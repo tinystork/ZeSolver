@@ -29,6 +29,8 @@ gui = [
 
 [project.scripts]
 zeblindsolver = "zesolver.zeblindsolver:main"
+zeblindsolve = "zeblindsolver.zeblindsolver:main"
+zebuildindex = "zeblindsolver.db_convert:main"
 
 [tool.pytest.ini_options]
 minversion = "7.0"

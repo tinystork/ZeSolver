@@ -1,0 +1,79 @@
+.
+├── .gitignore
+├── __pycache__
+│   └── zesolver.cpython-312.pyc
+├── CHANGELOG.md
+├── database
+│   ├── d20_0101.1476
+│   ├── d50_3409.1476
+│   ├── d50_3501.1476
+│   ├── d50_3502.1476
+│   ├── d50_3503.1476
+│   ├── d50_3601.1476
+│   ├── d80_0101.1476
+│   ├── d80_0201.1476
+│   ├── deep_sky.csv
+│   ├── g05_0101.290
+│   ├── g05_1801.290
+│   ├── hyperleda.csv
+│   ├── v50_3502.1476
+│   ├── v50_3601.1476
+│   ├── variable_stars.csv
+│   ├── variable_stars_8.csv
+│   └── w08_0101.001
+├── examples
+│   ├── Light_M 81_10.0s_IRCUT_20241129-012439.fit
+│   ├── [.....]
+│   ├── Light_M 81_10.0s_IRCUT_20241129-013850.fit
+│   ├── [.....]
+│   ├── Light_M31_180.0s_Bin1_20231009-010829_0009.fit
+│   ├── Light_M31_60.0s_Bin1_UHC_20241030-224215_0002_thn.jpg
+│   ├── Light_M31_60.0s_Bin1_UHC_20241030-224358_0003.fit
+│   ├── [.....]
+│   ├── Light_M31_60.0s_Bin1_UHC_20241030-224757_0006_thn.jpg
+│   └── zemosaic_MT16_R65.fits
+├── pyproject.toml
+├── README.md
+├── requirements.txt
+├── structure.txt
+├── tests
+│   ├── __pycache__
+│   │   ├── conftest.cpython-312-pytest-7.4.4.pyc
+│   │   ├── test_catalog290.cpython-312-pytest-7.4.4.pyc
+│   │   └── test_zeblindsolver.cpython-312-pytest-7.4.4.pyc
+│   ├── conftest.py
+│   ├── test_catalog290.py
+│   └── test_zeblindsolver.py
+├── tools
+│   ├── build_blind_index.py
+│   └── inspect_290.py
+├── zedatabase..py
+├── zesolver
+│   ├── __init__.py
+│   ├── __pycache__
+│   │   ├── __init__.cpython-312.pyc
+│   │   ├── __init__.cpython-313.pyc
+│   │   ├── blindindex.cpython-313.pyc
+│   │   ├── zeblindsolver.cpython-312.pyc
+│   │   └── zeblindsolver.cpython-313.pyc
+│   ├── blindindex.py
+│   └── zeblindsolver.py
+├── zesolver.log
+├── zesolver.py
+└── zewcs290
+    ├── __init__.py
+    ├── __pycache__
+    │   ├── __init__.cpython-312.pyc
+    │   ├── __init__.cpython-313.pyc
+    │   ├── catalog290.cpython-312.pyc
+    │   ├── catalog290.cpython-313.pyc
+    │   ├── layouts.cpython-312.pyc
+    │   └── layouts.cpython-313.pyc
+    ├── catalog290.py
+    ├── data
+    │   ├── __init__.py
+    │   ├── __pycache__
+    │   │   ├── __init__.cpython-312.pyc
+    │   │   └── __init__.cpython-313.pyc
+    │   └── layouts.json
+    └── layouts.py

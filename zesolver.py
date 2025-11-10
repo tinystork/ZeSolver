@@ -19,7 +19,7 @@ import shlex
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, List, Optional, Sequence
 
@@ -62,6 +62,7 @@ from skimage import color, io as skio
 from skimage.feature import peak_local_max
 from skimage.transform import rescale
 
+from zesolver.blindindex import BlindIndex, build_observed_quads
 from zesolver.zeblindsolver import (
     BlindSolveResult,
     BlindSolverRuntimeError,
@@ -268,6 +269,8 @@ class SolveConfig:
     blind_skip_if_valid: bool = True
     blind_astap_exe: Optional[str] = None
     blind_extra_args: Sequence[str] = field(default_factory=tuple)
+    blind_index_path: Optional[Path] = None
+    blind_strategy: str = "auto"
 
     def __post_init__(self) -> None:
         if self.families:
@@ -293,6 +296,8 @@ class SolveConfig:
             object.__setattr__(self, "blind_db_chain", tuple(tokens) if tokens else None)
         if self.blind_extra_args:
             object.__setattr__(self, "blind_extra_args", tuple(self.blind_extra_args))
+        if self.blind_index_path:
+            object.__setattr__(self, "blind_index_path", Path(self.blind_index_path).expanduser())
         if self.search_radius_scale < 1.0:
             raise ValueError("search_radius_scale must be >= 1.0")
         if self.search_radius_attempts < 1:
@@ -301,6 +306,10 @@ class SolveConfig:
             raise ValueError("max_search_radius_deg must be positive")
         if self.blind_timeout <= 0:
             raise ValueError("blind_timeout must be positive")
+        strategy = (self.blind_strategy or "auto").strip().lower()
+        if strategy not in {"auto", "astap", "index"}:
+            raise ValueError("blind_strategy must be one of: auto, astap, index")
+        object.__setattr__(self, "blind_strategy", strategy)
 
 
 @dataclass(slots=True)
@@ -538,6 +547,9 @@ class ImageSolver:
         self._db_lock = threading.Lock()
         self._family_candidates = self._init_family_candidates()
         self._family_hint: Optional[str] = None
+        self._blind_index: Optional[BlindIndex] = None
+        self._blind_index_loaded = False
+        self._blind_index_error_logged = False
 
     def _init_family_candidates(self) -> tuple[str, ...]:
         ordered: list[str] = []
@@ -679,6 +691,7 @@ class ImageSolver:
         if shortcut is not None:
             return shortcut
         metadata: Optional[ImageMetadata] = None
+        peaks: Optional[np.ndarray] = None
         try:
             data, metadata = self._load_image(path)
             if metadata.has_wcs and not self.config.overwrite:
@@ -783,6 +796,8 @@ class ImageSolver:
                 cached_result=blind_cache,
                 ra_hint=metadata.ra_deg if metadata else None,
                 dec_hint=metadata.dec_deg if metadata else None,
+                metadata=metadata,
+                peaks=peaks,
             )
             if blind_result is not None:
                 blind_result.duration_s = time.perf_counter() - start
@@ -947,8 +962,40 @@ class ImageSolver:
         )
         return np.ascontiguousarray(arr), meta
 
+    def _load_blind_index(self) -> Optional[BlindIndex]:
+        if self._blind_index_loaded:
+            return self._blind_index
+        self._blind_index_loaded = True
+        path = self.config.blind_index_path
+        if not path:
+            return None
+        try:
+            self._blind_index = BlindIndex.load(path)
+        except FileNotFoundError:
+            if not self._blind_index_error_logged:
+                logging.warning("Blind index %s not found; internal matcher disabled", path)
+                self._blind_index_error_logged = True
+        except Exception as exc:  # pragma: no cover - unexpected load failure
+            logging.exception("Unable to load blind index from %s: %s", path, exc)
+            self._blind_index_error_logged = True
+        return self._blind_index
+
+    def _index_available(self) -> bool:
+        return self._load_blind_index() is not None
+
     def _should_try_blind(self, path: Path) -> bool:
-        return self.config.blind_enabled and path.suffix.lower() in FITS_EXTENSIONS
+        if not self.config.blind_enabled:
+            return False
+        suffix = path.suffix.lower()
+        strategy = self.config.blind_strategy
+        if strategy == "astap":
+            return suffix in FITS_EXTENSIONS
+        if strategy == "index":
+            return self._index_available() and suffix in SUPPORTED_EXTENSIONS
+        # auto
+        if self._index_available():
+            return suffix in SUPPORTED_EXTENSIONS
+        return suffix in FITS_EXTENSIONS
 
     def _resolve_blind_db_chain(self) -> List[str]:
         entries = (
@@ -1082,11 +1129,87 @@ class ImageSolver:
             run_info=list(run_info),
         )
 
+    def _run_index_blind_solver(
+        self,
+        *,
+        path: Path,
+        metadata: Optional[ImageMetadata],
+        peaks: Optional[np.ndarray],
+        run_info: list[tuple[str, dict[str, Any]]],
+    ) -> Optional[ImageSolveResult]:
+        index = self._load_blind_index()
+        if index is None:
+            return None
+        if metadata is None or peaks is None or peaks.shape[0] < 4:
+            logging.info("Blind matcher skipped for %s: insufficient detection data", path.name)
+            return None
+        width = max(float(metadata.width), 1.0)
+        height = max(float(metadata.height), 1.0)
+        pixel_points = peaks[:, :2].astype(np.float32, copy=False)
+        unit_points = np.empty_like(pixel_points)
+        unit_points[:, 0] = pixel_points[:, 0] / width
+        unit_points[:, 1] = pixel_points[:, 1] / height
+        observed_quads = build_observed_quads(unit_points, pixel_points)
+        if not observed_quads:
+            logging.info("Blind matcher skipped for %s: not enough quad candidates", path.name)
+            return None
+        run_info.append(("run_info_blind_started", {"path": path.name}))
+        start = time.perf_counter()
+        candidates = index.query(observed_quads)
+        if not candidates:
+            message = "no quad matches"
+            run_info.append(("run_info_blind_failed", {"message": message}))
+            logging.info("Blind matcher failed for %s: %s", path.name, message)
+            return None
+        for candidate in candidates:
+            run_info.append(("run_info_blind_db", {"db": candidate.tile_key}))
+            hint_metadata = replace(
+                metadata,
+                ra_deg=candidate.center_ra_deg,
+                dec_deg=candidate.center_dec_deg,
+                source=f"blind:{candidate.tile_key}",
+            )
+            radius = max(candidate.radius_deg * 1.25, 0.5 * self.config.fov_deg, 0.3)
+            try:
+                result = self._solve_with_catalog(
+                    path=path,
+                    metadata=hint_metadata,
+                    peaks=peaks,
+                    radius=radius,
+                    families=(candidate.tile_family,),
+                    label=self._family_label(candidate.tile_family),
+                    catalog_family=candidate.tile_family,
+                )
+            except SolveError as exc:
+                logging.debug("Blind candidate %s failed for %s: %s", candidate.tile_key, path.name, exc)
+                continue
+            elapsed = time.perf_counter() - start
+            run_info.append(
+                ("run_info_blind_succeeded", {"db": candidate.tile_key, "elapsed": f"{elapsed:.1f}s"})
+            )
+            logging.info(
+                "Blind matcher success for %s via %s (score=%d, %.1fs)",
+                path.name,
+                candidate.tile_key,
+                candidate.score,
+                elapsed,
+            )
+            return result
+        message = "candidate tiles exhausted"
+        run_info.append(("run_info_blind_failed", {"message": message}))
+        logging.info("Blind matcher failed for %s: %s", path.name, message)
+        return None
+
     def _try_blind_shortcut(
         self,
         path: Path,
         run_info: list[tuple[str, dict[str, Any]]],
     ) -> tuple[Optional[ImageSolveResult], Optional[BlindSolveResult]]:
+        use_astap = self.config.blind_strategy == "astap"
+        if self.config.blind_strategy == "auto" and not self._index_available():
+            use_astap = True
+        if not use_astap:
+            return None, None
         result = self._run_blind_solver(
             path,
             run_info,
@@ -1109,22 +1232,48 @@ class ImageSolver:
         cached_result: Optional[BlindSolveResult],
         ra_hint: Optional[float],
         dec_hint: Optional[float],
+        metadata: Optional[ImageMetadata],
+        peaks: Optional[np.ndarray],
     ) -> Optional[ImageSolveResult]:
         if not self.config.overwrite:
             return None
-        if cached_result and cached_result["success"]:
-            return self._build_blind_result(path, cached_result, run_info)
-        result = self._run_blind_solver(
-            path,
-            run_info,
-            skip_if_header_has_wcs=False,
-            skip_if_valid=False,
-            ra_hint=ra_hint,
-            dec_hint=dec_hint,
+
+        def _run_astap() -> Optional[ImageSolveResult]:
+            if cached_result and cached_result["success"]:
+                return self._build_blind_result(path, cached_result, run_info)
+            result = self._run_blind_solver(
+                path,
+                run_info,
+                skip_if_header_has_wcs=False,
+                skip_if_valid=False,
+                ra_hint=ra_hint,
+                dec_hint=dec_hint,
+            )
+            if result and result["success"]:
+                return self._build_blind_result(path, result, run_info)
+            return None
+
+        strategy = self.config.blind_strategy
+        if strategy == "index":
+            return self._run_index_blind_solver(
+                path=path,
+                metadata=metadata,
+                peaks=peaks,
+                run_info=run_info,
+            )
+        if strategy == "astap":
+            return _run_astap()
+
+        # auto strategy: prefer index when available, fall back to ASTAP
+        index_result = self._run_index_blind_solver(
+            path=path,
+            metadata=metadata,
+            peaks=peaks,
+            run_info=run_info,
         )
-        if result and result["success"]:
-            return self._build_blind_result(path, result, run_info)
-        return None
+        if index_result is not None:
+            return index_result
+        return _run_astap()
 
 
 class BatchSolver:
@@ -1212,6 +1361,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--blind-extra-args",
         help="Additional arguments forwarded to ASTAP during blind fallback",
+    )
+    parser.add_argument(
+        "--blind-index",
+        type=Path,
+        help="Path to the quad index (.npz) used by the internal blind matcher",
+    )
+    parser.add_argument(
+        "--blind-strategy",
+        choices=("auto", "astap", "index"),
+        default="auto",
+        help="Blind solver backend: ASTAP, the internal index, or auto-detect (default: %(default)s)",
     )
     parser.add_argument(
         "--no-blind",
@@ -1317,6 +1477,8 @@ def run_cli(args: argparse.Namespace) -> int:
         blind_timeout=args.blind_timeout,
         blind_astap_exe=args.blind_astap_exe,
         blind_extra_args=blind_extra_args,
+        blind_index_path=args.blind_index,
+        blind_strategy=args.blind_strategy,
     )
     logging.info(
         "Starting batch solve in %s (families=%s, workers=%d, downsample=%d)",
@@ -1777,6 +1939,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 blind_timeout=args.blind_timeout,
                 blind_astap_exe=args.blind_astap_exe,
                 blind_extra_args=_parse_extra_args_arg(args.blind_extra_args),
+                blind_index_path=args.blind_index,
+                blind_strategy=args.blind_strategy,
             )
 
         def _start_solving(self) -> None:

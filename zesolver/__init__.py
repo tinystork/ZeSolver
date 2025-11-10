@@ -1,5 +1,6 @@
 """ZeSolver helper package."""
 
+from .blindindex import BlindIndex, BlindIndexCandidate, ObservedQuad
 from .zeblindsolver import (
     BlindSolveResult,
     BlindSolverRuntimeError,
@@ -22,4 +23,7 @@ __all__ = [
     "has_valid_wcs",
     "sanitize_wcs",
     "to_luminance_for_solve",
+    "BlindIndex",
+    "BlindIndexCandidate",
+    "ObservedQuad",
 ]
