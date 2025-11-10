@@ -1,0 +1,366 @@
+{
+  "hnsky_1476": [
+    {
+      "ring": "0-1",
+      "dec_min_deg": -90.0,
+      "dec_max_deg": -87.42857143,
+      "ra_cells": 1,
+      "dec_step_deg": null
+    },
+    {
+      "ring": "1-2",
+      "dec_min_deg": -87.42857143,
+      "dec_max_deg": -82.28571429,
+      "ra_cells": 3,
+      "dec_step_deg": -2.57142857
+    },
+    {
+      "ring": "2-3",
+      "dec_min_deg": -82.28571429,
+      "dec_max_deg": -77.14285714,
+      "ra_cells": 9,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "3-4",
+      "dec_min_deg": -77.14285714,
+      "dec_max_deg": -72.0,
+      "ra_cells": 15,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "4-5",
+      "dec_min_deg": -72.0,
+      "dec_max_deg": -66.85714286,
+      "ra_cells": 21,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "5-6",
+      "dec_min_deg": -66.85714286,
+      "dec_max_deg": -61.71428571,
+      "ra_cells": 27,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "6-7",
+      "dec_min_deg": -61.71428571,
+      "dec_max_deg": -56.57142857,
+      "ra_cells": 33,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "7-8",
+      "dec_min_deg": -56.57142857,
+      "dec_max_deg": -51.42857143,
+      "ra_cells": 38,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "8-9",
+      "dec_min_deg": -51.42857143,
+      "dec_max_deg": -46.28571429,
+      "ra_cells": 43,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "9-10",
+      "dec_min_deg": -46.28571429,
+      "dec_max_deg": -41.14285714,
+      "ra_cells": 48,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "10-11",
+      "dec_min_deg": -41.14285714,
+      "dec_max_deg": -36.0,
+      "ra_cells": 52,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "11-12",
+      "dec_min_deg": -36.0,
+      "dec_max_deg": -30.85714286,
+      "ra_cells": 56,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "12-13",
+      "dec_min_deg": -30.85714286,
+      "dec_max_deg": -25.71428571,
+      "ra_cells": 60,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "13-14",
+      "dec_min_deg": -25.71428571,
+      "dec_max_deg": -20.57142857,
+      "ra_cells": 63,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "14-15",
+      "dec_min_deg": -20.57142857,
+      "dec_max_deg": -15.42857143,
+      "ra_cells": 65,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "15-16",
+      "dec_min_deg": -15.42857143,
+      "dec_max_deg": -10.28571429,
+      "ra_cells": 67,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "16-17",
+      "dec_min_deg": -10.28571429,
+      "dec_max_deg": -5.14285714,
+      "ra_cells": 68,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "17-18",
+      "dec_min_deg": -5.14285714,
+      "dec_max_deg": 0.0,
+      "ra_cells": 69,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "18-19",
+      "dec_min_deg": 0.0,
+      "dec_max_deg": 5.14285714,
+      "ra_cells": 69,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "19-20",
+      "dec_min_deg": 5.14285714,
+      "dec_max_deg": 10.28571429,
+      "ra_cells": 68,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "20-21",
+      "dec_min_deg": 10.28571429,
+      "dec_max_deg": 15.42857143,
+      "ra_cells": 67,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "21-22",
+      "dec_min_deg": 15.42857143,
+      "dec_max_deg": 20.57142857,
+      "ra_cells": 65,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "22-23",
+      "dec_min_deg": 20.57142857,
+      "dec_max_deg": 25.71428571,
+      "ra_cells": 63,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "23-24",
+      "dec_min_deg": 25.71428571,
+      "dec_max_deg": 30.85714286,
+      "ra_cells": 60,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "24-25",
+      "dec_min_deg": 30.85714286,
+      "dec_max_deg": 36.0,
+      "ra_cells": 56,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "25-26",
+      "dec_min_deg": 36.0,
+      "dec_max_deg": 41.14285714,
+      "ra_cells": 52,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "26-27",
+      "dec_min_deg": 41.14285714,
+      "dec_max_deg": 46.28571429,
+      "ra_cells": 48,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "27-28",
+      "dec_min_deg": 46.28571429,
+      "dec_max_deg": 51.42857143,
+      "ra_cells": 43,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "28-29",
+      "dec_min_deg": 51.42857143,
+      "dec_max_deg": 56.57142857,
+      "ra_cells": 38,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "29-30",
+      "dec_min_deg": 56.57142857,
+      "dec_max_deg": 61.71428571,
+      "ra_cells": 33,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "30-31",
+      "dec_min_deg": 61.71428571,
+      "dec_max_deg": 66.85714286,
+      "ra_cells": 27,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "31-32",
+      "dec_min_deg": 66.85714286,
+      "dec_max_deg": 72.0,
+      "ra_cells": 21,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "32-33",
+      "dec_min_deg": 72.0,
+      "dec_max_deg": 77.14285714,
+      "ra_cells": 15,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "33-34",
+      "dec_min_deg": 77.14285714,
+      "dec_max_deg": 82.28571429,
+      "ra_cells": 9,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "34-35",
+      "dec_min_deg": 82.28571429,
+      "dec_max_deg": 87.42857143,
+      "ra_cells": 3,
+      "dec_step_deg": -5.14285714
+    },
+    {
+      "ring": "36-37",
+      "dec_min_deg": 87.42857143,
+      "dec_max_deg": 90.0,
+      "ra_cells": 1,
+      "dec_step_deg": null
+    }
+  ],
+  "hnsky_290": [
+    {
+      "ring": "0-1",
+      "dec_min_deg": -90.0,
+      "dec_max_deg": -85.23224404,
+      "ra_cells": 1
+    },
+    {
+      "ring": "1-2",
+      "dec_min_deg": -85.23224404,
+      "dec_max_deg": -75.66348756,
+      "ra_cells": 4
+    },
+    {
+      "ring": "2-3",
+      "dec_min_deg": -75.66348756,
+      "dec_max_deg": -65.99286637,
+      "ra_cells": 8
+    },
+    {
+      "ring": "4-5",
+      "dec_min_deg": -65.99286637,
+      "dec_max_deg": -56.14497387,
+      "ra_cells": 12
+    },
+    {
+      "ring": "6-7",
+      "dec_min_deg": -56.14497387,
+      "dec_max_deg": -46.03163067,
+      "ra_cells": 16
+    },
+    {
+      "ring": "7-8",
+      "dec_min_deg": -46.03163067,
+      "dec_max_deg": -35.54307745,
+      "ra_cells": 20
+    },
+    {
+      "ring": "8-9",
+      "dec_min_deg": -35.54307745,
+      "dec_max_deg": -24.53348115,
+      "ra_cells": 24
+    },
+    {
+      "ring": "7-8",
+      "dec_min_deg": -24.53348115,
+      "dec_max_deg": -12.79440589,
+      "ra_cells": 28
+    },
+    {
+      "ring": "8-9",
+      "dec_min_deg": -12.79440589,
+      "dec_max_deg": 0.0,
+      "ra_cells": 32
+    },
+    {
+      "ring": "9-10",
+      "dec_min_deg": 0.0,
+      "dec_max_deg": 12.79440589,
+      "ra_cells": 32
+    },
+    {
+      "ring": "10-11",
+      "dec_min_deg": 12.79440589,
+      "dec_max_deg": 24.53348115,
+      "ra_cells": 28
+    },
+    {
+      "ring": "11-12",
+      "dec_min_deg": 24.53348115,
+      "dec_max_deg": 35.54307745,
+      "ra_cells": 24
+    },
+    {
+      "ring": "12-13",
+      "dec_min_deg": 35.54307745,
+      "dec_max_deg": 46.03163067,
+      "ra_cells": 20
+    },
+    {
+      "ring": "13-14",
+      "dec_min_deg": 46.03163067,
+      "dec_max_deg": 56.14497387,
+      "ra_cells": 16
+    },
+    {
+      "ring": "14-15",
+      "dec_min_deg": 56.14497387,
+      "dec_max_deg": 65.99286637,
+      "ra_cells": 12
+    },
+    {
+      "ring": "15-16",
+      "dec_min_deg": 65.99286637,
+      "dec_max_deg": 75.66348756,
+      "ra_cells": 8
+    },
+    {
+      "ring": "16-17",
+      "dec_min_deg": 75.66348756,
+      "dec_max_deg": 85.23224404,
+      "ra_cells": 4
+    },
+    {
+      "ring": "17-18",
+      "dec_min_deg": 85.23224404,
+      "dec_max_deg": 90.0,
+      "ra_cells": 1
+    }
+  ]
+}

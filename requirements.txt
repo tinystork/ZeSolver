@@ -1,0 +1,10 @@
+# Core runtime dependencies (mirrors pyproject.toml)
+numpy>=1.26
+astropy>=6.0
+scipy>=1.11
+scikit-image>=0.22
+astroalign>=2.6
+rich>=13.7
+
+# GUI support (install PySide6 only if you need the desktop interface)
+PySide6>=6.7

@@ -1,0 +1,44 @@
+[project]
+name = "zewcs290"
+version = "0.1.0"
+description = "Offline WCS solver built around ASTAP/HNSKY 1476/290 catalogues"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+  { name = "ZeSolver Contributors" }
+]
+dependencies = [
+  "numpy>=1.26",
+  "astropy>=6.0",
+  "scipy>=1.11",
+  "scikit-image>=0.22",
+  "astroalign>=2.6",
+  "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=7.0",
+  "pytest-cov>=4.0",
+  "mypy>=1.8",
+]
+gui = [
+  "PySide6>=6.7",
+]
+
+[project.scripts]
+zeblindsolver = "zesolver.zeblindsolver:main"
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra"
+testpaths = [
+  "tests",
+]
+
+[tool.black]
+line-length = 100
+
+[tool.isort]
+profile = "black"
