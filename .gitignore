@@ -2,3 +2,5 @@ __pycache__/
 .pytest_cache/
 database/
 examples/
+zewcs290/__pycache__/
+zesolver/__pycache__/
