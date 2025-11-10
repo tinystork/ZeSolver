@@ -14,6 +14,8 @@ from .matcher import SimilarityTransform
 def _apply_similarity(transform: "SimilarityTransform", xy: tuple[float, float]) -> tuple[float, float]:
     rot_scale = transform.scale * np.exp(1j * transform.rotation)
     comp = complex(xy[0], xy[1])
+    if getattr(transform, "parity", 1) < 0:
+        comp = complex(comp.real, -comp.imag)
     result = rot_scale * comp + complex(*transform.translation)
     return (float(result.real), float(result.imag))
 
@@ -33,12 +35,18 @@ def tan_from_similarity(
     wcs.wcs.crpix = [center_pixel[0], center_pixel[1]]
     theta = transform.rotation
     scale = transform.scale
-    # Build the linear map from pixels to tangent-plane degrees
-    # A = scale * [[cos, -sin], [sin, cos]]
-    a11 = scale * np.cos(theta)
-    a12 = -scale * np.sin(theta)
-    a21 = scale * np.sin(theta)
-    a22 = scale * np.cos(theta)
+    if getattr(transform, "parity", 1) < 0:
+        # Reflection (conjugation) flips the sign of the imaginary component.
+        a11 = scale * np.cos(theta)
+        a12 = scale * np.sin(theta)
+        a21 = -scale * np.sin(theta)
+        a22 = scale * np.cos(theta)
+    else:
+        # Orientation-preserving similarity.
+        a11 = scale * np.cos(theta)
+        a12 = -scale * np.sin(theta)
+        a21 = scale * np.sin(theta)
+        a22 = scale * np.cos(theta)
     A = np.array([[a11, a12], [a21, a22]])
     if tile_center is not None:
         wcs.wcs.crval = [float(tile_center[0]), float(tile_center[1])]

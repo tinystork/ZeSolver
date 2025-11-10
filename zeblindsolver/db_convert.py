@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -18,6 +17,7 @@ if __package__ is None:
 
 from zeblindsolver.astap_db_reader import TileMeta, iter_tiles, load_tile_stars
 from zeblindsolver.levels import LEVEL_SPECS
+from zeblindsolver.projections import project_tan
 from zeblindsolver.quad_index_builder import build_quad_index
 
 try:
@@ -30,30 +30,6 @@ MANIFEST_FILENAME = "manifest.json"
 DEFAULT_MAG_CAP = 15.5
 DEFAULT_MAX_STARS = 2000
 DEFAULT_MAX_QUADS_PER_TILE = 20000
-
-
-def _project_tan(ra_deg: np.ndarray, dec_deg: np.ndarray, center_ra: float, center_dec: float) -> tuple[np.ndarray, np.ndarray]:
-    ra_rad = np.deg2rad(ra_deg)
-    dec_rad = np.deg2rad(dec_deg)
-    ra0_rad = np.deg2rad(center_ra)
-    dec0_rad = np.deg2rad(center_dec)
-    dra = (ra_rad - ra0_rad + math.pi) % (2 * math.pi) - math.pi
-    sin_dec = np.sin(dec_rad)
-    cos_dec = np.cos(dec_rad)
-    sin_dec0 = math.sin(dec0_rad)
-    cos_dec0 = math.cos(dec0_rad)
-    cos_dra = np.cos(dra)
-    sin_dra = np.sin(dra)
-    cosc = sin_dec0 * sin_dec + cos_dec0 * cos_dec * cos_dra
-    safe = cosc > 1e-8
-    x = np.empty_like(ra_rad)
-    y = np.empty_like(dec_rad)
-    with np.errstate(divide="ignore", invalid="ignore"):
-        x[~safe] = np.nan
-        y[~safe] = np.nan
-        x[safe] = (cos_dec[safe] * sin_dra[safe]) / cosc[safe]
-        y[safe] = (cos_dec0 * sin_dec[safe] - sin_dec0 * cos_dec[safe] * cos_dra[safe]) / cosc[safe]
-    return np.degrees(x), np.degrees(y)
 
 
 def _progress_iter(items: Iterable, *, desc: str) -> Iterable:
@@ -83,7 +59,7 @@ def build_index_from_astap(
         total = len(stars)
         ra = stars["ra_deg"].astype(np.float64, copy=False)
         dec = stars["dec_deg"].astype(np.float64, copy=False)
-        x_deg, y_deg = _project_tan(ra, dec, tile_meta.center_ra_deg, tile_meta.center_dec_deg)
+        x_deg, y_deg = project_tan(ra, dec, tile_meta.center_ra_deg, tile_meta.center_dec_deg)
         valid = np.isfinite(x_deg) & np.isfinite(y_deg)
         stars = stars[valid]
         x_deg = x_deg[valid]

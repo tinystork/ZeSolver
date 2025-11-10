@@ -4,7 +4,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Dict, Callable
 
 import numpy as np
 
@@ -44,6 +44,71 @@ def _tile_file_path(index_root: Path, entry: dict[str, Any]) -> Path:
     return candidate
 
 
+def validate_index(index_root: Path | str, *, db_root: Path | str | None = None) -> Dict[str, Any]:
+    """Validate index integrity.
+
+    Returns a dict with keys:
+      - manifest_ok: bool
+      - present_quads: list[str]
+      - missing_quads: list[str]
+      - levels: list[str]
+      - manifest_tile_count: int
+      - db_root_mismatch: bool
+      - db_tile_count: int | None
+      - tile_key_mismatch: bool | None
+    """
+    root = Path(index_root).expanduser().resolve()
+    result: Dict[str, Any] = {
+        "manifest_ok": False,
+        "present_quads": [],
+        "missing_quads": [],
+        "levels": [],
+        "manifest_tile_count": 0,
+        "db_root_mismatch": False,
+        "db_tile_count": None,
+        "tile_key_mismatch": None,
+    }
+    try:
+        manifest = _load_manifest(root)
+        result["manifest_ok"] = True
+    except Exception:
+        return result
+    levels = [lvl.get("name") for lvl in manifest.get("levels", []) if isinstance(lvl, dict) and lvl.get("name")]
+    result["levels"] = levels
+    ht = root / HASH_DIR
+    present: list[str] = []
+    missing: list[str] = []
+    for name in levels:
+        path = ht / f"quads_{name}.npz"
+        if path.exists():
+            present.append(name)
+        else:
+            missing.append(name)
+    result["present_quads"] = present
+    result["missing_quads"] = missing
+    tiles = manifest.get("tiles", [])
+    result["manifest_tile_count"] = int(len(tiles))
+    # Compare DB content if requested
+    if db_root is not None:
+        try:
+            from zewcs290.catalog290 import CatalogDB
+            db = CatalogDB(db_root)
+            db_keys = {tile.key for tile in db.tiles}
+            result["db_tile_count"] = len(db_keys)
+            manifest_keys = {t.get("tile_key") for t in tiles if isinstance(t, dict)}
+            result["tile_key_mismatch"] = db_keys != manifest_keys
+            # Detect root mismatch
+            manifest_root = Path(str(manifest.get("db_root", "")).strip() or "").expanduser()
+            try:
+                result["db_root_mismatch"] = manifest_root.resolve() != Path(db_root).expanduser().resolve()
+            except Exception:
+                result["db_root_mismatch"] = True
+        except Exception:
+            # If DB cannot be read, leave comparison fields as-is
+            pass
+    return result
+
+
 @dataclass
 class QuadIndex:
     level: str
@@ -78,7 +143,13 @@ class QuadIndex:
         return index
 
 
-def build_quad_index(index_root: Path | str, level: str, *, max_quads_per_tile: int = 20000) -> Path:
+def build_quad_index(
+    index_root: Path | str,
+    level: str,
+    *,
+    max_quads_per_tile: int = 20000,
+    on_progress: Callable[[int, int, str], None] | None = None,
+) -> Path:
     index_root = Path(index_root).expanduser().resolve()
     spec = LEVEL_MAP.get(level)
     if spec is None:
@@ -95,15 +166,20 @@ def build_quad_index(index_root: Path | str, level: str, *, max_quads_per_tile: 
     hashes: list[np.ndarray] = []
     tile_indices: list[np.ndarray] = []
     quad_indices: list[np.ndarray] = []
+    total = len(tile_entries)
     for tile_index, entry in enumerate(tile_entries):
         try:
             tile_path = _tile_file_path(index_root, entry)
         except FileNotFoundError as exc:
             logger.warning("missing tile file %s: %s", entry.get("tile_file"), exc)
+            if on_progress:
+                on_progress(tile_index + 1, total, str(entry.get("tile_key", "")))
             continue
         with np.load(tile_path) as data:
             if "x_deg" not in data or "mag" not in data:
                 logger.warning("tile %s missing x_deg/mag arrays", tile_path)
+                if on_progress:
+                    on_progress(tile_index + 1, total, str(entry.get("tile_key", "")))
                 continue
             coords = np.column_stack((data["x_deg"], data["y_deg"]))
             stars = np.zeros(data["mag"].shape[0], dtype=[("x", "f4"), ("y", "f4"), ("mag", "f4")])
@@ -114,14 +190,20 @@ def build_quad_index(index_root: Path | str, level: str, *, max_quads_per_tile: 
         strategy = "biased_brightness" if level == "L" else "local_brightness"
         quads = sample_quads(stars, max_quads_per_tile, strategy=strategy)
         if quads.size == 0:
+            if on_progress:
+                on_progress(tile_index + 1, total, str(entry.get("tile_key", "")))
             continue
         quad_hash = hash_quads(quads, coords, spec=spec)
         if quad_hash.hashes.size == 0:
+            if on_progress:
+                on_progress(tile_index + 1, total, str(entry.get("tile_key", "")))
             continue
         hashes.append(quad_hash.hashes)
         tile_indices.append(np.full(quad_hash.hashes.shape, tile_index, dtype=np.uint32))
         quad_indices.append(quad_hash.indices.astype(np.uint16))
         logger.debug("level %s: %s -> %d hashed quads", level, entry.get("tile_key"), quad_hash.hashes.size)
+        if on_progress:
+            on_progress(tile_index + 1, total, str(entry.get("tile_key", "")))
     if not hashes:
         raise RuntimeError("no quads were hashed for level %s" % level)
     all_hashes = np.concatenate(hashes)

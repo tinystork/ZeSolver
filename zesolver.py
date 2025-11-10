@@ -66,6 +66,7 @@ from zesolver.zeblindsolver import (
     BlindSolverRuntimeError,
     blind_solve,
     has_valid_wcs,
+    near_solve,
 )
 from zeblindsolver.db_convert import (
     DEFAULT_MAG_CAP,
@@ -175,12 +176,17 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_save_btn": "Sauvegarder",
         "settings_build_btn": "Construire l'index",
         "settings_run_btn": "Lancer le blind solve",
+        "settings_near_btn": "Résolution WCS (Python, sans quads)",
         "settings_log": "Journal d'index",
         "settings_saved": "Réglages sauvegardés",
         "settings_index_missing": "Répertoire d'index requis.",
         "settings_sample_required": "Choisis un fichier FITS à tester.",
         "settings_index_result": "Index {status}: {message}",
         "settings_blind_result": "Blind {status}: {message}",
+        "settings_near_result": "Near {status}: {message}",
+        "settings_build_start": "Construction de l'index dans {path}… (cela peut prendre plusieurs minutes)",
+        "settings_rebuild_title": "Reconstruire l'index ?",
+        "settings_rebuild_text": "Un index existe déjà dans {path}. Le reconstruire ?",
     },
     "en": {
         "language_menu": "Language",
@@ -248,12 +254,17 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_save_btn": "Save settings",
         "settings_build_btn": "Build index",
         "settings_run_btn": "Run blind solve",
+        "settings_near_btn": "Near solve (Python, no quads)",
         "settings_log": "Index log",
         "settings_saved": "Settings saved",
         "settings_index_missing": "Index directory is required.",
         "settings_sample_required": "Select a FITS file to test.",
         "settings_index_result": "Index {status}: {message}",
         "settings_blind_result": "Blind {status}: {message}",
+        "settings_near_result": "Near {status}: {message}",
+        "settings_build_start": "Building index at {path}… (this may take several minutes)",
+        "settings_rebuild_title": "Rebuild Index?",
+        "settings_rebuild_text": "An index already exists at {path}. Rebuild it?",
     },
 }
 
@@ -312,7 +323,8 @@ def _configure_logging(level_name: str) -> None:
     root.addHandler(stream_handler)
     file_handler: Optional[logging.Handler] = None
     try:
-        file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+        # Truncate the log file at each program start
+        file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
     except OSError as exc:  # pragma: no cover - filesystem edge case
         print(f"Warning: unable to open log file {LOG_FILE}: {exc}", file=sys.stderr)
     else:
@@ -1052,6 +1064,25 @@ class ImageSolver:
             skip_if_valid,
         )
         try:
+            # Extra diagnostics: verify index structure before calling the solver
+            try:
+                root = Path(index_root).expanduser().resolve()
+                manifest = root / "manifest.json"
+                ht = root / "hash_tables"
+                l = ht / "quads_L.npz"
+                m = ht / "quads_M.npz"
+                s = ht / "quads_S.npz"
+                logging.info(
+                    "Blind index check: root=%s manifest=%s L=%s M=%s S=%s",
+                    root,
+                    "ok" if manifest.exists() else "missing",
+                    "ok" if l.exists() else "missing",
+                    "ok" if m.exists() else "missing",
+                    "ok" if s.exists() else "missing",
+                )
+            except Exception:
+                # Non-fatal; proceed to solver which will report a clear error
+                pass
             result = blind_solve(
                 fits_path=str(path),
                 index_root=str(index_root),
@@ -1385,6 +1416,7 @@ def launch_gui(args: argparse.Namespace) -> int:
 
     class IndexBuilder(QtCore.QThread):
         log = QtCore.Signal(str)
+        progress = QtCore.Signal(int, int, str)
         finished = QtCore.Signal(bool, str)
 
         def __init__(
@@ -1395,6 +1427,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             mag_cap: float,
             max_stars: int,
             max_quads_per_tile: int,
+            quads_only: bool = False,
         ) -> None:
             super().__init__()
             self.db_root = db_root
@@ -1402,21 +1435,100 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.mag_cap = mag_cap
             self.max_stars = max_stars
             self.max_quads_per_tile = max_quads_per_tile
+            self.quads_only = quads_only
 
         def run(self) -> None:
+            # Bridge Python logging (INFO+) into the GUI log during the build
+            class _ForwardLogHandler(logging.Handler):
+                def __init__(self, sink):
+                    super().__init__(level=logging.INFO)
+                    self._sink = sink
+                def emit(self, record: logging.LogRecord) -> None:
+                    try:
+                        msg = self.format(record)
+                    except Exception:
+                        msg = record.getMessage()
+                    self._sink.emit(msg)
+
+            handler = _ForwardLogHandler(self.log)
+            handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+            root_logger = logging.getLogger()
+            # Attach only to the root logger to avoid duplicate propagation
+            root_logger.addHandler(handler)
+            root_logger.setLevel(logging.INFO)
             try:
-                manifest = build_index_from_astap(
-                    self.db_root,
-                    self.index_root,
-                    mag_cap=self.mag_cap,
-                    max_stars=self.max_stars,
-                    max_quads_per_tile=self.max_quads_per_tile,
-                )
-                self.log.emit(f"Index built: {manifest}")
-                self.finished.emit(True, str(manifest))
+                # Optional quads-only mode (set by caller)
+                quads_only = bool(getattr(self, "quads_only", False))
+                self.log.emit(f"Index worker started (quads_only={quads_only})")
+                logging.info("Index worker started (quads_only=%s)", quads_only)
+                if not quads_only:
+                    manifest = build_index_from_astap(
+                        self.db_root,
+                        self.index_root,
+                        mag_cap=self.mag_cap,
+                        max_stars=self.max_stars,
+                        max_quads_per_tile=self.max_quads_per_tile,
+                    )
+                    msg = f"Index built: {manifest}"
+                    self.log.emit(msg)
+                    logging.info(msg)
+                else:
+                    msg = "Manifest present; building quad tables only…"
+                    self.log.emit(msg)
+                    logging.info(msg)
+                # Safety net: if quad tables are still missing, (re)build them now.
+                try:
+                    from zeblindsolver.levels import LEVEL_SPECS
+                    from zeblindsolver.quad_index_builder import build_quad_index
+                    idx_root = Path(self.index_root).expanduser().resolve()
+                    ht = idx_root / "hash_tables"
+                    ht.mkdir(parents=True, exist_ok=True)
+                    self.log.emit(f"Checking quad tables under: {ht}")
+                    logging.info("Checking quad tables under: %s", ht)
+                    built_any = False
+                    for level in LEVEL_SPECS:
+                        out = ht / f"quads_{level.name}.npz"
+                        if not out.exists():
+                            msg = f"Building missing quad table: {out}"
+                            self.log.emit(msg)
+                            logging.info(msg)
+                            def _cb(done: int, total: int, tile_key: str, lvl=level.name):
+                                self.progress.emit(done, total, f"{lvl}:{tile_key}")
+                            built = build_quad_index(
+                                idx_root,
+                                level.name,
+                                max_quads_per_tile=self.max_quads_per_tile,
+                                on_progress=_cb,
+                            )
+                            done = f"Built quad table: {built}"
+                            self.log.emit(done)
+                            logging.info(done)
+                            built_any = True
+                        else:
+                            self.log.emit(f"Quad table present: {out}")
+                    # Final presence check
+                    missing = [lvl.name for lvl in LEVEL_SPECS if not (ht / f"quads_{lvl.name}.npz").exists()]
+                    if missing:
+                        raise RuntimeError(f"quad tables missing after build: {', '.join(missing)}")
+                    if not built_any:
+                        msg = "Quad tables already present; skipped rebuild"
+                        self.log.emit(msg)
+                        logging.info(msg)
+                except Exception as exc:
+                    err = f"Quad table build failed: {exc}"
+                    self.log.emit(err)
+                    logging.error(err)
+                    self.finished.emit(False, str(exc))
+                    return
+                self.finished.emit(True, str(Path(self.index_root).expanduser().resolve() / 'manifest.json'))
             except Exception as exc:
                 self.log.emit(f"Index build failed: {exc}")
                 self.finished.emit(False, str(exc))
+            finally:
+                try:
+                    root_logger.removeHandler(handler)
+                except Exception:
+                    pass
 
     class BlindRunner(QtCore.QThread):
         log = QtCore.Signal(str)
@@ -1451,6 +1563,36 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.log.emit(f"Blind solve error: {exc}")
                 self.finished.emit(False, str(exc))
 
+    class NearRunner(QtCore.QThread):
+        log = QtCore.Signal(str)
+        finished = QtCore.Signal(bool, str)
+
+        def __init__(self, fits_path: str, index_root: str) -> None:
+            super().__init__()
+            self.fits_path = fits_path
+            self.index_root = index_root
+
+        def run(self) -> None:
+            try:
+                result = near_solve(
+                    self.fits_path,
+                    self.index_root,
+                    skip_if_valid=False,
+                    fallback_to_blind=False,
+                    log=logging.info,
+                )
+                if result["success"]:
+                    message = result["message"] or "near solve succeeded"
+                    self.log.emit(f"Near solve succeeded: {message}")
+                    self.finished.emit(True, message)
+                else:
+                    message = result["message"] or "no valid solution"
+                    self.log.emit(f"Near solve failed: {message}")
+                    self.finished.emit(False, message)
+            except Exception as exc:
+                self.log.emit(f"Near solve error: {exc}")
+                self.finished.emit(False, str(exc))
+
     class ZeSolverWindow(QtWidgets.QMainWindow):
         def __init__(self, settings: PersistentSettings) -> None:
             super().__init__()
@@ -1465,6 +1607,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._settings = settings
             self._index_worker: Optional[IndexBuilder] = None
             self._blind_worker: Optional[BlindRunner] = None
+            self._near_worker: Optional[NearRunner] = None
             self._build_ui()
             self._populate_settings_ui()
             self._prefill_from_args(args)
@@ -1644,9 +1787,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.settings_build_btn.clicked.connect(self._on_build_index_clicked)
             self.settings_run_blind_btn = QtWidgets.QPushButton()
             self.settings_run_blind_btn.clicked.connect(self._on_run_blind_clicked)
+            self.settings_run_near_btn = QtWidgets.QPushButton()
+            self.settings_run_near_btn.clicked.connect(self._on_run_near_clicked)
             button_row.addWidget(self.settings_save_btn)
             button_row.addWidget(self.settings_build_btn)
             button_row.addWidget(self.settings_run_blind_btn)
+            button_row.addWidget(self.settings_run_near_btn)
 
             self.settings_log_view = QtWidgets.QPlainTextEdit()
             self.settings_log_view.setReadOnly(True)
@@ -1654,6 +1800,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             column.addLayout(button_row)
             self.settings_log_label = QtWidgets.QLabel()
             column.addWidget(self.settings_log_label)
+            # Progress bar for index/quads build
+            self.settings_progress = QtWidgets.QProgressBar()
+            self.settings_progress.setRange(0, 1)
+            self.settings_progress.setValue(0)
+            self.settings_progress.setFormat("Idle")
+            column.addWidget(self.settings_progress)
             column.addWidget(self.settings_log_view)
 
             self.settings_db_browse.clicked.connect(
@@ -1710,7 +1862,7 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _log_settings(self, message: str) -> None:
             timestamp = time.strftime("%H:%M:%S")
             self.settings_log_view.appendPlainText(f"[{timestamp}] {message}")
-            self._log(message)
+            # Avoid echoing into root logger (prevents feedback via the forwarding handler)
 
         def _on_save_settings_clicked(self) -> None:
             try:
@@ -1759,17 +1911,81 @@ def launch_gui(args: argparse.Namespace) -> int:
             except ValueError as exc:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
+            # Integrity check: if index looks complete and matches current DB, ask before rebuilding
+            idx_path = Path(settings.index_root).expanduser().resolve()
+            try:
+                from zeblindsolver.quad_index_builder import validate_index
+                info = validate_index(idx_path, db_root=Path(settings.db_root).expanduser().resolve())
+            except Exception:
+                info = {"manifest_ok": False}
+            if info.get("manifest_ok"):
+                missing = info.get("missing_quads") or []
+                db_mismatch = bool(info.get("db_root_mismatch"))
+                tile_mismatch = bool(info.get("tile_key_mismatch")) if info.get("tile_key_mismatch") is not None else False
+                if not missing and not db_mismatch and not tile_mismatch:
+                    # Index appears complete and up to date
+                    answer = QtWidgets.QMessageBox.question(
+                        self,
+                        self._text("settings_rebuild_title"),
+                        self._text("settings_rebuild_text", path=str(idx_path)),
+                        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                        QtWidgets.QMessageBox.No,
+                    )
+                    if answer != QtWidgets.QMessageBox.Yes:
+                        return
+                elif missing and not db_mismatch and not tile_mismatch:
+                    # Only quads are missing; propose quads-only build
+                    text = f"Missing quad tables: {', '.join(missing)}. Build quads only?"
+                    answer = QtWidgets.QMessageBox.question(
+                        self,
+                        self._text("dialog_config_title"),
+                        text,
+                        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                        QtWidgets.QMessageBox.Yes,
+                    )
+                    if answer == QtWidgets.QMessageBox.Yes:
+                        # Run in quads-only mode
+                        self._settings = settings
+                        save_persistent_settings(settings)
+                        self.settings_build_btn.setEnabled(False)
+                        if hasattr(self, 'settings_run_blind_btn'):
+                            self.settings_run_blind_btn.setEnabled(False)
+                        if hasattr(self, 'settings_run_near_btn'):
+                            self.settings_run_near_btn.setEnabled(False)
+                        self._log_settings(self._text("settings_build_start", path=str(idx_path)))
+                        self._index_worker = IndexBuilder(
+                            db_root=settings.db_root,
+                            index_root=settings.index_root,
+                            mag_cap=settings.mag_cap,
+                            max_stars=settings.max_stars,
+                            max_quads_per_tile=settings.max_quads_per_tile,
+                            quads_only=True,
+                        )
+                        self._index_worker.log.connect(self._log_settings)
+                        self._index_worker.progress.connect(self._on_index_progress)
+                        self._index_worker.finished.connect(self._on_index_finished)
+                        self._index_worker.start()
+                        return
             self._settings = settings
             save_persistent_settings(settings)
+            # Disable build/run while index build is in progress
             self.settings_build_btn.setEnabled(False)
+            if hasattr(self, 'settings_run_blind_btn'):
+                self.settings_run_blind_btn.setEnabled(False)
+            if hasattr(self, 'settings_run_near_btn'):
+                self.settings_run_near_btn.setEnabled(False)
+            # Inform user build is long-running
+            self._log_settings(self._text("settings_build_start", path=str(Path(settings.index_root).expanduser().resolve())))
             self._index_worker = IndexBuilder(
                 db_root=settings.db_root,
                 index_root=settings.index_root,
                 mag_cap=settings.mag_cap,
                 max_stars=settings.max_stars,
                 max_quads_per_tile=settings.max_quads_per_tile,
+                quads_only=False,
             )
             self._index_worker.log.connect(self._log_settings)
+            self._index_worker.progress.connect(self._on_index_progress)
             self._index_worker.finished.connect(self._on_index_finished)
             self._index_worker.start()
 
@@ -1799,17 +2015,68 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._blind_worker.finished.connect(self._on_blind_finished)
             self._blind_worker.start()
 
+        def _on_run_near_clicked(self) -> None:
+            if self._near_worker:
+                return
+            sample_path = self.settings_sample_edit.text().strip()
+            if not sample_path:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("settings_sample_required"))
+                return
+            if not Path(sample_path).is_file():
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_input_missing", path=sample_path))
+                return
+            try:
+                settings = self._read_settings_from_ui()
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                return
+            self._settings = settings
+            save_persistent_settings(settings)
+            self.settings_run_near_btn.setEnabled(False)
+            self._near_worker = NearRunner(
+                fits_path=sample_path,
+                index_root=settings.index_root,
+            )
+            self._near_worker.log.connect(self._log_settings)
+            self._near_worker.finished.connect(self._on_near_finished)
+            self._near_worker.start()
+
         def _on_index_finished(self, success: bool, message: str) -> None:
             status = "ok" if success else "failed"
             self._log_settings(self._text("settings_index_result", status=status, message=message))
             self.settings_build_btn.setEnabled(True)
+            if hasattr(self, 'settings_run_blind_btn'):
+                self.settings_run_blind_btn.setEnabled(True)
+            if hasattr(self, 'settings_run_near_btn'):
+                self.settings_run_near_btn.setEnabled(True)
             self._index_worker = None
+            # Reset progress bar
+            try:
+                self.settings_progress.setRange(0, 1)
+                self.settings_progress.setValue(0)
+                self.settings_progress.setFormat("Idle")
+            except Exception:
+                pass
+
+        def _on_index_progress(self, value: int, total: int, label: str) -> None:
+            try:
+                self.settings_progress.setRange(0, total)
+                self.settings_progress.setValue(value)
+                self.settings_progress.setFormat(f"{label}  {value}/{total}")
+            except Exception:
+                pass
 
         def _on_blind_finished(self, success: bool, message: str) -> None:
             status = "ok" if success else "failed"
             self._log_settings(self._text("settings_blind_result", status=status, message=message))
             self.settings_run_blind_btn.setEnabled(True)
             self._blind_worker = None
+
+        def _on_near_finished(self, success: bool, message: str) -> None:
+            status = "ok" if success else "failed"
+            self._log_settings(self._text("settings_near_result", status=status, message=message))
+            self.settings_run_near_btn.setEnabled(True)
+            self._near_worker = None
 
         def _build_splitter(self) -> QtWidgets.QSplitter:
             splitter = QtWidgets.QSplitter()
@@ -1922,6 +2189,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_build_btn.setText(self._text("settings_build_btn"))
             if hasattr(self, "settings_run_blind_btn"):
                 self.settings_run_blind_btn.setText(self._text("settings_run_btn"))
+            if hasattr(self, "settings_run_near_btn"):
+                self.settings_run_near_btn.setText(self._text("settings_near_btn"))
             if hasattr(self, "settings_log_label"):
                 self.settings_log_label.setText(self._text("settings_log"))
             self._retranslate_status_items()

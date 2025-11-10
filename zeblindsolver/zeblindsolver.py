@@ -145,13 +145,23 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
     manifest = load_manifest(index_root)
     levels = [level["name"] for level in manifest.get("levels", [])] or ["L", "M", "S"]
     # Preflight: ensure there is at least one quad hash table present.
-    present_levels = [lvl for lvl in levels if (index_root / "hash_tables" / f"quads_{lvl}.npz").exists()]
+    ht_root = index_root / "hash_tables"
+    present_levels = [lvl for lvl in levels if (ht_root / f"quads_{lvl}.npz").exists()]
     missing_levels = [lvl for lvl in levels if lvl not in present_levels]
     if not present_levels:
+        manifest_path = index_root / "manifest.json"
+        details = [
+            f"root={index_root}",
+            f"manifest={'ok' if manifest_path.exists() else 'missing'}",
+        ]
+        for lvl in levels:
+            details.append(f"{lvl}={'ok' if (ht_root / f'quads_{lvl}.npz').exists() else 'missing'}")
         msg = (
             "index has no quad hash tables (levels: "
             + ", ".join(levels)
-            + "); build the index with zebuildindex (see firstrun.txt)"
+            + ") — details: "
+            + ", ".join(details)
+            + ". Build the index with zebuildindex (see firstrun.txt)"
         )
         logger.error(msg)
         return WcsSolution(False, msg, None, {}, None, {})
@@ -335,6 +345,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
             dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
             rot_scale = scale * np.exp(1j * transform.rotation)
             translation = complex(*transform.translation)
+            if getattr(transform, "parity", 1) < 0:
+                src_all_c = np.conj(src_all_c)
             pred = rot_scale * src_all_c + translation
             err_deg = np.abs(pred - dst_all_c)
             tol_deg = max(1e-6, float(config.pixel_tolerance) * max(scale, 1e-12))
@@ -357,13 +369,19 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
                 tile_in = tile_in[local_mask]
                 world_in = world_in[local_mask]
             # Refit similarity on local inliers
-            hyp2 = _derive_similarity(img_in.astype(np.float64), tile_in.astype(np.float64))
+            reflected = getattr(transform, "parity", 1) < 0
+            hyp2 = _derive_similarity(
+                img_in.astype(np.float64),
+                tile_in.astype(np.float64),
+                reflected=reflected,
+            )
             if hyp2 is not None:
                 rot_scale2, translation2 = hyp2
                 transform = SimilarityTransform(
                     scale=float(abs(rot_scale2)),
                     rotation=float(np.angle(rot_scale2)),
                     translation=(float(translation2.real), float(translation2.imag)),
+                    parity=-1 if reflected else 1,
                 )
             crpix = (image.shape[1] / 2.0 + 1.0, image.shape[0] / 2.0 + 1.0)
             wcs = tan_from_similarity(

@@ -11,6 +11,11 @@ from astropy.coordinates import Angle
 import astropy.units as u
 from astropy.io import fits
 
+from zeblindsolver.fits_utils import (
+    estimate_scale_and_fov as _core_estimate_scale_and_fov,
+    to_luminance_for_solve as _core_to_luminance_for_solve,
+)
+from zeblindsolver.metadata_solver import NearSolveConfig as InternalNearConfig, solve_near as _internal_solve_near
 from zeblindsolver.zeblindsolver import SolveConfig as InternalBlindConfig, solve_blind as _internal_solve_blind
 
 
@@ -136,77 +141,14 @@ def estimate_scale_and_fov(
     width: int,
     height: int,
 ) -> tuple[Optional[float], tuple[Optional[float], Optional[float]]]:
-    focal_len = header.get("FOCALLEN") or header.get("FOCLEN") or header.get("FOCALLENGTH")
-    if focal_len is None:
-        return None, (None, None)
-    try:
-        focal_len = float(focal_len)
-    except (TypeError, ValueError):
-        return None, (None, None)
-    if focal_len <= 0:
-        return None, (None, None)
-    pix_x = header.get("XPIXSZ") or header.get("PIXSIZE1")
-    pix_y = header.get("YPIXSZ") or header.get("PIXSIZE2")
-    if pix_x is None or pix_y is None:
-        return None, (None, None)
-    try:
-        pix_um = float((float(pix_x) + float(pix_y)) / 2.0)
-    except (TypeError, ValueError):
-        return None, (None, None)
-    if pix_um <= 0:
-        return None, (None, None)
-    scale = 206.265 * pix_um / float(focal_len)
-    fov_x = scale * width / 3600.0
-    fov_y = scale * height / 3600.0
-    return float(scale), (float(fov_x), float(fov_y))
-
-
-def _extract_bayer_green(data: np.ndarray, pattern: str) -> np.ndarray:
-    pattern = (pattern or "").strip().upper()
-    if len(pattern) != 4 or data.ndim != 2:
-        return data
-    mask = np.zeros_like(data, dtype=bool)
-    mapping = {(0, 0): pattern[0], (0, 1): pattern[1], (1, 0): pattern[2], (1, 1): pattern[3]}
-    for (dy, dx), channel in mapping.items():
-        if channel == "G":
-            mask[dy::2, dx::2] = True
-    if not mask.any():
-        return data
-    result = np.array(data, copy=True)
-    green_values = result[mask]
-    if green_values.size == 0:
-        return data
-    mean_green = float(np.mean(green_values))
-    if math.isfinite(mean_green):
-        result[~mask] = mean_green
-    return result
+    return _core_estimate_scale_and_fov(header, width, height)
 
 
 def to_luminance_for_solve(hdu: fits.PrimaryHDU) -> np.ndarray:
-    data = hdu.data
-    if data is None:
-        raise InvalidInputError("FITS HDU has no data to generate luminance")
-    arr = np.asarray(data)
-    if arr.ndim == 3:
-        arr = np.mean(arr, axis=0)
-    elif arr.ndim == 2:
-        bayer = hdu.header.get("BAYERPAT") or hdu.header.get("BAYERP")
-        arr = _extract_bayer_green(np.asarray(arr), bayer)
-    else:
-        raise InvalidInputError(f"Unsupported FITS data shape for luminance: {arr.shape}")
-    arr = np.asarray(arr, dtype=np.float32)
     try:
-        min_val = float(np.nanmin(arr))
-    except (ValueError, FloatingPointError):
-        min_val = 0.0
-    if math.isfinite(min_val):
-        arr -= min_val
-    arr = np.nan_to_num(arr, copy=False)
-    high = float(np.nanpercentile(arr, 99.5)) if arr.size else 1.0
-    if not math.isfinite(high) or high <= 0:
-        high = 1.0
-    arr = np.clip(arr / high, 0.0, 1.0)
-    return arr.astype(np.float32, copy=False)
+        return _core_to_luminance_for_solve(hdu)
+    except ValueError as exc:
+        raise InvalidInputError(str(exc)) from exc
 
 
 def blind_solve(
@@ -261,3 +203,71 @@ def blind_solve(
         updated_keywords=solution.header_updates,
         output_path=fits_path,
     )
+
+
+def near_solve(
+    fits_path: str,
+    index_root: str,
+    *,
+    config: Optional[InternalNearConfig] = None,
+    log: Optional[Callable[[str], None]] = None,
+    skip_if_valid: bool = True,
+    fallback_to_blind: bool = True,
+) -> BlindSolveResult:
+    logger = log or _default_log
+    start = time.perf_counter()
+    fits_path = str(Path(fits_path).expanduser())
+    index_root = str(Path(index_root).expanduser())
+    logger(f"[ZENEAR] starting (index_root={index_root})")
+    if skip_if_valid:
+        try:
+            with fits.open(fits_path, mode="readonly", memmap=False) as hdul:
+                if has_valid_wcs(hdul[0].header):
+                    elapsed = time.perf_counter() - start
+                    message = "skipped: already valid"
+                    logger(f"[ZENEAR] {message}")
+                    return BlindSolveResult(
+                        success=True,
+                        message=message,
+                        elapsed_sec=elapsed,
+                        tried_dbs=[index_root],
+                        used_db=None,
+                        wrote_wcs=False,
+                        updated_keywords={},
+                        output_path=fits_path,
+                    )
+        except Exception as exc:
+            raise InvalidInputError(f"Unable to read FITS header: {exc}") from exc
+    try:
+        solution = _internal_solve_near(fits_path, index_root, config=config)
+    except InvalidInputError:
+        raise
+    except Exception as exc:
+        raise BlindSolverRuntimeError(f"Internal near solver failed: {exc}") from exc
+    elapsed = time.perf_counter() - start
+    status_text = "succeeded" if solution.success else "failed"
+    logger(f"[ZENEAR] {status_text}: {solution.message}")
+    result = BlindSolveResult(
+        success=solution.success,
+        message=solution.message,
+        elapsed_sec=elapsed,
+        tried_dbs=[index_root],
+        used_db=solution.tile_key,
+        wrote_wcs=solution.success,
+        updated_keywords=solution.header_updates,
+        output_path=fits_path,
+    )
+    if solution.success or not fallback_to_blind:
+        return result
+    logger(f"[ZENEAR] near solve failed ({solution.message}); attempting blind fallback…")
+    blind_result = blind_solve(
+        fits_path,
+        index_root,
+        config=None,
+        log=log,
+        skip_if_valid=False,
+    )
+    prefix = f"near failed: {solution.message}"
+    blind_message = blind_result["message"]
+    blind_result["message"] = f"{prefix}; blind {blind_message}"
+    return blind_result

@@ -83,6 +83,37 @@ a trustworthy WCS (unless `--no-blind` is provided). Successful blind solves are
 logged in both CLI and GUI modes (`run_info_blind_*` entries) and prevent GUI
 freezes because ASTAP runs in worker threads.
 
+## Metadata-assisted near solver
+
+The new `zeblindsolver/metadata_solver.py` path keeps the solving workflow
+entirely in Python and only requires the manifest + tile projections produced by
+`zebuildindex`.  No quad hash tables are needed.  Given a FITS file with an RA/Dec
+hint and approximate optical metadata, the solver:
+
+- Detects image stars via the shared `star_detect` module.
+- Loads nearby catalogue tiles from `index/tiles/*.npz`, reprojects them onto the
+  requested tangent plane, and matches stars via similarity RANSAC (with optional
+  parity flips).
+- Writes a TAN WCS (and SIP terms if needed) together with `SOLVED`, `QUALITY`,
+  `NEAR_VER`, `INLIERS`, `RMSPX`, and `PIXSCAL` keywords.
+- Falls back to the quad-based blind solver automatically when metadata is
+  missing or inconsistent (if the quad tables are present).
+
+Programmatic usage mirrors the blind helper:
+
+```python
+from pathlib import Path
+from zesolver import NearSolveConfig, near_solve
+
+config = NearSolveConfig(max_img_stars=400, max_cat_stars=1000)
+result = near_solve("examples/Light_M31.fit", index_root="index", config=config)
+print(result["message"])
+```
+
+The GUI settings tab exposes a dedicated **“Near solve (Python, no quads)”**
+button next to the blind test action so you can validate a sample FITS file
+against your local index without launching ASTAP.
+
 ## Status
 
 Phase 1 focuses on catalogue ingest, inspection, and the assisted solver path. Blind solving,
