@@ -4,3 +4,4 @@ database/
 examples/
 zewcs290/__pycache__/
 zesolver/__pycache__/
+*.log

@@ -32,6 +32,7 @@ from astropy.io import fits
 ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+LOG_FILE = ROOT_DIR / "zesolver.log"
 
 try:
     from importlib.metadata import PackageNotFoundError, version as pkg_version
@@ -108,6 +109,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "formats_label": "Extensions suivies",
         "families_label": "Familles ASTAP",
         "overwrite_label": "Réécrire les WCS existants",
+        "blind_label": "Activer le blind solver ASTAP",
         "files_header": "Fichier",
         "status_header": "Statut",
         "details_header": "Détails",
@@ -163,6 +165,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "formats_label": "Watched extensions",
         "families_label": "ASTAP families",
         "overwrite_label": "Overwrite existing WCS",
+        "blind_label": "Enable ASTAP blind solver",
         "files_header": "File",
         "status_header": "Status",
         "details_header": "Details",
@@ -198,6 +201,37 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "run_info_blind_failed": "Blind failed: {message}",
     },
 }
+
+
+def _configure_logging(level_name: str) -> None:
+    """Setup console + file logging (appends to zesolver.log)."""
+    level = getattr(logging, (level_name or "").upper(), logging.INFO)
+    root = logging.getLogger()
+    root.setLevel(level)
+    configured = getattr(_configure_logging, "_configured", False)
+    if configured:
+        for handler in root.handlers:
+            handler.setLevel(level)
+        return
+    formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(level)
+    stream_handler.setFormatter(formatter)
+    root.addHandler(stream_handler)
+    file_handler: Optional[logging.Handler] = None
+    try:
+        file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    except OSError as exc:  # pragma: no cover - filesystem edge case
+        print(f"Warning: unable to open log file {LOG_FILE}: {exc}", file=sys.stderr)
+    else:
+        file_handler.setLevel(level)
+        file_handler.setFormatter(formatter)
+        root.addHandler(file_handler)
+    _configure_logging._configured = True  # type: ignore[attr-defined]
+    if file_handler:
+        root.info("Logging initialized — writing to %s", LOG_FILE)
+    else:
+        root.info("Logging initialized (no file handler)")
 
 
 class SolveError(RuntimeError):
@@ -917,7 +951,11 @@ class ImageSolver:
         return self.config.blind_enabled and path.suffix.lower() in FITS_EXTENSIONS
 
     def _resolve_blind_db_chain(self) -> List[str]:
-        entries = list(self.config.blind_db_chain) if self.config.blind_db_chain else list(DEFAULT_DB_SEQUENCE)
+        entries = (
+            list(self.config.blind_db_chain)
+            if self.config.blind_db_chain
+            else list(DEFAULT_DB_SEQUENCE)
+        )
         resolved: List[str] = []
         seen: set[str] = set()
         for entry in entries:
@@ -925,15 +963,34 @@ class ImageSolver:
             candidates = [raw]
             if not raw.is_absolute():
                 candidates.append((self.config.db_root / entry).expanduser())
+            matched = False
             for candidate in candidates:
                 if candidate.is_dir():
                     normalized = str(candidate.resolve())
                     if normalized not in seen:
                         seen.add(normalized)
                         resolved.append(normalized)
+                    matched = True
                     break
-            else:
-                logging.debug("Blind DB %s not found for %s", entry, self.config.db_root)
+            if not matched:
+                text_entry = str(entry).strip()
+                if text_entry and text_entry not in seen:
+                    logging.debug(
+                        "Blind DB %s not found as directory, keeping literal token",
+                        entry,
+                    )
+                    resolved.append(text_entry)
+                    seen.add(text_entry)
+        have_directory = any(Path(item).expanduser().is_dir() for item in resolved)
+        if not resolved or not have_directory:
+            fallback = str(self.config.db_root.resolve())
+            logging.info(
+                "Blind DB chain missing directories, adding catalogue root %s",
+                fallback,
+            )
+            if fallback not in seen:
+                resolved.insert(0, fallback)
+                seen.add(fallback)
         return resolved
 
     def _run_blind_solver(
@@ -950,6 +1007,7 @@ class ImageSolver:
             return None
         db_chain = self._resolve_blind_db_chain()
         if not db_chain:
+            logging.info("Blind solver skipped for %s: no ASTAP databases found", path.name)
             return None
         try:
             header = fits.getheader(path, ext=0)
@@ -957,6 +1015,7 @@ class ImageSolver:
             logging.debug("Blind fallback skipped for %s: %s", path.name, exc)
             return None
         if skip_if_header_has_wcs and has_valid_wcs(header):
+            logging.info("Blind solver skipped for %s: header already holds valid WCS", path.name)
             return None
         header_ra = _parse_angle(header.get("RA") or header.get("OBJCTRA"), is_ra=True)
         header_dec = _parse_angle(header.get("DEC") or header.get("OBJCTDEC"), is_ra=False)
@@ -964,6 +1023,15 @@ class ImageSolver:
             ra_hint = header_ra
         if dec_hint is None:
             dec_hint = header_dec
+        db_labels = ", ".join(Path(entry).name or entry for entry in db_chain)
+        logging.info(
+            "Blind solver attempt for %s (dbs=%s, hints=%s/%s, skip_if_valid=%s)",
+            path.name,
+            db_labels or "unknown",
+            f"{ra_hint:.3f}°" if ra_hint is not None else "?",
+            f"{dec_hint:.3f}°" if dec_hint is not None else "?",
+            skip_if_valid,
+        )
         run_info.append(("run_info_blind_started", {"path": path.name}))
         try:
             result = blind_solve(
@@ -993,8 +1061,10 @@ class ImageSolver:
                     {"db": db_name, "elapsed": f"{result['elapsed_sec']:.1f}s"},
                 )
             )
+            logging.info("Blind solver success for %s via %s (%s)", path.name, db_name, result["message"])
         else:
             run_info.append(("run_info_blind_failed", {"message": result["message"]}))
+            logging.info("Blind solver failed for %s: %s", path.name, result["message"])
         return result
 
     @staticmethod
@@ -1215,8 +1285,7 @@ def _format_run_info_cli(key: str, payload: dict[str, Any], path: Path) -> Optio
 
 
 def run_cli(args: argparse.Namespace) -> int:
-    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
-    logging.basicConfig(level=log_level, format="%(levelname)s %(message)s")
+    _configure_logging(args.log_level)
     formats = (
         tuple(f".{chunk.strip().lstrip('.')}".lower() for chunk in args.formats.split(","))
         if args.formats
@@ -1287,6 +1356,7 @@ def run_cli(args: argparse.Namespace) -> int:
 
 
 def launch_gui(args: argparse.Namespace) -> int:
+    _configure_logging(args.log_level)
     try:
         from PySide6 import QtCore, QtGui, QtWidgets
     except ImportError as exc:  # pragma: no cover - optional dependency
@@ -1442,6 +1512,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             )
             self.overwrite_check = QtWidgets.QCheckBox()
             self.overwrite_check.setChecked(args.overwrite)
+            self.blind_check = QtWidgets.QCheckBox()
+            self.blind_check.setChecked(args.blind_enabled)
             self.fov_label_widget = QtWidgets.QLabel()
             self.search_scale_label_widget = QtWidgets.QLabel()
             self.search_attempts_label_widget = QtWidgets.QLabel()
@@ -1462,6 +1534,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.max_files_label_widget, self.max_files_spin)
             form.addRow(self.formats_label_widget, self.formats_edit)
             form.addRow(self.families_label_widget, self.families_edit)
+            form.addRow(self.blind_check)
             form.addRow(self.overwrite_check)
             return self.options_box
 
@@ -1538,6 +1611,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.max_files_label_widget.setText(self._text("max_files_label"))
             self.formats_label_widget.setText(self._text("formats_label"))
             self.families_label_widget.setText(self._text("families_label"))
+            self.blind_check.setText(self._text("blind_label"))
             self.overwrite_check.setText(self._text("overwrite_label"))
             self.files_view.setHeaderLabels(
                 [
@@ -1697,7 +1771,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 search_radius_scale=self.search_scale_spin.value(),
                 search_radius_attempts=self.search_attempts_spin.value(),
                 max_search_radius_deg=max_radius,
-                blind_enabled=args.blind_enabled,
+                blind_enabled=self.blind_check.isChecked(),
                 blind_db_chain=_parse_db_chain_arg(args.blind_db),
                 blind_profile=args.auto_blind_profile,
                 blind_timeout=args.blind_timeout,
@@ -1818,6 +1892,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.status_label.setText(self._text("status_ready"))
 
         def _log(self, message: str) -> None:
+            logging.info(message)
             timestamp = time.strftime("%H:%M:%S")
             self.log_view.appendPlainText(f"[{timestamp}] {message}")
             self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
