@@ -4,8 +4,6 @@ from .blindindex import BlindIndex, BlindIndexCandidate, ObservedQuad
 from .zeblindsolver import (
     BlindSolveResult,
     BlindSolverRuntimeError,
-    DEFAULT_DB_SEQUENCE,
-    PROFILE_PRESETS,
     blind_solve,
     estimate_scale_and_fov,
     has_valid_wcs,
@@ -16,8 +14,6 @@ from .zeblindsolver import (
 __all__ = [
     "BlindSolveResult",
     "BlindSolverRuntimeError",
-    "DEFAULT_DB_SEQUENCE",
-    "PROFILE_PRESETS",
     "blind_solve",
     "estimate_scale_and_fov",
     "has_valid_wcs",

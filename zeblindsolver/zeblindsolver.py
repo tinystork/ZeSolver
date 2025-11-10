@@ -16,7 +16,9 @@ from .asterisms import hash_quads, sample_quads
 from .candidate_search import tally_candidates
 from .image_prep import build_pyramid, read_fits_as_luma, remove_background
 from .matcher import SimilarityStats, SimilarityTransform, estimate_similarity_RANSAC
+from .matcher import _derive_similarity  # quad-based hypothesis helper
 from .quad_index_builder import QuadIndex, load_manifest, lookup_hashes
+from .levels import LEVEL_MAP
 from .star_detect import detect_stars
 from .verify import validate_solution
 from .wcs_fit import fit_wcs_sip, fit_wcs_tan, needs_sip, tan_from_similarity
@@ -66,7 +68,9 @@ def _image_positions(stars: np.ndarray) -> np.ndarray:
 
 
 def _load_tile_positions(index_root: Path, entry: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
-    tile_path = index_root / entry["tile_file"]
+    # Normalize path separators to support manifests written on Windows
+    rel = str(entry["tile_file"]).replace("\\", "/")
+    tile_path = index_root / rel
     with np.load(tile_path) as data:
         xy = np.column_stack((data["x_deg"], data["y_deg"]))
         world = np.column_stack((data["ra_deg"], data["dec_deg"]))
@@ -83,10 +87,10 @@ def _collect_tile_matches(
     tile_positions: np.ndarray,
     tile_world: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    matches_img: list[np.ndarray] = []
-    matches_tile: list[np.ndarray] = []
-    matches_world: list[np.ndarray] = []
-    seen: set[tuple[int, int]] = set()
+    # Accumulate votes for (image_star, tile_star) pairs across matching quads,
+    # then keep only pairs with sufficient support to reduce spurious matches.
+    from collections import Counter
+    votes: Counter[tuple[int, int]] = Counter()
     for level in levels:
         try:
             index = QuadIndex.load(index_root, level)
@@ -97,26 +101,32 @@ def _collect_tile_matches(
             if slc.start == slc.stop:
                 continue
             obs_combo = observed_quads[idx]
+            # Skip excessively large buckets (too ambiguous)
+            if getattr(index, "bucket_cap", 0) and (slc.stop - slc.start) > index.bucket_cap:
+                continue
             for bucket in range(slc.start, slc.stop):
                 if int(index.tile_indices[bucket]) != tile_index:
                     continue
                 tile_combo = index.quad_indices[bucket]
                 for obs_star, tile_star in zip(obs_combo, tile_combo):
-                    pair = (int(obs_star), int(tile_star))
-                    if pair in seen:
-                        continue
-                    seen.add(pair)
-                    matches_img.append(image_positions[pair[0]])
-                    matches_tile.append(tile_positions[pair[1]])
-                    matches_world.append(tile_world[pair[1]])
-    if not matches_img:
+                    votes[(int(obs_star), int(tile_star))] += 1
+    if not votes:
         empty = np.empty((0, 2), dtype=np.float32)
         return empty, empty, empty
-    return (
-        np.vstack(matches_img).astype(np.float32),
-        np.vstack(matches_tile).astype(np.float32),
-        np.vstack(matches_world).astype(np.float32),
-    )
+    # Determine a minimal vote threshold adaptively; at least 2.
+    counts = np.array(list(votes.values()), dtype=int)
+    # use percentile to drop the long tail of singletons
+    thr = max(2, int(np.percentile(counts, 60)))
+    pairs = [(i, t, c) for (i, t), c in votes.items() if c >= thr]
+    if not pairs:
+        # fallback: keep top-N by votes
+        top = sorted(votes.items(), key=lambda kv: kv[1], reverse=True)[: max(50, int(len(votes) * 0.05))]
+        pairs = [(i, t, c) for (i, t), c in top]
+    pairs.sort(key=lambda itc: itc[2], reverse=True)
+    img_pts = np.array([image_positions[i] for i, _, _ in pairs], dtype=np.float32)
+    tile_pts = np.array([tile_positions[t] for _, t, _ in pairs], dtype=np.float32)
+    world_pts = np.array([tile_world[t] for _, t, _ in pairs], dtype=np.float32)
+    return img_pts, tile_pts, world_pts
 
 
 def _build_matches_array(image_pts: np.ndarray, sky_pts: np.ndarray) -> np.ndarray:
@@ -134,6 +144,23 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
     index_root = Path(index_root).expanduser().resolve()
     manifest = load_manifest(index_root)
     levels = [level["name"] for level in manifest.get("levels", [])] or ["L", "M", "S"]
+    # Preflight: ensure there is at least one quad hash table present.
+    present_levels = [lvl for lvl in levels if (index_root / "hash_tables" / f"quads_{lvl}.npz").exists()]
+    missing_levels = [lvl for lvl in levels if lvl not in present_levels]
+    if not present_levels:
+        msg = (
+            "index has no quad hash tables (levels: "
+            + ", ".join(levels)
+            + "); build the index with zebuildindex (see firstrun.txt)"
+        )
+        logger.error(msg)
+        return WcsSolution(False, msg, None, {}, None, {})
+    if missing_levels:
+        logger.warning(
+            "some quad hash tables are missing: %s (continuing with %s)",
+            ", ".join(missing_levels),
+            ", ".join(present_levels),
+        )
     tile_entries = manifest.get("tiles", [])
     tile_map = {entry["tile_key"]: idx for idx, entry in enumerate(tile_entries)}
     logging.getLogger().setLevel(config.log_level)
@@ -157,7 +184,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
     obs_stars["x"] = stars["x"]
     obs_stars["y"] = stars["y"]
     obs_stars["mag"] = -stars["flux"]
-    quads = sample_quads(obs_stars, config.max_quads)
+    # Prefer local-neighborhood quads to improve geometric stability on TAN plane
+    quads = sample_quads(obs_stars, config.max_quads, strategy="local_brightness")
     if quads.size == 0:
         return WcsSolution(False, "no quads sampled", None, {}, None, {})
     obs_hash = hash_quads(quads, image_positions)
@@ -185,7 +213,16 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
         preferred_tile: str | None,
         parity_label: str,
     ) -> WcsSolution | None:
-        candidates = tally_candidates(hashes, index_root, levels=[level_name])
+        # Re-hash observed quads with level-specific spec to reduce collisions
+        level_spec = LEVEL_MAP.get(level_name)
+        if level_spec is not None:
+            obs_level = hash_quads(quads, image_positions, spec=level_spec)
+            level_hashes = obs_level.hashes
+            level_quads = obs_level.indices
+        else:
+            level_hashes = hashes
+            level_quads = obs_hash.indices
+        candidates = tally_candidates(level_hashes, index_root, levels=[level_name])
         if not candidates:
             logger.debug("level %s produced no candidates (parity=%s)", level_name, parity_label)
             return None
@@ -216,26 +253,126 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
                 index_root,
                 (level_name,),
                 tile_index,
-                hashes,
-                obs_hash.indices,
+                level_hashes,
+                level_quads,
                 image_positions,
                 tile_positions,
                 tile_world,
             )
             if img_points.shape[0] < 4:
                 continue
-            transform_result = estimate_similarity_RANSAC(
-                img_points,
-                tile_points,
-                trials=1000,
-                tol_px=config.pixel_tolerance,
-            )
+            # Try quad-based hypotheses first (local, stable scale) then fall back to RANSAC
+            transform_result: tuple[SimilarityTransform, SimilarityStats] | None = None
+            try:
+                index = QuadIndex.load(index_root, level_name)
+            except FileNotFoundError:
+                index = None
+            if index is not None:
+                slices = lookup_hashes(index_root, level_name, level_hashes)
+                best = None
+                best_inliers = -1
+                tested = 0
+                max_buckets = 2000
+                src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                for idx2, slc in enumerate(slices):
+                    if slc.start == slc.stop:
+                        continue
+                    if tested >= max_buckets:
+                        break
+                    obs_combo = level_quads[idx2]
+                    for b in range(slc.start, slc.stop):
+                        if int(index.tile_indices[b]) != tile_index:
+                            continue
+                        tested += 1
+                        if tested >= max_buckets:
+                            break
+                        tile_combo = index.quad_indices[b]
+                        src4 = image_positions[obs_combo].astype(np.float64)
+                        dst4 = tile_positions[tile_combo].astype(np.float64)
+                        hyp = _derive_similarity(src4, dst4)
+                        if hyp is None:
+                            continue
+                        rot_scale, translation = hyp
+                        scale = abs(rot_scale)
+                        # Accept only plausible scales (deg/px)
+                        if not (1e-5 <= scale <= 1e-2):
+                            continue
+                        pred = rot_scale * src_all_c + translation
+                        err_deg = np.abs(pred - dst_all_c)
+                        tol_deg = max(1e-6, float(config.pixel_tolerance) * scale)
+                        inliers_mask = err_deg <= tol_deg
+                        inliers = int(np.sum(inliers_mask))
+                        if inliers <= best_inliers:
+                            continue
+                        rms_px = float(np.sqrt(np.mean((err_deg[inliers_mask] / max(scale, 1e-12)) ** 2))) if inliers else float("inf")
+                        tr = SimilarityTransform(
+                            scale=float(scale),
+                            rotation=float(np.angle(rot_scale)),
+                            translation=(float(translation.real), float(translation.imag)),
+                        )
+                        st = SimilarityStats(rms_px=rms_px, inliers=inliers)
+                        best = (tr, st)
+                        best_inliers = inliers
+                        if inliers >= config.quality_inliers and rms_px <= config.quality_rms:
+                            break
+                    if best_inliers >= config.quality_inliers:
+                        break
+                transform_result = best
+            if transform_result is None:
+                transform_result = estimate_similarity_RANSAC(
+                    img_points,
+                    tile_points,
+                    trials=2000,
+                    tol_px=config.pixel_tolerance,
+                )
             if transform_result is None:
                 continue
-            transform, _ = transform_result
+            # Build localized inliers and refit similarity on that subset
+            transform, _stats0 = transform_result
+            scale = float(transform.scale)
+            src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+            dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+            rot_scale = scale * np.exp(1j * transform.rotation)
+            translation = complex(*transform.translation)
+            pred = rot_scale * src_all_c + translation
+            err_deg = np.abs(pred - dst_all_c)
+            tol_deg = max(1e-6, float(config.pixel_tolerance) * max(scale, 1e-12))
+            inliers_mask = err_deg <= tol_deg
+            if not inliers_mask.any():
+                continue
+            img_in = img_points[inliers_mask]
+            tile_in = tile_points[inliers_mask]
+            world_in = tile_world_matches[inliers_mask]
+            # Cluster locally around the median predicted position
+            pred_in = pred[inliers_mask]
+            cx = float(np.median(pred_in.real))
+            cy = float(np.median(pred_in.imag))
+            dloc = np.hypot(tile_in[:, 0] - cx, tile_in[:, 1] - cy)
+            approx_fov_deg = max(image.shape) * max(scale, 1e-12)
+            radius = max(0.2, 0.6 * approx_fov_deg)
+            local_mask = dloc <= radius
+            if local_mask.sum() >= 6:
+                img_in = img_in[local_mask]
+                tile_in = tile_in[local_mask]
+                world_in = world_in[local_mask]
+            # Refit similarity on local inliers
+            hyp2 = _derive_similarity(img_in.astype(np.float64), tile_in.astype(np.float64))
+            if hyp2 is not None:
+                rot_scale2, translation2 = hyp2
+                transform = SimilarityTransform(
+                    scale=float(abs(rot_scale2)),
+                    rotation=float(np.angle(rot_scale2)),
+                    translation=(float(translation2.real), float(translation2.imag)),
+                )
             crpix = (image.shape[1] / 2.0 + 1.0, image.shape[0] / 2.0 + 1.0)
-            wcs = tan_from_similarity(transform, image.shape, center_pixel=crpix)
-            matches_array = _build_matches_array(img_points, tile_world_matches)
+            wcs = tan_from_similarity(
+                transform,
+                image.shape,
+                center_pixel=crpix,
+                tile_center=(float(tile_entry.get("center_ra_deg", 0.0)), float(tile_entry.get("center_dec_deg", 0.0))),
+            )
+            matches_array = _build_matches_array(img_in, world_in)
             stats = validate_solution(wcs, matches_array, thresholds)
             final_wcs = wcs
             final_stats = stats

@@ -30,7 +30,15 @@ def load_manifest(index_root: Path | str) -> dict[str, Any]:
 
 
 def _tile_file_path(index_root: Path, entry: dict[str, Any]) -> Path:
-    candidate = index_root / entry.get("tile_file", "")
+    """Resolve a tile file path from the manifest entry.
+
+    The manifest stores relative paths. Normalize any Windows-style backslashes
+    to forward slashes so the index remains portable across platforms.
+    """
+    raw = entry.get("tile_file", "")
+    # Normalize separators for cross-platform compatibility
+    rel = str(raw).replace("\\", "/")
+    candidate = index_root / rel
     if not candidate.exists():
         raise FileNotFoundError(candidate)
     return candidate
@@ -102,7 +110,9 @@ def build_quad_index(index_root: Path | str, level: str, *, max_quads_per_tile: 
             stars["x"] = data["x_deg"].astype(np.float32)
             stars["y"] = data["y_deg"].astype(np.float32)
             stars["mag"] = data["mag"].astype(np.float32)
-        quads = sample_quads(stars, max_quads_per_tile)
+        # Use locality-aware sampling for smaller-diameter levels to avoid overly large quads
+        strategy = "biased_brightness" if level == "L" else "local_brightness"
+        quads = sample_quads(stars, max_quads_per_tile, strategy=strategy)
         if quads.size == 0:
             continue
         quad_hash = hash_quads(quads, coords, spec=spec)

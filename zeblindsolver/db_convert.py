@@ -122,7 +122,8 @@ def build_index_from_astap(
                     "ra_segments": [[float(a), float(b)] for a, b in tile_meta.bounds.ra_segments],
                 },
                 "stars": int(stars.size),
-                "tile_file": str(tile_path.relative_to(index_root)),
+                # Store relative path using POSIX separators for cross-platform portability
+                "tile_file": tile_path.relative_to(index_root).as_posix(),
                 "usable_ratio": float(stars.size / total) if total else 0.0,
             }
         )

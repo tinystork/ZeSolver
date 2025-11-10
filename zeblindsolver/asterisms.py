@@ -78,26 +78,66 @@ def _hash_from_indexes(
 
 
 def sample_quads(stars: np.ndarray, max_quads: int, strategy: str = "biased_brightness") -> np.ndarray:
-    """Return up to *max_quads* index-tuples biased toward bright stars."""
-    if max_quads <= 0:
-        return np.zeros((0, 4), dtype=np.uint16)
-    if stars.shape[0] < 4:
+    """Return up to *max_quads* index-tuples according to a sampling strategy.
+
+    Strategies:
+    - "biased_brightness": combinations from the brightest pool (fast, wide-area)
+    - "local_brightness": seed on bright stars and form quads with nearest neighbors (for smaller diameters)
+    """
+    if max_quads <= 0 or stars.shape[0] < 4:
         return np.zeros((0, 4), dtype=np.uint16)
     mags = stars["mag"]
-    order = np.argsort(mags)
+    order = np.argsort(mags)  # ascending: bright first
     if strategy == "biased_brightness":
         limit = min(len(order), max(16, int(max_quads ** 0.5) * 3, 64))
         pool = order[:limit]
+        combos = []
+        for combo in itertools.combinations(pool, 4):
+            combos.append(combo)
+            if len(combos) >= max_quads:
+                break
+        if not combos:
+            return np.zeros((0, 4), dtype=np.uint16)
+        return np.array(combos, dtype=np.uint16)
+    elif strategy == "local_brightness":
+        # Heuristic: use a handful of bright seeds and their K nearest neighbors
+        K = 16
+        # Each seed with K neighbors yields up to C(K,3) quads
+        per_seed = (K * (K - 1) * (K - 2)) // 6
+        min_seeds = 4
+        seeds_needed = max(min_seeds, int(np.ceil(max_quads / max(1, per_seed))))
+        seeds = order[:min(len(order), seeds_needed * 2)]  # take a bit more to diversify
+        combos: list[tuple[int, int, int, int]] = []
+        xy = np.column_stack((stars["x"], stars["y"]))
+        for seed in seeds:
+            dx = xy[:, 0] - xy[seed, 0]
+            dy = xy[:, 1] - xy[seed, 1]
+            dist2 = dx * dx + dy * dy
+            # Exclude the seed itself
+            order_nn = np.argsort(dist2)
+            nn = [idx for idx in order_nn if idx != seed][:K]
+            if len(nn) < 3:
+                continue
+            for a, b, c in itertools.combinations(nn, 3):
+                combos.append((seed, a, b, c))
+                if len(combos) >= max_quads:
+                    break
+            if len(combos) >= max_quads:
+                break
+        if not combos:
+            return np.zeros((0, 4), dtype=np.uint16)
+        return np.array(combos, dtype=np.uint16)
     else:
+        # Fallback: use the full order (may be very slow)
         pool = order
-    combos = []
-    for combo in itertools.combinations(pool, 4):
-        combos.append(combo)
-        if len(combos) >= max_quads:
-            break
-    if not combos:
-        return np.zeros((0, 4), dtype=np.uint16)
-    return np.array(combos, dtype=np.uint16)
+        combos = []
+        for combo in itertools.combinations(pool, 4):
+            combos.append(combo)
+            if len(combos) >= max_quads:
+                break
+        if not combos:
+            return np.zeros((0, 4), dtype=np.uint16)
+        return np.array(combos, dtype=np.uint16)
 
 def hash_quads(quads: np.ndarray, positions: np.ndarray, *, spec: QuadLevelSpec | None = None) -> QuadHash:
     """Hash the provided quads using the 3-ratio encoding and parity bit."""

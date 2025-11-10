@@ -87,9 +87,23 @@ def estimate_similarity_RANSAC(
     scale = abs(rot_scale)
     err_px = err_deg / max(scale, 1e-8)
     mask = err_px <= tol_px
+    # Refit using inliers to stabilize the similarity parameters
+    if mask.any():
+        in_src = image_points[mask]
+        in_dst = catalog_points[mask]
+        refined = _derive_similarity(in_src, in_dst)
+        if refined is not None:
+            rot_scale, translation = refined
+            scale = abs(rot_scale)
+            src_c = _complexify(image_points)
+            dst_c = _complexify(catalog_points)
+            predictions = rot_scale * src_c + translation
+            err_deg = np.abs(predictions - dst_c)
+            err_px = err_deg / max(scale, 1e-8)
+            mask = err_px <= tol_px
     rms_px = float(np.sqrt(np.mean(err_px ** 2)))
     transform = SimilarityTransform(
-        scale=scale,
+        scale=float(max(scale, 1e-12)),
         rotation=float(np.angle(rot_scale)),
         translation=(float(translation.real), float(translation.imag)),
     )

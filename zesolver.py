@@ -15,11 +15,10 @@ import json
 import logging
 import math
 import os
-import shlex
 import sys
 import threading
 import time
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, List, Optional, Sequence
 
@@ -62,15 +61,19 @@ from skimage import color, io as skio
 from skimage.feature import peak_local_max
 from skimage.transform import rescale
 
-from zesolver.blindindex import BlindIndex, build_observed_quads
 from zesolver.zeblindsolver import (
     BlindSolveResult,
     BlindSolverRuntimeError,
-    DEFAULT_DB_SEQUENCE,
-    PROFILE_PRESETS,
     blind_solve,
     has_valid_wcs,
 )
+from zeblindsolver.db_convert import (
+    DEFAULT_MAG_CAP,
+    DEFAULT_MAX_QUADS_PER_TILE,
+    DEFAULT_MAX_STARS,
+    build_index_from_astap,
+)
+from zeblindsolver.zeblindsolver import SolveConfig as BlindSolveConfig, solve_blind as python_solve_blind
 
 
 FITS_EXTENSIONS = {".fit", ".fits", ".fts"}
@@ -78,6 +81,23 @@ RASTER_EXTENSIONS = {".tif", ".tiff", ".png", ".jpg", ".jpeg"}
 SUPPORTED_EXTENSIONS = FITS_EXTENSIONS | RASTER_EXTENSIONS
 SIDE_CAR_SUFFIX = ".wcs.json"
 FITS_MEMMAP_FORBIDDEN_KEYS = ("BZERO", "BSCALE", "BLANK")
+
+
+def _parse_formats_value(value: Optional[str]) -> list[str]:
+    text = (value or "").replace(";", ",").strip()
+    if not text:
+        return list(sorted(SUPPORTED_EXTENSIONS))
+    formats: list[str] = []
+    for chunk in text.split(","):
+        chunk = chunk.strip().lower()
+        if not chunk:
+            continue
+        if not chunk.startswith("."):
+            chunk = f".{chunk}"
+        formats.append(chunk)
+    if not formats:
+        return list(sorted(SUPPORTED_EXTENSIONS))
+    return formats
 
 DEFAULT_FOV_DEG = 1.5
 DEFAULT_MAX_IMAGE_STARS = 200
@@ -144,6 +164,23 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "run_info_blind_db": "Blind: base {db}",
         "run_info_blind_succeeded": "Blind réussi ({db}, {elapsed})",
         "run_info_blind_failed": "Blind échec: {message}",
+        "solver_tab": "Solveur",
+        "settings_tab": "Réglages",
+        "settings_db_label": "Base ASTAP",
+        "settings_index_label": "Dossier d'index",
+        "settings_mag_label": "Magnitude max",
+        "settings_max_stars_label": "Étoiles max",
+        "settings_max_quads_label": "Quads max",
+        "settings_sample_label": "Fichier test (FITS)",
+        "settings_save_btn": "Sauvegarder",
+        "settings_build_btn": "Construire l'index",
+        "settings_run_btn": "Lancer le blind solve",
+        "settings_log": "Journal d'index",
+        "settings_saved": "Réglages sauvegardés",
+        "settings_index_missing": "Répertoire d'index requis.",
+        "settings_sample_required": "Choisis un fichier FITS à tester.",
+        "settings_index_result": "Index {status}: {message}",
+        "settings_blind_result": "Blind {status}: {message}",
     },
     "en": {
         "language_menu": "Language",
@@ -200,8 +237,62 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "run_info_blind_db": "Blind: trying {db}",
         "run_info_blind_succeeded": "Blind success ({db}, {elapsed})",
         "run_info_blind_failed": "Blind failed: {message}",
+        "solver_tab": "Solver",
+        "settings_tab": "Settings",
+        "settings_db_label": "ASTAP database",
+        "settings_index_label": "Index root",
+        "settings_mag_label": "Max magnitude",
+        "settings_max_stars_label": "Max stars",
+        "settings_max_quads_label": "Max quads",
+        "settings_sample_label": "Sample FITS",
+        "settings_save_btn": "Save settings",
+        "settings_build_btn": "Build index",
+        "settings_run_btn": "Run blind solve",
+        "settings_log": "Index log",
+        "settings_saved": "Settings saved",
+        "settings_index_missing": "Index directory is required.",
+        "settings_sample_required": "Select a FITS file to test.",
+        "settings_index_result": "Index {status}: {message}",
+        "settings_blind_result": "Blind {status}: {message}",
     },
 }
+
+SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
+
+
+@dataclass
+class PersistentSettings:
+    db_root: Optional[str] = None
+    index_root: Optional[str] = None
+    mag_cap: float = DEFAULT_MAG_CAP
+    max_stars: int = DEFAULT_MAX_STARS
+    max_quads_per_tile: int = DEFAULT_MAX_QUADS_PER_TILE
+    sample_fits: Optional[str] = None
+
+
+def load_persistent_settings() -> PersistentSettings:
+    if not SETTINGS_PATH.exists():
+        return PersistentSettings()
+    try:
+        payload = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return PersistentSettings()
+    if not isinstance(payload, dict):
+        return PersistentSettings()
+    return PersistentSettings(
+        db_root=payload.get("db_root"),
+        index_root=payload.get("index_root"),
+        mag_cap=float(payload.get("mag_cap", DEFAULT_MAG_CAP)),
+        max_stars=int(payload.get("max_stars", DEFAULT_MAX_STARS)),
+        max_quads_per_tile=int(payload.get("max_quads_per_tile", DEFAULT_MAX_QUADS_PER_TILE)),
+        sample_fits=payload.get("sample_fits"),
+    )
+
+
+def save_persistent_settings(settings: PersistentSettings) -> None:
+    data = asdict(settings)
+    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
 def _configure_logging(level_name: str) -> None:
@@ -263,14 +354,8 @@ class SolveConfig:
     search_radius_attempts: int = DEFAULT_SEARCH_RADIUS_ATTEMPTS
     max_search_radius_deg: Optional[float] = None
     blind_enabled: bool = True
-    blind_db_chain: Optional[Sequence[str]] = None
-    blind_profile: Optional[str] = None
-    blind_timeout: int = 90
     blind_skip_if_valid: bool = True
-    blind_astap_exe: Optional[str] = None
-    blind_extra_args: Sequence[str] = field(default_factory=tuple)
     blind_index_path: Optional[Path] = None
-    blind_strategy: str = "auto"
 
     def __post_init__(self) -> None:
         if self.families:
@@ -284,18 +369,6 @@ class SolveConfig:
                 normalized.append(name)
             value: Optional[tuple[str, ...]] = tuple(normalized) if normalized else None
             object.__setattr__(self, "families", value)
-        if self.blind_db_chain:
-            tokens: list[str] = []
-            for entry in self.blind_db_chain:
-                if entry is None:
-                    continue
-                for chunk in str(entry).replace(";", ",").split(","):
-                    name = chunk.strip()
-                    if name:
-                        tokens.append(name)
-            object.__setattr__(self, "blind_db_chain", tuple(tokens) if tokens else None)
-        if self.blind_extra_args:
-            object.__setattr__(self, "blind_extra_args", tuple(self.blind_extra_args))
         if self.blind_index_path:
             object.__setattr__(self, "blind_index_path", Path(self.blind_index_path).expanduser())
         if self.search_radius_scale < 1.0:
@@ -304,12 +377,6 @@ class SolveConfig:
             raise ValueError("search_radius_attempts must be >= 1")
         if self.max_search_radius_deg is not None and self.max_search_radius_deg <= 0:
             raise ValueError("max_search_radius_deg must be positive")
-        if self.blind_timeout <= 0:
-            raise ValueError("blind_timeout must be positive")
-        strategy = (self.blind_strategy or "auto").strip().lower()
-        if strategy not in {"auto", "astap", "index"}:
-            raise ValueError("blind_strategy must be one of: auto, astap, index")
-        object.__setattr__(self, "blind_strategy", strategy)
 
 
 @dataclass(slots=True)
@@ -547,9 +614,6 @@ class ImageSolver:
         self._db_lock = threading.Lock()
         self._family_candidates = self._init_family_candidates()
         self._family_hint: Optional[str] = None
-        self._blind_index: Optional[BlindIndex] = None
-        self._blind_index_loaded = False
-        self._blind_index_error_logged = False
 
     def _init_family_candidates(self) -> tuple[str, ...]:
         ordered: list[str] = []
@@ -962,83 +1026,8 @@ class ImageSolver:
         )
         return np.ascontiguousarray(arr), meta
 
-    def _load_blind_index(self) -> Optional[BlindIndex]:
-        if self._blind_index_loaded:
-            return self._blind_index
-        self._blind_index_loaded = True
-        path = self.config.blind_index_path
-        if not path:
-            return None
-        try:
-            self._blind_index = BlindIndex.load(path)
-        except FileNotFoundError:
-            if not self._blind_index_error_logged:
-                logging.warning("Blind index %s not found; internal matcher disabled", path)
-                self._blind_index_error_logged = True
-        except Exception as exc:  # pragma: no cover - unexpected load failure
-            logging.exception("Unable to load blind index from %s: %s", path, exc)
-            self._blind_index_error_logged = True
-        return self._blind_index
-
-    def _index_available(self) -> bool:
-        return self._load_blind_index() is not None
-
     def _should_try_blind(self, path: Path) -> bool:
-        if not self.config.blind_enabled:
-            return False
-        suffix = path.suffix.lower()
-        strategy = self.config.blind_strategy
-        if strategy == "astap":
-            return suffix in FITS_EXTENSIONS
-        if strategy == "index":
-            return self._index_available() and suffix in SUPPORTED_EXTENSIONS
-        # auto
-        if self._index_available():
-            return suffix in SUPPORTED_EXTENSIONS
-        return suffix in FITS_EXTENSIONS
-
-    def _resolve_blind_db_chain(self) -> List[str]:
-        entries = (
-            list(self.config.blind_db_chain)
-            if self.config.blind_db_chain
-            else list(DEFAULT_DB_SEQUENCE)
-        )
-        resolved: List[str] = []
-        seen: set[str] = set()
-        for entry in entries:
-            raw = Path(entry).expanduser()
-            candidates = [raw]
-            if not raw.is_absolute():
-                candidates.append((self.config.db_root / entry).expanduser())
-            matched = False
-            for candidate in candidates:
-                if candidate.is_dir():
-                    normalized = str(candidate.resolve())
-                    if normalized not in seen:
-                        seen.add(normalized)
-                        resolved.append(normalized)
-                    matched = True
-                    break
-            if not matched:
-                text_entry = str(entry).strip()
-                if text_entry and text_entry not in seen:
-                    logging.debug(
-                        "Blind DB %s not found as directory, keeping literal token",
-                        entry,
-                    )
-                    resolved.append(text_entry)
-                    seen.add(text_entry)
-        have_directory = any(Path(item).expanduser().is_dir() for item in resolved)
-        if not resolved or not have_directory:
-            fallback = str(self.config.db_root.resolve())
-            logging.info(
-                "Blind DB chain missing directories, adding catalogue root %s",
-                fallback,
-            )
-            if fallback not in seen:
-                resolved.insert(0, fallback)
-                seen.add(fallback)
-        return resolved
+        return self.config.blind_enabled and path.suffix.lower() in FITS_EXTENSIONS
 
     def _run_blind_solver(
         self,
@@ -1052,46 +1041,23 @@ class ImageSolver:
     ) -> Optional[BlindSolveResult]:
         if not self._should_try_blind(path):
             return None
-        db_chain = self._resolve_blind_db_chain()
-        if not db_chain:
-            logging.info("Blind solver skipped for %s: no ASTAP databases found", path.name)
+        index_root = self.config.blind_index_path
+        if not index_root:
+            logging.info("Blind solver skipped for %s: no index root configured", path.name)
             return None
-        try:
-            header = fits.getheader(path, ext=0)
-        except Exception as exc:
-            logging.debug("Blind fallback skipped for %s: %s", path.name, exc)
-            return None
-        if skip_if_header_has_wcs and has_valid_wcs(header):
-            logging.info("Blind solver skipped for %s: header already holds valid WCS", path.name)
-            return None
-        header_ra = _parse_angle(header.get("RA") or header.get("OBJCTRA"), is_ra=True)
-        header_dec = _parse_angle(header.get("DEC") or header.get("OBJCTDEC"), is_ra=False)
-        if ra_hint is None:
-            ra_hint = header_ra
-        if dec_hint is None:
-            dec_hint = header_dec
-        db_labels = ", ".join(Path(entry).name or entry for entry in db_chain)
         logging.info(
-            "Blind solver attempt for %s (dbs=%s, hints=%s/%s, skip_if_valid=%s)",
+            "Blind solver attempt for %s (index=%s, skip_if_valid=%s)",
             path.name,
-            db_labels or "unknown",
-            f"{ra_hint:.3f}°" if ra_hint is not None else "?",
-            f"{dec_hint:.3f}°" if dec_hint is not None else "?",
+            Path(index_root).name or str(index_root),
             skip_if_valid,
         )
-        run_info.append(("run_info_blind_started", {"path": path.name}))
         try:
             result = blind_solve(
                 fits_path=str(path),
-                db_roots=db_chain,
-                profile=self.config.blind_profile,
-                timeout_sec=self.config.blind_timeout,
-                skip_if_valid=skip_if_valid,
-                astap_exe=self.config.blind_astap_exe,
-                extra_args=self.config.blind_extra_args,
-                ra_hint=ra_hint,
-                dec_hint=dec_hint,
+                index_root=str(index_root),
+                config=BlindSolveConfig(),
                 log=logging.info,
+                skip_if_valid=skip_if_valid,
             )
         except BlindSolverRuntimeError as exc:
             logging.warning("Blind solver failed for %s: %s", path.name, exc)
@@ -1129,87 +1095,11 @@ class ImageSolver:
             run_info=list(run_info),
         )
 
-    def _run_index_blind_solver(
-        self,
-        *,
-        path: Path,
-        metadata: Optional[ImageMetadata],
-        peaks: Optional[np.ndarray],
-        run_info: list[tuple[str, dict[str, Any]]],
-    ) -> Optional[ImageSolveResult]:
-        index = self._load_blind_index()
-        if index is None:
-            return None
-        if metadata is None or peaks is None or peaks.shape[0] < 4:
-            logging.info("Blind matcher skipped for %s: insufficient detection data", path.name)
-            return None
-        width = max(float(metadata.width), 1.0)
-        height = max(float(metadata.height), 1.0)
-        pixel_points = peaks[:, :2].astype(np.float32, copy=False)
-        unit_points = np.empty_like(pixel_points)
-        unit_points[:, 0] = pixel_points[:, 0] / width
-        unit_points[:, 1] = pixel_points[:, 1] / height
-        observed_quads = build_observed_quads(unit_points, pixel_points)
-        if not observed_quads:
-            logging.info("Blind matcher skipped for %s: not enough quad candidates", path.name)
-            return None
-        run_info.append(("run_info_blind_started", {"path": path.name}))
-        start = time.perf_counter()
-        candidates = index.query(observed_quads)
-        if not candidates:
-            message = "no quad matches"
-            run_info.append(("run_info_blind_failed", {"message": message}))
-            logging.info("Blind matcher failed for %s: %s", path.name, message)
-            return None
-        for candidate in candidates:
-            run_info.append(("run_info_blind_db", {"db": candidate.tile_key}))
-            hint_metadata = replace(
-                metadata,
-                ra_deg=candidate.center_ra_deg,
-                dec_deg=candidate.center_dec_deg,
-                source=f"blind:{candidate.tile_key}",
-            )
-            radius = max(candidate.radius_deg * 1.25, 0.5 * self.config.fov_deg, 0.3)
-            try:
-                result = self._solve_with_catalog(
-                    path=path,
-                    metadata=hint_metadata,
-                    peaks=peaks,
-                    radius=radius,
-                    families=(candidate.tile_family,),
-                    label=self._family_label(candidate.tile_family),
-                    catalog_family=candidate.tile_family,
-                )
-            except SolveError as exc:
-                logging.debug("Blind candidate %s failed for %s: %s", candidate.tile_key, path.name, exc)
-                continue
-            elapsed = time.perf_counter() - start
-            run_info.append(
-                ("run_info_blind_succeeded", {"db": candidate.tile_key, "elapsed": f"{elapsed:.1f}s"})
-            )
-            logging.info(
-                "Blind matcher success for %s via %s (score=%d, %.1fs)",
-                path.name,
-                candidate.tile_key,
-                candidate.score,
-                elapsed,
-            )
-            return result
-        message = "candidate tiles exhausted"
-        run_info.append(("run_info_blind_failed", {"message": message}))
-        logging.info("Blind matcher failed for %s: %s", path.name, message)
-        return None
-
     def _try_blind_shortcut(
         self,
         path: Path,
         run_info: list[tuple[str, dict[str, Any]]],
     ) -> tuple[Optional[ImageSolveResult], Optional[BlindSolveResult]]:
-        use_astap = self.config.blind_strategy == "astap"
-        if self.config.blind_strategy == "auto" and not self._index_available():
-            use_astap = True
-        if not use_astap:
-            return None, None
         result = self._run_blind_solver(
             path,
             run_info,
@@ -1238,42 +1128,19 @@ class ImageSolver:
         if not self.config.overwrite:
             return None
 
-        def _run_astap() -> Optional[ImageSolveResult]:
-            if cached_result and cached_result["success"]:
-                return self._build_blind_result(path, cached_result, run_info)
-            result = self._run_blind_solver(
-                path,
-                run_info,
-                skip_if_header_has_wcs=False,
-                skip_if_valid=False,
-                ra_hint=ra_hint,
-                dec_hint=dec_hint,
-            )
-            if result and result["success"]:
-                return self._build_blind_result(path, result, run_info)
-            return None
-
-        strategy = self.config.blind_strategy
-        if strategy == "index":
-            return self._run_index_blind_solver(
-                path=path,
-                metadata=metadata,
-                peaks=peaks,
-                run_info=run_info,
-            )
-        if strategy == "astap":
-            return _run_astap()
-
-        # auto strategy: prefer index when available, fall back to ASTAP
-        index_result = self._run_index_blind_solver(
-            path=path,
-            metadata=metadata,
-            peaks=peaks,
-            run_info=run_info,
+        if cached_result and cached_result["success"]:
+            return self._build_blind_result(path, cached_result, run_info)
+        result = self._run_blind_solver(
+            path,
+            run_info,
+            skip_if_header_has_wcs=False,
+            skip_if_valid=False,
+            ra_hint=ra_hint,
+            dec_hint=dec_hint,
         )
-        if index_result is not None:
-            return index_result
-        return _run_astap()
+        if result and result["success"]:
+            return self._build_blind_result(path, result, run_info)
+        return None
 
 
 class BatchSolver:
@@ -1341,37 +1208,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional hard limit (degrees) for the search radius when expanding the cone",
     )
     parser.add_argument(
-        "--blind-db",
-        "--db",
-        dest="blind_db",
-        help="Semicolon-separated ASTAP database directories for blind fallback",
-    )
-    parser.add_argument(
-        "--auto-blind-profile",
-        choices=sorted(PROFILE_PRESETS.keys()),
-        help="Instrument profile hint passed to the blind fallback",
-    )
-    parser.add_argument(
-        "--blind-timeout",
-        type=int,
-        default=90,
-        help="Timeout (seconds) for each blind fallback attempt (default: %(default)s)",
-    )
-    parser.add_argument("--blind-astap-exe", help="Path to astap/astap.exe for blind fallback")
-    parser.add_argument(
-        "--blind-extra-args",
-        help="Additional arguments forwarded to ASTAP during blind fallback",
-    )
-    parser.add_argument(
         "--blind-index",
         type=Path,
-        help="Path to the quad index (.npz) used by the internal blind matcher",
-    )
-    parser.add_argument(
-        "--blind-strategy",
-        choices=("auto", "astap", "index"),
-        default="auto",
-        help="Blind solver backend: ASTAP, the internal index, or auto-detect (default: %(default)s)",
+        help="Path to the Zeblind index root (manifest + hash tables) used by the internal matcher",
     )
     parser.add_argument(
         "--no-blind",
@@ -1411,23 +1250,6 @@ def _normalize_family_args(values: Optional[Sequence[str]]) -> Optional[List[str
     return ordered or None
 
 
-def _parse_db_chain_arg(value: Optional[str]) -> Optional[List[str]]:
-    if not value:
-        return None
-    entries: List[str] = []
-    for chunk in value.replace(";", ",").split(","):
-        token = chunk.strip()
-        if token:
-            entries.append(token)
-    return entries or None
-
-
-def _parse_extra_args_arg(value: Optional[str]) -> tuple[str, ...]:
-    if not value:
-        return tuple()
-    return tuple(shlex.split(value))
-
-
 def _format_run_info_cli(key: str, payload: dict[str, Any], path: Path) -> Optional[str]:
     if key == "run_info_blind_started":
         name = payload.get("path") or path.name
@@ -1446,16 +1268,10 @@ def _format_run_info_cli(key: str, payload: dict[str, Any], path: Path) -> Optio
 
 def run_cli(args: argparse.Namespace) -> int:
     _configure_logging(args.log_level)
-    formats = (
-        tuple(f".{chunk.strip().lstrip('.')}".lower() for chunk in args.formats.split(","))
-        if args.formats
-        else tuple(sorted(SUPPORTED_EXTENSIONS))
-    )
+    formats = tuple(_parse_formats_value(args.formats))
     if not args.db_root or not args.input_dir:
         raise SystemExit("--db-root and --input-dir are required in CLI mode (use --gui to launch the GUI)")
     families = _normalize_family_args(args.family)
-    blind_db_chain = _parse_db_chain_arg(args.blind_db)
-    blind_extra_args = _parse_extra_args_arg(args.blind_extra_args)
     config = SolveConfig(
         db_root=args.db_root.expanduser().resolve(),
         input_dir=args.input_dir.expanduser().resolve(),
@@ -1472,13 +1288,7 @@ def run_cli(args: argparse.Namespace) -> int:
         search_radius_attempts=args.search_radius_attempts,
         max_search_radius_deg=args.max_search_radius_deg,
         blind_enabled=args.blind_enabled,
-        blind_db_chain=blind_db_chain,
-        blind_profile=args.auto_blind_profile,
-        blind_timeout=args.blind_timeout,
-        blind_astap_exe=args.blind_astap_exe,
-        blind_extra_args=blind_extra_args,
         blind_index_path=args.blind_index,
-        blind_strategy=args.blind_strategy,
     )
     logging.info(
         "Starting batch solve in %s (families=%s, workers=%d, downsample=%d)",
@@ -1524,6 +1334,7 @@ def launch_gui(args: argparse.Namespace) -> int:
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise SystemExit("PySide6>=6 is required for the GUI. Install it and retry.") from exc
     prefill_families = _normalize_family_args(args.family)
+    persistent_settings = load_persistent_settings()
 
     class SolveRunner(QtCore.QThread):
         progress = QtCore.Signal(object)
@@ -1572,8 +1383,76 @@ def launch_gui(args: argparse.Namespace) -> int:
             finally:
                 self.finished.emit()
 
+    class IndexBuilder(QtCore.QThread):
+        log = QtCore.Signal(str)
+        finished = QtCore.Signal(bool, str)
+
+        def __init__(
+            self,
+            db_root: str,
+            index_root: str,
+            *,
+            mag_cap: float,
+            max_stars: int,
+            max_quads_per_tile: int,
+        ) -> None:
+            super().__init__()
+            self.db_root = db_root
+            self.index_root = index_root
+            self.mag_cap = mag_cap
+            self.max_stars = max_stars
+            self.max_quads_per_tile = max_quads_per_tile
+
+        def run(self) -> None:
+            try:
+                manifest = build_index_from_astap(
+                    self.db_root,
+                    self.index_root,
+                    mag_cap=self.mag_cap,
+                    max_stars=self.max_stars,
+                    max_quads_per_tile=self.max_quads_per_tile,
+                )
+                self.log.emit(f"Index built: {manifest}")
+                self.finished.emit(True, str(manifest))
+            except Exception as exc:
+                self.log.emit(f"Index build failed: {exc}")
+                self.finished.emit(False, str(exc))
+
+    class BlindRunner(QtCore.QThread):
+        log = QtCore.Signal(str)
+        finished = QtCore.Signal(bool, str)
+
+        def __init__(self, fits_path: str, index_root: str) -> None:
+            super().__init__()
+            self.fits_path = fits_path
+            self.index_root = index_root
+
+        def run(self) -> None:
+            try:
+                config = BlindSolveConfig(
+                    max_candidates=12,
+                    max_stars=800,
+                    max_quads=12000,
+                    sip_order=2,
+                    quality_rms=1.0,
+                    quality_inliers=60,
+                )
+                solution = python_solve_blind(self.fits_path, self.index_root, config=config)
+                if solution.success:
+                    rms = solution.stats.get("rms_px")
+                    msg = f"Blind solve succeeded (rms={rms:.2f} px)" if isinstance(rms, (int, float)) else "Blind solve succeeded"
+                    self.log.emit(msg)
+                    self.finished.emit(True, msg)
+                else:
+                    message = solution.message or "no valid solution"
+                    self.log.emit(f"Blind solve failed: {message}")
+                    self.finished.emit(False, message)
+            except Exception as exc:
+                self.log.emit(f"Blind solve error: {exc}")
+                self.finished.emit(False, str(exc))
+
     class ZeSolverWindow(QtWidgets.QMainWindow):
-        def __init__(self) -> None:
+        def __init__(self, settings: PersistentSettings) -> None:
             super().__init__()
             self._language = GUI_DEFAULT_LANGUAGE
             self.resize(1280, 760)
@@ -1583,7 +1462,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._current_input_dir: Optional[Path] = None
             self._results_seen = 0
             self._language_actions: dict[str, QtGui.QAction] = {}
+            self._settings = settings
+            self._index_worker: Optional[IndexBuilder] = None
+            self._blind_worker: Optional[BlindRunner] = None
             self._build_ui()
+            self._populate_settings_ui()
             self._prefill_from_args(args)
             self._apply_language()
 
@@ -1593,9 +1476,16 @@ def launch_gui(args: argparse.Namespace) -> int:
             central = QtWidgets.QWidget()
             layout = QtWidgets.QVBoxLayout(central)
             layout.addLayout(self._build_paths_row())
-            layout.addWidget(self._build_options_box())
-            layout.addWidget(self._build_splitter())
-            layout.addLayout(self._build_bottom_row())
+            self.tabs = QtWidgets.QTabWidget()
+            solver_tab = QtWidgets.QWidget()
+            solver_layout = QtWidgets.QVBoxLayout(solver_tab)
+            solver_layout.addWidget(self._build_options_box())
+            solver_layout.addWidget(self._build_splitter())
+            solver_layout.addLayout(self._build_bottom_row())
+            self.tabs.addTab(solver_tab, self._text("solver_tab"))
+            self.settings_tab = self._build_settings_tab()
+            self.tabs.addTab(self.settings_tab, self._text("settings_tab"))
+            layout.addWidget(self.tabs)
             self.setCentralWidget(central)
 
         def _build_menu_bar(self) -> None:
@@ -1612,25 +1502,18 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _build_paths_row(self) -> QtWidgets.QLayout:
             grid = QtWidgets.QGridLayout()
-            self.db_label = QtWidgets.QLabel()
-            self.db_edit = QtWidgets.QLineEdit()
-            self.browse_db_btn = QtWidgets.QPushButton()
-            self.browse_db_btn.clicked.connect(lambda: self._pick_directory(self.db_edit))
-            grid.addWidget(self.db_label, 0, 0)
-            grid.addWidget(self.db_edit, 0, 1)
-            grid.addWidget(self.browse_db_btn, 0, 2)
             self.input_label = QtWidgets.QLabel()
             self.input_edit = QtWidgets.QLineEdit()
             self.browse_in_btn = QtWidgets.QPushButton()
             self.browse_in_btn.clicked.connect(
                 lambda: self._pick_directory(self.input_edit, trigger_scan=True)
             )
-            grid.addWidget(self.input_label, 1, 0)
-            grid.addWidget(self.input_edit, 1, 1)
-            grid.addWidget(self.browse_in_btn, 1, 2)
+            grid.addWidget(self.input_label, 0, 0)
+            grid.addWidget(self.input_edit, 0, 1)
+            grid.addWidget(self.browse_in_btn, 0, 2)
             self.scan_btn = QtWidgets.QPushButton()
             self.scan_btn.clicked.connect(self.scan_files)
-            grid.addWidget(self.scan_btn, 0, 3, 2, 1)
+            grid.addWidget(self.scan_btn, 0, 3)
             return grid
 
         def _build_options_box(self) -> QtWidgets.QGroupBox:
@@ -1700,6 +1583,234 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.overwrite_check)
             return self.options_box
 
+        def _build_settings_tab(self) -> QtWidgets.QWidget:
+            widget = QtWidgets.QWidget()
+            column = QtWidgets.QVBoxLayout(widget)
+            form = QtWidgets.QFormLayout()
+
+            self.settings_db_label = QtWidgets.QLabel()
+            self.settings_db_edit = QtWidgets.QLineEdit(self._settings.db_root or "")
+            self.settings_db_browse = QtWidgets.QPushButton()
+            db_row = QtWidgets.QWidget()
+            db_layout = QtWidgets.QHBoxLayout(db_row)
+            db_layout.setContentsMargins(0, 0, 0, 0)
+            db_layout.addWidget(self.settings_db_edit)
+            db_layout.addWidget(self.settings_db_browse)
+            form.addRow(self.settings_db_label, db_row)
+
+            self.settings_index_label = QtWidgets.QLabel()
+            self.settings_index_edit = QtWidgets.QLineEdit(self._settings.index_root or "")
+            self.settings_index_browse = QtWidgets.QPushButton()
+            index_row = QtWidgets.QWidget()
+            index_layout = QtWidgets.QHBoxLayout(index_row)
+            index_layout.setContentsMargins(0, 0, 0, 0)
+            index_layout.addWidget(self.settings_index_edit)
+            index_layout.addWidget(self.settings_index_browse)
+            form.addRow(self.settings_index_label, index_row)
+
+            self.settings_mag_label = QtWidgets.QLabel()
+            self.settings_mag_spin = QtWidgets.QDoubleSpinBox()
+            self.settings_mag_spin.setRange(0.0, 20.0)
+            self.settings_mag_spin.setDecimals(2)
+            self.settings_mag_spin.setValue(self._settings.mag_cap)
+            form.addRow(self.settings_mag_label, self.settings_mag_spin)
+
+            self.settings_max_stars_label = QtWidgets.QLabel()
+            self.settings_max_stars_spin = QtWidgets.QSpinBox()
+            self.settings_max_stars_spin.setRange(100, 10000)
+            self.settings_max_stars_spin.setValue(self._settings.max_stars)
+            form.addRow(self.settings_max_stars_label, self.settings_max_stars_spin)
+
+            self.settings_max_quads_label = QtWidgets.QLabel()
+            self.settings_max_quads_spin = QtWidgets.QSpinBox()
+            self.settings_max_quads_spin.setRange(100, 100000)
+            self.settings_max_quads_spin.setValue(self._settings.max_quads_per_tile)
+            form.addRow(self.settings_max_quads_label, self.settings_max_quads_spin)
+
+            self.settings_sample_label = QtWidgets.QLabel()
+            self.settings_sample_edit = QtWidgets.QLineEdit(self._settings.sample_fits or "")
+            self.settings_sample_browse = QtWidgets.QPushButton()
+            sample_row = QtWidgets.QWidget()
+            sample_layout = QtWidgets.QHBoxLayout(sample_row)
+            sample_layout.setContentsMargins(0, 0, 0, 0)
+            sample_layout.addWidget(self.settings_sample_edit)
+            sample_layout.addWidget(self.settings_sample_browse)
+            form.addRow(self.settings_sample_label, sample_row)
+
+            button_row = QtWidgets.QHBoxLayout()
+            self.settings_save_btn = QtWidgets.QPushButton()
+            self.settings_save_btn.clicked.connect(self._on_save_settings_clicked)
+            self.settings_build_btn = QtWidgets.QPushButton()
+            self.settings_build_btn.clicked.connect(self._on_build_index_clicked)
+            self.settings_run_blind_btn = QtWidgets.QPushButton()
+            self.settings_run_blind_btn.clicked.connect(self._on_run_blind_clicked)
+            button_row.addWidget(self.settings_save_btn)
+            button_row.addWidget(self.settings_build_btn)
+            button_row.addWidget(self.settings_run_blind_btn)
+
+            self.settings_log_view = QtWidgets.QPlainTextEdit()
+            self.settings_log_view.setReadOnly(True)
+            column.addLayout(form)
+            column.addLayout(button_row)
+            self.settings_log_label = QtWidgets.QLabel()
+            column.addWidget(self.settings_log_label)
+            column.addWidget(self.settings_log_view)
+
+            self.settings_db_browse.clicked.connect(
+                lambda: self._pick_settings_directory(self.settings_db_edit)
+            )
+            self.settings_index_browse.clicked.connect(
+                lambda: self._pick_settings_directory(self.settings_index_edit)
+            )
+            self.settings_sample_browse.clicked.connect(self._pick_settings_sample)
+            return widget
+
+        def _pick_settings_directory(self, target: QtWidgets.QLineEdit) -> None:
+            directory = QtWidgets.QFileDialog.getExistingDirectory(
+                self,
+                self._text("dialog_select_directory"),
+            )
+            if directory:
+                target.setText(directory)
+
+        def _pick_settings_sample(self) -> None:
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self,
+                self._text("dialog_select_directory"),
+                filter="FITS Files (*.fit *.fits *.fts);;All Files (*)",
+            )
+            if path:
+                self.settings_sample_edit.setText(path)
+
+        def _populate_settings_ui(self) -> None:
+            settings = self._settings
+            self.settings_db_edit.setText(settings.db_root or "")
+            self.settings_index_edit.setText(settings.index_root or "")
+            self.settings_mag_spin.setValue(settings.mag_cap)
+            self.settings_max_stars_spin.setValue(settings.max_stars)
+            self.settings_max_quads_spin.setValue(settings.max_quads_per_tile)
+            self.settings_sample_edit.setText(settings.sample_fits or "")
+
+        def _read_settings_from_ui(self) -> PersistentSettings:
+            db_root = self.settings_db_edit.text().strip()
+            if not db_root:
+                raise ValueError(self._text("error_database_required"))
+            index_root = self.settings_index_edit.text().strip()
+            if not index_root:
+                raise ValueError(self._text("settings_index_missing"))
+            return PersistentSettings(
+                db_root=db_root,
+                index_root=index_root,
+                mag_cap=float(self.settings_mag_spin.value()),
+                max_stars=int(self.settings_max_stars_spin.value()),
+                max_quads_per_tile=int(self.settings_max_quads_spin.value()),
+                sample_fits=self.settings_sample_edit.text().strip() or None,
+            )
+
+        def _log_settings(self, message: str) -> None:
+            timestamp = time.strftime("%H:%M:%S")
+            self.settings_log_view.appendPlainText(f"[{timestamp}] {message}")
+            self._log(message)
+
+        def _on_save_settings_clicked(self) -> None:
+            try:
+                settings = self._read_settings_from_ui()
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                return
+            self._settings = settings
+            save_persistent_settings(settings)
+            self._log_settings(self._text("settings_saved"))
+
+        def _on_build_index_clicked(self) -> None:
+            if self._index_worker:
+                return
+            # Ensure user explicitly picks a destination separate from the ASTAP database
+            # to avoid mixing `database/` and `index/` content.
+            db_root_text = self.settings_db_edit.text().strip()
+            if not db_root_text:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_database_required"))
+                return
+            db_root_path = Path(db_root_text).expanduser().resolve()
+            current_index = self.settings_index_edit.text().strip()
+            need_pick = not current_index
+            if not need_pick:
+                try:
+                    idx_path = Path(current_index).expanduser().resolve()
+                    # If index is the same as DB or inside DB, force a new pick
+                    same = idx_path == db_root_path
+                    inside = str(idx_path).startswith(str(db_root_path) + os.sep)
+                    need_pick = same or inside
+                except Exception:
+                    need_pick = True
+            if need_pick:
+                # Suggest a sibling "index" next to the DB root
+                suggested = db_root_path.parent / "index"
+                picked = QtWidgets.QFileDialog.getExistingDirectory(
+                    self,
+                    self._text("dialog_select_directory"),
+                    str(suggested),
+                )
+                if not picked:
+                    return
+                self.settings_index_edit.setText(picked)
+            try:
+                settings = self._read_settings_from_ui()
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                return
+            self._settings = settings
+            save_persistent_settings(settings)
+            self.settings_build_btn.setEnabled(False)
+            self._index_worker = IndexBuilder(
+                db_root=settings.db_root,
+                index_root=settings.index_root,
+                mag_cap=settings.mag_cap,
+                max_stars=settings.max_stars,
+                max_quads_per_tile=settings.max_quads_per_tile,
+            )
+            self._index_worker.log.connect(self._log_settings)
+            self._index_worker.finished.connect(self._on_index_finished)
+            self._index_worker.start()
+
+        def _on_run_blind_clicked(self) -> None:
+            if self._blind_worker:
+                return
+            sample_path = self.settings_sample_edit.text().strip()
+            if not sample_path:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("settings_sample_required"))
+                return
+            if not Path(sample_path).is_file():
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_input_missing", path=sample_path))
+                return
+            try:
+                settings = self._read_settings_from_ui()
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                return
+            self._settings = settings
+            save_persistent_settings(settings)
+            self.settings_run_blind_btn.setEnabled(False)
+            self._blind_worker = BlindRunner(
+                fits_path=sample_path,
+                index_root=settings.index_root,
+            )
+            self._blind_worker.log.connect(self._log_settings)
+            self._blind_worker.finished.connect(self._on_blind_finished)
+            self._blind_worker.start()
+
+        def _on_index_finished(self, success: bool, message: str) -> None:
+            status = "ok" if success else "failed"
+            self._log_settings(self._text("settings_index_result", status=status, message=message))
+            self.settings_build_btn.setEnabled(True)
+            self._index_worker = None
+
+        def _on_blind_finished(self, success: bool, message: str) -> None:
+            status = "ok" if success else "failed"
+            self._log_settings(self._text("settings_blind_result", status=status, message=message))
+            self.settings_run_blind_btn.setEnabled(True)
+            self._blind_worker = None
+
         def _build_splitter(self) -> QtWidgets.QSplitter:
             splitter = QtWidgets.QSplitter()
             self.files_view = QtWidgets.QTreeWidget()
@@ -1757,9 +1868,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     action.setText(self._text(label_key))
                     action.setChecked(code == self._language)
             browse_label = self._text("browse_button")
-            self.browse_db_btn.setText(browse_label)
             self.browse_in_btn.setText(browse_label)
-            self.db_label.setText(self._text("database_label"))
             self.input_label.setText(self._text("input_label"))
             self.scan_btn.setText(self._text("scan_button"))
             self.options_box.setTitle(self._text("options_box"))
@@ -1788,6 +1897,33 @@ def launch_gui(args: argparse.Namespace) -> int:
             if self._should_reset_status_label():
                 self.status_label.setText(self._text("status_ready"))
             self.max_radius_spin.setSpecialValueText(self._text("special_auto"))
+            if hasattr(self, "tabs"):
+                self.tabs.setTabText(0, self._text("solver_tab"))
+                self.tabs.setTabText(1, self._text("settings_tab"))
+            browse_label = self._text("browse_button")
+            if hasattr(self, "settings_db_label"):
+                self.settings_db_label.setText(self._text("settings_db_label"))
+                self.settings_db_browse.setText(browse_label)
+            if hasattr(self, "settings_index_label"):
+                self.settings_index_label.setText(self._text("settings_index_label"))
+                self.settings_index_browse.setText(browse_label)
+            if hasattr(self, "settings_mag_label"):
+                self.settings_mag_label.setText(self._text("settings_mag_label"))
+            if hasattr(self, "settings_max_stars_label"):
+                self.settings_max_stars_label.setText(self._text("settings_max_stars_label"))
+            if hasattr(self, "settings_max_quads_label"):
+                self.settings_max_quads_label.setText(self._text("settings_max_quads_label"))
+            if hasattr(self, "settings_sample_label"):
+                self.settings_sample_label.setText(self._text("settings_sample_label"))
+                self.settings_sample_browse.setText(browse_label)
+            if hasattr(self, "settings_save_btn"):
+                self.settings_save_btn.setText(self._text("settings_save_btn"))
+            if hasattr(self, "settings_build_btn"):
+                self.settings_build_btn.setText(self._text("settings_build_btn"))
+            if hasattr(self, "settings_run_blind_btn"):
+                self.settings_run_blind_btn.setText(self._text("settings_run_btn"))
+            if hasattr(self, "settings_log_label"):
+                self.settings_log_label.setText(self._text("settings_log"))
             self._retranslate_status_items()
 
         def _retranslate_status_items(self) -> None:
@@ -1824,7 +1960,13 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _prefill_from_args(self, cli_args: argparse.Namespace) -> None:
             if cli_args.db_root:
-                self.db_edit.setText(str(cli_args.db_root))
+                db_root = str(cli_args.db_root)
+                self._settings.db_root = db_root
+                self.settings_db_edit.setText(db_root)
+            if cli_args.blind_index:
+                index_root = str(cli_args.blind_index)
+                self._settings.index_root = index_root
+                self.settings_index_edit.setText(index_root)
             if cli_args.input_dir:
                 self.input_edit.setText(str(cli_args.input_dir))
                 QtCore.QTimer.singleShot(100, self.scan_files)
@@ -1866,18 +2008,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             return files
 
         def _parse_formats(self) -> List[str]:
-            text = self.formats_edit.text().replace(";", ",").strip()
-            if not text:
-                return list(sorted(SUPPORTED_EXTENSIONS))
-            formats: List[str] = []
-            for chunk in text.split(","):
-                chunk = chunk.strip().lower()
-                if not chunk:
-                    continue
-                if not chunk.startswith("."):
-                    chunk = f".{chunk}"
-                formats.append(chunk)
-            return formats
+            return _parse_formats_value(self.formats_edit.text())
 
         def _refresh_file_list(self) -> None:
             self.files_view.clear()
@@ -1901,10 +2032,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             return path.name
 
         def _build_config(self) -> SolveConfig:
-            db_path = self.db_edit.text().strip()
-            if not db_path:
+            db_root_text = self._settings.db_root
+            if not db_root_text:
                 raise ValueError(self._text("error_database_required"))
-            db_root = Path(db_path).expanduser()
+            db_root = Path(db_root_text).expanduser()
             if not db_root.is_dir():
                 raise ValueError(self._text("error_database_missing", path=db_root))
             if not self._current_input_dir:
@@ -1919,6 +2050,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             max_files = self.max_files_spin.value() or None
             max_radius_value = self.max_radius_spin.value()
             max_radius = max_radius_value if max_radius_value > 0 else None
+            index_root_text = self._settings.index_root
+            if not index_root_text:
+                raise ValueError(self._text("settings_index_missing"))
+            index_root = Path(index_root_text).expanduser()
+            if not index_root.is_dir():
+                raise ValueError(self._text("settings_index_missing"))
             return SolveConfig(
                 db_root=db_root,
                 input_dir=self._current_input_dir,
@@ -1934,13 +2071,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 search_radius_attempts=self.search_attempts_spin.value(),
                 max_search_radius_deg=max_radius,
                 blind_enabled=self.blind_check.isChecked(),
-                blind_db_chain=_parse_db_chain_arg(args.blind_db),
-                blind_profile=args.auto_blind_profile,
-                blind_timeout=args.blind_timeout,
-                blind_astap_exe=args.blind_astap_exe,
-                blind_extra_args=_parse_extra_args_arg(args.blind_extra_args),
-                blind_index_path=args.blind_index,
-                blind_strategy=args.blind_strategy,
+                blind_index_path=index_root,
             )
 
         def _start_solving(self) -> None:
@@ -1987,7 +2118,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.start_btn.setEnabled(not running)
             self.stop_btn.setEnabled(running)
             self.scan_btn.setEnabled(not running)
-            self.db_edit.setEnabled(not running)
             self.input_edit.setEnabled(not running)
 
         def _on_worker_started(self, total: int) -> None:
@@ -2071,7 +2201,7 @@ def launch_gui(args: argparse.Namespace) -> int:
     QtWidgets.QApplication.setApplicationName("ZeSolver")
     QtWidgets.QApplication.setApplicationVersion(APP_VERSION)
     app = QtWidgets.QApplication(sys.argv)
-    window = ZeSolverWindow()
+    window = ZeSolverWindow(persistent_settings)
     window.show()
     return app.exec()
 

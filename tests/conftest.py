@@ -4,15 +4,15 @@ import json
 import sys
 from pathlib import Path
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
 import numpy as np
 import pytest
 
 from zeblindsolver.levels import LEVEL_SPECS
 from zeblindsolver.quad_index_builder import build_quad_index
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
 
 SYNTHETIC_STAR_POS = np.array(
     [

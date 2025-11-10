@@ -23,6 +23,7 @@ def tan_from_similarity(
     image_shape: tuple[int, int],
     *,
     center_pixel: tuple[float, float] | None = None,
+    tile_center: tuple[float, float] | None = None,
 ) -> WCS:
     if center_pixel is None:
         center_pixel = (image_shape[1] / 2.0, image_shape[0] / 2.0)
@@ -30,16 +31,33 @@ def tan_from_similarity(
     wcs.wcs.ctype = ["RA---TAN", "DEC--TAN"]
     wcs.wcs.cunit = ["deg", "deg"]
     wcs.wcs.crpix = [center_pixel[0], center_pixel[1]]
-    zero_pixel = (center_pixel[0] - 1.0, center_pixel[1] - 1.0)
-    ra_dec = _apply_similarity(transform, zero_pixel)
-    wcs.wcs.crval = list(ra_dec)
     theta = transform.rotation
     scale = transform.scale
-    cd11 = -scale * np.cos(theta)
-    cd12 = scale * np.sin(theta)
-    cd21 = scale * np.sin(theta)
-    cd22 = scale * np.cos(theta)
-    wcs.wcs.cd = np.array([[cd11, cd12], [cd21, cd22]])
+    # Build the linear map from pixels to tangent-plane degrees
+    # A = scale * [[cos, -sin], [sin, cos]]
+    a11 = scale * np.cos(theta)
+    a12 = -scale * np.sin(theta)
+    a21 = scale * np.sin(theta)
+    a22 = scale * np.cos(theta)
+    A = np.array([[a11, a12], [a21, a22]])
+    if tile_center is not None:
+        wcs.wcs.crval = [float(tile_center[0]), float(tile_center[1])]
+        # Incorporate the similarity translation into CRPIX so that
+        # A * (pixel - CRPIX_0) equals the plane offsets from the transform
+        t = np.array([float(transform.translation[0]), float(transform.translation[1])])
+        try:
+            crpix0 = -np.linalg.inv(A) @ t
+        except np.linalg.LinAlgError:
+            crpix0 = np.array([0.0, 0.0])
+        # FITS CRPIX is 1-based; astropy with origin=0 uses (pixel - (CRPIX-1))
+        wcs.wcs.crpix = [float(crpix0[0] + 1.0), float(crpix0[1] + 1.0)]
+    else:
+        # Fallback: keep previous behavior anchored at provided center_pixel
+        wcs.wcs.crpix = [center_pixel[0], center_pixel[1]]
+        zero_pixel = (center_pixel[0] - 1.0, center_pixel[1] - 1.0)
+        ra_dec = _apply_similarity(transform, zero_pixel)
+        wcs.wcs.crval = list(ra_dec)
+    wcs.wcs.cd = A
     wcs.wcs.radesys = "ICRS"
     return wcs
 
