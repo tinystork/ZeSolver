@@ -78,7 +78,10 @@ def test_blind_solve_writes_tags(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(zeblindsolver, "_resolve_astap_executable", lambda _: "/usr/bin/astap")
 
+    captured_cmd: list[str] = []
+
     def fake_run(cmd, capture_output, text, timeout, check):  # noqa: D401 - pytest helper
+        captured_cmd[:] = cmd
         with fits.open(path, mode="update", memmap=False) as hdul:
             hdr = hdul[0].header
             _populate_valid_wcs(hdr)
@@ -94,6 +97,8 @@ def test_blind_solve_writes_tags(monkeypatch, tmp_path) -> None:
         db_roots=["D50"],
         skip_if_valid=False,
         timeout_sec=10,
+        ra_hint=30.0,
+        dec_hint=-10.0,
     )
     assert result["success"]
     header = fits.getheader(path)
@@ -102,3 +107,9 @@ def test_blind_solve_writes_tags(monkeypatch, tmp_path) -> None:
     assert header["ZESOLVER_HINT"] == 1
     assert result["wrote_wcs"]
     assert result["updated_keywords"]["USED_DB"] == "D50"
+    assert "-ra" in captured_cmd
+    assert "-spd" in captured_cmd
+    ra_index = captured_cmd.index("-ra")
+    spd_index = captured_cmd.index("-spd")
+    assert pytest.approx(float(captured_cmd[ra_index + 1]), rel=1e-6) == pytest.approx(30.0 / 15.0, rel=1e-6)
+    assert pytest.approx(float(captured_cmd[spd_index + 1]), rel=1e-6) == pytest.approx(80.0, rel=1e-6)

@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterable, List, Optional, Sequence, Tuple, TypedDict
 
 import numpy as np
+from astropy.coordinates import Angle
+import astropy.units as u
 from astropy.io import fits
 
 try:  # pragma: no cover - fallback for older Python versions
@@ -98,6 +100,45 @@ def _resolve_astap_executable(explicit: Optional[str]) -> str:
     if discovered:
         return discovered
     raise AstapNotFoundError("ASTAP executable not found in PATH")
+
+
+def _parse_header_angle(value: object, *, is_ra: bool) -> Optional[float]:
+    if value is None:
+        return None
+    if isinstance(value, (int, float, np.floating)):
+        number = float(value)
+        return number
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        try:
+            angle = Angle(text, unit=u.hourangle if is_ra else u.deg)
+            return float(angle.degree)
+        except (ValueError, u.UnitsError):
+            return None
+
+
+def _ra_deg_to_hours(value: float) -> Optional[float]:
+    try:
+        hours = (float(value) % 360.0) / 15.0
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(hours):
+        return None
+    return hours
+
+
+def _dec_deg_to_spd(value: float) -> Optional[float]:
+    try:
+        spd = 90.0 + float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(spd):
+        return None
+    return min(max(spd, 0.0), 180.0)
 
 
 def has_valid_wcs(header: fits.Header) -> bool:
@@ -278,6 +319,8 @@ def blind_solve(
     profile: Optional[str] = None,
     timeout_sec: int = 90,
     skip_if_valid: bool = True,
+    ra_hint: Optional[float] = None,
+    dec_hint: Optional[float] = None,
     write_to: Optional[str] = None,
     extra_args: Optional[Sequence[str]] = None,
     log: Optional[Callable[[str], None]] = None,
@@ -310,6 +353,8 @@ def blind_solve(
     luminance_backup: Optional[np.ndarray] = None
     luminance_used = False
     profile_name = profile
+    hint_ra_deg = float(ra_hint) if ra_hint is not None else None
+    hint_dec_deg = float(dec_hint) if dec_hint is not None else None
     try:
         with fits.open(work_path, mode="update", memmap=False) as hdul:
             primary = hdul[0]
@@ -360,6 +405,14 @@ def blind_solve(
                 primary.data = to_luminance_for_solve(primary)
                 luminance_used = True
                 logger("[ZEBLIND] generated luminance plane for CFA data")
+            if hint_ra_deg is None:
+                hint_ra_deg = _parse_header_angle(header.get("RA") or header.get("OBJCTRA"), is_ra=True)
+            if hint_dec_deg is None:
+                hint_dec_deg = _parse_header_angle(header.get("DEC") or header.get("OBJCTDEC"), is_ra=False)
+            if hint_ra_deg is not None or hint_dec_deg is not None:
+                ra_text = f"{hint_ra_deg:.3f}°" if hint_ra_deg is not None else "?"
+                dec_text = f"{hint_dec_deg:.3f}°" if hint_dec_deg is not None else "?"
+                logger(f"[ZEBLIND] hints ra={ra_text} dec={dec_text}")
             hdul.flush()
         astap_path = _resolve_astap_executable(astap_exe)
         logger(f"[ZEBLIND] astap={astap_path}")
@@ -377,6 +430,12 @@ def blind_solve(
                 str(DEFAULT_RADIUS_TOLERANCE),
                 "-update",
             ]
+            ra_hours = _ra_deg_to_hours(hint_ra_deg) if hint_ra_deg is not None else None
+            spd = _dec_deg_to_spd(hint_dec_deg) if hint_dec_deg is not None else None
+            if ra_hours is not None:
+                cmd.extend(["-ra", f"{ra_hours:.6f}"])
+            if spd is not None:
+                cmd.extend(["-spd", f"{spd:.6f}"])
             if extra_args:
                 cmd.extend(extra_args)
             try:
@@ -475,6 +534,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout", type=int, default=90, help="Per-database timeout in seconds")
     parser.add_argument("--skip-if-valid", dest="skip_if_valid", action="store_true", default=True, help="Skip solving if the FITS already holds a valid WCS")
     parser.add_argument("--no-skip-if-valid", dest="skip_if_valid", action="store_false", help="Force solving even if an existing WCS is detected")
+    parser.add_argument("--ra-hint", type=float, help="Optional RA hint in degrees (0-360)")
+    parser.add_argument("--dec-hint", type=float, help="Optional DEC hint in degrees (-90..+90)")
     parser.add_argument("--write-to", help="Optional output FITS path (defaults to in-place update)")
     parser.add_argument("--astap-exe", help="Path to astap.exe/astap binary")
     parser.add_argument("--extra-astap-args", help="Additional arguments passed to ASTAP")
@@ -497,6 +558,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             profile=args.profile,
             timeout_sec=args.timeout,
             skip_if_valid=args.skip_if_valid,
+            ra_hint=args.ra_hint,
+            dec_hint=args.dec_hint,
             write_to=args.write_to,
             extra_args=extra_args,
             verbose=args.verbose,

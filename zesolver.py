@@ -640,7 +640,8 @@ class ImageSolver:
     def solve_path(self, path: Path) -> ImageSolveResult:
         start = time.perf_counter()
         run_info: list[tuple[str, dict[str, Any]]] = []
-        shortcut = self._try_blind_shortcut(path, run_info)
+        blind_cache: Optional[BlindSolveResult] = None
+        shortcut, blind_cache = self._try_blind_shortcut(path, run_info)
         if shortcut is not None:
             return shortcut
         metadata: Optional[ImageMetadata] = None
@@ -742,6 +743,16 @@ class ImageSolver:
                 raise final_error
             raise SolveError("No catalogue families available in the database")
         except SolveError as exc:
+            blind_result = self._resolve_with_blind_after_failure(
+                path=path,
+                run_info=run_info,
+                cached_result=blind_cache,
+                ra_hint=metadata.ra_deg if metadata else None,
+                dec_hint=metadata.dec_deg if metadata else None,
+            )
+            if blind_result is not None:
+                blind_result.duration_s = time.perf_counter() - start
+                return blind_result
             duration = time.perf_counter() - start
             status = "skipped" if exc.skip else "failed"
             return ImageSolveResult(
@@ -925,11 +936,16 @@ class ImageSolver:
                 logging.debug("Blind DB %s not found for %s", entry, self.config.db_root)
         return resolved
 
-    def _try_blind_shortcut(
+    def _run_blind_solver(
         self,
         path: Path,
         run_info: list[tuple[str, dict[str, Any]]],
-    ) -> Optional[ImageSolveResult]:
+        *,
+        skip_if_header_has_wcs: bool,
+        skip_if_valid: bool,
+        ra_hint: Optional[float] = None,
+        dec_hint: Optional[float] = None,
+    ) -> Optional[BlindSolveResult]:
         if not self._should_try_blind(path):
             return None
         db_chain = self._resolve_blind_db_chain()
@@ -940,8 +956,14 @@ class ImageSolver:
         except Exception as exc:
             logging.debug("Blind fallback skipped for %s: %s", path.name, exc)
             return None
-        if has_valid_wcs(header):
+        if skip_if_header_has_wcs and has_valid_wcs(header):
             return None
+        header_ra = _parse_angle(header.get("RA") or header.get("OBJCTRA"), is_ra=True)
+        header_dec = _parse_angle(header.get("DEC") or header.get("OBJCTDEC"), is_ra=False)
+        if ra_hint is None:
+            ra_hint = header_ra
+        if dec_hint is None:
+            dec_hint = header_dec
         run_info.append(("run_info_blind_started", {"path": path.name}))
         try:
             result = blind_solve(
@@ -949,9 +971,11 @@ class ImageSolver:
                 db_roots=db_chain,
                 profile=self.config.blind_profile,
                 timeout_sec=self.config.blind_timeout,
-                skip_if_valid=self.config.blind_skip_if_valid,
+                skip_if_valid=skip_if_valid,
                 astap_exe=self.config.blind_astap_exe,
                 extra_args=self.config.blind_extra_args,
+                ra_hint=ra_hint,
+                dec_hint=dec_hint,
                 log=logging.info,
             )
         except BlindSolverRuntimeError as exc:
@@ -969,17 +993,67 @@ class ImageSolver:
                     {"db": db_name, "elapsed": f"{result['elapsed_sec']:.1f}s"},
                 )
             )
-            if not self.config.overwrite:
-                return ImageSolveResult(
-                    path=path,
-                    status="solved",
-                    message=result["message"],
-                    metadata_source="blind",
-                    duration_s=result["elapsed_sec"],
-                    run_info=list(run_info),
-                )
+        else:
+            run_info.append(("run_info_blind_failed", {"message": result["message"]}))
+        return result
+
+    @staticmethod
+    def _build_blind_result(
+        path: Path,
+        result: BlindSolveResult,
+        run_info: list[tuple[str, dict[str, Any]]],
+    ) -> ImageSolveResult:
+        return ImageSolveResult(
+            path=path,
+            status="solved",
+            message=result["message"],
+            metadata_source="blind",
+            duration_s=None,
+            run_info=list(run_info),
+        )
+
+    def _try_blind_shortcut(
+        self,
+        path: Path,
+        run_info: list[tuple[str, dict[str, Any]]],
+    ) -> tuple[Optional[ImageSolveResult], Optional[BlindSolveResult]]:
+        result = self._run_blind_solver(
+            path,
+            run_info,
+            skip_if_header_has_wcs=True,
+            skip_if_valid=self.config.blind_skip_if_valid,
+        )
+        if result is None or not result["success"]:
+            return None, None
+        if not self.config.overwrite:
+            image = self._build_blind_result(path, result, run_info)
+            image.duration_s = result["elapsed_sec"]
+            return image, None
+        return None, result
+
+    def _resolve_with_blind_after_failure(
+        self,
+        *,
+        path: Path,
+        run_info: list[tuple[str, dict[str, Any]]],
+        cached_result: Optional[BlindSolveResult],
+        ra_hint: Optional[float],
+        dec_hint: Optional[float],
+    ) -> Optional[ImageSolveResult]:
+        if not self.config.overwrite:
             return None
-        run_info.append(("run_info_blind_failed", {"message": result["message"]}))
+        if cached_result and cached_result["success"]:
+            return self._build_blind_result(path, cached_result, run_info)
+        result = self._run_blind_solver(
+            path,
+            run_info,
+            skip_if_header_has_wcs=False,
+            skip_if_valid=False,
+            ra_hint=ra_hint,
+            dec_hint=dec_hint,
+        )
+        if result and result["success"]:
+            return self._build_blind_result(path, result, run_info)
         return None
 
 
