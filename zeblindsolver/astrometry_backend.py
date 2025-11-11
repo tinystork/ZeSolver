@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-import math
 import os
-import time
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional
@@ -22,6 +21,16 @@ except Exception:  # pragma: no cover - optional import at runtime only
     _BlindSolveConfig = None  # type: ignore
 
 
+_UPLOAD_PRIVACY_FLAGS = {
+    "allow_commercial_use": "n",
+    "allow_modifications": "n",
+    "publicly_visible": "n",
+}
+
+_HEADER_COPY_KEYS = ("OBJECT", "DATE-OBS", "EXPTIME", "FILTER", "INSTRUME", "TELESCOP")
+_LUMINANCE_COEFFS = np.array([0.299, 0.587, 0.114], dtype=np.float32).reshape(1, 1, 3)
+
+
 def _default_log(msg: str) -> None:
     print(msg, flush=True)
 
@@ -34,6 +43,7 @@ class AstrometryConfig:
     timeout_s: int = 600
     use_hints: bool = True
     fallback_local: bool = True
+    scale_tolerance_percent: float = 20.0
     # For fallback
     index_root: Optional[str] = None
 
@@ -45,7 +55,7 @@ class JobResult:
     message: str
 
 
-def _extract_hints(header: fits.Header, width: int, height: int) -> dict:
+def _extract_hints(header: fits.Header, width: int, height: int, scale_tolerance_percent: float) -> dict:
     ra = _parse_angle(header.get("CRVAL1") or header.get("RA") or header.get("OBJCTRA"), is_ra=True)
     dec = _parse_angle(header.get("CRVAL2") or header.get("DEC") or header.get("OBJCTDEC"), is_ra=False)
     scale_arcsec, (fov_w_deg, fov_h_deg) = _estimate_scale_and_fov(header, width, height)
@@ -57,13 +67,58 @@ def _extract_hints(header: fits.Header, width: int, height: int) -> dict:
         hints["center_ra"] = float(ra)
         hints["center_dec"] = float(dec)
     if scale_arcsec and scale_arcsec > 0:
-        # Tolerant scale bounds
+        tol = max(0.0, float(scale_tolerance_percent))
+        frac = tol / 100.0 if tol > 0 else 0.0
+        scale_lower = scale_arcsec * (1.0 - frac)
+        scale_upper = scale_arcsec * (1.0 + frac)
         hints["scale_units"] = "arcsecperpix"
-        hints["scale_lower"] = max(1e-6, scale_arcsec * 0.6)
-        hints["scale_upper"] = scale_arcsec * 1.6
+        hints["scale_lower"] = max(1e-6, scale_lower)
+        hints["scale_upper"] = max(scale_lower, scale_upper)
     if radius and radius > 0:
         hints["radius"] = float(min(30.0, max(0.05, radius)))
     return hints
+
+
+def _prepare_submission_image(data: np.ndarray, header: Optional[fits.Header]) -> Path:
+    img = np.asarray(data)
+    if img is None:
+        raise ValueError("image data missing")
+    if img.ndim == 3 and img.shape[0] == 3:
+        img = np.moveaxis(img, 0, -1)
+        img = np.sum(img.astype(np.float32) * _LUMINANCE_COEFFS, axis=2, dtype=np.float32)
+    elif img.ndim == 2:
+        img = img.astype(np.float32)
+    else:
+        raise ValueError(f"unsupported image shape {img.shape!r}")
+    img = np.nan_to_num(img, copy=False)
+    min_v = float(np.min(img)) if img.size else 0.0
+    max_v = float(np.max(img)) if img.size else 0.0
+    if not np.isfinite(min_v):
+        min_v = 0.0
+    if not np.isfinite(max_v):
+        max_v = min_v
+    if max_v > min_v:
+        norm = (img - min_v) / (max_v - min_v)
+    else:
+        norm = np.zeros_like(img, dtype=np.float32)
+    data_uint16 = (np.clip(norm, 0.0, 1.0) * 65535.0).astype(np.uint16)
+    data_int16 = (data_uint16.astype(np.int32) - 32768).astype(np.int16)
+    header_out = fits.Header()
+    header_out["SIMPLE"] = True
+    header_out["BITPIX"] = 16
+    header_out["BSCALE"] = 1
+    header_out["BZERO"] = 32768
+    header_out["NAXIS"] = 2
+    header_out["NAXIS1"] = data_int16.shape[1]
+    header_out["NAXIS2"] = data_int16.shape[0]
+    for key in _HEADER_COPY_KEYS:
+        if header and key in header:
+            header_out[key] = header[key]
+    fd, tmp_name = tempfile.mkstemp(prefix="zesolver_astrometry_", suffix=".fits")
+    os.close(fd)
+    tmp_path = Path(tmp_name)
+    fits.writeto(tmp_path, data_int16, header=header_out, overwrite=True, output_verify="silentfix")
+    return tmp_path
 
 
 def _write_wcs_header(fits_path: Path, cards: Dict[str, Any], *, backend_label: str = "astrometry.net") -> None:
@@ -105,19 +160,36 @@ def solve_single(
         client.login(cfg.api_key)
     except AstrometryClientError as exc:
         return JobResult(path, False, f"login failed: {exc}")
-    # Prepare hints
-    hints: dict[str, Any] = {}
+    header: Optional[fits.Header] = None
+    img_data: Optional[np.ndarray] = None
+    h = w = 0
     try:
         with fits.open(path, mode="readonly", memmap=False) as hdul:
-            hdr = hdul[0].header
-            h, w = int(hdul[0].data.shape[0]), int(hdul[0].data.shape[1]) if hdul[0].data is not None else (0, 0)
-        if cfg.use_hints:
-            hints = _extract_hints(hdr, w, h)
-    except Exception:
-        hints = {}
+            header = hdul[0].header.copy()
+            if hdul[0].data is not None:
+                img_data = np.asarray(hdul[0].data)
+                if img_data.ndim >= 2:
+                    h = int(img_data.shape[-2])
+                    w = int(img_data.shape[-1])
+    except Exception as exc:
+        log_fn(f"Astrometry prep: unable to read FITS header/data ({exc})")
+    hints: dict[str, Any] = dict(_UPLOAD_PRIVACY_FLAGS)
+    if cfg.use_hints and header is not None and h > 0 and w > 0:
+        try:
+            hints.update(_extract_hints(header, w, h, cfg.scale_tolerance_percent))
+        except Exception as exc:
+            log_fn(f"Astrometry prep: unable to extract hints ({exc})")
+    prepared_path = path
+    temp_path: Optional[Path] = None
+    if img_data is not None:
+        try:
+            prepared_path = _prepare_submission_image(img_data, header)
+            temp_path = prepared_path
+        except Exception as exc:
+            log_fn(f"Astrometry prep: fallback to original FITS ({exc})")
     # Submit
     try:
-        sub = client.submit_fits(str(path), hints=hints)
+        sub = client.submit_fits(str(prepared_path), hints=hints)
         job_id = client.poll_submission_for_job(int(sub.get("subid") or sub.get("submissionid")), timeout=max(30.0, float(cfg.timeout_s) * 0.5))
         info = client.wait_for_job(job_id, timeout=float(cfg.timeout_s))
         status = str(info.get("status") or info.get("job_status") or "").lower()
@@ -131,6 +203,12 @@ def solve_single(
         return JobResult(path, True, f"job {job_id} solved")
     except AstrometryClientError as exc:
         return JobResult(path, False, str(exc))
+    finally:
+        if temp_path and temp_path.exists():
+            try:
+                temp_path.unlink()
+            except Exception:
+                pass
 
 
 def solve_batch(
@@ -159,15 +237,38 @@ def solve_batch(
                 pass
 
     for idx, path in enumerate(paths, start=1):
+        temp_path: Optional[Path] = None
         try:
             client = AstrometryClient(cfg.api_url)
             client.login(cfg.api_key)
-            with fits.open(path, mode="readonly", memmap=False) as hdul:
-                hdr = hdul[0].header
-                h, w = int(hdul[0].data.shape[0]), int(hdul[0].data.shape[1]) if hdul[0].data is not None else (0, 0)
-            hints = _extract_hints(hdr, w, h) if cfg.use_hints else {}
+            header: Optional[fits.Header] = None
+            img_data: Optional[np.ndarray] = None
+            h = w = 0
+            try:
+                with fits.open(path, mode="readonly", memmap=False) as hdul:
+                    header = hdul[0].header.copy()
+                    if hdul[0].data is not None:
+                        img_data = np.asarray(hdul[0].data)
+                        if img_data.ndim >= 2:
+                            h = int(img_data.shape[-2])
+                            w = int(img_data.shape[-1])
+            except Exception as exc:
+                _report(idx, f"[{idx}/{total}] {path.name}: lecture FITS impossible ({exc})")
+            hints: dict[str, Any] = dict(_UPLOAD_PRIVACY_FLAGS)
+            if cfg.use_hints and header is not None and h > 0 and w > 0:
+                try:
+                    hints.update(_extract_hints(header, w, h, cfg.scale_tolerance_percent))
+                except Exception as exc:
+                    _report(idx, f"[{idx}/{total}] {path.name}: extraction des hints impossible ({exc})")
+            prepared_path = path
+            if img_data is not None:
+                try:
+                    prepared_path = _prepare_submission_image(img_data, header)
+                    temp_path = prepared_path
+                except Exception as exc:
+                    _report(idx, f"[{idx}/{total}] {path.name}: fallback sur FITS original ({exc})")
             _report(idx, f"[{idx}/{total}] {path.name}: uploading")
-            sub = client.submit_fits(str(path), hints=hints)
+            sub = client.submit_fits(str(prepared_path), hints=hints)
             job_id = client.poll_submission_for_job(int(sub.get("subid") or sub.get("submissionid")), timeout=max(30.0, float(cfg.timeout_s) * 0.5))
             _report(idx, f"[{idx}/{total}] {path.name}: job {job_id} en file")
             info = client.wait_for_job(job_id, timeout=float(cfg.timeout_s))
@@ -217,3 +318,9 @@ def solve_batch(
         except Exception as exc:
             _report(idx, f"[{idx}/{total}] {path.name}: {exc}")
             yield JobResult(path, False, str(exc))
+        finally:
+            if temp_path and temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except Exception:
+                    pass
