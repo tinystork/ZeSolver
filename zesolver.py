@@ -77,6 +77,7 @@ from zeblindsolver.db_convert import (
 )
 from zeblindsolver.zeblindsolver import SolveConfig as BlindSolveConfig, solve_blind as python_solve_blind
 from zeblindsolver.quad_index_builder import validate_index as validate_zeblind_index
+from zeblindsolver import presets as preset_utils
 
 
 FITS_EXTENSIONS = {".fit", ".fits", ".fts"}
@@ -170,6 +171,27 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "solver_tab": "Solveur",
         "settings_tab": "Réglages",
         "performance_tab": "Performance",
+        "database_tab": "Base de données",
+        "database_tab_title": "Base de données",
+        "presets_title": "Presets d’instruments",
+        "fov_mode_title": "Par FOV",
+        "focal_length_mm": "Focale (mm)",
+        "pixel_size_um": "Taille pixel (µm)",
+        "resolution_px": "Résolution (px)",
+        "reducer_factor": "Réducteur (x)",
+        "binning": "Binning",
+        "compute_button": "Calculer",
+        "recommendations_title": "Recommandations d’index",
+        "est_scale": "Échantillonnage (""/px)",
+        "est_fov": "Champ (°)",
+        "mag_cap_suggested": "Magnitude max conseillée",
+        "quads_profile": "Profil quads",
+        "max_quads_per_tile": "Quads max/tile",
+        "spec_warning_unknown": "Spécifications à confirmer (approx.)",
+        "database_tab_title": "Base de données",
+        "select_db_root": "Dossier database",
+        "data_sources": "Sources de données (tuiles HNSKY/ASTAP)",
+        "warn_sep_dirs": "L’index doit être dans un dossier différent de database.",
         "settings_db_label": "Base ASTAP",
         "settings_index_label": "Dossier d'index",
         "settings_mag_label": "Magnitude max",
@@ -206,7 +228,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_rebuild_title": "Reconstruire l'index ?",
         "settings_rebuild_text": "Un index existe déjà dans {path}. Le reconstruire ?",
     },
-    "en": {
+        "en": {
         "language_menu": "Language",
         "language_action_fr": "French",
         "language_action_en": "English",
@@ -264,6 +286,27 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "solver_tab": "Solver",
         "settings_tab": "Settings",
         "performance_tab": "Performance",
+        "database_tab": "Database",
+        "database_tab_title": "Database",
+        "presets_title": "Instrument presets",
+        "fov_mode_title": "By FOV",
+        "focal_length_mm": "Focal length (mm)",
+        "pixel_size_um": "Pixel size (µm)",
+        "resolution_px": "Resolution (px)",
+        "reducer_factor": "Reducer (x)",
+        "binning": "Binning",
+        "compute_button": "Compute",
+        "recommendations_title": "Index recommendations",
+        "est_scale": "Pixel scale (""/px)",
+        "est_fov": "Field of view (°)",
+        "mag_cap_suggested": "Suggested mag cap",
+        "quads_profile": "Quads profile",
+        "max_quads_per_tile": "Max quads/tile",
+        "spec_warning_unknown": "Specifications need confirmation (approx.)",
+        "database_tab_title": "Database",
+        "select_db_root": "Database folder",
+        "data_sources": "Data sources (HNSKY/ASTAP shards)",
+        "warn_sep_dirs": "Index must be separate from database.",
         "settings_db_label": "ASTAP database",
         "settings_index_label": "Index root",
         "settings_mag_label": "Max magnitude",
@@ -302,6 +345,31 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
     },
 }
 
+# Backfill translations for downloads UI (added post hoc) without overriding existing keys
+_GUI_DOWNLOADS_I18N = {
+    "fr": {
+        "downloads_title": "Telechargements",
+        "add_to_queue": "Ajouter a la file",
+        "start_all": "Tout demarrer",
+        "pause_all": "Tout mettre en pause",
+        "verify_hashes": "Verifier les empreintes",
+        "add_selected": "Ajouter la selection a la file",
+    },
+    "en": {
+        "downloads_title": "Downloads",
+        "add_to_queue": "Add to queue",
+        "start_all": "Start all",
+        "pause_all": "Pause all",
+        "verify_hashes": "Verify hashes",
+        "add_selected": "Add selected to queue",
+    },
+}
+for _lang, _mapping in _GUI_DOWNLOADS_I18N.items():
+    base = GUI_TRANSLATIONS.setdefault(_lang, {})
+    for _k, _v in _mapping.items():
+        if _k not in base:
+            base[_k] = _v
+
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 
 
@@ -313,6 +381,14 @@ class PersistentSettings:
     max_stars: int = DEFAULT_MAX_STARS
     max_quads_per_tile: int = DEFAULT_MAX_QUADS_PER_TILE
     sample_fits: Optional[str] = None
+    # Preset/FOV persistence
+    last_preset_id: Optional[str] = None
+    last_fov_focal_mm: float = 0.0
+    last_fov_pixel_um: float = 0.0
+    last_fov_res_w: int = 0
+    last_fov_res_h: int = 0
+    last_fov_reducer: float = 1.0
+    last_fov_binning: int = 1
     # Blind solver tunables
     blind_max_stars: int = 800
     blind_max_quads: int = 12000
@@ -359,6 +435,13 @@ def load_persistent_settings() -> PersistentSettings:
         max_stars=int(payload.get("max_stars", DEFAULT_MAX_STARS)),
         max_quads_per_tile=int(payload.get("max_quads_per_tile", DEFAULT_MAX_QUADS_PER_TILE)),
         sample_fits=payload.get("sample_fits"),
+        last_preset_id=(payload.get("last_preset_id") or None),
+        last_fov_focal_mm=float(payload.get("last_fov_focal_mm", 0.0)),
+        last_fov_pixel_um=float(payload.get("last_fov_pixel_um", 0.0)),
+        last_fov_res_w=int(payload.get("last_fov_res_w", 0)),
+        last_fov_res_h=int(payload.get("last_fov_res_h", 0)),
+        last_fov_reducer=float(payload.get("last_fov_reducer", 1.0)),
+        last_fov_binning=int(payload.get("last_fov_binning", 1)),
         blind_max_stars=int(payload.get("blind_max_stars", 800)),
         blind_max_quads=int(payload.get("blind_max_quads", 12000)),
         blind_max_candidates=int(payload.get("blind_max_candidates", 12)),
@@ -2275,6 +2358,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             solver_layout.addWidget(self._build_splitter())
             solver_layout.addLayout(self._build_bottom_row())
             self.tabs.addTab(solver_tab, self._text("solver_tab"))
+            # Database tab (db_root selection and future download UI)
+            self.database_tab = self._build_database_tab()
+            self.tabs.addTab(self.database_tab, self._text("database_tab"))
             self.settings_tab = self._build_settings_tab()
             self.tabs.addTab(self.settings_tab, self._text("settings_tab"))
             # Add Performance tab for near-solver tuning
@@ -2310,6 +2396,230 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.scan_btn.clicked.connect(self.scan_files)
             grid.addWidget(self.scan_btn, 0, 3)
             return grid
+
+        def _build_database_tab(self) -> QtWidgets.QWidget:
+            widget = QtWidgets.QWidget()
+            column = QtWidgets.QVBoxLayout(widget)
+            form = QtWidgets.QFormLayout()
+            # Database root selector (kept in sync with Settings tab)
+            self.db_tab_label = QtWidgets.QLabel()
+            self.db_tab_edit = QtWidgets.QLineEdit(self._settings.db_root or "")
+            self.db_tab_browse = QtWidgets.QPushButton()
+            row = QtWidgets.QWidget()
+            row_layout = QtWidgets.QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.addWidget(self.db_tab_edit)
+            row_layout.addWidget(self.db_tab_browse)
+            form.addRow(self.db_tab_label, row)
+
+            # Data sources (preset URLs)
+            self.data_sources_label = QtWidgets.QLabel()
+            # Preset list of HNSKY/ASTAP shards (placeholders)
+            self.sources_group = QtWidgets.QGroupBox(self._text("data_sources"))
+            sources_layout = QtWidgets.QVBoxLayout(self.sources_group)
+            self.sources_tree = QtWidgets.QTreeWidget()
+            self.sources_tree.setHeaderLabels(["Package", "Size"])
+            self.sources_tree.header().setStretchLastSection(True)
+            # Placeholder sources (replace with official URLs later)
+            preset_sources = [
+                {"label": "HNSKY/ASTAP Stars Shard A (placeholder)", "url": "https://example.invalid/astap/stars_A.1476", "size": 120_000_000},
+                {"label": "HNSKY/ASTAP Stars Shard B (placeholder)", "url": "https://example.invalid/astap/stars_B.1476", "size": 120_000_000},
+                {"label": "HNSKY/ASTAP Stars Shard C (placeholder)", "url": "https://example.invalid/astap/stars_C.1476", "size": 120_000_000},
+            ]
+            for entry in preset_sources:
+                item = QtWidgets.QTreeWidgetItem([entry["label"], f"{entry['size']/1_000_000:.1f} MB"])
+                # Store metadata on column 0
+                item.setData(0, QtCore.Qt.UserRole, entry)
+                item.setCheckState(0, QtCore.Qt.Unchecked)
+                self.sources_tree.addTopLevelItem(item)
+            sources_layout.addWidget(self.sources_tree)
+            # Add-selected button
+            self.btn_add_selected = QtWidgets.QPushButton(self._text("add_selected"))
+            sources_layout.addWidget(self.btn_add_selected)
+            form.addRow(self.sources_group)
+
+            # Downloads group
+            self.downloads_group = QtWidgets.QGroupBox()
+            self.downloads_group.setTitle(self._text("downloads_title") if hasattr(self, "_text") else "Downloads")
+            dl_layout = QtWidgets.QVBoxLayout(self.downloads_group)
+            # URLs input
+            self.urls_edit = QtWidgets.QPlainTextEdit()
+            self.urls_edit.setPlaceholderText("https://… one URL per line")
+            dl_layout.addWidget(self.urls_edit)
+            # Buttons row
+            btn_row = QtWidgets.QHBoxLayout()
+            self.btn_add_to_queue = QtWidgets.QPushButton(self._text("add_to_queue") if hasattr(self, "_text") else "Add to queue")
+            self.btn_start_all = QtWidgets.QPushButton(self._text("start_all") if hasattr(self, "_text") else "Start all")
+            self.btn_pause_all = QtWidgets.QPushButton(self._text("pause_all") if hasattr(self, "_text") else "Pause all")
+            self.btn_verify_hashes = QtWidgets.QPushButton(self._text("verify_hashes") if hasattr(self, "_text") else "Verify hashes")
+            btn_row.addWidget(self.btn_add_to_queue)
+            btn_row.addWidget(self.btn_start_all)
+            btn_row.addWidget(self.btn_pause_all)
+            btn_row.addWidget(self.btn_verify_hashes)
+            btn_row.addStretch(1)
+            dl_layout.addLayout(btn_row)
+            # Table
+            self.downloads_table = QtWidgets.QTableWidget(0, 4)
+            self.downloads_table.setHorizontalHeaderLabels(["File", "Size", "Progress", "Status"])
+            self.downloads_table.horizontalHeader().setStretchLastSection(True)
+            dl_layout.addWidget(self.downloads_table)
+            column.addLayout(form)
+            column.addWidget(self.downloads_group)
+
+            # Manager and worker
+            try:
+                from zeblindsolver.downloads import DownloadsManager
+                self._downloads_manager = DownloadsManager()
+            except Exception:
+                self._downloads_manager = None
+
+            class DownloadRunner(QtCore.QThread):
+                progress = QtCore.Signal(dict)
+                finished = QtCore.Signal()
+
+                def __init__(self, manager, parent=None):
+                    super().__init__(parent)
+                    self._manager = manager
+                    self._stop = threading.Event()
+
+                def stop(self):
+                    self._stop.set()
+
+                def run(self):  # pragma: no cover - GUI thread
+                    if self._manager is None:
+                        return
+                    def _emit(item):
+                        payload = {
+                            "id": item.id,
+                            "path": str(item.dest_path),
+                            "status": item.status,
+                            "done": int(item.bytes_done or 0),
+                            "total": int(item.bytes_total or 0) if item.bytes_total else None,
+                            "error": item.error,
+                        }
+                        self.progress.emit(payload)
+                    self._manager.run_all(stop_event=self._stop, on_update=_emit)
+                    self.finished.emit()
+
+            self._dl_worker = None
+
+            def _append_row_for_item(item) -> None:
+                row_idx = self.downloads_table.rowCount()
+                self.downloads_table.insertRow(row_idx)
+                self.downloads_table.setItem(row_idx, 0, QtWidgets.QTableWidgetItem(item.dest_path.name))
+                size_text = f"{(item.size_hint or 0)/1_000_000:.1f} MB" if item.size_hint else "?"
+                self.downloads_table.setItem(row_idx, 1, QtWidgets.QTableWidgetItem(size_text))
+                self.downloads_table.setItem(row_idx, 2, QtWidgets.QTableWidgetItem("0%"))
+                self.downloads_table.setItem(row_idx, 3, QtWidgets.QTableWidgetItem(item.status))
+                self.downloads_table.scrollToBottom()
+
+            def _update_row(payload: dict) -> None:
+                # Find row by filename
+                try:
+                    name = Path(payload.get("path") or "").name
+                    for r in range(self.downloads_table.rowCount()):
+                        if self.downloads_table.item(r, 0).text() == name:
+                            done = payload.get("done") or 0
+                            total = payload.get("total") or 0
+                            pct = 0 if not total else int(100 * done / max(1, total))
+                            self.downloads_table.setItem(r, 2, QtWidgets.QTableWidgetItem(f"{pct}%"))
+                            self.downloads_table.setItem(r, 3, QtWidgets.QTableWidgetItem(payload.get("status") or "?"))
+                            break
+                except Exception:
+                    pass
+
+            def _add_to_queue_clicked() -> None:
+                try:
+                    if not self._downloads_manager:
+                        return
+                    root = self.db_tab_edit.text().strip() or (self._settings.db_root or "")
+                    if not root:
+                        QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_database_required"))
+                        return
+                    root_path = Path(root).expanduser()
+                    lines = [ln.strip() for ln in self.urls_edit.toPlainText().splitlines()]
+                    for url in lines:
+                        if not url:
+                            continue
+                        item = self._downloads_manager.add(url, root_path)
+                        _append_row_for_item(item)
+                except Exception as exc:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+
+            def _add_selected_clicked() -> None:
+                try:
+                    if not self._downloads_manager:
+                        return
+                    root = self.db_tab_edit.text().strip() or (self._settings.db_root or "")
+                    if not root:
+                        QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_database_required"))
+                        return
+                    root_path = Path(root).expanduser()
+                    for i in range(self.sources_tree.topLevelItemCount()):
+                        it = self.sources_tree.topLevelItem(i)
+                        if it.checkState(0) == QtCore.Qt.Checked:
+                            entry = it.data(0, QtCore.Qt.UserRole)
+                            if isinstance(entry, dict):
+                                url = entry.get("url") or ""
+                                size = int(entry.get("size") or 0)
+                                if url:
+                                    item = self._downloads_manager.add(url, root_path, size_hint=size)
+                                    _append_row_for_item(item)
+                                    it.setCheckState(0, QtCore.Qt.Unchecked)
+                except Exception as exc:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+
+            def _start_all_clicked() -> None:
+                try:
+                    if not self._downloads_manager or self._dl_worker:
+                        return
+                    self._dl_worker = DownloadRunner(self._downloads_manager)
+                    self._dl_worker.progress.connect(_update_row)
+                    self._dl_worker.finished.connect(lambda: setattr(self, "_dl_worker", None))
+                    self._dl_worker.start()
+                except Exception as exc:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+
+            def _pause_all_clicked() -> None:
+                try:
+                    if self._dl_worker:
+                        self._dl_worker.stop()
+                except Exception:
+                    pass
+
+            def _verify_hashes_clicked() -> None:
+                try:
+                    if not self._downloads_manager:
+                        return
+                    def _emit(item):
+                        _update_row({
+                            "path": str(item.dest_path),
+                            "status": item.status,
+                            "done": item.bytes_done,
+                            "total": item.bytes_total,
+                        })
+                    self._downloads_manager.verify_all(on_update=_emit)
+                except Exception as exc:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+
+            self.btn_add_to_queue.clicked.connect(_add_to_queue_clicked)
+            self.btn_add_selected.clicked.connect(_add_selected_clicked)
+            self.btn_start_all.clicked.connect(_start_all_clicked)
+            self.btn_pause_all.clicked.connect(_pause_all_clicked)
+            self.btn_verify_hashes.clicked.connect(_verify_hashes_clicked)
+
+            column.addLayout(form)
+            self.db_tab_browse.clicked.connect(lambda: self._pick_settings_directory(self.db_tab_edit))
+            # Keep Settings tab DB field in sync
+            def _sync_db_text(text: str) -> None:
+                try:
+                    if hasattr(self, "settings_db_edit"):
+                        if self.settings_db_edit.text().strip() != text.strip():
+                            self.settings_db_edit.setText(text)
+                except Exception:
+                    pass
+            self.db_tab_edit.textChanged.connect(_sync_db_text)
+            return widget
 
         def _build_options_box(self) -> QtWidgets.QGroupBox:
             self.options_box = QtWidgets.QGroupBox()
@@ -2472,6 +2782,78 @@ def launch_gui(args: argparse.Namespace) -> int:
             sample_layout.addWidget(self.settings_sample_browse)
             form.addRow(self.settings_sample_label, sample_row)
 
+            # Presets group
+            self.presets_group = QtWidgets.QGroupBox()
+            self.presets_group.setTitle(self._text("presets_title"))
+            presets_layout = QtWidgets.QVBoxLayout(self.presets_group)
+            self.presets_combo = QtWidgets.QComboBox()
+            for p in preset_utils.list_presets():
+                self.presets_combo.addItem(p.label, p.id)
+            self.preset_warning_label = QtWidgets.QLabel()
+            self.preset_warning_label.setStyleSheet("color: #c08000;")
+            presets_layout.addWidget(self.presets_combo)
+            presets_layout.addWidget(self.preset_warning_label)
+
+            # FOV group
+            self.fov_group = QtWidgets.QGroupBox()
+            self.fov_group.setTitle(self._text("fov_mode_title"))
+            fov_form = QtWidgets.QFormLayout(self.fov_group)
+            self.fov_focal_spin = QtWidgets.QDoubleSpinBox()
+            self.fov_focal_spin.setRange(10.0, 6000.0)
+            self.fov_focal_spin.setDecimals(1)
+            self.fov_pixel_spin = QtWidgets.QDoubleSpinBox()
+            self.fov_pixel_spin.setRange(1.0, 20.0)
+            self.fov_pixel_spin.setDecimals(2)
+            self.fov_res_w_spin = QtWidgets.QSpinBox()
+            self.fov_res_w_spin.setRange(64, 20000)
+            self.fov_res_h_spin = QtWidgets.QSpinBox()
+            self.fov_res_h_spin.setRange(64, 20000)
+            self.fov_reducer_spin = QtWidgets.QDoubleSpinBox()
+            self.fov_reducer_spin.setRange(0.2, 2.0)
+            self.fov_reducer_spin.setDecimals(2)
+            self.fov_reducer_spin.setSingleStep(0.01)
+            self.fov_binning_spin = QtWidgets.QSpinBox()
+            self.fov_binning_spin.setRange(1, 8)
+            # Labels for results
+            self.reco_group = QtWidgets.QGroupBox()
+            self.reco_group.setTitle(self._text("recommendations_title"))
+            reco_form = QtWidgets.QFormLayout(self.reco_group)
+            self.reco_scale_label = QtWidgets.QLabel()
+            self.reco_scale_value = QtWidgets.QLabel("-")
+            self.reco_fov_label = QtWidgets.QLabel()
+            self.reco_fov_value = QtWidgets.QLabel("-")
+            self.reco_mag_label = QtWidgets.QLabel()
+            self.reco_mag_value = QtWidgets.QLabel("-")
+            self.reco_quads_label = QtWidgets.QLabel()
+            self.reco_quads_value = QtWidgets.QLabel("-")
+            self.reco_notes_label = QtWidgets.QLabel("")
+            self.reco_notes_label.setWordWrap(True)
+            self.compute_button = QtWidgets.QPushButton()
+
+            fov_form.addRow(QtWidgets.QLabel(self._text("focal_length_mm")), self.fov_focal_spin)
+            fov_form.addRow(QtWidgets.QLabel(self._text("pixel_size_um")), self.fov_pixel_spin)
+            # Resolution as two widgets in one row
+            res_row = QtWidgets.QWidget()
+            res_layout = QtWidgets.QHBoxLayout(res_row)
+            res_layout.setContentsMargins(0, 0, 0, 0)
+            res_layout.addWidget(self.fov_res_w_spin)
+            res_layout.addWidget(self.fov_res_h_spin)
+            fov_form.addRow(QtWidgets.QLabel(self._text("resolution_px")), res_row)
+            fov_form.addRow(QtWidgets.QLabel(self._text("reducer_factor")), self.fov_reducer_spin)
+            fov_form.addRow(QtWidgets.QLabel(self._text("binning")), self.fov_binning_spin)
+            fov_form.addRow(self.compute_button)
+
+            reco_form.addRow(self.reco_scale_label, self.reco_scale_value)
+            reco_form.addRow(self.reco_fov_label, self.reco_fov_value)
+            reco_form.addRow(self.reco_mag_label, self.reco_mag_value)
+            reco_form.addRow(self.reco_quads_label, self.reco_quads_value)
+            reco_form.addRow(self.reco_notes_label)
+
+            column.addLayout(form)
+            column.addWidget(self.presets_group)
+            column.addWidget(self.fov_group)
+            column.addWidget(self.reco_group)
+
             # Blind solver tuning group
             self.blind_group = QtWidgets.QGroupBox()
             self.blind_group.setTitle(self._text("settings_blind_group"))
@@ -2558,10 +2940,45 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.settings_db_browse.clicked.connect(
                 lambda: self._pick_settings_directory(self.settings_db_edit)
             )
+            # Keep Database tab DB field in sync when editing in Settings
+            def _sync_db_tab_text(text: str) -> None:
+                try:
+                    if hasattr(self, "db_tab_edit"):
+                        if self.db_tab_edit.text().strip() != text.strip():
+                            self.db_tab_edit.setText(text)
+                except Exception:
+                    pass
+            self.settings_db_edit.textChanged.connect(_sync_db_tab_text)
             self.settings_index_browse.clicked.connect(
                 lambda: self._pick_settings_directory(self.settings_index_edit)
             )
             self.settings_sample_browse.clicked.connect(self._pick_settings_sample)
+            # Presets interactions: load preset populates FOV fields
+            def _apply_preset(preset_id: str) -> None:
+                try:
+                    presets = {p.id: p for p in preset_utils.list_presets()}
+                    p = presets.get(preset_id)
+                    if not p:
+                        return
+                    self.fov_focal_spin.setValue(p.focal_mm)
+                    self.fov_pixel_spin.setValue(p.pixel_um)
+                    self.fov_res_w_spin.setValue(p.res_w)
+                    self.fov_res_h_spin.setValue(p.res_h)
+                    self.fov_reducer_spin.setValue(p.reducer)
+                    self.fov_binning_spin.setValue(1)
+                    # Warning banner for approximate presets
+                    if p.spec_confidence in ("approx", "unknown"):
+                        self.preset_warning_label.setText(self._text("spec_warning_unknown"))
+                    else:
+                        self.preset_warning_label.setText("")
+                except Exception:
+                    pass
+
+            self.presets_combo.currentIndexChanged.connect(
+                lambda idx: _apply_preset(self.presets_combo.itemData(idx))
+            )
+
+            self.compute_button.clicked.connect(self._on_compute_fov_clicked)
             return widget
 
         def _build_performance_tab(self) -> QtWidgets.QWidget:
@@ -2718,6 +3135,19 @@ def launch_gui(args: argparse.Namespace) -> int:
             index_root = self.settings_index_edit.text().strip()
             if not index_root:
                 raise ValueError(self._text("settings_index_missing"))
+            # Enforce separation between database/ and index/
+            try:
+                dbp = Path(db_root).expanduser().resolve()
+                idxp = Path(index_root).expanduser().resolve()
+                same = (idxp == dbp)
+                inside = str(idxp).startswith(str(dbp) + os.sep)
+                if same or inside:
+                    raise ValueError(self._text("warn_sep_dirs"))
+            except Exception as _exc:
+                # Convert any path-related issue into a user-facing message
+                if not isinstance(_exc, ValueError):
+                    raise ValueError(self._text("warn_sep_dirs"))
+                raise
             # Read detection device from Performance tab
             try:
                 sel = self.perf_detect_combo.currentData()
@@ -2734,6 +3164,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                 max_stars=int(self.settings_max_stars_spin.value()),
                 max_quads_per_tile=int(self.settings_max_quads_spin.value()),
                 sample_fits=self.settings_sample_edit.text().strip() or None,
+                last_preset_id=(self.presets_combo.currentData() if hasattr(self, 'presets_combo') else None),
+                last_fov_focal_mm=float(self.fov_focal_spin.value()) if hasattr(self, 'fov_focal_spin') else 0.0,
+                last_fov_pixel_um=float(self.fov_pixel_spin.value()) if hasattr(self, 'fov_pixel_spin') else 0.0,
+                last_fov_res_w=int(self.fov_res_w_spin.value()) if hasattr(self, 'fov_res_w_spin') else 0,
+                last_fov_res_h=int(self.fov_res_h_spin.value()) if hasattr(self, 'fov_res_h_spin') else 0,
+                last_fov_reducer=float(self.fov_reducer_spin.value()) if hasattr(self, 'fov_reducer_spin') else 1.0,
+                last_fov_binning=int(self.fov_binning_spin.value()) if hasattr(self, 'fov_binning_spin') else 1,
                 blind_max_stars=int(self.settings_blind_max_stars_spin.value()),
                 blind_max_quads=int(self.settings_blind_max_quads_spin.value()),
                 blind_max_candidates=int(self.settings_blind_max_candidates_spin.value()),
@@ -2748,6 +3185,42 @@ def launch_gui(args: argparse.Namespace) -> int:
                 io_concurrency=int(self.perf_io_spin.value()) if hasattr(self, 'perf_io_spin') else 0,
                 near_warm_start=bool(self.perf_near_warm_check.isChecked()) if hasattr(self, 'perf_near_warm_check') else True,
             )
+
+        def _on_compute_fov_clicked(self) -> None:
+            try:
+                focal = float(self.fov_focal_spin.value())
+                pixel = float(self.fov_pixel_spin.value())
+                rw = int(self.fov_res_w_spin.value())
+                rh = int(self.fov_res_h_spin.value())
+                red = float(self.fov_reducer_spin.value())
+                binning = int(self.fov_binning_spin.value())
+                geo = preset_utils.compute_scale_and_fov(
+                    focal, pixel, rw, rh, reducer=red, binning=binning
+                )
+                rec = preset_utils.recommend_params(
+                    geo["scale_arcsec_per_px"], geo["fov_diag_deg"]
+                )
+                # Update recommendation labels
+                self.reco_scale_value.setText(f"{geo['scale_arcsec_per_px']:.3f}")
+                self.reco_fov_value.setText(
+                    f"{geo['fov_w_deg']:.3f}° × {geo['fov_h_deg']:.3f}° (diag {geo['fov_diag_deg']:.3f}°)"
+                )
+                self.reco_mag_value.setText(f"{rec['mag_cap']:.2f}")
+                self.reco_quads_value.setText(
+                    f"{preset_utils.describe_quads_profile(rec['levels'])} / {int(rec['max_quads_per_tile'])}"
+                )
+                self.reco_notes_label.setText(str(rec.get('notes') or ''))
+                # Apply to index build fields for convenience
+                try:
+                    self.settings_mag_spin.setValue(float(rec["mag_cap"]))
+                except Exception:
+                    pass
+                try:
+                    self.settings_max_quads_spin.setValue(int(rec["max_quads_per_tile"]))
+                except Exception:
+                    pass
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
 
         def _log_settings(self, message: str) -> None:
             timestamp = time.strftime("%H:%M:%S")
@@ -3148,10 +3621,11 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.status_label.setText(self._text("status_ready"))
             self.max_radius_spin.setSpecialValueText(self._text("special_auto"))
             if hasattr(self, "tabs"):
-                self.tabs.setTabText(0, self._text("solver_tab"))
-                self.tabs.setTabText(1, self._text("settings_tab"))
                 try:
-                    self.tabs.setTabText(2, self._text("performance_tab"))
+                    self.tabs.setTabText(0, self._text("solver_tab"))
+                    self.tabs.setTabText(1, self._text("database_tab"))
+                    self.tabs.setTabText(2, self._text("settings_tab"))
+                    self.tabs.setTabText(3, self._text("performance_tab"))
                 except Exception:
                     pass
             browse_label = self._text("browse_button")
@@ -3161,6 +3635,27 @@ def launch_gui(args: argparse.Namespace) -> int:
             if hasattr(self, "settings_index_label"):
                 self.settings_index_label.setText(self._text("settings_index_label"))
                 self.settings_index_browse.setText(browse_label)
+            # Database tab labels
+            if hasattr(self, "db_tab_label"):
+                self.db_tab_label.setText(self._text("select_db_root"))
+                self.db_tab_browse.setText(browse_label)
+            if hasattr(self, "data_sources_label"):
+                self.data_sources_label.setText(self._text("data_sources"))
+            if hasattr(self, "sources_group"):
+                self.sources_group.setTitle(self._text("data_sources"))
+            # Downloads group labels
+            if hasattr(self, "downloads_group"):
+                self.downloads_group.setTitle(self._text("downloads_title"))
+            if hasattr(self, "btn_add_to_queue"):
+                self.btn_add_to_queue.setText(self._text("add_to_queue"))
+            if hasattr(self, "btn_start_all"):
+                self.btn_start_all.setText(self._text("start_all"))
+            if hasattr(self, "btn_pause_all"):
+                self.btn_pause_all.setText(self._text("pause_all"))
+            if hasattr(self, "btn_verify_hashes"):
+                self.btn_verify_hashes.setText(self._text("verify_hashes"))
+            if hasattr(self, "btn_add_selected"):
+                self.btn_add_selected.setText(self._text("add_selected"))
             if hasattr(self, "settings_mag_label"):
                 self.settings_mag_label.setText(self._text("settings_mag_label"))
             if hasattr(self, "settings_max_stars_label"):
@@ -3169,6 +3664,19 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_max_quads_label.setText(self._text("settings_max_quads_label"))
             if hasattr(self, "blind_group"):
                 self.blind_group.setTitle(self._text("settings_blind_group"))
+            # Presets/FOV groups
+            if hasattr(self, "presets_group"):
+                self.presets_group.setTitle(self._text("presets_title"))
+            if hasattr(self, "fov_group"):
+                self.fov_group.setTitle(self._text("fov_mode_title"))
+            if hasattr(self, "compute_button"):
+                self.compute_button.setText(self._text("compute_button"))
+            if hasattr(self, "reco_group"):
+                self.reco_group.setTitle(self._text("recommendations_title"))
+                self.reco_scale_label.setText(self._text("est_scale"))
+                self.reco_fov_label.setText(self._text("est_fov"))
+                self.reco_mag_label.setText(self._text("mag_cap_suggested"))
+                self.reco_quads_label.setText(self._text("quads_profile"))
             if hasattr(self, "settings_blind_max_stars_label"):
                 self.settings_blind_max_stars_label.setText(self._text("settings_blind_max_stars_label"))
             if hasattr(self, "settings_blind_max_quads_label"):
