@@ -53,6 +53,7 @@ def estimate_similarity_RANSAC(
     tol_px: float = 3.0,
     min_inliers: int = 3,
     allow_reflection: bool = False,
+    early_stop_inliers: int = 0,
 ) -> tuple[SimilarityTransform, SimilarityStats] | None:
     if len(image_points) < 2 or len(catalog_points) < 2:
         return None
@@ -88,6 +89,16 @@ def estimate_similarity_RANSAC(
             if score < min_inliers:
                 continue
             rms = float(np.sqrt(np.mean(err_px[mask] ** 2))) if score else float("inf")
+            # Early exit when a high-quality consensus is reached
+            if early_stop_inliers and score >= early_stop_inliers:
+                transform = SimilarityTransform(
+                    scale=float(max(scale, 1e-12)),
+                    rotation=float(np.angle(rot_scale)),
+                    translation=(float(translation.real), float(translation.imag)),
+                    parity=int(parity),
+                )
+                stats = SimilarityStats(rms_px=rms, inliers=score)
+                return transform, stats
             if score > best_score or (score == best_score and rms < best_rms):
                 best_score = score
                 best_transform = (rot_scale, translation)

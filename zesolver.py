@@ -201,6 +201,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_near_max_tiles_label": "Tuiles candidates max (near)",
         "settings_perf_detect_label": "Dispositif détection (GPU/CPU)",
         "settings_perf_io_label": "Concurrence I/O (Auto=0)",
+        "settings_perf_near_warm_label": "Near rapide (séquence)",
         "settings_build_start": "Construction de l'index dans {path}… (cela peut prendre plusieurs minutes)",
         "settings_rebuild_title": "Reconstruire l'index ?",
         "settings_rebuild_text": "Un index existe déjà dans {path}. Le reconstruire ?",
@@ -294,6 +295,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_near_max_tiles_label": "Max tile candidates (near)",
         "settings_perf_detect_label": "Star detection device",
         "settings_perf_io_label": "I/O concurrency (Auto=0)",
+        "settings_perf_near_warm_label": "Fast near (sequential warm-start)",
         "settings_build_start": "Building index at {path}… (this may take several minutes)",
         "settings_rebuild_title": "Rebuild Index?",
         "settings_rebuild_text": "An index already exists at {path}. Rebuild it?",
@@ -325,6 +327,7 @@ class PersistentSettings:
     near_detect_backend: str = "auto"  # auto|cpu|cuda
     near_detect_device: int = 0
     io_concurrency: int = 0
+    near_warm_start: bool = True
     # Solver panel persisted settings
     solver_fov_deg: float = DEFAULT_FOV_DEG
     solver_search_scale: float = DEFAULT_SEARCH_RADIUS_SCALE
@@ -368,6 +371,7 @@ def load_persistent_settings() -> PersistentSettings:
         near_detect_backend=str(payload.get("near_detect_backend", "auto")),
         near_detect_device=int(payload.get("near_detect_device", 0)),
         io_concurrency=int(payload.get("io_concurrency", 0)),
+        near_warm_start=bool(payload.get("near_warm_start", True)),
         solver_fov_deg=float(payload.get("solver_fov_deg", DEFAULT_FOV_DEG)),
         solver_search_scale=float(payload.get("solver_search_scale", DEFAULT_SEARCH_RADIUS_SCALE)),
         solver_search_attempts=int(payload.get("solver_search_attempts", DEFAULT_SEARCH_RADIUS_ATTEMPTS)),
@@ -460,6 +464,7 @@ class SolveConfig:
     near_tile_cache_size: int = 128
     near_detect_backend: Optional[str] = None
     near_detect_device: Optional[int] = None
+    near_warm_start: bool = True
 
     def __post_init__(self) -> None:
         if self.families:
@@ -718,6 +723,8 @@ class ImageSolver:
         self._db_lock = threading.Lock()
         self._family_candidates = self._init_family_candidates()
         self._family_hint: Optional[str] = None
+        # Sequential near-solver warm start: (scale_deg_per_px, rotation_rad, parity)
+        self._near_seed: Optional[tuple[float, float, int]] = None
         # Cache to avoid repeating expensive blind index preflight checks per file
         self._blind_index_checked: bool = False
         self._blind_index_checked_root: Optional[Path] = None
@@ -1244,6 +1251,7 @@ class ImageSolver:
                         dec_deg=dec,
                         source="fits-header",
                         has_wcs=has_wcs,
+                        extra={"OBJECT": str(header.get("OBJECT", "")).strip() or ""},
                     )
                     return np.ascontiguousarray(arr), meta
             except ValueError as exc:
@@ -1521,6 +1529,24 @@ class ImageSolver:
             family: Optional[str] = None
             if self.config.families and len(self.config.families) == 1:
                 family = self.config.families[0]
+            # If we have a previous near solution, reduce trials and pass parity hint
+            seed = getattr(self, "_near_seed", None)
+            ransac_trials = 600 if seed else 1200
+            seed_scale = float(seed[0]) if seed else None
+            seed_rot = float(seed[1]) if seed else None
+            seed_par = int(seed[2]) if seed else 1
+            if seed and self.config.near_warm_start:
+                logging.info("[ZENEAR] warm-start used (trials=%d)", ransac_trials)
+            # Further tighten search margin when OBJECT is present
+            obj_name = None
+            try:
+                obj_name = (metadata.extra.get("OBJECT") if metadata and metadata.extra else None)
+            except Exception:
+                obj_name = None
+            search_margin = 1.2
+            if obj_name and metadata.ra_deg is not None and metadata.dec_deg is not None:
+                search_margin = 1.05
+                logging.info("[ZENEAR] OBJECT=%s -> tighter search margin (%.2f)", obj_name, search_margin)
             near_cfg = NearIndexConfig(
                 fov_override_deg=fov_override,
                 family=family,
@@ -1528,6 +1554,11 @@ class ImageSolver:
                 tile_cache_size=int(getattr(self.config, "near_tile_cache_size", 128) or 128),
                 detect_backend=(getattr(self.config, "near_detect_backend", None) or "auto"),
                 detect_device=(getattr(self.config, "near_detect_device", None)),
+                ransac_trials=ransac_trials,
+                seed_scale_deg=seed_scale,
+                seed_rotation=seed_rot,
+                seed_parity=seed_par,
+                search_margin=search_margin,
             )
             result = near_solve(
                 fits_path=str(path),
@@ -1543,6 +1574,16 @@ class ImageSolver:
             return None
         if result["success"]:
             message = result.get("message") or "near solution found"
+            # Update sequential seed from returned keywords when available
+            try:
+                kw = result.get("updated_keywords", {}) or {}
+                s = float(kw.get("SEED_SCALE")) if kw.get("SEED_SCALE") is not None else None
+                r = float(kw.get("SEED_ROT")) if kw.get("SEED_ROT") is not None else None
+                p = int(kw.get("SEED_PAR")) if kw.get("SEED_PAR") is not None else 1
+                if s and r is not None:
+                    self._near_seed = (s, r, p)
+            except Exception:
+                pass
             return ImageSolveResult(
                 path=path,
                 status="solved",
@@ -1715,6 +1756,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Near-solver: CUDA device index to use for detection",
     )
     parser.add_argument(
+        "--near-warm-start",
+        dest="near_warm_start",
+        action="store_true",
+        default=None,
+        help="Enable sequential warm-start for near solver",
+    )
+    parser.add_argument(
+        "--no-near-warm-start",
+        dest="near_warm_start",
+        action="store_false",
+        help="Disable sequential warm-start for near solver",
+    )
+    parser.add_argument(
         "--io-concurrency",
         type=int,
         default=0,
@@ -1814,6 +1868,7 @@ def run_cli(args: argparse.Namespace) -> int:
         near_detect_device=(int(args.near_detect_device) if args.near_detect_device is not None else None),
         io_concurrency=int(args.io_concurrency or 0),
         gc_interval=int(args.gc_interval or 0),
+        near_warm_start=(True if args.near_warm_start is None else bool(args.near_warm_start)),
     )
     logging.info(
         "Starting batch solve in %s (families=%s, workers=%d, downsample=%d)",
@@ -2538,6 +2593,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.perf_io_spin.setValue(int(getattr(self._settings, 'io_concurrency', 0) or 0))
             self.perf_io_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
             form.addRow(self.perf_io_label, self.perf_io_spin)
+            # Near warm-start toggle
+            self.perf_near_warm_check = QtWidgets.QCheckBox()
+            self.perf_near_warm_check.setChecked(bool(getattr(self._settings, 'near_warm_start', True)))
+            form.addRow(QtWidgets.QLabel(self._text("settings_perf_near_warm_label")), self.perf_near_warm_check)
             # Save button
             self.performance_save_btn = QtWidgets.QPushButton()
             self.performance_save_btn.clicked.connect(self._on_save_settings_clicked)
@@ -2687,6 +2746,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_detect_backend=str(backend_sel),
                 near_detect_device=int(dev_sel if isinstance(dev_sel, int) else 0),
                 io_concurrency=int(self.perf_io_spin.value()) if hasattr(self, 'perf_io_spin') else 0,
+                near_warm_start=bool(self.perf_near_warm_check.isChecked()) if hasattr(self, 'perf_near_warm_check') else True,
             )
 
         def _log_settings(self, message: str) -> None:
@@ -3143,6 +3203,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.perf_detect_label.setText(self._text("settings_perf_detect_label"))
             if hasattr(self, "perf_io_label"):
                 self.perf_io_label.setText(self._text("settings_perf_io_label"))
+            if hasattr(self, "perf_near_warm_check"):
+                # Checkboxes show their own text; set it here
+                self.perf_near_warm_check.setText(self._text("settings_perf_near_warm_label"))
             if hasattr(self, "performance_save_btn"):
                 self.performance_save_btn.setText(self._text("settings_save_btn"))
             self._retranslate_status_items()
@@ -3396,6 +3459,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_detect_backend=str(self._settings.near_detect_backend or "auto"),
                 near_detect_device=int(self._settings.near_detect_device) if self._settings.near_detect_device is not None else None,
                 io_concurrency=int(self._settings.io_concurrency or 0),
+                near_warm_start=bool(self._settings.near_warm_start),
             )
 
         def _start_solving(self) -> None:

@@ -495,10 +495,11 @@ def solve_blind(
                 transform_result = estimate_similarity_RANSAC(
                     img_points,
                     tile_points,
-                    trials=2000,
+                    trials=1200,
                     tol_px=config.pixel_tolerance,
                     min_inliers=4,
                     allow_reflection=bool(config.try_parity_flip),
+                    early_stop_inliers=int(getattr(config, "quality_inliers", 60) or 60),
                 )
             if transform_result is None:
                 continue

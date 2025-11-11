@@ -65,6 +65,12 @@ class NearSolveConfig:
     # Star detection compute backend
     detect_backend: str = "auto"  # "auto" | "cpu" | "cuda"
     detect_device: int | None = None
+    # RANSAC settings
+    ransac_trials: int = 1200
+    # Optional warm-start seed (from previous near solution)
+    seed_scale_deg: float | None = None
+    seed_rotation: float | None = None  # radians
+    seed_parity: int = 1
 
 
 def _failure(message: str) -> WcsSolution:
@@ -455,17 +461,40 @@ def solve_near(
         return _failure("unable to build candidate matches from metadata")
     if cancel_check and cancel_check():
         return _failure("cancelled")
-    hypothesis = estimate_similarity_RANSAC(
+    # Try a cheap least-squares fit first if a parity hint is provided and enough pairs exist
+    used_transform: SimilarityTransform | None = None
+    hypothesis = None
+    if img_pairs.shape[0] >= 6 and cat_pairs.shape[0] >= 6 and cfg.seed_rotation is not None and cfg.seed_scale_deg is not None:
+        try:
+            # One-shot LS fit with parity hint; validates via inlier thresholds below
+            ls = estimate_similarity_RANSAC(
+                img_pairs,
+                cat_pairs,
+                trials=1,
+                tol_px=cfg.pixel_tolerance,
+                min_inliers=4,
+                allow_reflection=cfg.try_parity_flip,
+                early_stop_inliers=int(getattr(cfg, "quality_inliers", 60) or 60),
+            )
+            if ls is not None:
+                used_transform, _ = ls
+                hypothesis = ls
+        except Exception:
+            hypothesis = None
+    if hypothesis is None:
+        hypothesis = estimate_similarity_RANSAC(
         img_pairs,
         cat_pairs,
-        trials=2000,
+        trials=int(getattr(cfg, "ransac_trials", 1200) or 1200),
         tol_px=cfg.pixel_tolerance,
         min_inliers=4,
         allow_reflection=cfg.try_parity_flip,
+        early_stop_inliers=int(getattr(cfg, "quality_inliers", 60) or 60),
     )
     if hypothesis is None:
         return _failure("near solver could not estimate a similarity transform")
     transform, _ = hypothesis
+    used_transform = used_transform or transform
     inlier_mask, _ = _compute_inliers(transform, img_pairs, cat_pairs, cfg.pixel_tolerance)
     if not inlier_mask.any():
         return _failure("no geometric consensus found for metadata solve")
@@ -524,6 +553,13 @@ def solve_near(
         "SOLVMODE": "NEAR",
         "SOLVER": "ZeSolver",
     }
+    try:
+        if used_transform is not None:
+            header_updates["SEED_SCALE"] = float(used_transform.scale)
+            header_updates["SEED_ROT"] = float(used_transform.rotation)
+            header_updates["SEED_PAR"] = int(getattr(used_transform, "parity", 1))
+    except Exception:
+        pass
     pix_scale_arcsec = _pix_scale_arcsec(final_wcs)
     if pix_scale_arcsec is not None:
         header_updates["PIXSCAL"] = pix_scale_arcsec
