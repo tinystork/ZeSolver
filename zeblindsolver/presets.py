@@ -45,26 +45,26 @@ def list_presets() -> List[InstrumentPreset]:
             spec_confidence="high",
         ),
         InstrumentPreset(
-            id="s50_placeholder",
-            label="S50 (placeholder)",
+            id="seestar_s50",
+            label="Seestar S50",
             focal_mm=250.0,
             reducer=1.0,
-            pixel_um=3.76,
-            res_w=3008,
-            res_h=3008,
-            spec_confidence="unknown",
-            notes="Approximate; verify specs.",
+            pixel_um=2.9,
+            res_w=1920,
+            res_h=1080,
+            spec_confidence="approx",
+            notes="IMX462 (2.9um), 1920x1080; ~250mm focal",
         ),
         InstrumentPreset(
-            id="s30_placeholder",
-            label="S30 (placeholder)",
-            focal_mm=180.0,
+            id="seestar_s30",
+            label="Seestar S30",
+            focal_mm=380.0,
             reducer=1.0,
-            pixel_um=3.76,
-            res_w=3008,
-            res_h=3008,
-            spec_confidence="unknown",
-            notes="Approximate; verify specs.",
+            pixel_um=2.9,
+            res_w=1920,
+            res_h=1080,
+            spec_confidence="approx",
+            notes="IMX462 (2.9um), 1920x1080; ~380mm focal",
         ),
     ]
 
@@ -169,4 +169,3 @@ def recommend_params(scale_arcsec_per_px: float, fov_diag_deg: float) -> Dict[st
 def describe_quads_profile(levels: Dict[str, bool]) -> str:
     order = [k for k in ("L", "M", "S") if levels.get(k)]
     return "/".join(order) if order else "(none)"
-

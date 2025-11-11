@@ -354,6 +354,9 @@ _GUI_DOWNLOADS_I18N = {
         "pause_all": "Tout mettre en pause",
         "verify_hashes": "Verifier les empreintes",
         "add_selected": "Ajouter la selection a la file",
+        "open_page": "Ouvrir la page",
+        "copy_url": "Copier l'URL",
+        "sources_hint_c14": "Astuce: pour les instruments a petit champ (p.ex. C14), privilegiez les bases GAIA DR3 (plus profondes).",
     },
     "en": {
         "downloads_title": "Downloads",
@@ -362,6 +365,9 @@ _GUI_DOWNLOADS_I18N = {
         "pause_all": "Pause all",
         "verify_hashes": "Verify hashes",
         "add_selected": "Add selected to queue",
+        "open_page": "Open page",
+        "copy_url": "Copy URL",
+        "sources_hint_c14": "Hint: For narrow FOV (e.g., C14-class), prefer GAIA DR3 datasets (deeper).",
     },
 }
 for _lang, _mapping in _GUI_DOWNLOADS_I18N.items():
@@ -2420,22 +2426,75 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.sources_tree = QtWidgets.QTreeWidget()
             self.sources_tree.setHeaderLabels(["Package", "Size"])
             self.sources_tree.header().setStretchLastSection(True)
-            # Placeholder sources (replace with official URLs later)
+            # Preset sources
             preset_sources = [
-                {"label": "HNSKY/ASTAP Stars Shard A (placeholder)", "url": "https://example.invalid/astap/stars_A.1476", "size": 120_000_000},
-                {"label": "HNSKY/ASTAP Stars Shard B (placeholder)", "url": "https://example.invalid/astap/stars_B.1476", "size": 120_000_000},
-                {"label": "HNSKY/ASTAP Stars Shard C (placeholder)", "url": "https://example.invalid/astap/stars_C.1476", "size": 120_000_000},
+                # HNSKY/ASTAP (pre-built shards)
+                {
+                    "label": "ASTAP (HNSKY) star databases (directory)",
+                    "url": "https://sourceforge.net/projects/hnsky/files/star_databases/ASTAP/",
+                    "kind": "page",
+                },
+                # Gaia DR3 via HNSKY mirrors (directory listing)
+                {
+                    "label": "Gaia star catalog release DR3 (directory)",
+                    "url": "https://sourceforge.net/projects/hnsky/files/star_databases/GAIA%20DR3/",
+                    "kind": "page",
+                },
+                # Gaia DR3 at source (ESA DPAC bulk)
+                {
+                    "label": "Gaia DR3 root (ESA bulk directory)",
+                    "url": "http://cdn.gea.esac.esa.int/Gaia/gdr3/",
+                    "kind": "page",
+                },
+                {
+                    "label": "Gaia DR3 gaia_source (ESA bulk directory)",
+                    "url": "http://cdn.gea.esac.esa.int/Gaia/gdr3/gaia_source/",
+                    "kind": "page",
+                },
+                {
+                    "label": "Gaia DR3 xp_continuous_mean_spectrum (ESA bulk directory)",
+                    "url": "http://cdn.gea.esac.esa.int/Gaia/gdr3/xp_continuous_mean_spectrum/",
+                    "kind": "page",
+                },
+                {
+                    "label": "Gaia DR3 xp_sampled_mean_spectrum (ESA bulk directory)",
+                    "url": "http://cdn.gea.esac.esa.int/Gaia/gdr3/xp_sampled_mean_spectrum/",
+                    "kind": "page",
+                },
+                {
+                    "label": "Gaia DR3 vari_time_series_statistics (ESA bulk directory)",
+                    "url": "http://cdn.gea.esac.esa.int/Gaia/gdr3/vari_time_series_statistics/",
+                    "kind": "page",
+                },
+                {
+                    "label": "Gaia DR3 vari_classifier_result (ESA bulk directory)",
+                    "url": "http://cdn.gea.esac.esa.int/Gaia/gdr3/vari_classifier_result/",
+                    "kind": "page",
+                },
             ]
             for entry in preset_sources:
-                item = QtWidgets.QTreeWidgetItem([entry["label"], f"{entry['size']/1_000_000:.1f} MB"])
+                size = entry.get("size")
+                size_txt = f"{size/1_000_000:.1f} MB" if isinstance(size, (int, float)) else "-"
+                item = QtWidgets.QTreeWidgetItem([entry["label"], size_txt])
                 # Store metadata on column 0
                 item.setData(0, QtCore.Qt.UserRole, entry)
                 item.setCheckState(0, QtCore.Qt.Unchecked)
                 self.sources_tree.addTopLevelItem(item)
             sources_layout.addWidget(self.sources_tree)
             # Add-selected button
+            btn_row_src = QtWidgets.QHBoxLayout()
             self.btn_add_selected = QtWidgets.QPushButton(self._text("add_selected"))
-            sources_layout.addWidget(self.btn_add_selected)
+            self.btn_open_page = QtWidgets.QPushButton(self._text("open_page") if hasattr(self, "_text") else "Open page")
+            self.btn_copy_url = QtWidgets.QPushButton(self._text("copy_url") if hasattr(self, "_text") else "Copy URL")
+            btn_row_src.addWidget(self.btn_add_selected)
+            btn_row_src.addWidget(self.btn_open_page)
+            btn_row_src.addWidget(self.btn_copy_url)
+            btn_row_src.addStretch(1)
+            sources_layout.addLayout(btn_row_src)
+            # Hint label for dataset recommendation (static text)
+            self.sources_hint_label = QtWidgets.QLabel(self._text("sources_hint_c14") if hasattr(self, "_text") else "Hint: DR3 is recommended for narrow FOV (C14-class)")
+            self.sources_hint_label.setWordWrap(True)
+            sources_layout.addWidget(self.sources_hint_label)
             form.addRow(self.sources_group)
 
             # Downloads group
@@ -2560,12 +2619,21 @@ def launch_gui(args: argparse.Namespace) -> int:
                         if it.checkState(0) == QtCore.Qt.Checked:
                             entry = it.data(0, QtCore.Qt.UserRole)
                             if isinstance(entry, dict):
+                                kind = (entry.get("kind") or "file").lower()
                                 url = entry.get("url") or ""
-                                size = int(entry.get("size") or 0)
-                                if url:
-                                    item = self._downloads_manager.add(url, root_path, size_hint=size)
-                                    _append_row_for_item(item)
-                                    it.setCheckState(0, QtCore.Qt.Unchecked)
+                                if kind == "file":
+                                    size = int(entry.get("size") or 0)
+                                    if url:
+                                        item = self._downloads_manager.add(url, root_path, size_hint=size)
+                                        _append_row_for_item(item)
+                                        it.setCheckState(0, QtCore.Qt.Unchecked)
+                                else:
+                                    # Directory page: copy URL to clipboard
+                                    try:
+                                        QtWidgets.QApplication.clipboard().setText(url)
+                                        self._log_settings(f"Copied URL to clipboard: {url}")
+                                    except Exception:
+                                        pass
                 except Exception as exc:
                     QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
 
@@ -2604,6 +2672,36 @@ def launch_gui(args: argparse.Namespace) -> int:
 
             self.btn_add_to_queue.clicked.connect(_add_to_queue_clicked)
             self.btn_add_selected.clicked.connect(_add_selected_clicked)
+            # Source page helpers
+            def _current_source_url() -> str:
+                try:
+                    it = self.sources_tree.currentItem()
+                    if not it:
+                        return ""
+                    entry = it.data(0, QtCore.Qt.UserRole)
+                    if isinstance(entry, dict):
+                        return str(entry.get("url") or "")
+                except Exception:
+                    pass
+                return ""
+            def _open_page_clicked() -> None:
+                try:
+                    url = _current_source_url()
+                    if not url:
+                        return
+                    QtGui.QDesktopServices.openUrl(QtCore.QUrl(url))
+                except Exception:
+                    pass
+            def _copy_url_clicked() -> None:
+                try:
+                    url = _current_source_url()
+                    if not url:
+                        return
+                    QtWidgets.QApplication.clipboard().setText(url)
+                except Exception:
+                    pass
+            self.btn_open_page.clicked.connect(_open_page_clicked)
+            self.btn_copy_url.clicked.connect(_copy_url_clicked)
             self.btn_start_all.clicked.connect(_start_all_clicked)
             self.btn_pause_all.clicked.connect(_pause_all_clicked)
             self.btn_verify_hashes.clicked.connect(_verify_hashes_clicked)
