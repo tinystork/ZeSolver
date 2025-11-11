@@ -200,6 +200,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_near_cache_label": "Cache tuiles (near)",
         "settings_perf_near_max_tiles_label": "Tuiles candidates max (near)",
         "settings_perf_detect_label": "Dispositif détection (GPU/CPU)",
+        "settings_perf_io_label": "Concurrence I/O (Auto=0)",
         "settings_build_start": "Construction de l'index dans {path}… (cela peut prendre plusieurs minutes)",
         "settings_rebuild_title": "Reconstruire l'index ?",
         "settings_rebuild_text": "Un index existe déjà dans {path}. Le reconstruire ?",
@@ -292,6 +293,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_near_cache_label": "Near tile cache",
         "settings_perf_near_max_tiles_label": "Max tile candidates (near)",
         "settings_perf_detect_label": "Star detection device",
+        "settings_perf_io_label": "I/O concurrency (Auto=0)",
         "settings_build_start": "Building index at {path}… (this may take several minutes)",
         "settings_rebuild_title": "Rebuild Index?",
         "settings_rebuild_text": "An index already exists at {path}. Rebuild it?",
@@ -322,6 +324,7 @@ class PersistentSettings:
     near_tile_cache_size: int = 128
     near_detect_backend: str = "auto"  # auto|cpu|cuda
     near_detect_device: int = 0
+    io_concurrency: int = 0
     # Solver panel persisted settings
     solver_fov_deg: float = DEFAULT_FOV_DEG
     solver_search_scale: float = DEFAULT_SEARCH_RADIUS_SCALE
@@ -364,6 +367,7 @@ def load_persistent_settings() -> PersistentSettings:
         near_tile_cache_size=int(payload.get("near_tile_cache_size", 128)),
         near_detect_backend=str(payload.get("near_detect_backend", "auto")),
         near_detect_device=int(payload.get("near_detect_device", 0)),
+        io_concurrency=int(payload.get("io_concurrency", 0)),
         solver_fov_deg=float(payload.get("solver_fov_deg", DEFAULT_FOV_DEG)),
         solver_search_scale=float(payload.get("solver_search_scale", DEFAULT_SEARCH_RADIUS_SCALE)),
         solver_search_attempts=int(payload.get("solver_search_attempts", DEFAULT_SEARCH_RADIUS_ATTEMPTS)),
@@ -447,6 +451,10 @@ class SolveConfig:
     blind_enabled: bool = True
     blind_skip_if_valid: bool = True
     blind_index_path: Optional[Path] = None
+    # Limit concurrent disk I/O to avoid thrashing (0 = auto based on workers)
+    io_concurrency: int = 0
+    # Force periodic GC every N results (0 = disabled)
+    gc_interval: int = 0
     # Near solver (index-based) performance knobs
     near_max_tile_candidates: int = 48
     near_tile_cache_size: int = 128
@@ -715,6 +723,73 @@ class ImageSolver:
         self._blind_index_checked_root: Optional[Path] = None
         # Optional cancellation event set by the GUI runner for responsive Stop
         self._cancel_event: Optional[threading.Event] = None
+        # Throttle concurrent I/O (reads/writes)
+        workers = int(self.config.workers or _default_worker_count())
+        io_limit = int(self.config.io_concurrency or 0)
+        if io_limit <= 0:
+            # Auto‑tune I/O concurrency from a quick throughput probe on the input drive
+            try:
+                img_limit = self._autotune_io_limit(self.config.input_dir, workers)
+                idx_limit = None
+                idx_path = getattr(self.config, 'blind_index_path', None)
+                if idx_path is not None:
+                    try:
+                        idx_limit = self._autotune_io_limit(Path(idx_path), workers)
+                    except Exception:
+                        idx_limit = None
+                if idx_limit is not None:
+                    io_limit = min(img_limit, idx_limit)
+                    logging.info(
+                        "I/O auto-tune: input=%d, index=%d -> using %d",
+                        img_limit,
+                        idx_limit,
+                        io_limit,
+                    )
+                else:
+                    io_limit = img_limit
+                    logging.info("I/O auto-tune: input=%d", img_limit)
+            except Exception:
+                io_limit = 5 if workers >= 5 else max(1, (workers + 1) // 2)
+        self._io_sema = threading.Semaphore(max(1, io_limit))
+        logging.info("I/O concurrency set to %d (workers=%d)", io_limit, workers)
+
+    @staticmethod
+    def _autotune_io_limit(base_dir: Path, workers: int) -> int:
+        """Estimate disk throughput and choose an I/O concurrency accordingly.
+
+        Reads up to ~4 MiB from a few files to estimate MB/s; maps to a sensible
+        number of parallel I/O slots. Keeps it conservative to avoid saturation.
+        """
+        import itertools
+        sample_files = list(itertools.islice(_iter_image_files(base_dir, SUPPORTED_EXTENSIONS), 6))
+        if not sample_files:
+            return 5 if workers >= 5 else max(1, (workers + 1) // 2)
+        total = 0
+        start = time.perf_counter()
+        target = 4 * 1024 * 1024  # 4 MiB per file max
+        for p in sample_files:
+            try:
+                with open(p, 'rb', buffering=0) as fh:
+                    chunk = fh.read(target)
+                    total += len(chunk)
+            except Exception:
+                continue
+        elapsed = max(1e-3, time.perf_counter() - start)
+        mbps = (total / (1024 * 1024)) / elapsed
+        # Map throughput to concurrency caps; NVMe typically > 800 MB/s
+        if mbps >= 1500:
+            cap = 12
+        elif mbps >= 800:
+            cap = 10
+        elif mbps >= 400:
+            cap = 8
+        elif mbps >= 200:
+            cap = 6
+        elif mbps >= 120:
+            cap = 5
+        else:
+            cap = 3
+        return min(max(1, cap), max(1, workers))
 
     def set_cancel_event(self, event: Optional[threading.Event]) -> None:
         self._cancel_event = event
@@ -796,15 +871,14 @@ class ImageSolver:
         label: Optional[str],
         catalog_family: Optional[str],
     ) -> ImageSolveResult:
-        with self._db_lock:
-            catalog = self.db.query_cone(
-                ra_deg=metadata.ra_deg,
-                dec_deg=metadata.dec_deg,
-                radius_deg=radius,
-                families=families,
-                mag_limit=self.config.mag_limit,
-                max_stars=self.config.max_catalog_stars,
-            )
+        catalog = self.db.query_cone(
+            ra_deg=metadata.ra_deg,
+            dec_deg=metadata.dec_deg,
+            radius_deg=radius,
+            families=families,
+            mag_limit=self.config.mag_limit,
+            max_stars=self.config.max_catalog_stars,
+        )
         if catalog.size < 5:
             error = "catalogue returned too few stars in this region"
             raise SolveError(
@@ -1094,27 +1168,28 @@ class ImageSolver:
             target.write_text(json.dumps(payload, indent=2))
 
     def _write_fits_solution(self, path: Path, solution: WCSSolution) -> None:
-        with fits.open(path, mode="update", memmap=False) as hdul:
-            header = hdul[0].header
-            header["WCSAXES"] = 2
-            header["CRPIX1"] = float(solution.crpix[0])
-            header["CRPIX2"] = float(solution.crpix[1])
-            header["CRVAL1"] = float(solution.crval[0])
-            header["CRVAL2"] = float(solution.crval[1])
-            header["CD1_1"] = float(solution.cd[0, 0])
-            header["CD1_2"] = float(solution.cd[0, 1])
-            header["CD2_1"] = float(solution.cd[1, 0])
-            header["CD2_2"] = float(solution.cd[1, 1])
-            header["CTYPE1"] = "RA---TAN"
-            header["CTYPE2"] = "DEC--TAN"
-            header["CUNIT1"] = "deg"
-            header["CUNIT2"] = "deg"
-            header["RADECSYS"] = "ICRS"
-            header["EQUINOX"] = 2000.0
-            header["ZESOLVER"] = (APP_VERSION, "WCS written by zesolver.py")
-            timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-            header.add_history(f"ZeSolver WCS solution at {timestamp}")
-            hdul.flush()
+        with self._io_sema:
+            with fits.open(path, mode="update", memmap=False) as hdul:
+                header = hdul[0].header
+                header["WCSAXES"] = 2
+                header["CRPIX1"] = float(solution.crpix[0])
+                header["CRPIX2"] = float(solution.crpix[1])
+                header["CRVAL1"] = float(solution.crval[0])
+                header["CRVAL2"] = float(solution.crval[1])
+                header["CD1_1"] = float(solution.cd[0, 0])
+                header["CD1_2"] = float(solution.cd[0, 1])
+                header["CD2_1"] = float(solution.cd[1, 0])
+                header["CD2_2"] = float(solution.cd[1, 1])
+                header["CTYPE1"] = "RA---TAN"
+                header["CTYPE2"] = "DEC--TAN"
+                header["CUNIT1"] = "deg"
+                header["CUNIT2"] = "deg"
+                header["RADECSYS"] = "ICRS"
+                header["EQUINOX"] = 2000.0
+                header["ZESOLVER"] = (APP_VERSION, "WCS written by zesolver.py")
+                timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                header.add_history(f"ZeSolver WCS solution at {timestamp}")
+                hdul.flush()
 
     def _load_image(self, path: Path) -> tuple[np.ndarray, ImageMetadata]:
         suffix = path.suffix.lower()
@@ -1128,7 +1203,9 @@ class ImageSolver:
         fallback_reason = ""
         for memmap in (True, False):
             try:
-                with fits.open(path, memmap=memmap) as hdul:
+                with self._io_sema:
+                    hdul = fits.open(path, memmap=memmap)
+                with hdul:
                     hdu = hdul[0]
                     header = hdu.header
                     if memmap and _fits_requires_memmap_off(header):
@@ -1179,7 +1256,8 @@ class ImageSolver:
         )
 
     def _load_raster(self, path: Path) -> tuple[np.ndarray, ImageMetadata]:
-        image = skio.imread(str(path))
+        with self._io_sema:
+            image = skio.imread(str(path))
         if image.ndim == 3:
             image = color.rgb2gray(image)
         arr = np.asarray(image, dtype=np.float32)
@@ -1340,10 +1418,11 @@ class ImageSolver:
         tmp_fits = tmp_dir / f"zesolver_tmp_{os.getpid()}_{int(time.time()*1000)}.fits"
         try:
             # Minimal FITS with luminance data
-            hdu = _fits.PrimaryHDU(np.ascontiguousarray(raster_data.astype(np.float32, copy=False)))
-            hdul = _fits.HDUList([hdu])
-            hdul.writeto(tmp_fits, overwrite=True)
-            hdul.close()
+            with self._io_sema:
+                hdu = _fits.PrimaryHDU(np.ascontiguousarray(raster_data.astype(np.float32, copy=False)))
+                hdul = _fits.HDUList([hdu])
+                hdul.writeto(tmp_fits, overwrite=True)
+                hdul.close()
         except Exception as exc:
             logging.info("Failed to write temporary FITS for raster %s: %s", raster_path.name, exc)
             return None
@@ -1359,7 +1438,9 @@ class ImageSolver:
                 return None
             # Extract WCS keywords from the temp FITS to build a JSON sidecar
             try:
-                with fits.open(tmp_fits, mode="readonly", memmap=False) as hdul:
+                with self._io_sema:
+                    hdul = fits.open(tmp_fits, mode="readonly", memmap=False)
+                with hdul:
                     hdr = hdul[0].header
                     cd = np.array(
                         [
@@ -1405,7 +1486,8 @@ class ImageSolver:
             )
         finally:
             try:
-                tmp_fits.unlink(missing_ok=True)  # type: ignore[arg-type]
+                with self._io_sema:
+                    tmp_fits.unlink(missing_ok=True)  # type: ignore[arg-type]
             except Exception:
                 pass
 
@@ -1633,6 +1715,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Near-solver: CUDA device index to use for detection",
     )
     parser.add_argument(
+        "--io-concurrency",
+        type=int,
+        default=0,
+        help="Limit concurrent disk I/O operations (0 = auto based on workers)",
+    )
+    parser.add_argument(
+        "--gc-interval",
+        type=int,
+        default=0,
+        help="Force a garbage collection every N results (0 = disabled)",
+    )
+    parser.add_argument(
         "--blind-index",
         type=Path,
         help="Path to the Zeblind index root (manifest + hash tables) used by the internal matcher",
@@ -1718,6 +1812,8 @@ def run_cli(args: argparse.Namespace) -> int:
         near_tile_cache_size=max(1, int(args.near_tile_cache_size or 128)),
         near_detect_backend=str(args.near_detect_backend or "auto"),
         near_detect_device=(int(args.near_detect_device) if args.near_detect_device is not None else None),
+        io_concurrency=int(args.io_concurrency or 0),
+        gc_interval=int(args.gc_interval or 0),
     )
     logging.info(
         "Starting batch solve in %s (families=%s, workers=%d, downsample=%d)",
@@ -1812,8 +1908,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                 for result in batch.run(cancel_event=self._cancel_event):
                     self.progress.emit(result)
                     processed += 1
-                    # Periodic GC to reduce memory high-water in long runs
-                    if processed % max(1, int(self.config.workers)) == 0:
+                    # Optional periodic GC if requested
+                    try:
+                        interval = int(getattr(self.config, 'gc_interval', 0) or 0)
+                    except Exception:
+                        interval = 0
+                    if interval > 0 and processed % interval == 0:
                         try:
                             _gc.collect()
                         except Exception:
@@ -1825,6 +1925,41 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.error.emit(str(exc))
             finally:
                 self.finished.emit()
+
+    class FileScanner(QtCore.QThread):
+        file_found = QtCore.Signal(str)
+        finished = QtCore.Signal(int)
+
+        def __init__(self, root: Path, exts: list[str], limit: Optional[int]) -> None:
+            super().__init__()
+            self._root = Path(root)
+            self._exts = [e.lower() for e in exts]
+            self._limit = int(limit) if isinstance(limit, int) and limit > 0 else None
+            self._cancel = threading.Event()
+
+        def cancel(self) -> None:
+            self._cancel.set()
+
+        def run(self) -> None:
+            count = 0
+            try:
+                for path in _iter_image_files(self._root, self._exts):
+                    if self._cancel.is_set():
+                        break
+                    try:
+                        self.file_found.emit(str(path))
+                    except Exception:
+                        pass
+                    count += 1
+                    if self._limit and count >= self._limit:
+                        break
+            except Exception:
+                pass
+            finally:
+                try:
+                    self.finished.emit(count)
+                except Exception:
+                    pass
 
     class IndexBuilder(QtCore.QThread):
         log = QtCore.Signal(str)
@@ -2064,6 +2199,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._index_worker: Optional[IndexBuilder] = None
             self._blind_worker: Optional[BlindRunner] = None
             self._near_worker: Optional[NearRunner] = None
+            self._scanner: Optional[FileScanner] = None
+            self._scan_buffer: list[Path] = []
+            self._scan_flush_threshold = 250
             self._build_ui()
             self._populate_settings_ui()
             self._prefill_from_args(args)
@@ -2393,6 +2531,13 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.perf_detect_combo = QtWidgets.QComboBox()
             self._populate_detect_devices(self.perf_detect_combo)
             form.addRow(self.perf_detect_label, self.perf_detect_combo)
+            # I/O concurrency (0 = Auto)
+            self.perf_io_label = QtWidgets.QLabel()
+            self.perf_io_spin = QtWidgets.QSpinBox()
+            self.perf_io_spin.setRange(0, max(64, _default_worker_count()))
+            self.perf_io_spin.setValue(int(getattr(self._settings, 'io_concurrency', 0) or 0))
+            self.perf_io_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
+            form.addRow(self.perf_io_label, self.perf_io_spin)
             # Save button
             self.performance_save_btn = QtWidgets.QPushButton()
             self.performance_save_btn.clicked.connect(self._on_save_settings_clicked)
@@ -2444,9 +2589,21 @@ def launch_gui(args: argparse.Namespace) -> int:
                         break
 
         def _pick_settings_directory(self, target: QtWidgets.QLineEdit) -> None:
+            opts = QtWidgets.QFileDialog.Option.ShowDirsOnly | QtWidgets.QFileDialog.Option.DontUseNativeDialog
+            try:
+                opts |= QtWidgets.QFileDialog.Option.DontUseCustomDirectoryIcons
+            except Exception:
+                pass
+            try:
+                opts |= QtWidgets.QFileDialog.Option.DontResolveSymlinks
+            except Exception:
+                pass
+            start = target.text().strip() or str(Path.home())
             directory = QtWidgets.QFileDialog.getExistingDirectory(
                 self,
                 self._text("dialog_select_directory"),
+                start,
+                options=opts,
             )
             if directory:
                 target.setText(directory)
@@ -2529,6 +2686,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_tile_cache_size=int(self.perf_near_cache_spin.value()) if hasattr(self, 'perf_near_cache_spin') else 128,
                 near_detect_backend=str(backend_sel),
                 near_detect_device=int(dev_sel if isinstance(dev_sel, int) else 0),
+                io_concurrency=int(self.perf_io_spin.value()) if hasattr(self, 'perf_io_spin') else 0,
             )
 
         def _log_settings(self, message: str) -> None:
@@ -2983,6 +3141,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.perf_near_max_tiles_label.setText(self._text("settings_perf_near_max_tiles_label"))
             if hasattr(self, "perf_detect_label"):
                 self.perf_detect_label.setText(self._text("settings_perf_detect_label"))
+            if hasattr(self, "perf_io_label"):
+                self.perf_io_label.setText(self._text("settings_perf_io_label"))
             if hasattr(self, "performance_save_btn"):
                 self.performance_save_btn.setText(self._text("settings_save_btn"))
             self._retranslate_status_items()
@@ -3036,9 +3196,21 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         # --- Actions -------------------------------------------------------------
         def _pick_directory(self, line_edit: QtWidgets.QLineEdit, *, trigger_scan: bool = False) -> None:
+            opts = QtWidgets.QFileDialog.Option.ShowDirsOnly | QtWidgets.QFileDialog.Option.DontUseNativeDialog
+            try:
+                opts |= QtWidgets.QFileDialog.Option.DontUseCustomDirectoryIcons
+            except Exception:
+                pass
+            try:
+                opts |= QtWidgets.QFileDialog.Option.DontResolveSymlinks
+            except Exception:
+                pass
+            start = line_edit.text().strip() or str(Path.home())
             directory = QtWidgets.QFileDialog.getExistingDirectory(
                 self,
                 self._text("dialog_select_directory"),
+                start,
+                options=opts,
             )
             if directory:
                 line_edit.setText(directory)
@@ -3046,14 +3218,78 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.scan_files()
 
         def scan_files(self) -> None:
+            # Cancel previous scan if any
             try:
-                files = self._gather_candidate_files()
-            except ValueError as exc:
-                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                if self._scanner and self._scanner.isRunning():
+                    self._scanner.cancel()
+            except Exception:
+                pass
+            # Validate directory
+            path = self.input_edit.text().strip()
+            if not path:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_select_input"))
                 return
-            self._pending_files = files
-            self._refresh_file_list()
-            self._log(self._text("info_files_detected", count=len(files)))
+            directory = Path(path).expanduser()
+            if not directory.is_dir():
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_input_missing", path=directory))
+                return
+            # Prepare UI
+            self._pending_files = []
+            self._current_input_dir = directory
+            self.files_view.clear()
+            self._item_by_path.clear()
+            self.files_view.setSortingEnabled(False)
+            self._scan_buffer.clear()
+            # Build scanner
+            formats = self._parse_formats()
+            limit = self.max_files_spin.value()
+            limit = limit if limit > 0 else None
+            self._scanner = FileScanner(directory, formats, limit)
+            self._scanner.file_found.connect(self._on_scan_file_found)
+            self._scanner.finished.connect(self._on_scan_finished)
+            self._scanner.start()
+            # Give immediate feedback
+            self._log(self._text("info_files_detected", count=0))
+
+        def _on_scan_file_found(self, path_text: str) -> None:
+            try:
+                p = Path(path_text).resolve()
+                self._pending_files.append(p)
+                self._scan_buffer.append(p)
+            except Exception:
+                return
+            # Flush in chunks to keep UI responsive
+            if len(self._scan_buffer) >= self._scan_flush_threshold:
+                self._flush_scan_buffer()
+                QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
+            # Update info line periodically
+            if len(self._pending_files) % 500 == 0:
+                self._log(self._text("info_files_detected", count=len(self._pending_files)))
+
+        def _on_scan_finished(self, count: int) -> None:
+            self._flush_scan_buffer()
+            self._log(self._text("info_files_detected", count=len(self._pending_files)))
+
+        def _flush_scan_buffer(self) -> None:
+            if not self._scan_buffer:
+                return
+            self.files_view.setUpdatesEnabled(False)
+            try:
+                items = []
+                for path in self._scan_buffer:
+                    item = QtWidgets.QTreeWidgetItem(
+                        [self._format_path(path), self._status_label_for("waiting"), ""]
+                    )
+                    item.setData(1, QtCore.Qt.UserRole, "waiting")
+                    items.append(item)
+                if items:
+                    self.files_view.addTopLevelItems(items)
+                    self.files_view.resizeColumnToContents(0)
+            except Exception:
+                pass
+            finally:
+                self.files_view.setUpdatesEnabled(True)
+                self._scan_buffer.clear()
 
         def _gather_candidate_files(self) -> List[Path]:
             path = self.input_edit.text().strip()
@@ -3159,6 +3395,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_tile_cache_size=int(self._settings.near_tile_cache_size or 128),
                 near_detect_backend=str(self._settings.near_detect_backend or "auto"),
                 near_detect_device=int(self._settings.near_detect_device) if self._settings.near_detect_device is not None else None,
+                io_concurrency=int(self._settings.io_concurrency or 0),
             )
 
         def _start_solving(self) -> None:

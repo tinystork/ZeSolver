@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
+import threading
 from pathlib import Path
 from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 import logging
@@ -147,17 +148,21 @@ class _TileCache:
             raise ValueError("cache size must be >= 1")
         self._store: "OrderedDict[str, StarBlock]" = OrderedDict()
         self._max_entries = max_entries
+        self._lock = threading.Lock()
 
     def get(self, key: str, loader) -> StarBlock:
         store = self._store
-        if key in store:
-            value = store.pop(key)
-            store[key] = value
-            return value
+        with self._lock:
+            if key in store:
+                value = store.pop(key)
+                store[key] = value
+                return value
+        # Load outside lock to avoid blocking other readers
         value = loader()
-        store[key] = value
-        if len(store) > self._max_entries:
-            store.popitem(last=False)
+        with self._lock:
+            store[key] = value
+            if len(store) > self._max_entries:
+                store.popitem(last=False)
         return value
 
 
@@ -232,6 +237,7 @@ class CatalogDB:
 
         self._cache = _TileCache(cache_size)
         self._prefetched: Dict[str, Tuple[np.ndarray, int, int, str]] = {}
+        self._prefetch_lock = threading.Lock()
         if families:
             requested = [fam.lower() for fam in families]
         else:
@@ -360,7 +366,8 @@ class CatalogDB:
         key = str(tile.path)
 
         def loader() -> StarBlock:
-            parsed = self._prefetched.pop(key, None)
+            with self._prefetch_lock:
+                parsed = self._prefetched.pop(key, None)
             if parsed is None:
                 parsed = _parse_catalog_file(tile.path, tile.spec)
             return _build_star_block(tile, parsed)
