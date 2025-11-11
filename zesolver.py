@@ -132,7 +132,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "formats_label": "Extensions suivies",
         "families_label": "Familles ASTAP",
         "overwrite_label": "Réécrire les WCS existants",
-        "blind_label": "Activer le blind solver ASTAP",
+        "blind_label": "Activer le blind solver",
         "files_header": "Fichier",
         "status_header": "Statut",
         "details_header": "Détails",
@@ -220,7 +220,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "formats_label": "Watched extensions",
         "families_label": "ASTAP families",
         "overwrite_label": "Overwrite existing WCS",
-        "blind_label": "Enable ASTAP blind solver",
+        "blind_label": "Enable blind solver",
         "files_header": "File",
         "status_header": "Status",
         "details_header": "Details",
@@ -389,7 +389,7 @@ class SolveConfig:
     families: Optional[Sequence[str]]
     fov_deg: float = DEFAULT_FOV_DEG
     downsample: int = 1
-    overwrite: bool = False
+    overwrite: bool = True
     workers: int = 1
     formats: Sequence[str] = field(default_factory=lambda: tuple(sorted(SUPPORTED_EXTENSIONS)))
     max_files: Optional[int] = None
@@ -798,16 +798,24 @@ class ImageSolver:
     def solve_path(self, path: Path) -> ImageSolveResult:
         start = time.perf_counter()
         run_info: list[tuple[str, dict[str, Any]]] = []
-        blind_cache: Optional[BlindSolveResult] = None
-        shortcut, blind_cache = self._try_blind_shortcut(path, run_info)
-        if shortcut is not None:
-            return shortcut
+        # Try metadata-assisted (near) solve first; fall back to blind on failure
         metadata: Optional[ImageMetadata] = None
         peaks: Optional[np.ndarray] = None
         try:
             data, metadata = self._load_image(path)
             if metadata.has_wcs and not self.config.overwrite:
                 raise SolveError("WCS already present (use --overwrite to recompute)", skip=True)
+            # Prefer the internal index-powered near solver when an index root is configured.
+            # This uses Python-only metadata-assisted solving without quads.
+            if (
+                self.config.blind_index_path
+                and path.suffix.lower() in FITS_EXTENSIONS
+            ):
+                near_first = self._run_index_near_solver(path)
+                if near_first is not None:
+                    near_first.duration_s = time.perf_counter() - start
+                    near_first.run_info.extend(run_info)
+                    return near_first
             if metadata.ra_deg is None or metadata.dec_deg is None:
                 raise SolveError("Missing RA/DEC metadata", skip=False)
             peaks = _detect_stars(
@@ -905,7 +913,7 @@ class ImageSolver:
             blind_result = self._resolve_with_blind_after_failure(
                 path=path,
                 run_info=run_info,
-                cached_result=blind_cache,
+                cached_result=None,
                 ra_hint=metadata.ra_deg if metadata else None,
                 dec_hint=metadata.dec_deg if metadata else None,
                 metadata=metadata,
@@ -1184,6 +1192,40 @@ class ImageSolver:
             duration_s=None,
             run_info=list(run_info),
         )
+
+    def _run_index_near_solver(self, path: Path) -> Optional[ImageSolveResult]:
+        """Attempt a metadata-assisted near solve using the Zeblind index.
+
+        Uses the same internal routine as the Settings tab tester (no quads).
+        Returns an ImageSolveResult on success, or None on failure.
+        """
+        try:
+            index_root = self.config.blind_index_path
+            if not index_root:
+                return None
+            result = near_solve(
+                fits_path=str(path),
+                index_root=str(index_root),
+                config=None,
+                log=logging.info,
+                skip_if_valid=False,
+                fallback_to_blind=False,
+            )
+        except BlindSolverRuntimeError as exc:
+            logging.info("Near solver (index) failed for %s: %s", path.name, exc)
+            return None
+        if result["success"]:
+            message = result.get("message") or "near solution found"
+            return ImageSolveResult(
+                path=path,
+                status="solved",
+                message=message,
+                matched_stars=0,
+                rms_arcsec=None,
+                pixel_scale_arcsec=None,
+                metadata_source="near-index",
+            )
+        return None
 
     def _try_blind_shortcut(
         self,
@@ -1791,7 +1833,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 ",".join(prefill_families) if prefill_families else ""
             )
             self.overwrite_check = QtWidgets.QCheckBox()
-            self.overwrite_check.setChecked(args.overwrite)
+            # Default to overwriting existing WCS in the GUI
+            self.overwrite_check.setChecked(True)
             self.blind_check = QtWidgets.QCheckBox()
             self.blind_check.setChecked(args.blind_enabled)
             self.fov_label_widget = QtWidgets.QLabel()
