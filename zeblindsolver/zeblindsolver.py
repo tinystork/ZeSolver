@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import time
@@ -42,17 +43,17 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SolveConfig:
-    max_candidates: int = 12
-    max_stars: int = 800
-    max_quads: int = 12000
+    max_candidates: int = 10
+    max_stars: int = 500
+    max_quads: int = 8000
     sip_order: int = 2
-    quality_rms: float = 1.0
-    quality_inliers: int = 60
-    pixel_tolerance: float = 3.0
+    quality_rms: float = 1.2
+    quality_inliers: int = 40
+    pixel_tolerance: float = 2.5
     log_level: str = "INFO"
     verbose: bool = False
     try_parity_flip: bool = True
-    fast_mode: bool = False
+    fast_mode: bool = True
 
 
 @dataclass
@@ -744,10 +745,26 @@ def solve_blind(
     )
 
 
+def _load_cli_defaults_from_settings() -> dict:
+    """Load basic defaults from ~/.zesolver_settings.json if present.
+
+    Avoids importing the GUI module to keep this CLI lean.
+    """
+    settings_path = Path.home() / ".zesolver_settings.json"
+    try:
+        payload = json.loads(settings_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="ZeSolver blind solve pipeline")
+    parser = argparse.ArgumentParser(description="ZeSolver blind solve pipeline (with optional Astrometry.net web backend)")
     parser.add_argument("input", help="Path to the FITS file to solve")
-    parser.add_argument("--index-root", required=True, help="Directory containing the blind index")
+    parser.add_argument("--index-root", required=False, help="Directory containing the blind index")
+    # Local blind options
     parser.add_argument("--max-candidates", type=int, default=12)
     parser.add_argument("--max-stars", type=int, default=800)
     parser.add_argument("--max-quads", type=int, default=12000)
@@ -756,8 +773,53 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quality-inliers", type=int, default=60)
     parser.add_argument("--pixel-tolerance", type=float, default=3.0)
     parser.add_argument("--log-level", default="INFO")
+    # Backend selection
+    parser.add_argument("--solver-backend", choices=("local", "astrometry"), default=None)
+    parser.add_argument("--astrometry-api-url", default=None)
+    parser.add_argument("--astrometry-api-key", default=None)
+    parser.add_argument("--astrometry-use-hints", action="store_true")
+    parser.add_argument("--astrometry-timeout-s", type=int, default=None)
+    parser.add_argument("--astrometry-parallel-jobs", type=int, default=None)
+    parser.add_argument("--astrometry-fallback-local", action="store_true")
     args = parser.parse_args(argv)
     logging.basicConfig(level=args.log_level.upper(), format="%(levelname)s: %(message)s")
+
+    # Load defaults from settings file if flags not provided
+    defaults = _load_cli_defaults_from_settings()
+    backend = args.solver_backend or (defaults.get("solver_backend") if isinstance(defaults.get("solver_backend"), str) else "local")
+    backend = (backend or "local").lower()
+    if backend == "astrometry":
+        from .astrometry_backend import AstrometryConfig, solve_single  # lazy import
+
+        api_url = args.astrometry_api_url or defaults.get("astrometry_api_url") or "https://nova.astrometry.net/api"
+        api_key = args.astrometry_api_key or defaults.get("astrometry_api_key") or os.environ.get("ASTROMETRY_API_KEY")
+        if not api_key:
+            logger.error("astrometry backend selected but no API key provided")
+            return 2
+        use_hints = bool(args.astrometry_use_hints or defaults.get("astrometry_use_hints", True))
+        timeout_s = int(args.astrometry_timeout_s or defaults.get("astrometry_timeout_s", 600))
+        parallel = int(args.astrometry_parallel_jobs or defaults.get("astrometry_parallel_jobs", 2))
+        fallback_local = bool(args.astrometry_fallback_local or defaults.get("astrometry_fallback_local", True))
+        cfg = AstrometryConfig(
+            api_url=api_url,
+            api_key=api_key,
+            parallel_jobs=parallel,
+            timeout_s=timeout_s,
+            use_hints=use_hints,
+            fallback_local=fallback_local,
+            index_root=(args.index_root or defaults.get("index_root")),
+        )
+        res = solve_single(args.input, cfg)
+        if res.success:
+            logger.info("astrometry solve succeeded for %s", args.input)
+            return 0
+        logger.error("astrometry solve failed: %s", res.message)
+        return 2
+
+    # Local blind backend (default)
+    if not args.index_root:
+        logger.error("--index-root is required for local backend")
+        return 2
     config = SolveConfig(
         max_candidates=args.max_candidates,
         max_stars=args.max_stars,

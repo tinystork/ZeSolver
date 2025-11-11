@@ -376,11 +376,81 @@ for _lang, _mapping in _GUI_DOWNLOADS_I18N.items():
         if _k not in base:
             base[_k] = _v
 
+# Backfill translations for Astrometry.net web backend UI
+_GUI_ASTROMETRY_I18N = {
+    "fr": {
+        "solver.backend.label": "Solveur",
+        "solver.backend.local": "Local (ZeBlind)",
+        "solver.backend.astrometry": "Astrometry.net (web)",
+        "solver.backend.note": "Choisissez le solveur à utiliser pour cette exécution.",
+        "solver.status.using_backend": "Solveur utilisé : {backend}",
+        "astrometry.tab.title": "Astrometry.net",
+        "astrometry.api_url": "URL de l’API",
+        "astrometry.api_key": "Clé API",
+        "astrometry.login.test": "Tester la connexion",
+        "astrometry.login.ok": "Connexion OK",
+        "astrometry.login.fail": "Échec de connexion",
+        "astrometry.submit.batch": "Envoyer le lot",
+        "astrometry.submit.in_progress": "Envoi en cours…",
+        "astrometry.submit.done": "Tous les jobs envoyés",
+        "astrometry.polling.status": "Statut du job",
+        "astrometry.job.solved": "Résolu",
+        "astrometry.job.failed": "Échec",
+        "astrometry.job.timeout": "Délai dépassé",
+        "astrometry.options.use_hints": "Utiliser les métadonnées (RA/Dec/échelle) si disponibles",
+        "astrometry.options.fallback_local": "Basculement vers le solveur local en cas d’échec",
+        "astrometry.options.parallel_jobs": "Jobs en parallèle",
+        "astrometry.options.timeout_s": "Délai par job (s)",
+        "astrometry.options.privacy_note": "Les images sont envoyées à un service tiers. Assurez-vous d’avoir les droits et le consentement.",
+        "settings.saved": "Paramètres enregistrés",
+        "settings.save": "Enregistrer",
+        "settings.cancel": "Annuler",
+        "solver.run.batch": "Lancer la résolution en lot",
+    },
+    "en": {
+        "solver.backend.label": "Solver backend",
+        "solver.backend.local": "Local (ZeBlind)",
+        "solver.backend.astrometry": "Astrometry.net (web)",
+        "solver.backend.note": "Choose the solver to use for this run.",
+        "solver.status.using_backend": "Using backend: {backend}",
+        "astrometry.tab.title": "Astrometry.net",
+        "astrometry.api_url": "API URL",
+        "astrometry.api_key": "API Key",
+        "astrometry.login.test": "Test login",
+        "astrometry.login.ok": "Login OK",
+        "astrometry.login.fail": "Login failed",
+        "astrometry.submit.batch": "Submit batch",
+        "astrometry.submit.in_progress": "Submitting…",
+        "astrometry.submit.done": "All jobs submitted",
+        "astrometry.polling.status": "Job status",
+        "astrometry.job.solved": "Solved",
+        "astrometry.job.failed": "Failed",
+        "astrometry.job.timeout": "Timed out",
+        "astrometry.options.use_hints": "Use metadata hints (RA/Dec/scale) if available",
+        "astrometry.options.fallback_local": "Fallback to local solver on failure",
+        "astrometry.options.parallel_jobs": "Parallel jobs",
+        "astrometry.options.timeout_s": "Per-job timeout (s)",
+        "astrometry.options.privacy_note": "Images are sent to a third-party service. Ensure you have rights and consent.",
+        "settings.saved": "Settings saved",
+        "settings.save": "Save",
+        "settings.cancel": "Cancel",
+        "solver.run.batch": "Run batch solve",
+    },
+}
+for _lang, _mapping in _GUI_ASTROMETRY_I18N.items():
+    base = GUI_TRANSLATIONS.setdefault(_lang, {})
+    for _k, _v in _mapping.items():
+        if _k not in base:
+            base[_k] = _v
+
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
+# Increment when the on-disk settings layout or recommended defaults change
+SETTINGS_SCHEMA_VERSION = 3
 
 
 @dataclass
 class PersistentSettings:
+    schema_version: int = SETTINGS_SCHEMA_VERSION
     db_root: Optional[str] = None
     index_root: Optional[str] = None
     mag_cap: float = DEFAULT_MAG_CAP
@@ -396,13 +466,13 @@ class PersistentSettings:
     last_fov_reducer: float = 1.0
     last_fov_binning: int = 1
     # Blind solver tunables
-    blind_max_stars: int = 800
-    blind_max_quads: int = 12000
-    blind_max_candidates: int = 12
-    blind_pixel_tolerance: float = 3.0
-    blind_quality_inliers: int = 60
-    blind_quality_rms: float = 1.0
-    blind_fast_mode: bool = False
+    blind_max_stars: int = 500
+    blind_max_quads: int = 8000
+    blind_max_candidates: int = 10
+    blind_pixel_tolerance: float = 2.5
+    blind_quality_inliers: int = 40
+    blind_quality_rms: float = 1.2
+    blind_fast_mode: bool = True
     # Near solver performance
     near_max_tile_candidates: int = 48
     near_tile_cache_size: int = 128
@@ -423,6 +493,14 @@ class PersistentSettings:
     solver_family: Optional[str] = None  # lower-case key, None = Auto
     solver_blind_enabled: bool = True
     solver_overwrite: bool = True
+    # Solver backend selection + Astrometry.net web backend
+    solver_backend: str = "local"  # "local" or "astrometry"
+    astrometry_api_url: str = "https://nova.astrometry.net/api"
+    astrometry_api_key: Optional[str] = None
+    astrometry_parallel_jobs: int = 2
+    astrometry_timeout_s: int = 600
+    astrometry_use_hints: bool = True
+    astrometry_fallback_local: bool = True
 
 
 def load_persistent_settings() -> PersistentSettings:
@@ -434,7 +512,8 @@ def load_persistent_settings() -> PersistentSettings:
         return PersistentSettings()
     if not isinstance(payload, dict):
         return PersistentSettings()
-    return PersistentSettings(
+    settings = PersistentSettings(
+        schema_version=int(payload.get("schema_version", 1)),
         db_root=payload.get("db_root"),
         index_root=payload.get("index_root"),
         mag_cap=float(payload.get("mag_cap", DEFAULT_MAG_CAP)),
@@ -448,13 +527,13 @@ def load_persistent_settings() -> PersistentSettings:
         last_fov_res_h=int(payload.get("last_fov_res_h", 0)),
         last_fov_reducer=float(payload.get("last_fov_reducer", 1.0)),
         last_fov_binning=int(payload.get("last_fov_binning", 1)),
-        blind_max_stars=int(payload.get("blind_max_stars", 800)),
-        blind_max_quads=int(payload.get("blind_max_quads", 12000)),
-        blind_max_candidates=int(payload.get("blind_max_candidates", 12)),
-        blind_pixel_tolerance=float(payload.get("blind_pixel_tolerance", 3.0)),
-        blind_quality_inliers=int(payload.get("blind_quality_inliers", 12)),
-        blind_quality_rms=float(payload.get("blind_quality_rms", 1.0)),
-        blind_fast_mode=bool(payload.get("blind_fast_mode", False)),
+        blind_max_stars=int(payload.get("blind_max_stars", 500)),
+        blind_max_quads=int(payload.get("blind_max_quads", 8000)),
+        blind_max_candidates=int(payload.get("blind_max_candidates", 10)),
+        blind_pixel_tolerance=float(payload.get("blind_pixel_tolerance", 2.5)),
+        blind_quality_inliers=int(payload.get("blind_quality_inliers", 40)),
+        blind_quality_rms=float(payload.get("blind_quality_rms", 1.2)),
+        blind_fast_mode=bool(payload.get("blind_fast_mode", True)),
         near_max_tile_candidates=int(payload.get("near_max_tile_candidates", 48)),
         near_tile_cache_size=int(payload.get("near_tile_cache_size", 128)),
         near_detect_backend=str(payload.get("near_detect_backend", "auto")),
@@ -473,13 +552,108 @@ def load_persistent_settings() -> PersistentSettings:
         solver_family=(payload.get("solver_family") or None),
         solver_blind_enabled=bool(payload.get("solver_blind_enabled", True)),
         solver_overwrite=bool(payload.get("solver_overwrite", True)),
+        solver_backend=str(payload.get("solver_backend", "local") or "local"),
+        astrometry_api_url=str(payload.get("astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api"),
+        astrometry_api_key=(payload.get("astrometry_api_key") or None),
+        astrometry_parallel_jobs=int(payload.get("astrometry_parallel_jobs", 2)),
+        astrometry_timeout_s=int(payload.get("astrometry_timeout_s", 600)),
+        astrometry_use_hints=bool(payload.get("astrometry_use_hints", True)),
+        astrometry_fallback_local=bool(payload.get("astrometry_fallback_local", True)),
     )
+    migrated, updated = _migrate_settings_if_needed(settings)
+    if updated:
+        try:
+            save_persistent_settings(migrated)
+        except Exception:
+            pass
+        return migrated
+    return settings
 
 
 def save_persistent_settings(settings: PersistentSettings) -> None:
     data = asdict(settings)
     SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
     SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+
+def _migrate_settings_if_needed(settings: PersistentSettings) -> tuple[PersistentSettings, bool]:
+    """Upgrade persisted settings to the current schema and defaults.
+
+    Heuristics:
+    - If file predates schema v2 (no schema_version or <2), update the blind
+      solver defaults when they match the legacy fingerprint (the previous
+      shipped defaults) or when obviously too lax/buggy (inliers <= 20).
+    - Never increase work caps beyond user choices; only tighten or adopt the
+      new balanced defaults when the old defaults are detected verbatim.
+    """
+    changed = False
+    try:
+        current_version = int(getattr(settings, "schema_version", 1) or 1)
+    except Exception:
+        current_version = 1
+
+    # Legacy defaults shipped previously
+    LEGACY = {
+        "max_stars": 800,
+        "max_quads": 12000,
+        "max_candidates": 12,
+        "pixel_tol": 3.0,
+        # Some builds accidentally persisted 12 as fallback; accept both as legacy
+        "quality_inliers": {60, 12},
+        "quality_rms": 1.0,
+        "fast_mode": False,
+    }
+    # New recommended defaults
+    NEW = {
+        "max_stars": 500,
+        "max_quads": 8000,
+        "max_candidates": 10,
+        "pixel_tol": 2.5,
+        "quality_inliers": 40,
+        "quality_rms": 1.2,
+        "fast_mode": True,
+    }
+
+    if current_version < SETTINGS_SCHEMA_VERSION:
+        # Detect a legacy fingerprint (all key parameters at old defaults)
+        legacy_match = (
+            settings.blind_max_stars == LEGACY["max_stars"]
+            and settings.blind_max_quads == LEGACY["max_quads"]
+            and settings.blind_max_candidates == LEGACY["max_candidates"]
+            and abs(settings.blind_pixel_tolerance - LEGACY["pixel_tol"]) < 1e-6
+            and (settings.blind_quality_inliers in LEGACY["quality_inliers"])
+            and abs(settings.blind_quality_rms - LEGACY["quality_rms"]) < 1e-6
+            and settings.blind_fast_mode == LEGACY["fast_mode"]
+        )
+        if legacy_match:
+            settings.blind_max_stars = NEW["max_stars"]
+            settings.blind_max_quads = NEW["max_quads"]
+            settings.blind_max_candidates = NEW["max_candidates"]
+            settings.blind_pixel_tolerance = NEW["pixel_tol"]
+            settings.blind_quality_inliers = NEW["quality_inliers"]
+            settings.blind_quality_rms = NEW["quality_rms"]
+            settings.blind_fast_mode = NEW["fast_mode"]
+            changed = True
+        else:
+            # Targeted fixes: adjust obviously too-lax/buggy thresholds
+            if settings.blind_quality_inliers <= 20:
+                settings.blind_quality_inliers = max(20, NEW["quality_inliers"])
+                changed = True
+            # Adopt fast mode by default unless user already enabled it explicitly
+            # Heuristic: switch it on if other values still look legacy-ish
+            if settings.blind_fast_mode is False:
+                if (
+                    settings.blind_max_candidates >= 12
+                    or settings.blind_pixel_tolerance >= 3.0
+                    or settings.blind_max_quads >= 12000
+                ):
+                    settings.blind_fast_mode = True
+                    changed = True
+
+        settings.schema_version = SETTINGS_SCHEMA_VERSION
+        changed = True or changed
+
+    return settings, changed
 
 
 def _configure_logging(level_name: str) -> None:
@@ -2328,6 +2502,67 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.log.emit(f"Near solve error: {exc}")
                 self.finished.emit(False, str(exc))
 
+    class AstrometryRunner(QtCore.QThread):
+        progress = QtCore.Signal(object)
+        started = QtCore.Signal(int)
+        finished = QtCore.Signal()
+        info = QtCore.Signal(str)
+        error = QtCore.Signal(str)
+        stage = QtCore.Signal(int, str)
+
+        def __init__(self, files: list[Path], *, api_url: str, api_key: str, parallel: int, timeout_s: int, use_hints: bool, fallback_local: bool, index_root: Optional[str], translator: Callable[..., str]) -> None:
+            super().__init__()
+            self.files = [Path(p) for p in files]
+            self.api_url = api_url
+            self.api_key = api_key
+            self.parallel = max(1, int(parallel))
+            self.timeout_s = max(30, int(timeout_s))
+            self.use_hints = bool(use_hints)
+            self.fallback_local = bool(fallback_local)
+            self.index_root = index_root
+            self._cancel_event = threading.Event()
+            self._translate = translator
+
+        def request_cancel(self) -> None:
+            self._cancel_event.set()
+
+        def run(self) -> None:  # pragma: no cover - GUI thread
+            try:
+                from zeblindsolver.astrometry_backend import AstrometryConfig, solve_batch
+            except Exception as exc:  # pragma: no cover - import
+                self.error.emit(str(exc))
+                return
+            cfg = AstrometryConfig(
+                api_url=self.api_url,
+                api_key=self.api_key,
+                parallel_jobs=self.parallel,
+                timeout_s=self.timeout_s,
+                use_hints=self.use_hints,
+                fallback_local=self.fallback_local,
+                index_root=self.index_root,
+            )
+            self.started.emit(len(self.files))
+            try:
+                processed = 0
+                stage_hook = lambda idx, text: self.stage.emit(idx, text)
+                for result in solve_batch(self.files, cfg, log=lambda m: self.info.emit(m), progress_hook=stage_hook):
+                    # Map to ImageSolveResult used by GUI
+                    status = "solved" if result.success else "failed"
+                    msg = result.message or ""
+                    img_result = ImageSolveResult(path=result.path, status=status, message=msg)
+                    self.progress.emit(img_result)
+                    processed += 1
+                    if self._cancel_event.is_set():
+                        try:
+                            self.info.emit(self._translate("runner_stop_wait"))
+                        except Exception:
+                            self.info.emit("Stop requested, waiting for tasks.")
+                        break
+            except Exception as exc:
+                self.error.emit(str(exc))
+            finally:
+                self.finished.emit()
+
     class ZeSolverWindow(QtWidgets.QMainWindow):
         def __init__(self, settings: PersistentSettings) -> None:
             super().__init__()
@@ -2363,17 +2598,47 @@ def launch_gui(args: argparse.Namespace) -> int:
             solver_layout.addWidget(self._build_options_box())
             solver_layout.addWidget(self._build_splitter())
             solver_layout.addLayout(self._build_bottom_row())
-            self.tabs.addTab(solver_tab, self._text("solver_tab"))
+            # Wrap solver tab in a scroll area to handle small screens
+            self.tabs.addTab(self._wrap_scroll_area(solver_tab), self._text("solver_tab"))
             # Database tab (db_root selection and future download UI)
             self.database_tab = self._build_database_tab()
-            self.tabs.addTab(self.database_tab, self._text("database_tab"))
+            self.tabs.addTab(self._wrap_scroll_area(self.database_tab), self._text("database_tab"))
             self.settings_tab = self._build_settings_tab()
-            self.tabs.addTab(self.settings_tab, self._text("settings_tab"))
+            self.tabs.addTab(self._wrap_scroll_area(self.settings_tab), self._text("settings_tab"))
             # Add Performance tab for near-solver tuning
             self.performance_tab = self._build_performance_tab()
-            self.tabs.addTab(self.performance_tab, self._text("performance_tab"))
+            self.tabs.addTab(self._wrap_scroll_area(self.performance_tab), self._text("performance_tab"))
+            # Astrometry.net web backend tab (API settings)
+            try:
+                self.astrometry_tab = self._build_astrometry_tab()
+                self.astrometry_scroll = self._wrap_scroll_area(self.astrometry_tab)
+                self.tabs.addTab(self.astrometry_scroll, self._text("astrometry.tab.title"))
+            except Exception:
+                pass
             layout.addWidget(self.tabs)
             self.setCentralWidget(central)
+
+        def _wrap_scroll_area(self, inner: 'QtWidgets.QWidget') -> 'QtWidgets.QScrollArea':
+            """Return a scroll area that hosts the given widget.
+
+            This ensures tabs remain usable on small screens by enabling
+            vertical scrolling when the content height exceeds the viewport.
+            """
+            scroll = QtWidgets.QScrollArea()
+            scroll.setWidget(inner)
+            scroll.setWidgetResizable(True)
+            # Avoid visual frame to blend with tab background
+            try:
+                scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+            except Exception:
+                pass
+            # Be explicit about scroll bar policies
+            try:
+                scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+                scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+            except Exception:
+                pass
+            return scroll
 
         def _build_menu_bar(self) -> None:
             menu_bar = self.menuBar()
@@ -2719,9 +2984,123 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.db_tab_edit.textChanged.connect(_sync_db_text)
             return widget
 
+        def _build_astrometry_tab(self) -> QtWidgets.QWidget:
+            widget = QtWidgets.QWidget()
+            form = QtWidgets.QFormLayout(widget)
+            # API URL
+            self.ast_api_url_label = QtWidgets.QLabel()
+            self.ast_api_url_edit = QtWidgets.QLineEdit(self._settings.astrometry_api_url or "https://nova.astrometry.net/api")
+            form.addRow(self.ast_api_url_label, self.ast_api_url_edit)
+            # API Key (masked)
+            self.ast_api_key_label = QtWidgets.QLabel()
+            self.ast_api_key_edit = QtWidgets.QLineEdit(self._settings.astrometry_api_key or "")
+            try:
+                self.ast_api_key_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+            except Exception:
+                pass
+            key_row = QtWidgets.QWidget()
+            key_layout = QtWidgets.QHBoxLayout(key_row)
+            key_layout.setContentsMargins(0, 0, 0, 0)
+            key_layout.addWidget(self.ast_api_key_edit, 1)
+            # Env var hint
+            self.ast_env_hint = QtWidgets.QLabel("")
+            self.ast_env_hint.setStyleSheet("color: #666;")
+            key_layout.addWidget(self.ast_env_hint)
+            form.addRow(self.ast_api_key_label, key_row)
+            # Parallel jobs
+            self.ast_parallel_label = QtWidgets.QLabel()
+            self.ast_parallel_spin = QtWidgets.QSpinBox()
+            self.ast_parallel_spin.setRange(1, 8)
+            self.ast_parallel_spin.setValue(int(self._settings.astrometry_parallel_jobs or 2))
+            form.addRow(self.ast_parallel_label, self.ast_parallel_spin)
+            # Timeout per job (s)
+            self.ast_timeout_label = QtWidgets.QLabel()
+            self.ast_timeout_spin = QtWidgets.QSpinBox()
+            self.ast_timeout_spin.setRange(30, 3600)
+            self.ast_timeout_spin.setValue(int(self._settings.astrometry_timeout_s or 600))
+            form.addRow(self.ast_timeout_label, self.ast_timeout_spin)
+            # Options
+            self.ast_use_hints_check = QtWidgets.QCheckBox()
+            self.ast_use_hints_check.setChecked(bool(self._settings.astrometry_use_hints))
+            form.addRow(self.ast_use_hints_check)
+            self.ast_fallback_local_check = QtWidgets.QCheckBox()
+            self.ast_fallback_local_check.setChecked(bool(self._settings.astrometry_fallback_local))
+            form.addRow(self.ast_fallback_local_check)
+            # Privacy note
+            self.ast_privacy_label = QtWidgets.QLabel()
+            self.ast_privacy_label.setWordWrap(True)
+            form.addRow(self.ast_privacy_label)
+            # Buttons
+            buttons_row = QtWidgets.QHBoxLayout()
+            self.ast_test_login_btn = QtWidgets.QPushButton()
+            self.ast_save_btn = QtWidgets.QPushButton()
+            buttons_row.addWidget(self.ast_test_login_btn)
+            buttons_row.addWidget(self.ast_save_btn)
+            buttons_row.addStretch(1)
+            form.addRow(buttons_row)
+
+            def _update_env_hint() -> None:
+                detected = os.environ.get("ASTROMETRY_API_KEY")
+                if (not (self._settings.astrometry_api_key or "").strip()) and detected:
+                    self.ast_env_hint.setText("(env)")
+                else:
+                    self.ast_env_hint.setText("")
+
+            _update_env_hint()
+
+            def _on_test_login() -> None:
+                api_url = self.ast_api_url_edit.text().strip() or "https://nova.astrometry.net/api"
+                api_key = self.ast_api_key_edit.text().strip() or os.environ.get("ASTROMETRY_API_KEY", "")
+                if not api_key:
+                    QtWidgets.QMessageBox.warning(self, self._text("astrometry.tab.title"), self._text("astrometry.login.fail"))
+                    return
+                try:
+                    from zeblindsolver.astrometry_client import AstrometryClient
+
+                    client = AstrometryClient(api_url)
+                    client.login(api_key)
+                except Exception as exc:
+                    err = f"{self._text('astrometry.login.fail')}: {exc}"
+                    self._log(err)
+                    QtWidgets.QMessageBox.warning(self, self._text("astrometry.tab.title"), err)
+                    return
+                self._log(self._text("astrometry.login.ok"))
+                QtWidgets.QMessageBox.information(self, self._text("astrometry.tab.title"), self._text("astrometry.login.ok"))
+
+            def _on_save_astrometry() -> None:
+                try:
+                    settings = self._read_settings_from_ui()
+                except ValueError as exc:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                    return
+                self._settings = settings
+                save_persistent_settings(settings)
+                self._log(self._text("settings.saved"))
+
+            self.ast_test_login_btn.clicked.connect(_on_test_login)
+            self.ast_save_btn.clicked.connect(_on_save_astrometry)
+            return widget
+
         def _build_options_box(self) -> QtWidgets.QGroupBox:
             self.options_box = QtWidgets.QGroupBox()
             form = QtWidgets.QFormLayout(self.options_box)
+            # Solver backend selector (Local vs Astrometry.net)
+            self.backend_label_widget = QtWidgets.QLabel()
+            self.backend_combo = QtWidgets.QComboBox()
+            self.backend_combo.setEditable(False)
+            self.backend_combo.addItem(self._text("solver.backend.local"), "local")
+            self.backend_combo.addItem(self._text("solver.backend.astrometry"), "astrometry")
+            try:
+                backend_saved = (self._settings.solver_backend or "local").lower()
+                idx = self.backend_combo.findData(backend_saved)
+                if idx >= 0:
+                    self.backend_combo.setCurrentIndex(idx)
+            except Exception:
+                pass
+            form.addRow(self.backend_label_widget, self.backend_combo)
+            self.backend_note_label = QtWidgets.QLabel()
+            self.backend_note_label.setWordWrap(True)
+            form.addRow(self.backend_note_label)
             self.fov_spin = QtWidgets.QDoubleSpinBox()
             self.fov_spin.setRange(0.0, 20.0)
             self.fov_spin.setDecimals(2)
@@ -2889,6 +3268,11 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.presets_combo.addItem(p.label, p.id)
             self.preset_warning_label = QtWidgets.QLabel()
             self.preset_warning_label.setStyleSheet("color: #c08000;")
+            # Hide the legacy approx-specs notice; presets now have vetted values
+            try:
+                self.preset_warning_label.setVisible(False)
+            except Exception:
+                pass
             presets_layout.addWidget(self.presets_combo)
             presets_layout.addWidget(self.preset_warning_label)
 
@@ -3064,11 +3448,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.fov_res_h_spin.setValue(p.res_h)
                     self.fov_reducer_spin.setValue(p.reducer)
                     self.fov_binning_spin.setValue(1)
-                    # Warning banner for approximate presets
-                    if p.spec_confidence in ("approx", "unknown"):
-                        self.preset_warning_label.setText(self._text("spec_warning_unknown"))
-                    else:
-                        self.preset_warning_label.setText("")
+                    # Do not display the old approx-specs banner anymore
+                    try:
+                        self.preset_warning_label.clear()
+                        self.preset_warning_label.setVisible(False)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
 
@@ -3214,6 +3599,31 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_blind_quality_rms_spin.setValue(settings.blind_quality_rms)
             if hasattr(self, 'settings_blind_fast_check'):
                 self.settings_blind_fast_check.setChecked(settings.blind_fast_mode)
+            # Solver backend selector
+            try:
+                if hasattr(self, 'backend_combo'):
+                    backend_saved = (settings.solver_backend or "local").lower()
+                    idx = self.backend_combo.findData(backend_saved)
+                    if idx >= 0:
+                        self.backend_combo.setCurrentIndex(idx)
+            except Exception:
+                pass
+            # Astrometry tab fields
+            try:
+                if hasattr(self, 'ast_api_url_edit'):
+                    self.ast_api_url_edit.setText(settings.astrometry_api_url or "https://nova.astrometry.net/api")
+                if hasattr(self, 'ast_api_key_edit'):
+                    self.ast_api_key_edit.setText(settings.astrometry_api_key or "")
+                if hasattr(self, 'ast_parallel_spin'):
+                    self.ast_parallel_spin.setValue(int(settings.astrometry_parallel_jobs or 2))
+                if hasattr(self, 'ast_timeout_spin'):
+                    self.ast_timeout_spin.setValue(int(settings.astrometry_timeout_s or 600))
+                if hasattr(self, 'ast_use_hints_check'):
+                    self.ast_use_hints_check.setChecked(bool(settings.astrometry_use_hints))
+                if hasattr(self, 'ast_fallback_local_check'):
+                    self.ast_fallback_local_check.setChecked(bool(settings.astrometry_fallback_local))
+            except Exception:
+                pass
             # Also refresh the solver tab family dropdown from the chosen index,
             # and restore previously saved family selection if any.
             try:
@@ -3282,6 +3692,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_detect_device=int(dev_sel if isinstance(dev_sel, int) else 0),
                 io_concurrency=int(self.perf_io_spin.value()) if hasattr(self, 'perf_io_spin') else 0,
                 near_warm_start=bool(self.perf_near_warm_check.isChecked()) if hasattr(self, 'perf_near_warm_check') else True,
+                # Backend + astrometry
+                solver_backend=(self.backend_combo.currentData() if hasattr(self, 'backend_combo') else "local"),
+                astrometry_api_url=(self.ast_api_url_edit.text().strip() if hasattr(self, 'ast_api_url_edit') else "https://nova.astrometry.net/api"),
+                astrometry_api_key=(self.ast_api_key_edit.text().strip() if hasattr(self, 'ast_api_key_edit') and self.ast_api_key_edit.text().strip() else (os.environ.get("ASTROMETRY_API_KEY") or None)),
+                astrometry_parallel_jobs=int(self.ast_parallel_spin.value()) if hasattr(self, 'ast_parallel_spin') else 2,
+                astrometry_timeout_s=int(self.ast_timeout_spin.value()) if hasattr(self, 'ast_timeout_spin') else 600,
+                astrometry_use_hints=bool(self.ast_use_hints_check.isChecked()) if hasattr(self, 'ast_use_hints_check') else True,
+                astrometry_fallback_local=bool(self.ast_fallback_local_check.isChecked()) if hasattr(self, 'ast_fallback_local_check') else True,
             )
 
         def _on_compute_fov_clicked(self) -> None:
@@ -3682,6 +4100,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.input_label.setText(self._text("input_label"))
             self.scan_btn.setText(self._text("scan_button"))
             self.options_box.setTitle(self._text("options_box"))
+            if hasattr(self, "backend_label_widget"):
+                self.backend_label_widget.setText(self._text("solver.backend.label"))
+            if hasattr(self, "backend_note_label"):
+                self.backend_note_label.setText(self._text("solver.backend.note"))
             self.fov_label_widget.setText(self._text("fov_label"))
             self.search_scale_label_widget.setText(self._text("search_scale_label"))
             self.search_attempts_label_widget.setText(self._text("search_attempts_label"))
@@ -3798,6 +4220,34 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_run_blind_btn.setText(self._text("settings_run_btn"))
             if hasattr(self, "settings_run_near_btn"):
                 self.settings_run_near_btn.setText(self._text("settings_near_btn"))
+            # Astrometry tab controls
+            try:
+                idx = self.tabs.indexOf(self.astrometry_scroll)
+            except Exception:
+                idx = -1
+            if hasattr(self, "astrometry_scroll") and idx >= 0:
+                try:
+                    self.tabs.setTabText(idx, self._text("astrometry.tab.title"))
+                except Exception:
+                    pass
+            if hasattr(self, "ast_api_url_label"):
+                self.ast_api_url_label.setText(self._text("astrometry.api_url"))
+            if hasattr(self, "ast_api_key_label"):
+                self.ast_api_key_label.setText(self._text("astrometry.api_key"))
+            if hasattr(self, "ast_parallel_label"):
+                self.ast_parallel_label.setText(self._text("astrometry.options.parallel_jobs"))
+            if hasattr(self, "ast_timeout_label"):
+                self.ast_timeout_label.setText(self._text("astrometry.options.timeout_s"))
+            if hasattr(self, "ast_use_hints_check"):
+                self.ast_use_hints_check.setText(self._text("astrometry.options.use_hints"))
+            if hasattr(self, "ast_fallback_local_check"):
+                self.ast_fallback_local_check.setText(self._text("astrometry.options.fallback_local"))
+            if hasattr(self, "ast_privacy_label"):
+                self.ast_privacy_label.setText(self._text("astrometry.options.privacy_note"))
+            if hasattr(self, "ast_test_login_btn"):
+                self.ast_test_login_btn.setText(self._text("astrometry.login.test"))
+            if hasattr(self, "ast_save_btn"):
+                self.ast_save_btn.setText(self._text("settings.save"))
             if hasattr(self, "settings_log_label"):
                 self.settings_log_label.setText(self._text("settings_log"))
             # Performance tab labels
@@ -4095,6 +4545,49 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.progress_bar.setValue(0)
             self.status_label.setText(f"0 / {target_total}")
             self._set_running(True)
+            backend = (self.backend_combo.currentData() if hasattr(self, 'backend_combo') else 'local')
+            self._log(self._text("solver.status.using_backend", backend=self.backend_combo.currentText() if hasattr(self, 'backend_combo') else 'Local'))
+            if backend == 'astrometry':
+                # Use finer-grained progress (100 steps per file) so we can reflect upload/queue stages
+                try:
+                    self.progress_bar.setMaximum(target_total * 100)
+                    self.progress_bar.setValue(0)
+                except Exception:
+                    pass
+                api_url = self.ast_api_url_edit.text().strip() if hasattr(self, 'ast_api_url_edit') else ''
+                api_key = self.ast_api_key_edit.text().strip() if hasattr(self, 'ast_api_key_edit') else ''
+                if not api_key:
+                    # Try environment variable, but do not persist
+                    api_key = os.environ.get('ASTROMETRY_API_KEY', '')
+                if not api_key:
+                    QtWidgets.QMessageBox.warning(self, self._text("astrometry.tab.title"), self._text("astrometry.login.fail"))
+                    self._set_running(False)
+                    return
+                parallel = int(self.ast_parallel_spin.value()) if hasattr(self, 'ast_parallel_spin') else 2
+                timeout_s = int(self.ast_timeout_spin.value()) if hasattr(self, 'ast_timeout_spin') else 600
+                use_hints = bool(self.ast_use_hints_check.isChecked()) if hasattr(self, 'ast_use_hints_check') else True
+                fallback_local = bool(self.ast_fallback_local_check.isChecked()) if hasattr(self, 'ast_fallback_local_check') else True
+                index_root = self._settings.index_root
+                self._worker = AstrometryRunner(
+                    list(self._pending_files),
+                    api_url=api_url or 'https://nova.astrometry.net/api',
+                    api_key=api_key,
+                    parallel=parallel,
+                    timeout_s=timeout_s,
+                    use_hints=use_hints,
+                    fallback_local=fallback_local,
+                    index_root=index_root,
+                    translator=self._text,
+                )
+                self._worker.started.connect(self._on_worker_started)
+                self._worker.progress.connect(self._on_worker_progress)
+                self._worker.info.connect(self._log)
+                self._worker.error.connect(self._on_worker_error)
+                self._worker.stage.connect(self._on_worker_stage)
+                self._worker.finished.connect(self._on_worker_finished)
+                self._worker.start()
+                return
+            # Local backend (default)
             self._worker = SolveRunner(config, self._pending_files, self._text)
             self._worker.started.connect(self._on_worker_started)
             self._worker.progress.connect(self._on_worker_progress)
@@ -4125,8 +4618,16 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self._log(self._text(key, **payload))
             if not result.path.is_dir():
                 self._results_seen += 1
-                self.progress_bar.setValue(min(self._results_seen, self.progress_bar.maximum()))
-                self.status_label.setText(f"{self._results_seen} / {self.progress_bar.maximum()}")
+                # If we are in fine-grained mode (100 per file), advance to end of current file bucket
+                try:
+                    maxv = int(self.progress_bar.maximum())
+                    total_files = max(1, len(self._pending_files))
+                    unit = max(1, maxv // total_files)
+                    self.progress_bar.setValue(min(self._results_seen * unit, maxv))
+                except Exception:
+                    self.progress_bar.setValue(min(self._results_seen, self.progress_bar.maximum()))
+                # Keep textual counter based on files completed
+                self.status_label.setText(f"{self._results_seen} / {len(self._pending_files)}")
                 self._update_item(result)
             status_text = self._status_label_for(result.status)
             if result.message:
@@ -4178,6 +4679,30 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._worker.deleteLater()
             self._worker = None
             self.status_label.setText(self._text("status_ready"))
+
+        def _on_worker_stage(self, index: int, message: str) -> None:
+            try:
+                self.status_label.setText(message)
+            except Exception:
+                pass
+            try:
+                maxv = int(self.progress_bar.maximum())
+                total_files = max(1, len(self._pending_files))
+                unit = max(1, maxv // total_files)
+                # Rough mapping of stage to an in-file offset (percent of unit)
+                stage_pct = 5
+                txt = str(message).lower()
+                if 'upload' in txt:
+                    stage_pct = 10
+                elif 'en file' in txt or 'queued' in txt:
+                    stage_pct = 30
+                elif 'résolu' in txt or 'resolu' in txt or 'solved' in txt:
+                    stage_pct = 90
+                # Compute progress up to this stage
+                value = (index - 1) * unit + int(unit * stage_pct / 100)
+                self.progress_bar.setValue(min(value, maxv))
+            except Exception:
+                pass
 
         def _log(self, message: str) -> None:
             logging.info(message)
