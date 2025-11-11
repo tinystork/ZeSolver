@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -30,6 +31,65 @@ MANIFEST_FILENAME = "manifest.json"
 DEFAULT_MAG_CAP = 15.5
 DEFAULT_MAX_STARS = 2000
 DEFAULT_MAX_QUADS_PER_TILE = 20000
+_BOUND_MARGIN_DEG = 0.1
+
+
+def _cartesian_center(ra_deg: np.ndarray, dec_deg: np.ndarray) -> tuple[float, float]:
+    if ra_deg.size == 0:
+        return 0.0, 0.0
+    ra_rad = np.deg2rad(ra_deg)
+    dec_rad = np.deg2rad(dec_deg)
+    cos_dec = np.cos(dec_rad)
+    x = np.sum(cos_dec * np.cos(ra_rad))
+    y = np.sum(cos_dec * np.sin(ra_rad))
+    z = np.sum(np.sin(dec_rad))
+    norm = math.sqrt(x * x + y * y + z * z)
+    if norm == 0.0:
+        return float(np.mean(ra_deg)), float(np.mean(dec_deg))
+    vx = x / norm
+    vy = y / norm
+    vz = z / norm
+    ra = math.degrees(math.atan2(vy, vx)) % 360.0
+    vz = min(1.0, max(-1.0, vz))
+    dec = math.degrees(math.asin(vz))
+    return ra, dec
+
+
+def _serialize_bounds(bounds) -> dict[str, list[list[float]] | float]:
+    return {
+        "dec_min": float(bounds.dec_min),
+        "dec_max": float(bounds.dec_max),
+        "ra_segments": [[float(a), float(b)] for a, b in bounds.ra_segments],
+    }
+
+
+def _bounds_from_points(ra_deg: np.ndarray, dec_deg: np.ndarray, center_ra: float) -> dict[str, object]:
+    if ra_deg.size == 0:
+        return {
+            "dec_min": 0.0,
+            "dec_max": 0.0,
+            "ra_segments": [[0.0, 360.0]],
+        }
+    dec_min = float(np.min(dec_deg)) - _BOUND_MARGIN_DEG
+    dec_max = float(np.max(dec_deg)) + _BOUND_MARGIN_DEG
+    offsets = ((ra_deg - center_ra + 540.0) % 360.0) - 180.0
+    lo = float(np.min(offsets)) - _BOUND_MARGIN_DEG
+    hi = float(np.max(offsets)) + _BOUND_MARGIN_DEG
+    span = hi - lo
+    if span >= 359.0:
+        segments = [(0.0, 360.0)]
+    else:
+        ra_min = (center_ra + lo) % 360.0
+        ra_max = (center_ra + hi) % 360.0
+        if ra_min <= ra_max:
+            segments = [(ra_min, ra_max)]
+        else:
+            segments = [(ra_min, 360.0), (0.0, ra_max)]
+    return {
+        "dec_min": max(-90.0, dec_min),
+        "dec_max": min(90.0, dec_max),
+        "ra_segments": [[float(a), float(b)] for a, b in segments],
+    }
 
 
 def _progress_iter(items: Iterable, *, desc: str) -> Iterable:
@@ -45,6 +105,7 @@ def build_index_from_astap(
     mag_cap: float = DEFAULT_MAG_CAP,
     max_stars: int = DEFAULT_MAX_STARS,
     max_quads_per_tile: int = DEFAULT_MAX_QUADS_PER_TILE,
+    skip_quads: bool = False,
 ) -> Path:
     db_root = Path(db_root).expanduser().resolve()
     index_root = Path(index_root).expanduser().resolve()
@@ -57,24 +118,50 @@ def build_index_from_astap(
     for tile_index, tile_meta in enumerate(_progress_iter(tiles, desc="convert")):
         stars = load_tile_stars(db_root, tile_meta)
         total = len(stars)
-        ra = stars["ra_deg"].astype(np.float64, copy=False)
-        dec = stars["dec_deg"].astype(np.float64, copy=False)
-        x_deg, y_deg = project_tan(ra, dec, tile_meta.center_ra_deg, tile_meta.center_dec_deg)
-        valid = np.isfinite(x_deg) & np.isfinite(y_deg)
-        stars = stars[valid]
-        x_deg = x_deg[valid]
-        y_deg = y_deg[valid]
+        if total:
+            ra = stars["ra_deg"].astype(np.float64, copy=False)
+            dec = stars["dec_deg"].astype(np.float64, copy=False)
+            center_ra_deg, center_dec_deg = _cartesian_center(ra, dec)
+            x_deg, y_deg = project_tan(ra, dec, center_ra_deg, center_dec_deg)
+            valid = np.isfinite(x_deg) & np.isfinite(y_deg)
+            if not valid.any():
+                logger.warning(
+                    "tile %s: cartesian center %.2f/%.2f yielded no TAN projection, falling back to layout center",
+                    tile_meta.key,
+                    center_ra_deg,
+                    center_dec_deg,
+                )
+                center_ra_deg = tile_meta.center_ra_deg
+                center_dec_deg = tile_meta.center_dec_deg
+                x_deg, y_deg = project_tan(ra, dec, center_ra_deg, center_dec_deg)
+                valid = np.isfinite(x_deg) & np.isfinite(y_deg)
+            stars = stars[valid]
+            ra = ra[valid]
+            dec = dec[valid]
+            x_deg = x_deg[valid]
+            y_deg = y_deg[valid]
+        else:
+            center_ra_deg = tile_meta.center_ra_deg
+            center_dec_deg = tile_meta.center_dec_deg
+            ra = np.empty(0, dtype=np.float64)
+            dec = np.empty(0, dtype=np.float64)
+            x_deg = np.empty(0, dtype=np.float32)
+            y_deg = np.empty(0, dtype=np.float32)
         if mag_cap is not None:
             mask_mag = stars["mag"] <= mag_cap
             stars = stars[mask_mag]
             x_deg = x_deg[mask_mag]
             y_deg = y_deg[mask_mag]
+            ra = ra[mask_mag]
+            dec = dec[mask_mag]
         if stars.size > max_stars:
             order = np.argsort(stars["mag"])
             order = order[:max_stars]
             stars = stars[order]
             x_deg = x_deg[order]
             y_deg = y_deg[order]
+            ra = ra[order]
+            dec = dec[order]
         tile_path = tiles_dir / f"{tile_meta.key}.npz"
         np.savez_compressed(
             tile_path,
@@ -84,19 +171,19 @@ def build_index_from_astap(
             x_deg=x_deg.astype(np.float32, copy=False),
             y_deg=y_deg.astype(np.float32, copy=False),
         )
+        if stars.size:
+            bounds = _bounds_from_points(ra, dec, center_ra_deg)
+        else:
+            bounds = _serialize_bounds(tile_meta.bounds)
         tile_entries.append(
             {
                 "tile_index": tile_index,
                 "tile_key": tile_meta.key,
                 "family": tile_meta.family,
                 "tile_code": tile_meta.tile_code,
-                "center_ra_deg": tile_meta.center_ra_deg,
-                "center_dec_deg": tile_meta.center_dec_deg,
-                "bounds": {
-                    "dec_min": tile_meta.bounds.dec_min,
-                    "dec_max": tile_meta.bounds.dec_max,
-                    "ra_segments": [[float(a), float(b)] for a, b in tile_meta.bounds.ra_segments],
-                },
+                "center_ra_deg": float(center_ra_deg),
+                "center_dec_deg": float(center_dec_deg),
+                "bounds": bounds,
                 "stars": int(stars.size),
                 # Store relative path using POSIX separators for cross-platform portability
                 "tile_file": tile_path.relative_to(index_root).as_posix(),
@@ -122,8 +209,9 @@ def build_index_from_astap(
     }
     manifest_path.write_text(json.dumps(manifest, indent=2))
     logger.info("Index manifest written to %s", manifest_path)
-    for level in LEVEL_SPECS:
-        build_quad_index(index_root, level.name, max_quads_per_tile=max_quads_per_tile)
+    if not skip_quads:
+        for level in LEVEL_SPECS:
+            build_quad_index(index_root, level.name, max_quads_per_tile=max_quads_per_tile)
     return manifest_path
 
 
@@ -144,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
         default=DEFAULT_MAX_QUADS_PER_TILE,
         help="Maximum quads hashed per tile",
     )
+    parser.add_argument("--skip-quads", action="store_true", help="Only write manifest/tiles and skip quad hashing")
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     args = parser.parse_args(argv)
     logging.basicConfig(level=args.log_level.upper(), format="%(levelname)s: %(message)s")
@@ -154,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
             mag_cap=args.mag_cap,
             max_stars=args.max_stars,
             max_quads_per_tile=args.max_quads_per_tile,
+            skip_quads=bool(args.skip_quads),
         )
         return 0
     except Exception as exc:  # pragma: no cover - bubble error

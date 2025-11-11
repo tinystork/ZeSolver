@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+import os
+import concurrent.futures
 from pathlib import Path
 from typing import Any, Dict, Callable
 
@@ -56,6 +58,11 @@ def validate_index(index_root: Path | str, *, db_root: Path | str | None = None)
       - db_root_mismatch: bool
       - db_tile_count: int | None
       - tile_key_mismatch: bool | None
+      - empty_tiles_total: int
+      - empty_ratio_overall: float
+      - ring_empty_counts: dict[int, int]
+      - ring_total_counts: dict[int, int]
+      - bad_empty_rings: list[int]  # rings with >=80% empty tiles
     """
     root = Path(index_root).expanduser().resolve()
     result: Dict[str, Any] = {
@@ -67,6 +74,11 @@ def validate_index(index_root: Path | str, *, db_root: Path | str | None = None)
         "db_root_mismatch": False,
         "db_tile_count": None,
         "tile_key_mismatch": None,
+        "empty_tiles_total": 0,
+        "empty_ratio_overall": 0.0,
+        "ring_empty_counts": {},
+        "ring_total_counts": {},
+        "bad_empty_rings": [],
     }
     try:
         manifest = _load_manifest(root)
@@ -88,6 +100,55 @@ def validate_index(index_root: Path | str, *, db_root: Path | str | None = None)
     result["missing_quads"] = missing
     tiles = manifest.get("tiles", [])
     result["manifest_tile_count"] = int(len(tiles))
+    # Compute empty-tile stats per ring using manifest data when available
+    empty_total = 0
+    ring_empty: Dict[int, int] = {}
+    ring_total: Dict[int, int] = {}
+    for entry in tiles:
+        try:
+            # Prefer explicit tile_code if present; otherwise parse from tile_key suffix
+            code = str(entry.get("tile_code") or str(entry.get("tile_key", "")).split("_", 1)[-1])
+            ring_idx = int(code[:2]) if len(code) >= 2 and code[:2].isdigit() else -1
+        except Exception:
+            ring_idx = -1
+        stars = entry.get("stars")
+        is_empty = False
+        if isinstance(stars, (int, np.integer)):
+            is_empty = int(stars) == 0
+        else:
+            # Fallback: inspect tile file if manifest lacks a star count
+            try:
+                tile_path = _tile_file_path(root, entry)
+                with np.load(tile_path) as data:
+                    size = int(np.shape(data.get("ra_deg", ())) and data["ra_deg"].size)
+                is_empty = size == 0
+            except Exception:
+                # Missing/unreadable tile counts as empty for the purpose of this health check
+                is_empty = True
+        empty_total += 1 if is_empty else 0
+        if ring_idx not in ring_total:
+            ring_total[ring_idx] = 0
+            ring_empty[ring_idx] = 0
+        ring_total[ring_idx] += 1
+        if is_empty:
+            ring_empty[ring_idx] += 1
+    result["empty_tiles_total"] = empty_total
+    total_tiles = max(1, int(len(tiles)))
+    result["empty_ratio_overall"] = float(empty_total) / float(total_tiles)
+    # Store per-ring stats, excluding unknown ring -1
+    if -1 in ring_total:
+        ring_total.pop(-1, None)
+        ring_empty.pop(-1, None)
+    result["ring_empty_counts"] = {int(k): int(v) for k, v in ring_empty.items()}
+    result["ring_total_counts"] = {int(k): int(v) for k, v in ring_total.items()}
+    # Identify rings with a large fraction of empty tiles (>=80%)
+    bad_rings: list[int] = []
+    for k, tot in ring_total.items():
+        if tot <= 0:
+            continue
+        if float(ring_empty.get(k, 0)) / float(tot) >= 0.80:
+            bad_rings.append(int(k))
+    result["bad_empty_rings"] = sorted(bad_rings)
     # Compare DB content if requested
     if db_root is not None:
         try:
@@ -143,12 +204,44 @@ class QuadIndex:
         return index
 
 
+def _process_tile_for_level(
+    tile_path: str,
+    tile_key: str,
+    tile_index: int,
+    level_name: str,
+    max_quads_per_tile: int,
+) -> tuple[int, np.ndarray, np.ndarray] | None:
+    try:
+        with np.load(tile_path) as data:
+            if "x_deg" not in data or "mag" not in data:
+                return None
+            coords = np.column_stack((data["x_deg"], data["y_deg"]))
+            stars = np.zeros(data["mag"].shape[0], dtype=[("x", "f4"), ("y", "f4"), ("mag", "f4")])
+            stars["x"] = data["x_deg"].astype(np.float32)
+            stars["y"] = data["y_deg"].astype(np.float32)
+            stars["mag"] = data["mag"].astype(np.float32)
+        from .levels import LEVEL_MAP  # local import is safe in subproc
+        from .asterisms import sample_quads, hash_quads
+        spec = LEVEL_MAP.get(level_name)
+        strategy = "biased_brightness" if level_name == "L" else "local_brightness"
+        quads = sample_quads(stars, max_quads_per_tile, strategy=strategy)
+        if quads.size == 0:
+            return None
+        quad_hash = hash_quads(quads, coords, spec=spec)
+        if quad_hash.hashes.size == 0:
+            return None
+        return tile_index, quad_hash.hashes, quad_hash.indices.astype(np.uint16)
+    except Exception:
+        return None
+
+
 def build_quad_index(
     index_root: Path | str,
     level: str,
     *,
     max_quads_per_tile: int = 20000,
     on_progress: Callable[[int, int, str], None] | None = None,
+    workers: int | None = None,
 ) -> Path:
     index_root = Path(index_root).expanduser().resolve()
     spec = LEVEL_MAP.get(level)
@@ -167,43 +260,71 @@ def build_quad_index(
     tile_indices: list[np.ndarray] = []
     quad_indices: list[np.ndarray] = []
     total = len(tile_entries)
+    # Progress helpers
+    done = 0
+    def _record_progress(label: str) -> None:
+        nonlocal done
+        done += 1
+        if on_progress:
+            on_progress(done, total, label)
+
+    # Build task list (pre-resolve paths to avoid pickling manifest entries)
+    tasks: list[tuple[str, str, int]] = []
     for tile_index, entry in enumerate(tile_entries):
         try:
-            tile_path = _tile_file_path(index_root, entry)
+            path = _tile_file_path(index_root, entry)
         except FileNotFoundError as exc:
             logger.warning("missing tile file %s: %s", entry.get("tile_file"), exc)
-            if on_progress:
-                on_progress(tile_index + 1, total, str(entry.get("tile_key", "")))
+            _record_progress(str(entry.get("tile_key", "")))
             continue
-        with np.load(tile_path) as data:
-            if "x_deg" not in data or "mag" not in data:
-                logger.warning("tile %s missing x_deg/mag arrays", tile_path)
-                if on_progress:
-                    on_progress(tile_index + 1, total, str(entry.get("tile_key", "")))
+        tasks.append((str(path), str(entry.get("tile_key", "")), tile_index))
+
+    # Choose workers (default: half CPUs, min 1) if not provided
+    if workers is None:
+        try:
+            workers = max(1, (os.cpu_count() or 1) // 2)
+        except Exception:
+            workers = 1
+
+    if workers <= 1:
+        for tile_path, tile_key, tile_index in tasks:
+            result = _process_tile_for_level(tile_path, tile_key, tile_index, level, max_quads_per_tile)
+            if result is None:
+                _record_progress(tile_key)
                 continue
-            coords = np.column_stack((data["x_deg"], data["y_deg"]))
-            stars = np.zeros(data["mag"].shape[0], dtype=[("x", "f4"), ("y", "f4"), ("mag", "f4")])
-            stars["x"] = data["x_deg"].astype(np.float32)
-            stars["y"] = data["y_deg"].astype(np.float32)
-            stars["mag"] = data["mag"].astype(np.float32)
-        # Use locality-aware sampling for smaller-diameter levels to avoid overly large quads
-        strategy = "biased_brightness" if level == "L" else "local_brightness"
-        quads = sample_quads(stars, max_quads_per_tile, strategy=strategy)
-        if quads.size == 0:
-            if on_progress:
-                on_progress(tile_index + 1, total, str(entry.get("tile_key", "")))
-            continue
-        quad_hash = hash_quads(quads, coords, spec=spec)
-        if quad_hash.hashes.size == 0:
-            if on_progress:
-                on_progress(tile_index + 1, total, str(entry.get("tile_key", "")))
-            continue
-        hashes.append(quad_hash.hashes)
-        tile_indices.append(np.full(quad_hash.hashes.shape, tile_index, dtype=np.uint32))
-        quad_indices.append(quad_hash.indices.astype(np.uint16))
-        logger.debug("level %s: %s -> %d hashed quads", level, entry.get("tile_key"), quad_hash.hashes.size)
-        if on_progress:
-            on_progress(tile_index + 1, total, str(entry.get("tile_key", "")))
+            idx, h, q = result
+            hashes.append(h)
+            tile_indices.append(np.full(h.shape, idx, dtype=np.uint32))
+            quad_indices.append(q)
+            logger.debug("level %s: %s -> %d hashed quads", level, tile_key, h.size)
+            _record_progress(tile_key)
+    else:
+        with concurrent.futures.ProcessPoolExecutor(max_workers=int(workers)) as pool:
+            future_map = {
+                pool.submit(
+                    _process_tile_for_level,
+                    tile_path,
+                    tile_key,
+                    tile_index,
+                    level,
+                    max_quads_per_tile,
+                ): (tile_key, tile_index)
+                for (tile_path, tile_key, tile_index) in tasks
+            }
+            for fut in concurrent.futures.as_completed(future_map):
+                tile_key, _idx = future_map[fut]
+                try:
+                    result = fut.result()
+                except Exception:
+                    result = None
+                if result is None:
+                    _record_progress(tile_key)
+                    continue
+                idx, h, q = result
+                hashes.append(h)
+                tile_indices.append(np.full(h.shape, idx, dtype=np.uint32))
+                quad_indices.append(q)
+                _record_progress(tile_key)
     if not hashes:
         raise RuntimeError("no quads were hashed for level %s" % level)
     all_hashes = np.concatenate(hashes)

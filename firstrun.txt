@@ -3,9 +3,12 @@ Français :
 2. Construisez l’index tangentiel + tables de quads en lançant :
    `zebuildindex --db-root database --index-root index --mag-cap 15.5 --max-stars 2000 --max-quads-per-tile 20000`
    Cela écrit des `.npz` par tuile, un `manifest.json` et des tables `hash_tables/quads_*`.
-3. Pour un premier solveur, exécutez :
-   `zeblindsolve exemples/Light_M81.fit --index-root index --max-candidates 12 --max-stars 800 --quality-rms 1.0 --quality-inliers 60`
-   Le FITS reçoit un WCS TAN vérifié et les mots-clés `SOLVED`, `QUALITY`, `BLIND_VER`, etc.
+3. Pour un premier blind solve, exécutez :
+   `zeblindsolve examples/Light_M81.fit --index-root index --max-candidates 12 --max-stars 800 --quality-rms 1.0 --quality-inliers 60`
+   Le FITS reçoit un WCS TAN vérifié et des mots‑clés normalisés: `SOLVED`, `SOLVER=ZeSolver`,
+   `SOLVMODE=BLIND`, `BLINDVER`, `USED_DB`, `RMSPX`, `INLIERS`.
+   Dans le GUI, vous pouvez activer le "Mode rapide (S-seul, fallback M/L)" dans la section
+   "Blind solver (Python)" pour accélérer les essais.
 
 English :
 1. Place your ASTAP/HNSKY catalog root under `database/` (D50, D80, ...).
@@ -14,4 +17,7 @@ English :
    This produces per-tile `.npz` blobs, a `manifest.json`, and `hash_tables/quads_*`.
 3. Run the blind solver for the first time:
    `zeblindsolve examples/Light_M81.fit --index-root index --max-candidates 12 --max-stars 800 --quality-rms 1.0 --quality-inliers 60`
-   The FITS header will be updated with the validated TAN WCS plus `SOLVED`, `QUALITY`, `BLIND_VER`, etc.
+   The FITS header will be updated with normalized keywords: `SOLVED`, `SOLVER=ZeSolver`,
+   `SOLVMODE=BLIND`, `BLINDVER`, `USED_DB`, `RMSPX`, `INLIERS`.
+   In the GUI, a "Fast mode (S-only, fallback M/L)" toggle in the "Blind solver (Python)" group
+   prefers the most selective level first to improve speed.

@@ -14,9 +14,10 @@ from .fits_utils import estimate_scale_and_fov, parse_angle, to_luminance_for_so
 from .matcher import SimilarityTransform, estimate_similarity_RANSAC
 from .projections import project_tan
 from .quad_index_builder import load_manifest
+from zewcs290.catalog290 import CatalogDB
 from .star_detect import detect_stars
 from .verify import validate_solution
-from .wcs_fit import fit_wcs_sip, needs_sip, tan_from_similarity
+from .wcs_fit import fit_wcs_sip, fit_wcs_tan, needs_sip, tan_from_similarity
 from .zeblindsolver import WcsSolution
 
 try:
@@ -121,15 +122,50 @@ def _extract_angle(header: fits.Header, keys: Iterable[str], *, is_ra: bool) -> 
     return None
 
 
-def _load_tile_catalog(index_root: Path, entry: dict, ra0: float, dec0: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _load_tile_catalog(
+    index_root: Path,
+    entry: dict,
+    ra0: float,
+    dec0: float,
+    *,
+    db_root: Path | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     rel = str(entry.get("tile_file", "")).replace("\\", "/")
     tile_path = index_root / rel
-    if not tile_path.exists():
+    ra = dec = mag = None
+    if tile_path.exists():
+        try:
+            with np.load(tile_path) as data:
+                ra = data.get("ra_deg")
+                dec = data.get("dec_deg")
+                mag = data.get("mag")
+                if ra is not None:
+                    ra = ra.astype(np.float64, copy=False)
+                if dec is not None:
+                    dec = dec.astype(np.float64, copy=False)
+                if mag is not None:
+                    mag = mag.astype(np.float32, copy=False)
+        except Exception:
+            ra = dec = mag = None
+    # Fallback: read directly from the ASTAP DB if the tile blob is missing or empty
+    if (ra is None or dec is None or mag is None or ra.size == 0 or dec.size == 0) and db_root is not None:
+        try:
+            fam = str(entry.get("family") or "").strip().lower() or None
+            db = CatalogDB(db_root, families=[fam] if fam else None)
+            target_code = str(entry.get("tile_code") or "")
+            ra = dec = mag = None
+            for tile in db.tiles:
+                if tile.tile_code == target_code and (fam is None or tile.spec.key == fam):
+                    block = db._load_tile(tile)
+                    stars = block.stars
+                    ra = stars["ra_deg"].astype(np.float64, copy=False)
+                    dec = stars["dec_deg"].astype(np.float64, copy=False)
+                    mag = stars["mag"].astype(np.float32, copy=False)
+                    break
+        except Exception:
+            ra = dec = mag = None
+    if ra is None or dec is None or mag is None:
         raise FileNotFoundError(tile_path)
-    with np.load(tile_path) as data:
-        ra = data["ra_deg"].astype(np.float64, copy=False)
-        dec = data["dec_deg"].astype(np.float64, copy=False)
-        mag = data["mag"].astype(np.float32, copy=False)
     x_deg, y_deg = project_tan(ra, dec, ra0, dec0)
     mask = np.isfinite(x_deg) & np.isfinite(y_deg)
     if not mask.any():
@@ -289,9 +325,15 @@ def solve_near(
     catalog_world: list[np.ndarray] = []
     catalog_mags: list[np.ndarray] = []
     missing_tiles: list[str] = []
+    # Resolve DB root for optional fallback when tile blobs are empty/missing
+    try:
+        db_root_text = str(manifest.get("db_root", "")).strip()
+        db_root_path: Path | None = Path(db_root_text).expanduser().resolve() if db_root_text else None
+    except Exception:
+        db_root_path = None
     for entry in candidates:
         try:
-            positions, world, mags = _load_tile_catalog(index_path, entry, ra0, dec0)
+            positions, world, mags = _load_tile_catalog(index_path, entry, ra0, dec0, db_root=db_root_path)
         except FileNotFoundError:
             missing_tiles.append(str(entry.get("tile_file")))
             continue
@@ -360,6 +402,19 @@ def solve_near(
     )
     final_wcs = wcs
     final_stats = stats
+    try:
+        ls_wcs, _ = fit_wcs_tan(matches)
+    except Exception:
+        ls_wcs = None
+    else:
+        ls_stats = validate_solution(
+            ls_wcs,
+            matches,
+            thresholds={"rms_px": cfg.quality_rms, "inliers": cfg.quality_inliers},
+        )
+        if ls_stats.get("rms_px", float("inf")) < final_stats.get("rms_px", float("inf")):
+            final_wcs = ls_wcs
+            final_stats = ls_stats
     fov_est = approx_fov or (2.0 * np.max(np.hypot(cat_positions[:, 0], cat_positions[:, 1])))
     if final_stats.get("quality") == "GOOD" and needs_sip(final_wcs, final_stats, fov_est):
         for order in range(2, cfg.sip_order + 1):
@@ -384,12 +439,13 @@ def solve_near(
         "INLIERS": final_stats.get("inliers"),
         "TILE_ID": candidates[0].get("tile_key") if candidates else None,
         "SOLVMODE": "NEAR",
+        "SOLVER": "ZeSolver",
     }
     pix_scale_arcsec = _pix_scale_arcsec(final_wcs)
     if pix_scale_arcsec is not None:
         header_updates["PIXSCAL"] = pix_scale_arcsec
     elapsed = time.perf_counter() - start
-    header_updates["NEAR_TIME"] = f"{elapsed:.2f}s"
+    header_updates["NEARTIME"] = f"{elapsed:.2f}s"
     try:
         with fits.open(fits_path, mode="update", memmap=False) as hdul:
             header = hdul[0].header

@@ -20,7 +20,9 @@ zeblindsolve input.fits --index-root /path/to/index \
     --sip-order 2 --quality-rms 1.0 --quality-inliers 60 --log-level INFO
 ```
 
-The solver detects stars, builds observed quads, looks up hashed tiles, estimates a similarity transform, and writes back a TAN WCS with quality metrics. Successful solves set `SOLVED=1`, `BLIND_VER`, `DBSET`, `TILE_ID`, `RMS_PX`, `N_INLIERS`, `SIP_ORDER`, and `QUALITY`.
+The solver detects stars, builds observed quads, looks up hashed tiles, estimates a similarity transform, and writes back a TAN WCS with quality metrics. Successful solves set `SOLVED=1`, `SOLVER=ZeSolver`, `SOLVMODE=BLIND`, `BLINDVER`, `DBSET`, `TILE_ID`, `RMSPX`, `INLIERS`, `SIPORD`, and `QUALITY`.
+
+GUI users can enable "Fast mode (S-only, fallback M/L)" from the settings to try the most selective level first and improve speed.
 
 ## Limitations
 

@@ -263,19 +263,45 @@ class CatalogDB:
                 try:
                     ring_def = layout.ring_for_index(ring_index)
                 except KeyError:
-                    logger.warning(
-                        "family %s: ring %02d missing from layout %s (skipping %d tile(s))",
-                        key,
-                        ring_index,
-                        layout_name,
-                        len(entries),
+                    # Fallback: synthesize ring geometry from data to avoid dropping tiles.
+                    # Determine RA cells from observed max tile index; estimate DEC span from a sample tile.
+                    observed_max = max((idx for idx, _ in entries), default=1)
+                    ra_cells = max(1, int(observed_max))
+                    sample_path = entries[0][1]
+                    try:
+                        parsed = _parse_catalog_file(sample_path, spec)
+                        stars = parsed[0]
+                        if stars.size:
+                            dec_min = float(np.min(stars["dec_deg"]))
+                            dec_max = float(np.max(stars["dec_deg"]))
+                        else:
+                            # Degenerate; fallback to broad bounds
+                            dec_min, dec_max = -90.0, 90.0
+                    except Exception as exc:  # pylint: disable=broad-except
+                        logger.warning(
+                            "family %s: ring %02d missing from layout %s and sample decode failed (%s); using default bounds",
+                            key,
+                            ring_index,
+                            layout_name,
+                            exc,
+                        )
+                        dec_min, dec_max = -90.0, 90.0
+                    geom = RingGeometry(
+                        dec_min=dec_min,
+                        dec_max=dec_max,
+                        ra_cells=ra_cells,
                     )
-                    continue
-                geom = RingGeometry(
-                    dec_min=ring_def.dec_min_deg,
-                    dec_max=ring_def.dec_max_deg,
-                    ra_cells=ring_def.ra_cells,
-                )
+                else:
+                    # Some catalogue variants (notably 290) have ring tile counts that differ
+                    # from the nominal layout. Adapt ra_cells to the observed maximum tile index
+                    # to avoid skipping valid tiles (e.g. warnings "tile index X outside [1,1]").
+                    observed_max = max((idx for idx, _ in entries), default=0)
+                    ra_cells = max(int(ring_def.ra_cells), int(observed_max)) or ring_def.ra_cells
+                    geom = RingGeometry(
+                        dec_min=ring_def.dec_min_deg,
+                        dec_max=ring_def.dec_max_deg,
+                        ra_cells=ra_cells,
+                    )
                 sample_path = entries[0][1]
                 sample_key = str(sample_path)
                 if sample_key not in self._prefetched:

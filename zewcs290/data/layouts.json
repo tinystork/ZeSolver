@@ -246,7 +246,7 @@
       "dec_step_deg": -5.14285714
     },
     {
-      "ring": "36-37",
+      "ring": "35-36",
       "dec_min_deg": 87.42857143,
       "dec_max_deg": 90.0,
       "ra_cells": 1,
@@ -273,25 +273,25 @@
       "ra_cells": 8
     },
     {
-      "ring": "4-5",
+      "ring": "3-4",
       "dec_min_deg": -65.99286637,
       "dec_max_deg": -56.14497387,
       "ra_cells": 12
     },
     {
-      "ring": "6-7",
+      "ring": "4-5",
       "dec_min_deg": -56.14497387,
       "dec_max_deg": -46.03163067,
       "ra_cells": 16
     },
     {
-      "ring": "7-8",
+      "ring": "5-6",
       "dec_min_deg": -46.03163067,
       "dec_max_deg": -35.54307745,
       "ra_cells": 20
     },
     {
-      "ring": "8-9",
+      "ring": "6-7",
       "dec_min_deg": -35.54307745,
       "dec_max_deg": -24.53348115,
       "ra_cells": 24

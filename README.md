@@ -67,8 +67,9 @@ as JSON sidecars for raster formats).
 
 `zeblindsolver` is a standalone ASTAP-based blind solver that sanitises FITS
 headers, tries the local D80/D50/V50/D20/D05/G05/W08/H18 databases in cascade,
-and writes back a validated WCS solution (including `SOLVED`, `ZESOLVER_HINT`,
-`ZEBLINDVER`, `USED_DB`, etc.). It exposes both a Python API and a CLI:
+and writes back a validated WCS solution (including `SOLVED`, `SOLVER=ZeSolver`,
+`SOLVMODE=BLIND`, `BLINDVER`, `USED_DB`, `RMSPX`, `INLIERS`). It exposes both a
+Python API and a CLI:
 
 ```bash
 # Blind solve a single FITS file in place with the default ASTAP sequence
@@ -83,6 +84,10 @@ a trustworthy WCS (unless `--no-blind` is provided). Successful blind solves are
 logged in both CLI and GUI modes (`run_info_blind_*` entries) and prevent GUI
 freezes because ASTAP runs in worker threads.
 
+In the GUI, the settings tab now includes a "Blind solver (Python)" group with
+the main tunables and a "Fast mode (S-only, fallback M/L)" option that tries the
+most selective level first for speed.
+
 ## Metadata-assisted near solver
 
 The new `zeblindsolver/metadata_solver.py` path keeps the solving workflow
@@ -94,8 +99,8 @@ hint and approximate optical metadata, the solver:
 - Loads nearby catalogue tiles from `index/tiles/*.npz`, reprojects them onto the
   requested tangent plane, and matches stars via similarity RANSAC (with optional
   parity flips).
-- Writes a TAN WCS (and SIP terms if needed) together with `SOLVED`, `QUALITY`,
-  `NEAR_VER`, `INLIERS`, `RMSPX`, and `PIXSCAL` keywords.
+- Writes a TAN WCS (and SIP terms if needed) together with `SOLVED`, `SOLVER=ZeSolver`,
+  `SOLVMODE=NEAR`, `QUALITY`, `NEAR_VER`, `INLIERS`, `RMSPX`, and `PIXSCAL` keywords.
 - Falls back to the quad-based blind solver automatically when metadata is
   missing or inconsistent (if the quad tables are present).
 

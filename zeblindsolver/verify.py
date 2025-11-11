@@ -19,6 +19,10 @@ def validate_solution(
         world = wcs.wcs_pix2world(matches[:, :2], 0)
     except InvalidTransformError:
         return {"quality": "FAIL", "success": False, "reason": "invalid transform", "rms_px": float("inf"), "inliers": 0}
+    except Exception:
+        # Catch any wcslib/astropy error (e.g. singular PC/CD matrices) and
+        # report a clean validation failure rather than propagating an exception
+        return {"quality": "FAIL", "success": False, "reason": "wcs failure", "rms_px": float("inf"), "inliers": 0}
     residuals = np.linalg.norm(world - matches[:, 2:], axis=1)
     cd = getattr(wcs.wcs, "cd", None)
     if cd is not None and np.linalg.det(cd) != 0:

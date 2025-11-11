@@ -75,6 +75,7 @@ from zeblindsolver.db_convert import (
     build_index_from_astap,
 )
 from zeblindsolver.zeblindsolver import SolveConfig as BlindSolveConfig, solve_blind as python_solve_blind
+from zeblindsolver.quad_index_builder import validate_index as validate_zeblind_index
 
 
 FITS_EXTENSIONS = {".fit", ".fits", ".fts"}
@@ -177,12 +178,22 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_build_btn": "Construire l'index",
         "settings_run_btn": "Lancer le blind solve",
         "settings_near_btn": "Résolution WCS (Python, sans quads)",
+        "settings_blind_group": "Blind solver (Python)",
+        "settings_blind_max_stars_label": "Étoiles max (blind)",
+        "settings_blind_max_quads_label": "Quads max (blind)",
+        "settings_blind_max_candidates_label": "Candidats max (blind)",
+        "settings_blind_pixel_tol_label": "Tolérance pixel (blind)",
+        "settings_blind_quality_inliers_label": "Inliers mini (blind)",
+        "settings_blind_quality_rms_label": "RMS max px (blind)",
         "settings_log": "Journal d'index",
         "settings_saved": "Réglages sauvegardés",
         "settings_index_missing": "Répertoire d'index requis.",
         "settings_sample_required": "Choisis un fichier FITS à tester.",
         "settings_index_result": "Index {status}: {message}",
+        "settings_index_health_ok": "Index OK: {tiles} tuiles, {empty} vides ({percent:.1f}%).",
+        "settings_index_health_bad": "Index incomplet: {empty}/{tiles} tuiles vides; anneaux touchés: {rings}. Reconstruis l’index.",
         "settings_blind_result": "Blind {status}: {message}",
+        "settings_blind_fast_label": "Mode rapide (S-seul, fallback M/L)",
         "settings_near_result": "Near {status}: {message}",
         "settings_build_start": "Construction de l'index dans {path}… (cela peut prendre plusieurs minutes)",
         "settings_rebuild_title": "Reconstruire l'index ?",
@@ -255,12 +266,22 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_build_btn": "Build index",
         "settings_run_btn": "Run blind solve",
         "settings_near_btn": "Near solve (Python, no quads)",
+        "settings_blind_group": "Blind solver (Python)",
+        "settings_blind_max_stars_label": "Max stars (blind)",
+        "settings_blind_max_quads_label": "Max quads (blind)",
+        "settings_blind_max_candidates_label": "Max candidates (blind)",
+        "settings_blind_pixel_tol_label": "Pixel tolerance (blind)",
+        "settings_blind_quality_inliers_label": "Min inliers (blind)",
+        "settings_blind_quality_rms_label": "Max RMS px (blind)",
         "settings_log": "Index log",
         "settings_saved": "Settings saved",
         "settings_index_missing": "Index directory is required.",
         "settings_sample_required": "Select a FITS file to test.",
         "settings_index_result": "Index {status}: {message}",
+        "settings_index_health_ok": "Index OK: {tiles} tiles, {empty} empty ({percent:.1f}%).",
+        "settings_index_health_bad": "Index incomplete: {empty}/{tiles} empty tiles; affected rings: {rings}. Rebuild the index.",
         "settings_blind_result": "Blind {status}: {message}",
+        "settings_blind_fast_label": "Fast mode (S-only, fallback M/L)",
         "settings_near_result": "Near {status}: {message}",
         "settings_build_start": "Building index at {path}… (this may take several minutes)",
         "settings_rebuild_title": "Rebuild Index?",
@@ -279,6 +300,14 @@ class PersistentSettings:
     max_stars: int = DEFAULT_MAX_STARS
     max_quads_per_tile: int = DEFAULT_MAX_QUADS_PER_TILE
     sample_fits: Optional[str] = None
+    # Blind solver tunables
+    blind_max_stars: int = 800
+    blind_max_quads: int = 12000
+    blind_max_candidates: int = 12
+    blind_pixel_tolerance: float = 3.0
+    blind_quality_inliers: int = 60
+    blind_quality_rms: float = 1.0
+    blind_fast_mode: bool = False
 
 
 def load_persistent_settings() -> PersistentSettings:
@@ -297,6 +326,13 @@ def load_persistent_settings() -> PersistentSettings:
         max_stars=int(payload.get("max_stars", DEFAULT_MAX_STARS)),
         max_quads_per_tile=int(payload.get("max_quads_per_tile", DEFAULT_MAX_QUADS_PER_TILE)),
         sample_fits=payload.get("sample_fits"),
+        blind_max_stars=int(payload.get("blind_max_stars", 800)),
+        blind_max_quads=int(payload.get("blind_max_quads", 12000)),
+        blind_max_candidates=int(payload.get("blind_max_candidates", 12)),
+        blind_pixel_tolerance=float(payload.get("blind_pixel_tolerance", 3.0)),
+        blind_quality_inliers=int(payload.get("blind_quality_inliers", 12)),
+        blind_quality_rms=float(payload.get("blind_quality_rms", 1.0)),
+        blind_fast_mode=bool(payload.get("blind_fast_mode", False)),
     )
 
 
@@ -1080,6 +1116,29 @@ class ImageSolver:
                     "ok" if m.exists() else "missing",
                     "ok" if s.exists() else "missing",
                 )
+                # Sanity-check: detect rings with mostly-empty tiles
+                try:
+                    health = validate_zeblind_index(root)
+                    tiles = int(health.get("manifest_tile_count", 0) or 0)
+                    empty = int(health.get("empty_tiles_total", 0) or 0)
+                    ratio = float(health.get("empty_ratio_overall", 0.0) or 0.0)
+                    rings = health.get("bad_empty_rings") or []
+                    ring_str = ",".join(str(r) for r in rings) if rings else "-"
+                    logging.info(
+                        "Blind index health: %d/%d empty tiles (%.1f%%); affected rings: %s",
+                        empty,
+                        tiles,
+                        100.0 * ratio,
+                        ring_str,
+                    )
+                    if rings:
+                        logging.warning(
+                            "Index appears incomplete (rings %s mostly empty). Rebuild the index to populate missing tiles.",
+                            ring_str,
+                        )
+                except Exception:
+                    # Non-fatal
+                    pass
             except Exception:
                 # Non-fatal; proceed to solver which will report a clear error
                 pass
@@ -1468,6 +1527,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                         mag_cap=self.mag_cap,
                         max_stars=self.max_stars,
                         max_quads_per_tile=self.max_quads_per_tile,
+                        skip_quads=True,
                     )
                     msg = f"Index built: {manifest}"
                     self.log.emit(msg)
@@ -1499,6 +1559,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                                 level.name,
                                 max_quads_per_tile=self.max_quads_per_tile,
                                 on_progress=_cb,
+                                workers=max(1, (os.cpu_count() or 1) // 2),
                             )
                             done = f"Built quad table: {built}"
                             self.log.emit(done)
@@ -1534,34 +1595,65 @@ def launch_gui(args: argparse.Namespace) -> int:
         log = QtCore.Signal(str)
         finished = QtCore.Signal(bool, str)
 
-        def __init__(self, fits_path: str, index_root: str) -> None:
+        def __init__(self, fits_path: str, index_root: str, blind_config: Optional[BlindSolveConfig] = None) -> None:
             super().__init__()
             self.fits_path = fits_path
             self.index_root = index_root
+            self._config = blind_config
 
         def run(self) -> None:
+            # Forward Python logging to GUI log during blind run (like index builder)
+            class _ForwardLogHandler(logging.Handler):
+                def __init__(self, sink):
+                    super().__init__(level=logging.INFO)
+                    self._sink = sink
+                def emit(self, record: logging.LogRecord) -> None:
+                    try:
+                        msg = self.format(record)
+                    except Exception:
+                        msg = record.getMessage()
+                    self._sink.emit(msg)
+            handler = _ForwardLogHandler(self.log)
+            handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
+            root_logger = logging.getLogger()
+            root_logger.addHandler(handler)
+            prev_level = root_logger.level
+            root_logger.setLevel(logging.INFO)
             try:
-                config = BlindSolveConfig(
-                    max_candidates=12,
-                    max_stars=800,
-                    max_quads=12000,
-                    sip_order=2,
-                    quality_rms=1.0,
-                    quality_inliers=60,
+                config = self._config or BlindSolveConfig()
+                self.log.emit(f"Starting blind solve for {Path(self.fits_path).name}…")
+                result = blind_solve(
+                    self.fits_path,
+                    self.index_root,
+                    config=config,
+                    log=self.log.emit,
+                    skip_if_valid=False,
                 )
-                solution = python_solve_blind(self.fits_path, self.index_root, config=config)
-                if solution.success:
-                    rms = solution.stats.get("rms_px")
-                    msg = f"Blind solve succeeded (rms={rms:.2f} px)" if isinstance(rms, (int, float)) else "Blind solve succeeded"
+                if result["success"]:
+                    kw = result.get("updated_keywords", {}) or {}
+                    rms = kw.get("RMS_PX") or kw.get("RMSPX")
+                    inl = kw.get("N_INLIERS") or kw.get("INLIERS")
+                    if isinstance(rms, (int, float)) and isinstance(inl, (int, float)):
+                        msg = f"Blind solve succeeded (rms={float(rms):.2f} px, inliers={int(inl)})"
+                    elif isinstance(rms, (int, float)):
+                        msg = f"Blind solve succeeded (rms={float(rms):.2f} px)"
+                    else:
+                        msg = result.get("message") or "Blind solve succeeded"
                     self.log.emit(msg)
                     self.finished.emit(True, msg)
                 else:
-                    message = solution.message or "no valid solution"
+                    message = result.get("message") or "no valid solution"
                     self.log.emit(f"Blind solve failed: {message}")
                     self.finished.emit(False, message)
             except Exception as exc:
                 self.log.emit(f"Blind solve error: {exc}")
                 self.finished.emit(False, str(exc))
+            finally:
+                try:
+                    root_logger.setLevel(prev_level)
+                    root_logger.removeHandler(handler)
+                except Exception:
+                    pass
 
     class NearRunner(QtCore.QThread):
         log = QtCore.Signal(str)
@@ -1780,6 +1872,55 @@ def launch_gui(args: argparse.Namespace) -> int:
             sample_layout.addWidget(self.settings_sample_browse)
             form.addRow(self.settings_sample_label, sample_row)
 
+            # Blind solver tuning group
+            self.blind_group = QtWidgets.QGroupBox()
+            self.blind_group.setTitle(self._text("settings_blind_group"))
+            blind_form = QtWidgets.QFormLayout(self.blind_group)
+            self.settings_blind_max_stars_label = QtWidgets.QLabel()
+            self.settings_blind_max_stars_spin = QtWidgets.QSpinBox()
+            self.settings_blind_max_stars_spin.setRange(100, 5000)
+            self.settings_blind_max_stars_spin.setValue(self._settings.blind_max_stars)
+            blind_form.addRow(self.settings_blind_max_stars_label, self.settings_blind_max_stars_spin)
+
+            self.settings_blind_max_quads_label = QtWidgets.QLabel()
+            self.settings_blind_max_quads_spin = QtWidgets.QSpinBox()
+            self.settings_blind_max_quads_spin.setRange(500, 100000)
+            self.settings_blind_max_quads_spin.setSingleStep(500)
+            self.settings_blind_max_quads_spin.setValue(self._settings.blind_max_quads)
+            blind_form.addRow(self.settings_blind_max_quads_label, self.settings_blind_max_quads_spin)
+
+            self.settings_blind_max_candidates_label = QtWidgets.QLabel()
+            self.settings_blind_max_candidates_spin = QtWidgets.QSpinBox()
+            self.settings_blind_max_candidates_spin.setRange(4, 64)
+            self.settings_blind_max_candidates_spin.setValue(self._settings.blind_max_candidates)
+            blind_form.addRow(self.settings_blind_max_candidates_label, self.settings_blind_max_candidates_spin)
+
+            self.settings_blind_pixel_tol_label = QtWidgets.QLabel()
+            self.settings_blind_pixel_tol_spin = QtWidgets.QDoubleSpinBox()
+            self.settings_blind_pixel_tol_spin.setRange(0.5, 10.0)
+            self.settings_blind_pixel_tol_spin.setDecimals(1)
+            self.settings_blind_pixel_tol_spin.setSingleStep(0.5)
+            self.settings_blind_pixel_tol_spin.setValue(self._settings.blind_pixel_tolerance)
+            blind_form.addRow(self.settings_blind_pixel_tol_label, self.settings_blind_pixel_tol_spin)
+
+            self.settings_blind_quality_inliers_label = QtWidgets.QLabel()
+            self.settings_blind_quality_inliers_spin = QtWidgets.QSpinBox()
+            self.settings_blind_quality_inliers_spin.setRange(4, 200)
+            self.settings_blind_quality_inliers_spin.setValue(self._settings.blind_quality_inliers)
+            blind_form.addRow(self.settings_blind_quality_inliers_label, self.settings_blind_quality_inliers_spin)
+
+            self.settings_blind_quality_rms_label = QtWidgets.QLabel()
+            self.settings_blind_quality_rms_spin = QtWidgets.QDoubleSpinBox()
+            self.settings_blind_quality_rms_spin.setRange(0.2, 5.0)
+            self.settings_blind_quality_rms_spin.setDecimals(2)
+            self.settings_blind_quality_rms_spin.setSingleStep(0.1)
+            self.settings_blind_quality_rms_spin.setValue(self._settings.blind_quality_rms)
+            blind_form.addRow(self.settings_blind_quality_rms_label, self.settings_blind_quality_rms_spin)
+            # Fast mode (S-only then fallback)
+            self.settings_blind_fast_check = QtWidgets.QCheckBox()
+            self.settings_blind_fast_check.setChecked(self._settings.blind_fast_mode)
+            blind_form.addRow(QtWidgets.QLabel(self._text("settings_blind_fast_label")), self.settings_blind_fast_check)
+
             button_row = QtWidgets.QHBoxLayout()
             self.settings_save_btn = QtWidgets.QPushButton()
             self.settings_save_btn.clicked.connect(self._on_save_settings_clicked)
@@ -1797,6 +1938,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.settings_log_view = QtWidgets.QPlainTextEdit()
             self.settings_log_view.setReadOnly(True)
             column.addLayout(form)
+            column.addWidget(self.blind_group)
             column.addLayout(button_row)
             self.settings_log_label = QtWidgets.QLabel()
             column.addWidget(self.settings_log_label)
@@ -1842,6 +1984,21 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.settings_max_stars_spin.setValue(settings.max_stars)
             self.settings_max_quads_spin.setValue(settings.max_quads_per_tile)
             self.settings_sample_edit.setText(settings.sample_fits or "")
+            # Blind group
+            if hasattr(self, 'settings_blind_max_stars_spin'):
+                self.settings_blind_max_stars_spin.setValue(settings.blind_max_stars)
+            if hasattr(self, 'settings_blind_max_quads_spin'):
+                self.settings_blind_max_quads_spin.setValue(settings.blind_max_quads)
+            if hasattr(self, 'settings_blind_max_candidates_spin'):
+                self.settings_blind_max_candidates_spin.setValue(settings.blind_max_candidates)
+            if hasattr(self, 'settings_blind_pixel_tol_spin'):
+                self.settings_blind_pixel_tol_spin.setValue(settings.blind_pixel_tolerance)
+            if hasattr(self, 'settings_blind_quality_inliers_spin'):
+                self.settings_blind_quality_inliers_spin.setValue(settings.blind_quality_inliers)
+            if hasattr(self, 'settings_blind_quality_rms_spin'):
+                self.settings_blind_quality_rms_spin.setValue(settings.blind_quality_rms)
+            if hasattr(self, 'settings_blind_fast_check'):
+                self.settings_blind_fast_check.setChecked(settings.blind_fast_mode)
 
         def _read_settings_from_ui(self) -> PersistentSettings:
             db_root = self.settings_db_edit.text().strip()
@@ -1857,12 +2014,52 @@ def launch_gui(args: argparse.Namespace) -> int:
                 max_stars=int(self.settings_max_stars_spin.value()),
                 max_quads_per_tile=int(self.settings_max_quads_spin.value()),
                 sample_fits=self.settings_sample_edit.text().strip() or None,
+                blind_max_stars=int(self.settings_blind_max_stars_spin.value()),
+                blind_max_quads=int(self.settings_blind_max_quads_spin.value()),
+                blind_max_candidates=int(self.settings_blind_max_candidates_spin.value()),
+                blind_pixel_tolerance=float(self.settings_blind_pixel_tol_spin.value()),
+                blind_quality_inliers=int(self.settings_blind_quality_inliers_spin.value()),
+                blind_quality_rms=float(self.settings_blind_quality_rms_spin.value()),
+                blind_fast_mode=bool(self.settings_blind_fast_check.isChecked()),
             )
 
         def _log_settings(self, message: str) -> None:
             timestamp = time.strftime("%H:%M:%S")
             self.settings_log_view.appendPlainText(f"[{timestamp}] {message}")
             # Avoid echoing into root logger (prevents feedback via the forwarding handler)
+
+        def _log_index_health(self, index_root_text: str) -> None:
+            try:
+                from zeblindsolver.quad_index_builder import validate_index
+                root = Path(index_root_text).expanduser().resolve()
+                health = validate_index(root)
+                tiles = int(health.get("manifest_tile_count", 0) or 0)
+                empty = int(health.get("empty_tiles_total", 0) or 0)
+                ratio = float(health.get("empty_ratio_overall", 0.0) or 0.0)
+                rings = health.get("bad_empty_rings") or []
+                ring_str = ",".join(str(r) for r in rings) if rings else "-"
+                if rings or ratio >= 0.20:
+                    self._log_settings(
+                        self._text(
+                            "settings_index_health_bad",
+                            tiles=tiles,
+                            empty=empty,
+                            percent=100.0 * ratio,
+                            rings=ring_str,
+                        )
+                    )
+                else:
+                    self._log_settings(
+                        self._text(
+                            "settings_index_health_ok",
+                            tiles=tiles,
+                            empty=empty,
+                            percent=100.0 * ratio,
+                        )
+                    )
+            except Exception:
+                # Non-fatal; keep UI responsive even if index is missing/broken
+                pass
 
         def _on_save_settings_clicked(self) -> None:
             try:
@@ -2007,9 +2204,22 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._settings = settings
             save_persistent_settings(settings)
             self.settings_run_blind_btn.setEnabled(False)
+            # Build blind config from settings
+            blind_cfg = BlindSolveConfig(
+                max_candidates=settings.blind_max_candidates,
+                max_stars=settings.blind_max_stars,
+                max_quads=settings.blind_max_quads,
+                sip_order=2,
+                quality_rms=settings.blind_quality_rms,
+                quality_inliers=settings.blind_quality_inliers,
+                pixel_tolerance=settings.blind_pixel_tolerance,
+                fast_mode=settings.blind_fast_mode,
+                log_level="INFO",
+            )
             self._blind_worker = BlindRunner(
                 fits_path=sample_path,
                 index_root=settings.index_root,
+                blind_config=blind_cfg,
             )
             self._blind_worker.log.connect(self._log_settings)
             self._blind_worker.finished.connect(self._on_blind_finished)
@@ -2044,6 +2254,12 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _on_index_finished(self, success: bool, message: str) -> None:
             status = "ok" if success else "failed"
             self._log_settings(self._text("settings_index_result", status=status, message=message))
+            # Surface index health after a build/rebuild completes
+            try:
+                if success:
+                    self._log_index_health(self.settings_index_edit.text().strip())
+            except Exception:
+                pass
             self.settings_build_btn.setEnabled(True)
             if hasattr(self, 'settings_run_blind_btn'):
                 self.settings_run_blind_btn.setEnabled(True)
@@ -2180,6 +2396,20 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_max_stars_label.setText(self._text("settings_max_stars_label"))
             if hasattr(self, "settings_max_quads_label"):
                 self.settings_max_quads_label.setText(self._text("settings_max_quads_label"))
+            if hasattr(self, "blind_group"):
+                self.blind_group.setTitle(self._text("settings_blind_group"))
+            if hasattr(self, "settings_blind_max_stars_label"):
+                self.settings_blind_max_stars_label.setText(self._text("settings_blind_max_stars_label"))
+            if hasattr(self, "settings_blind_max_quads_label"):
+                self.settings_blind_max_quads_label.setText(self._text("settings_blind_max_quads_label"))
+            if hasattr(self, "settings_blind_max_candidates_label"):
+                self.settings_blind_max_candidates_label.setText(self._text("settings_blind_max_candidates_label"))
+            if hasattr(self, "settings_blind_pixel_tol_label"):
+                self.settings_blind_pixel_tol_label.setText(self._text("settings_blind_pixel_tol_label"))
+            if hasattr(self, "settings_blind_quality_inliers_label"):
+                self.settings_blind_quality_inliers_label.setText(self._text("settings_blind_quality_inliers_label"))
+            if hasattr(self, "settings_blind_quality_rms_label"):
+                self.settings_blind_quality_rms_label.setText(self._text("settings_blind_quality_rms_label"))
             if hasattr(self, "settings_sample_label"):
                 self.settings_sample_label.setText(self._text("settings_sample_label"))
                 self.settings_sample_browse.setText(browse_label)
@@ -2236,6 +2466,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 index_root = str(cli_args.blind_index)
                 self._settings.index_root = index_root
                 self.settings_index_edit.setText(index_root)
+                # Perform a quick sanity-check and surface advice in the settings log
+                self._log_index_health(index_root)
             if cli_args.input_dir:
                 self.input_edit.setText(str(cli_args.input_dir))
                 QtCore.QTimer.singleShot(100, self.scan_files)

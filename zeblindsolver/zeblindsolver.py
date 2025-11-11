@@ -15,10 +15,11 @@ from astropy.wcs import WCS
 from .asterisms import hash_quads, sample_quads
 from .candidate_search import tally_candidates
 from .image_prep import build_pyramid, read_fits_as_luma, remove_background
+from .fits_utils import parse_angle
 from .matcher import SimilarityStats, SimilarityTransform, estimate_similarity_RANSAC
 from .matcher import _derive_similarity  # quad-based hypothesis helper
 from .quad_index_builder import QuadIndex, load_manifest, lookup_hashes
-from .levels import LEVEL_MAP
+from .levels import LEVEL_MAP, QuadLevelSpec
 from .star_detect import detect_stars
 from .verify import validate_solution
 from .wcs_fit import fit_wcs_sip, fit_wcs_tan, needs_sip, tan_from_similarity
@@ -51,6 +52,7 @@ class SolveConfig:
     log_level: str = "INFO"
     verbose: bool = False
     try_parity_flip: bool = True
+    fast_mode: bool = False
 
 
 @dataclass
@@ -101,10 +103,11 @@ def _collect_tile_matches(
             if slc.start == slc.stop:
                 continue
             obs_combo = observed_quads[idx]
-            # Skip excessively large buckets (too ambiguous)
-            if getattr(index, "bucket_cap", 0) and (slc.stop - slc.start) > index.bucket_cap:
-                continue
-            for bucket in range(slc.start, slc.stop):
+            # Do not skip large buckets outright; cap per-bucket iterations to bound work
+            per_bucket_cap = 4096
+            for off, bucket in enumerate(range(slc.start, slc.stop)):
+                if off >= per_bucket_cap:
+                    break
                 if int(index.tile_indices[bucket]) != tile_index:
                     continue
                 tile_combo = index.quad_indices[bucket]
@@ -113,19 +116,22 @@ def _collect_tile_matches(
     if not votes:
         empty = np.empty((0, 2), dtype=np.float32)
         return empty, empty, empty
-    # Determine a minimal vote threshold adaptively; at least 2.
+    # Determine a minimal vote threshold adaptively; allow 1 to seed hypotheses.
     counts = np.array(list(votes.values()), dtype=int)
-    # use percentile to drop the long tail of singletons
-    thr = max(2, int(np.percentile(counts, 60)))
+    # Use a moderate percentile to keep plausible pairs; too high discards signal.
+    thr = max(1, int(np.percentile(counts, 40)))
     pairs = [(i, t, c) for (i, t), c in votes.items() if c >= thr]
     if not pairs:
         # fallback: keep top-N by votes
-        top = sorted(votes.items(), key=lambda kv: kv[1], reverse=True)[: max(50, int(len(votes) * 0.05))]
+        top = sorted(votes.items(), key=lambda kv: kv[1], reverse=True)[: max(200, int(len(votes) * 0.1))]
         pairs = [(i, t, c) for (i, t), c in top]
     pairs.sort(key=lambda itc: itc[2], reverse=True)
-    img_pts = np.array([image_positions[i] for i, _, _ in pairs], dtype=np.float32)
-    tile_pts = np.array([tile_positions[t] for _, t, _ in pairs], dtype=np.float32)
-    world_pts = np.array([tile_world[t] for _, t, _ in pairs], dtype=np.float32)
+    # Cap pairs to bound runtime but keep enough support for RANSAC
+    cap = min(len(pairs), max(800, int(image_positions.shape[0] * 12)))
+    chosen = pairs[:cap]
+    img_pts = np.array([image_positions[i] for i, _, _ in chosen], dtype=np.float32)
+    tile_pts = np.array([tile_positions[t] for _, t, _ in chosen], dtype=np.float32)
+    world_pts = np.array([tile_world[t] for _, t, _ in chosen], dtype=np.float32)
     return img_pts, tile_pts, world_pts
 
 
@@ -144,6 +150,9 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
     index_root = Path(index_root).expanduser().resolve()
     manifest = load_manifest(index_root)
     levels = [level["name"] for level in manifest.get("levels", [])] or ["L", "M", "S"]
+    # Prefer trying smaller-diameter levels first for selectivity
+    pref = ("S", "M", "L")
+    levels = [lvl for lvl in pref if lvl in levels] + [lvl for lvl in levels if lvl not in pref]
     # Preflight: ensure there is at least one quad hash table present.
     ht_root = index_root / "hash_tables"
     present_levels = [lvl for lvl in levels if (ht_root / f"quads_{lvl}.npz").exists()]
@@ -174,11 +183,53 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
     tile_entries = manifest.get("tiles", [])
     tile_map = {entry["tile_key"]: idx for idx, entry in enumerate(tile_entries)}
     logging.getLogger().setLevel(config.log_level)
+    # Optional: use RA/DEC metadata (if present) to prioritize nearby tiles
+    preferred_tile_from_header: str | None = None
+    ra_hint = None
+    dec_hint = None
+    try:
+        hdr = fits.getheader(input_fits)
+        ra0 = parse_angle(hdr.get("RA") or hdr.get("OBJCTRA") or hdr.get("OBJRA") or hdr.get("OBJ_RA") or hdr.get("CRVAL1"), is_ra=True)
+        dec0 = parse_angle(hdr.get("DEC") or hdr.get("OBJCTDEC") or hdr.get("OBJDEC") or hdr.get("OBJ_DEC") or hdr.get("CRVAL2"), is_ra=False)
+        if ra0 is not None and dec0 is not None and tile_entries:
+            ra_hint, dec_hint = float(ra0), float(dec0)
+            # pick manifest tile whose center is closest to the metadata position
+            import math
+            def ang_sep(ra1, dec1, ra2, dec2):
+                ra1, ra2 = math.radians(ra1), math.radians(ra2)
+                d1, d2 = math.radians(dec1), math.radians(dec2)
+                return math.degrees(math.acos(max(-1.0, min(1.0, math.sin(d1)*math.sin(d2)+math.cos(d1)*math.cos(d2)*math.cos(ra1-ra2)))))
+            best_key = None
+            best_dist = 1e9
+            for entry in tile_entries:
+                tra = float(entry.get("center_ra_deg", 0.0))
+                tdec = float(entry.get("center_dec_deg", 0.0))
+                d = ang_sep(ra0, dec0, tra, tdec)
+                if d < best_dist:
+                    best_dist = d
+                    best_key = str(entry.get("tile_key"))
+            preferred_tile_from_header = best_key
+    except Exception:
+        preferred_tile_from_header = None
     stage = time.time()
     image = read_fits_as_luma(input_fits)
+    height, width = image.shape
+    # Estimate pixel scale (deg/px) if header contains optical info
+    try:
+        with fits.open(input_fits, mode="readonly", memmap=False) as _hdul_tmp:
+            _hdr2 = _hdul_tmp[0].header
+    except Exception:
+        _hdr2 = None
+    approx_scale_deg = None
+    if _hdr2 is not None:
+        from .fits_utils import estimate_scale_and_fov as _est_scale
+        scale_arcsec, _ = _est_scale(_hdr2, width, height)
+        if scale_arcsec:
+            approx_scale_deg = float(scale_arcsec) / 3600.0
     _log_phase("read image", stage)
     stage = time.time()
-    image = remove_background(image)
+    # Use a smaller median kernel for speed on typical Seestar frames
+    image = remove_background(image, kernel_size=15)
     pyramid = build_pyramid(image)
     _log_phase("preprocess", stage)
     detection = pyramid[-1]
@@ -217,26 +268,83 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
         prioritized.extend((key, value) for key, value in candidates if key not in {preferred})
         return prioritized
 
+    def _spec_pixels(level_name: str) -> QuadLevelSpec | None:
+        if approx_scale_deg is None:
+            return None
+        spec = LEVEL_MAP.get(level_name)
+        if spec is None:
+            return None
+        s = max(approx_scale_deg, 1e-8)
+        # Convert deg thresholds to pixel thresholds; be permissive on the lower bound
+        # to avoid discarding valid image quads. Keep only upper bounds as guidance.
+        min_area_px = 0.0
+        max_area_px = spec.max_area / (s * s)
+        min_diam_px = None
+        max_diam_px = None if spec.max_diameter is None else spec.max_diameter / s
+        return QuadLevelSpec(
+            name=spec.name,
+            min_area=float(min_area_px),
+            max_area=float(max_area_px),
+            min_diameter=min_diam_px,
+            max_diameter=max_diam_px,
+            bucket_cap=spec.bucket_cap,
+        )
+
+    # Precompute observed hashes per level with pixel-adapted specs when possible
+    obs_by_level: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    for lvl in levels:
+        px = _spec_pixels(lvl)
+        if px is None:
+            # fallback to unfiltered
+            obs_by_level[lvl] = (obs_hash.hashes, obs_hash.indices)
+        else:
+            oh = hash_quads(quads, image_positions, spec=px)
+            obs_by_level[lvl] = (oh.hashes, oh.indices)
+
     def _attempt_level(
         level_name: str,
         hashes: np.ndarray,
         preferred_tile: str | None,
         parity_label: str,
+        *,
+        use_px_spec: bool = True,
+        use_ra_filter: bool = True,
+        agg_levels: Iterable[str] | None = None,
     ) -> WcsSolution | None:
-        # Re-hash observed quads with level-specific spec to reduce collisions
-        level_spec = LEVEL_MAP.get(level_name)
-        if level_spec is not None:
-            obs_level = hash_quads(quads, image_positions, spec=level_spec)
-            level_hashes = obs_level.hashes
-            level_quads = obs_level.indices
+        # Use precomputed observed quads for this level (optionally bypassing px filters)
+        if use_px_spec:
+            level_hashes, level_quads = obs_by_level.get(level_name, (obs_hash.hashes, obs_hash.indices))
         else:
-            level_hashes = hashes
-            level_quads = obs_hash.indices
+            level_hashes, level_quads = (obs_hash.hashes, obs_hash.indices)
         candidates = tally_candidates(level_hashes, index_root, levels=[level_name])
         if not candidates:
             logger.debug("level %s produced no candidates (parity=%s)", level_name, parity_label)
             return None
         ordered = _prioritize_candidates(candidates, preferred_tile)
+        # If we have RA/DEC hint, ignore far tiles to speed up and reduce false tries
+        if use_ra_filter and ra_hint is not None and dec_hint is not None:
+            import math
+            def ang_sep(ra1, dec1, ra2, dec2):
+                ra1, ra2 = math.radians(ra1), math.radians(ra2)
+                d1, d2 = math.radians(dec1), math.radians(dec2)
+                return math.degrees(math.acos(max(-1.0, min(1.0, math.sin(d1)*math.sin(d2)+math.cos(d1)*math.cos(d2)*math.cos(ra1-ra2)))))
+            # derive a radius from approximate FOV if available; otherwise 5°
+            approx_fov = None
+            if approx_scale_deg is not None:
+                approx_fov = float(approx_scale_deg) * max(image.shape)
+            radius_limit = min(8.0, max(5.0, (approx_fov or 1.5) * 3.0))
+            filtered: list[tuple[str, int]] = []
+            for key, score in ordered:
+                idx = tile_map.get(key)
+                if idx is None:
+                    continue
+                entry = tile_entries[idx]
+                tra = float(entry.get("center_ra_deg", ra_hint))
+                tdec = float(entry.get("center_dec_deg", dec_hint))
+                if ang_sep(ra_hint, dec_hint, tra, tdec) <= radius_limit:
+                    filtered.append((key, score))
+            if filtered:
+                ordered = filtered
         logger.info(
             "level %s (parity=%s) candidate search returned %d candidate(s)",
             level_name,
@@ -259,16 +367,35 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
                 tile_positions, tile_world = _load_tile_positions(index_root, tile_entry)
             except FileNotFoundError:
                 continue
-            img_points, tile_points, tile_world_matches = _collect_tile_matches(
-                index_root,
-                (level_name,),
-                tile_index,
-                level_hashes,
-                level_quads,
-                image_positions,
-                tile_positions,
-                tile_world,
-            )
+            # Build matches by aggregating across available levels to boost support
+            img_list: list[np.ndarray] = []
+            tile_list: list[np.ndarray] = []
+            world_list: list[np.ndarray] = []
+            levels_to_use = list(agg_levels) if agg_levels is not None else list(levels)
+            for lvl in levels_to_use:
+                ohashes, oquads = (obs_by_level[lvl] if use_px_spec else (obs_hash.hashes, obs_hash.indices))
+                ip, tp, wp = _collect_tile_matches(
+                    index_root,
+                    (lvl,),
+                    tile_index,
+                    ohashes,
+                    oquads,
+                    image_positions,
+                    tile_positions,
+                    tile_world,
+                )
+                if ip.size:
+                    img_list.append(ip)
+                    tile_list.append(tp)
+                    world_list.append(wp)
+            if img_list:
+                img_points = np.vstack(img_list)
+                tile_points = np.vstack(tile_list)
+                tile_world_matches = np.vstack(world_list)
+            else:
+                img_points = np.empty((0, 2), dtype=np.float32)
+                tile_points = np.empty((0, 2), dtype=np.float32)
+                tile_world_matches = np.empty((0, 2), dtype=np.float32)
             if img_points.shape[0] < 4:
                 continue
             # Try quad-based hypotheses first (local, stable scale) then fall back to RANSAC
@@ -282,7 +409,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
                 best = None
                 best_inliers = -1
                 tested = 0
-                max_buckets = 2000
+                # Cap buckets per candidate tile to keep runtime reasonable
+                max_buckets = 800
                 src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
                 dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
                 for idx2, slc in enumerate(slices):
@@ -335,6 +463,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
                     tile_points,
                     trials=2000,
                     tol_px=config.pixel_tolerance,
+                    min_inliers=4,
+                    allow_reflection=bool(config.try_parity_flip),
                 )
             if transform_result is None:
                 continue
@@ -391,15 +521,28 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
                 tile_center=(float(tile_entry.get("center_ra_deg", 0.0)), float(tile_entry.get("center_dec_deg", 0.0))),
             )
             matches_array = _build_matches_array(img_in, world_in)
-            stats = validate_solution(wcs, matches_array, thresholds)
+            # Adapt inlier requirement to available matches (no hardcoded floor);
+            # let the user-configured quality_inliers cap the requirement.
+            n_pairs = int(matches_array.shape[0])
+            adaptive_inliers = min(
+                int(config.quality_inliers),
+                max(2, int(0.4 * max(0, n_pairs))),
+            )
+            th_local = {"rms_px": float(config.quality_rms), "inliers": adaptive_inliers}
+            stats = validate_solution(wcs, matches_array, th_local)
             final_wcs = wcs
             final_stats = stats
             sip_used = 0
-            fov_deg = float(np.hypot(*tile_positions.ptp(axis=0))) if tile_positions.size else 0.0
+            # NumPy 2.0 removed ndarray.ptp; use np.ptp(array, axis=...) instead
+            fov_deg = float(np.hypot(*np.ptp(tile_positions, axis=0))) if tile_positions.size else 0.0
             if final_stats.get("quality") == "GOOD" and needs_sip(final_wcs, final_stats, fov_deg):
                 for order in range(2, config.sip_order + 1):
-                    candidate_wcs, _ = fit_wcs_sip(matches_array, order=order)
-                    candidate_stats = validate_solution(candidate_wcs, matches_array, thresholds)
+                    try:
+                        candidate_wcs, _ = fit_wcs_sip(matches_array, order=order)
+                    except Exception as exc:
+                        logger.info("SIP fit failed (order=%d): %s", order, exc)
+                        continue
+                    candidate_stats = validate_solution(candidate_wcs, matches_array, th_local)
                     if candidate_stats["rms_px"] < final_stats["rms_px"]:
                         final_wcs = candidate_wcs
                         final_stats = candidate_stats
@@ -408,23 +551,27 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
                         break
             stats = final_stats
             if stats.get("quality") != "GOOD":
-                logger.debug(
-                    "validation failed for tile %s (level=%s, parity=%s): %s",
+                logger.info(
+                    "validation failed: tile=%s level=%s parity=%s rms=%.3f inliers=%d pairs=%d",
                     candidate_key,
                     level_name,
                     parity_label,
-                    stats,
+                    float(stats.get("rms_px", float("inf"))),
+                    int(stats.get("inliers", 0)),
+                    int(matches_array.shape[0]),
                 )
                 continue
             header_updates = {
                 "SOLVED": 1,
                 "DBSET": tile_entry.get("family"),
                 "TILE_ID": tile_entry.get("tile_key"),
-                "RMS_PX": stats["rms_px"],
-                "N_INLIERS": stats["inliers"],
-                "SIP_ORDER": sip_used,
+                "RMSPX": stats["rms_px"],
+                "INLIERS": stats["inliers"],
+                "SIPORD": sip_used,
                 "QUALITY": stats["quality"],
                 "USED_DB": tile_entry.get("family"),
+                "SOLVER": "ZeSolver",
+                "SOLVMODE": "BLIND",
             }
             return WcsSolution(
                 True,
@@ -436,9 +583,16 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
             )
         return None
 
-    def _run_levels(hashes: np.ndarray, parity_label: str) -> WcsSolution | None:
+    def _run_levels(
+        hashes: np.ndarray,
+        parity_label: str,
+        *,
+        use_px_spec: bool = True,
+        use_ra_filter: bool = True,
+        levels_seq: list[str] | None = None,
+    ) -> WcsSolution | None:
         best: WcsSolution | None = None
-        preferred_tile: str | None = None
+        preferred_tile: str | None = preferred_tile_from_header
 
         def _is_better(solution: WcsSolution, current: WcsSolution | None) -> bool:
             if current is None:
@@ -451,11 +605,19 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
             cur_rms = current.stats.get("rms_px", float("inf"))
             return new_rms < cur_rms
 
-        for level_name in levels:
-            solution = _attempt_level(level_name, hashes, preferred_tile, parity_label)
+        cur_levels = levels if levels_seq is None else levels_seq
+        for level_name in cur_levels:
+            solution = _attempt_level(
+                level_name,
+                hashes,
+                preferred_tile,
+                parity_label,
+                use_px_spec=use_px_spec,
+                use_ra_filter=use_ra_filter,
+                agg_levels=cur_levels,
+            )
+            # Do not bail out early if the first level fails; try remaining levels (e.g., M/S)
             if solution is None:
-                if best is None:
-                    return None
                 continue
             if _is_better(solution, best):
                 best = solution
@@ -467,9 +629,48 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
     if config.try_parity_flip:
         variants.append((obs_hash.hashes ^ 1, "mirror"))
     best_solution: WcsSolution | None = None
+    levels_all = list(levels)
+    levels_fast = [lvl for lvl in ("S",) if lvl in levels_all]
     for variant_hashes, parity_label in variants:
         logger.info("starting candidate search (parity=%s)", parity_label)
-        best_solution = _run_levels(variant_hashes, parity_label)
+        # Fast mode: try S only first (guided then relaxed)
+        if config.fast_mode and levels_fast:
+            best_solution = _run_levels(
+                variant_hashes,
+                parity_label,
+                use_px_spec=True,
+                use_ra_filter=True,
+                levels_seq=levels_fast,
+            )
+            if not best_solution:
+                logger.info("no solution in guided mode; retrying relaxed search (parity=%s)", parity_label)
+                best_solution = _run_levels(
+                    variant_hashes,
+                    parity_label,
+                    use_px_spec=False,
+                    use_ra_filter=False,
+                    levels_seq=levels_fast,
+                )
+            if best_solution:
+                best_solution.message += f" (parity={parity_label})"
+                break
+        # Full run
+        best_solution = _run_levels(
+            variant_hashes,
+            parity_label,
+            use_px_spec=True,
+            use_ra_filter=True,
+            levels_seq=levels_all,
+        )
+        if not best_solution:
+            logger.info("no solution in guided mode; retrying relaxed search (parity=%s)", parity_label)
+            best_solution = _run_levels(
+                variant_hashes,
+                parity_label,
+                use_px_spec=False,
+                use_ra_filter=False,
+                levels_seq=levels_all,
+            )
         if best_solution:
             best_solution.message += f" (parity={parity_label})"
             break
@@ -478,7 +679,7 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
         return WcsSolution(False, "no valid solution", None, {}, None, {})
     header_updates = {
         **best_solution.header_updates,
-        "BLIND_VER": ZEBLIND_VERSION,
+        "BLINDVER": ZEBLIND_VERSION,
     }
     with fits.open(input_fits, mode="update", memmap=False) as hdul:
         header = hdul[0].header
@@ -486,7 +687,7 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
             header[key] = value
         for key, value in header_updates.items():
             header[key] = value
-        header["ZEBLINDVER"] = ZEBLIND_VERSION
+        header["ZBLNDVER"] = ZEBLIND_VERSION
         hdul.flush()
     logger.info(
         "blind solve succeeded (tile=%s, rms=%.3f px, inliers=%d)",
