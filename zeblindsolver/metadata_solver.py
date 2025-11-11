@@ -4,6 +4,8 @@ import logging
 import math
 import time
 from dataclasses import dataclass
+from collections import OrderedDict
+import threading
 from pathlib import Path
 from typing import Iterable, Optional, Callable
 
@@ -55,6 +57,14 @@ class NearSolveConfig:
     # - fov_override_deg: override approximate FOV when estimating search radius; 0/None → auto
     family: str | None = None
     fov_override_deg: float | None = None
+    # Performance tuning
+    # - max_tile_candidates: cap how many intersecting tiles to consider per image
+    # - tile_cache_size: LRU size for cached tile blobs (RA/DEC/MAG arrays)
+    max_tile_candidates: int = _MAX_TILE_CANDIDATES
+    tile_cache_size: int = 128
+    # Star detection compute backend
+    detect_backend: str = "auto"  # "auto" | "cpu" | "cuda"
+    detect_device: int | None = None
 
 
 def _failure(message: str) -> WcsSolution:
@@ -105,7 +115,7 @@ def _tile_intersects(entry: dict, ra0: float, dec0: float, radius: float) -> tup
     return distance <= radius + extent, distance
 
 
-def _select_tiles(manifest: dict, ra0: float, dec0: float, radius: float) -> list[dict]:
+def _select_tiles(manifest: dict, ra0: float, dec0: float, radius: float, limit: int) -> list[dict]:
     tiles = manifest.get("tiles", [])
     selected: list[tuple[dict, float]] = []
     for entry in tiles:
@@ -114,7 +124,75 @@ def _select_tiles(manifest: dict, ra0: float, dec0: float, radius: float) -> lis
             continue
         selected.append((entry, distance))
     selected.sort(key=lambda item: item[1])
-    return [entry for entry, _ in selected[: _MAX_TILE_CANDIDATES]]
+    cap = max(1, int(limit)) if isinstance(limit, int) else _MAX_TILE_CANDIDATES
+    return [entry for entry, _ in selected[:cap]]
+
+# In-process LRU cache for tile RA/DEC/MAG arrays across images.
+_TILE_RAW_CACHE: "OrderedDict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]" = OrderedDict()
+_TILE_RAW_CACHE_LOCK = threading.Lock()
+_TILE_RAW_CACHE_CAP = 128
+
+
+def _tile_path_from_entry(index_root: Path, entry: dict) -> Path:
+    rel = str(entry.get("tile_file", "")).replace("\\", "/")
+    return index_root / rel
+
+
+def _get_tile_raw_arrays(
+    index_root: Path,
+    entry: dict,
+    *,
+    db_root: Path | None,
+    cache_cap: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    global _TILE_RAW_CACHE_CAP
+    if cache_cap and cache_cap != _TILE_RAW_CACHE_CAP:
+        _TILE_RAW_CACHE_CAP = max(1, int(cache_cap))
+    tile_path = _tile_path_from_entry(index_root, entry)
+    key = str(tile_path.resolve())
+    with _TILE_RAW_CACHE_LOCK:
+        cached = _TILE_RAW_CACHE.get(key)
+        if cached is not None:
+            _TILE_RAW_CACHE.pop(key)
+            _TILE_RAW_CACHE[key] = cached
+            return cached
+    ra = dec = mag = None
+    if tile_path.exists():
+        try:
+            with np.load(tile_path) as data:
+                ra = data.get("ra_deg")
+                dec = data.get("dec_deg")
+                mag = data.get("mag")
+                if ra is not None:
+                    ra = ra.astype(np.float64, copy=False)
+                if dec is not None:
+                    dec = dec.astype(np.float64, copy=False)
+                if mag is not None:
+                    mag = mag.astype(np.float32, copy=False)
+        except Exception:
+            ra = dec = mag = None
+    if (ra is None or dec is None or mag is None or ra.size == 0 or dec.size == 0) and db_root is not None:
+        try:
+            fam = str(entry.get("family") or "").strip().lower() or None
+            db = CatalogDB(db_root, families=[fam] if fam else None)
+            target_code = str(entry.get("tile_code") or "")
+            for tile in db.tiles:
+                if tile.tile_code == target_code and (fam is None or tile.spec.key == fam):
+                    block = db._load_tile(tile)
+                    stars = block.stars
+                    ra = stars["ra_deg"].astype(np.float64, copy=False)
+                    dec = stars["dec_deg"].astype(np.float64, copy=False)
+                    mag = stars["mag"].astype(np.float32, copy=False)
+                    break
+        except Exception:
+            ra = dec = mag = None
+    if ra is None or dec is None or mag is None:
+        raise FileNotFoundError(tile_path)
+    with _TILE_RAW_CACHE_LOCK:
+        _TILE_RAW_CACHE[key] = (ra, dec, mag)
+        while len(_TILE_RAW_CACHE) > _TILE_RAW_CACHE_CAP:
+            _TILE_RAW_CACHE.popitem(last=False)
+        return _TILE_RAW_CACHE[key]
 
 
 def _extract_angle(header: fits.Header, keys: Iterable[str], *, is_ra: bool) -> Optional[float]:
@@ -134,43 +212,9 @@ def _load_tile_catalog(
     dec0: float,
     *,
     db_root: Path | None = None,
+    cache_cap: int = _TILE_RAW_CACHE_CAP,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    rel = str(entry.get("tile_file", "")).replace("\\", "/")
-    tile_path = index_root / rel
-    ra = dec = mag = None
-    if tile_path.exists():
-        try:
-            with np.load(tile_path) as data:
-                ra = data.get("ra_deg")
-                dec = data.get("dec_deg")
-                mag = data.get("mag")
-                if ra is not None:
-                    ra = ra.astype(np.float64, copy=False)
-                if dec is not None:
-                    dec = dec.astype(np.float64, copy=False)
-                if mag is not None:
-                    mag = mag.astype(np.float32, copy=False)
-        except Exception:
-            ra = dec = mag = None
-    # Fallback: read directly from the ASTAP DB if the tile blob is missing or empty
-    if (ra is None or dec is None or mag is None or ra.size == 0 or dec.size == 0) and db_root is not None:
-        try:
-            fam = str(entry.get("family") or "").strip().lower() or None
-            db = CatalogDB(db_root, families=[fam] if fam else None)
-            target_code = str(entry.get("tile_code") or "")
-            ra = dec = mag = None
-            for tile in db.tiles:
-                if tile.tile_code == target_code and (fam is None or tile.spec.key == fam):
-                    block = db._load_tile(tile)
-                    stars = block.stars
-                    ra = stars["ra_deg"].astype(np.float64, copy=False)
-                    dec = stars["dec_deg"].astype(np.float64, copy=False)
-                    mag = stars["mag"].astype(np.float32, copy=False)
-                    break
-        except Exception:
-            ra = dec = mag = None
-    if ra is None or dec is None or mag is None:
-        raise FileNotFoundError(tile_path)
+    ra, dec, mag = _get_tile_raw_arrays(index_root, entry, db_root=db_root, cache_cap=cache_cap)
     x_deg, y_deg = project_tan(ra, dec, ra0, dec0)
     mask = np.isfinite(x_deg) & np.isfinite(y_deg)
     if not mask.any():
@@ -336,7 +380,7 @@ def solve_near(
     )
     if cancel_check and cancel_check():
         return _failure("cancelled")
-    candidates = _select_tiles(manifest, ra0, dec0, radius)
+    candidates = _select_tiles(manifest, ra0, dec0, radius, cfg.max_tile_candidates)
     if not candidates:
         return _failure("manifest present but no tile intersects the metadata cone")
     catalog_positions: list[np.ndarray] = []
@@ -353,7 +397,14 @@ def solve_near(
         if cancel_check and cancel_check():
             return _failure("cancelled")
         try:
-            positions, world, mags = _load_tile_catalog(index_path, entry, ra0, dec0, db_root=db_root_path)
+            positions, world, mags = _load_tile_catalog(
+                index_path,
+                entry,
+                ra0,
+                dec0,
+                db_root=db_root_path,
+                cache_cap=cfg.tile_cache_size,
+            )
         except FileNotFoundError:
             missing_tiles.append(str(entry.get("tile_file")))
             continue
@@ -377,7 +428,11 @@ def solve_near(
         cat_mags = cat_mags[keep]
     if cancel_check and cancel_check():
         return _failure("cancelled")
-    stars = detect_stars(image)
+    stars = detect_stars(
+        image,
+        backend=str(getattr(cfg, "detect_backend", "auto") or "auto").lower(),
+        device=getattr(cfg, "detect_device", None),
+    )
     if stars.size == 0:
         return _failure("no stars detected in the frame")
     if cfg.max_img_stars and stars.size > cfg.max_img_stars:

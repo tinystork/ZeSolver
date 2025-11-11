@@ -169,6 +169,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "run_info_blind_failed": "Blind échec: {message}",
         "solver_tab": "Solveur",
         "settings_tab": "Réglages",
+        "performance_tab": "Performance",
         "settings_db_label": "Base ASTAP",
         "settings_index_label": "Dossier d'index",
         "settings_mag_label": "Magnitude max",
@@ -196,6 +197,9 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_blind_result": "Blind {status}: {message}",
         "settings_blind_fast_label": "Mode rapide (S-seul, fallback M/L)",
         "settings_near_result": "Near {status}: {message}",
+        "settings_perf_near_cache_label": "Cache tuiles (near)",
+        "settings_perf_near_max_tiles_label": "Tuiles candidates max (near)",
+        "settings_perf_detect_label": "Dispositif détection (GPU/CPU)",
         "settings_build_start": "Construction de l'index dans {path}… (cela peut prendre plusieurs minutes)",
         "settings_rebuild_title": "Reconstruire l'index ?",
         "settings_rebuild_text": "Un index existe déjà dans {path}. Le reconstruire ?",
@@ -257,6 +261,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "run_info_blind_failed": "Blind failed: {message}",
         "solver_tab": "Solver",
         "settings_tab": "Settings",
+        "performance_tab": "Performance",
         "settings_db_label": "ASTAP database",
         "settings_index_label": "Index root",
         "settings_mag_label": "Max magnitude",
@@ -284,6 +289,9 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_blind_result": "Blind {status}: {message}",
         "settings_blind_fast_label": "Fast mode (S-only, fallback M/L)",
         "settings_near_result": "Near {status}: {message}",
+        "settings_perf_near_cache_label": "Near tile cache",
+        "settings_perf_near_max_tiles_label": "Max tile candidates (near)",
+        "settings_perf_detect_label": "Star detection device",
         "settings_build_start": "Building index at {path}… (this may take several minutes)",
         "settings_rebuild_title": "Rebuild Index?",
         "settings_rebuild_text": "An index already exists at {path}. Rebuild it?",
@@ -309,6 +317,11 @@ class PersistentSettings:
     blind_quality_inliers: int = 60
     blind_quality_rms: float = 1.0
     blind_fast_mode: bool = False
+    # Near solver performance
+    near_max_tile_candidates: int = 48
+    near_tile_cache_size: int = 128
+    near_detect_backend: str = "auto"  # auto|cpu|cuda
+    near_detect_device: int = 0
     # Solver panel persisted settings
     solver_fov_deg: float = DEFAULT_FOV_DEG
     solver_search_scale: float = DEFAULT_SEARCH_RADIUS_SCALE
@@ -347,6 +360,10 @@ def load_persistent_settings() -> PersistentSettings:
         blind_quality_inliers=int(payload.get("blind_quality_inliers", 12)),
         blind_quality_rms=float(payload.get("blind_quality_rms", 1.0)),
         blind_fast_mode=bool(payload.get("blind_fast_mode", False)),
+        near_max_tile_candidates=int(payload.get("near_max_tile_candidates", 48)),
+        near_tile_cache_size=int(payload.get("near_tile_cache_size", 128)),
+        near_detect_backend=str(payload.get("near_detect_backend", "auto")),
+        near_detect_device=int(payload.get("near_detect_device", 0)),
         solver_fov_deg=float(payload.get("solver_fov_deg", DEFAULT_FOV_DEG)),
         solver_search_scale=float(payload.get("solver_search_scale", DEFAULT_SEARCH_RADIUS_SCALE)),
         solver_search_attempts=int(payload.get("solver_search_attempts", DEFAULT_SEARCH_RADIUS_ATTEMPTS)),
@@ -430,6 +447,11 @@ class SolveConfig:
     blind_enabled: bool = True
     blind_skip_if_valid: bool = True
     blind_index_path: Optional[Path] = None
+    # Near solver (index-based) performance knobs
+    near_max_tile_candidates: int = 48
+    near_tile_cache_size: int = 128
+    near_detect_backend: Optional[str] = None
+    near_detect_device: Optional[int] = None
 
     def __post_init__(self) -> None:
         if self.families:
@@ -835,13 +857,25 @@ class ImageSolver:
     def solve_path(self, path: Path) -> ImageSolveResult:
         start = time.perf_counter()
         run_info: list[tuple[str, dict[str, Any]]] = []
+        logging.info("[solve] start %s", path.name)
         # Try metadata-assisted (near) solve first; fall back to blind on failure
         metadata: Optional[ImageMetadata] = None
         peaks: Optional[np.ndarray] = None
         try:
             if self._cancelled():
                 return ImageSolveResult(path=path, status="skipped", message="cancelled")
+            t0 = time.perf_counter()
             data, metadata = self._load_image(path)
+            logging.info(
+                "[solve] loaded %s: %dx%d, has_wcs=%s, ra=%s, dec=%s (%.2fs)",
+                path.name,
+                metadata.width,
+                metadata.height,
+                metadata.has_wcs,
+                f"{metadata.ra_deg:.6f}" if metadata.ra_deg is not None else "-",
+                f"{metadata.dec_deg:.6f}" if metadata.dec_deg is not None else "-",
+                time.perf_counter() - t0,
+            )
             if metadata.has_wcs and not self.config.overwrite:
                 raise SolveError("WCS already present (use --overwrite to recompute)", skip=True)
             # Prefer the internal index-powered near solver when an index root is configured.
@@ -858,14 +892,27 @@ class ImageSolver:
                     near_first.run_info.extend(run_info)
                     return near_first
             if metadata.ra_deg is None or metadata.dec_deg is None:
+                # For rasters without metadata: attempt blind via temp FITS bridge
+                if (
+                    metadata.kind == "raster"
+                    and self._should_try_blind(path)
+                    and self.config.blind_index_path is not None
+                ):
+                    bridged = self._run_blind_on_raster(raster_path=path, raster_data=data, run_info=run_info)
+                    if bridged is not None:
+                        bridged.duration_s = time.perf_counter() - start
+                        return bridged
                 raise SolveError("Missing RA/DEC metadata", skip=False)
             if self._cancelled():
                 return ImageSolveResult(path=path, status="skipped", message="cancelled")
+            logging.info("[solve] detecting stars in %s", path.name)
+            t1 = time.perf_counter()
             peaks = _detect_stars(
                 data,
                 downsample=self.config.downsample,
                 max_stars=self.config.max_image_stars,
             )
+            logging.info("[solve] detected %d stars in %.2fs", 0 if peaks is None else peaks.shape[0], time.perf_counter() - t1)
             if peaks.shape[0] < 5:
                 raise SolveError("Not enough stars detected in the frame")
             # Effective FOV for classic catalog-based solve; when GUI FOV is 0 (Auto),
@@ -885,6 +932,13 @@ class ImageSolver:
                     combined_catalog_family = self.config.families[0]
                     combined_label = self._family_label(combined_catalog_family)
                 try:
+                    logging.info(
+                        "[solve] query radius=%.2f° (attempt %d/%d) for %s",
+                        radius,
+                        radius_index + 1,
+                        len(radius_candidates),
+                        path.name,
+                    )
                     if self._cancelled():
                         return ImageSolveResult(path=path, status="skipped", message="cancelled")
                     result = self._solve_with_catalog(
@@ -1086,9 +1140,21 @@ class ImageSolver:
                     data = hdu.data
                     if data is None:
                         raise SolveError("Primary HDU has no data")
-                    arr = np.asarray(data, dtype=np.float32)
+                    # Normalize to 2D luminance for star detection
+                    arr = np.asarray(data)
                     if arr.ndim == 3:
-                        arr = arr[0]
+                        # Handle channel‑last RGB(A) or multi‑plane data
+                        if arr.shape[-1] in (3, 4):
+                            arr = np.mean(arr[..., :3], axis=-1)
+                        elif arr.shape[0] in (3, 4):
+                            arr = np.mean(arr[:3, ...], axis=0)
+                        else:
+                            # Fallback: first plane
+                            arr = arr[0]
+                    # Safe dtype conversion for NumPy>=2
+                    arr = np.asarray(arr)
+                    if arr.dtype != np.float32:
+                        arr = arr.astype(np.float32, copy=False)
                     if arr.ndim != 2:
                         raise SolveError(f"Unsupported FITS dimensionality: {arr.shape}")
                     height, width = arr.shape
@@ -1123,6 +1189,13 @@ class ImageSolver:
             ra, dec, peer_source = _peer_fits_metadata(path)
             if peer_source:
                 source = peer_source
+                # Opportunistically write a sidecar when we recover RA/DEC from a peer FITS
+                try:
+                    sidecar = path.with_suffix(path.suffix + SIDE_CAR_SUFFIX)
+                    payload = {"ra_deg": float(ra), "dec_deg": float(dec), "source": str(peer_source)}
+                    sidecar.write_text(json.dumps(payload, indent=2))
+                except Exception:
+                    pass
         meta = ImageMetadata(
             path=path,
             kind="raster",
@@ -1137,7 +1210,10 @@ class ImageSolver:
         return np.ascontiguousarray(arr), meta
 
     def _should_try_blind(self, path: Path) -> bool:
-        return self.config.blind_enabled and path.suffix.lower() in FITS_EXTENSIONS
+        # Allow blind on FITS directly, and on rasters via a temporary FITS bridge
+        return self.config.blind_enabled and (
+            path.suffix.lower() in FITS_EXTENSIONS or path.suffix.lower() in RASTER_EXTENSIONS
+        )
 
     def _run_blind_solver(
         self,
@@ -1244,6 +1320,95 @@ class ImageSolver:
             logging.info("Blind solver failed for %s: %s", path.name, result["message"])
         return result
 
+    def _run_blind_on_raster(
+        self,
+        *,
+        raster_path: Path,
+        raster_data: np.ndarray,
+        run_info: list[tuple[str, dict[str, Any]]],
+    ) -> Optional[ImageSolveResult]:
+        """Bridge for blind-solving a raster image by using a temporary FITS.
+
+        On success, writes a JSON WCS sidecar next to the raster and returns a solved result.
+        """
+        index_root = self.config.blind_index_path
+        if not index_root:
+            return None
+        import tempfile
+        from astropy.io import fits as _fits
+        tmp_dir = Path(tempfile.gettempdir())
+        tmp_fits = tmp_dir / f"zesolver_tmp_{os.getpid()}_{int(time.time()*1000)}.fits"
+        try:
+            # Minimal FITS with luminance data
+            hdu = _fits.PrimaryHDU(np.ascontiguousarray(raster_data.astype(np.float32, copy=False)))
+            hdul = _fits.HDUList([hdu])
+            hdul.writeto(tmp_fits, overwrite=True)
+            hdul.close()
+        except Exception as exc:
+            logging.info("Failed to write temporary FITS for raster %s: %s", raster_path.name, exc)
+            return None
+        try:
+            # Reuse blind solver on the temp FITS
+            result = self._run_blind_solver(
+                tmp_fits,
+                run_info,
+                skip_if_header_has_wcs=False,
+                skip_if_valid=False,
+            )
+            if not result or not result["success"]:
+                return None
+            # Extract WCS keywords from the temp FITS to build a JSON sidecar
+            try:
+                with fits.open(tmp_fits, mode="readonly", memmap=False) as hdul:
+                    hdr = hdul[0].header
+                    cd = np.array(
+                        [
+                            [float(hdr.get("CD1_1", 0.0)), float(hdr.get("CD1_2", 0.0))],
+                            [float(hdr.get("CD2_1", 0.0)), float(hdr.get("CD2_2", 0.0))],
+                        ],
+                        dtype=np.float64,
+                    )
+                    crpix = np.array(
+                        [float(hdr.get("CRPIX1", 0.0)), float(hdr.get("CRPIX2", 0.0))], dtype=np.float64
+                    )
+                    crval = np.array(
+                        [float(hdr.get("CRVAL1", 0.0)), float(hdr.get("CRVAL2", 0.0))], dtype=np.float64
+                    )
+            except Exception as exc:
+                logging.info("Unable to read WCS from temp FITS for %s: %s", raster_path.name, exc)
+                return None
+            # Write sidecar JSON using existing helper
+            pixel_scale_arcsec = self._pixel_scale_arcsec(cd)
+            sol = WCSSolution(crpix=crpix, crval=crval, cd=cd, matches=0, rms_pixels=None)
+            meta = ImageMetadata(
+                path=raster_path,
+                kind="raster",
+                width=raster_data.shape[1],
+                height=raster_data.shape[0],
+                ra_deg=None,
+                dec_deg=None,
+                source="blind",
+                has_wcs=False,
+                sidecar_path=raster_path.with_suffix(raster_path.suffix + SIDE_CAR_SUFFIX),
+            )
+            self._write_solution(meta, sol)
+            msg = result["message"] or "blind solution (sidecar)"
+            return ImageSolveResult(
+                path=raster_path,
+                status="solved",
+                message=msg,
+                matched_stars=0,
+                rms_arcsec=None,
+                pixel_scale_arcsec=pixel_scale_arcsec,
+                metadata_source="blind",
+                run_info=list(run_info),
+            )
+        finally:
+            try:
+                tmp_fits.unlink(missing_ok=True)  # type: ignore[arg-type]
+            except Exception:
+                pass
+
     @staticmethod
     def _build_blind_result(
         path: Path,
@@ -1277,6 +1442,10 @@ class ImageSolver:
             near_cfg = NearIndexConfig(
                 fov_override_deg=fov_override,
                 family=family,
+                max_tile_candidates=int(getattr(self.config, "near_max_tile_candidates", 48) or 48),
+                tile_cache_size=int(getattr(self.config, "near_tile_cache_size", 128) or 128),
+                detect_backend=(getattr(self.config, "near_detect_backend", None) or "auto"),
+                detect_device=(getattr(self.config, "near_detect_device", None)),
             )
             result = near_solve(
                 fits_path=str(path),
@@ -1441,6 +1610,29 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Optional hard limit (degrees) for the search radius when expanding the cone",
     )
     parser.add_argument(
+        "--near-max-tile-candidates",
+        type=int,
+        default=48,
+        help="Near-solver: cap intersecting tiles to this many (default: 48)",
+    )
+    parser.add_argument(
+        "--near-tile-cache-size",
+        type=int,
+        default=128,
+        help="Near-solver: in-memory tile cache size shared across runs (default: 128)",
+    )
+    parser.add_argument(
+        "--near-detect-backend",
+        choices=["auto", "cpu", "cuda"],
+        default="auto",
+        help="Near-solver: star detection device (auto|cpu|cuda)",
+    )
+    parser.add_argument(
+        "--near-detect-device",
+        type=int,
+        help="Near-solver: CUDA device index to use for detection",
+    )
+    parser.add_argument(
         "--blind-index",
         type=Path,
         help="Path to the Zeblind index root (manifest + hash tables) used by the internal matcher",
@@ -1522,6 +1714,10 @@ def run_cli(args: argparse.Namespace) -> int:
         max_search_radius_deg=args.max_search_radius_deg,
         blind_enabled=args.blind_enabled,
         blind_index_path=args.blind_index,
+        near_max_tile_candidates=max(1, int(args.near_max_tile_candidates or 48)),
+        near_tile_cache_size=max(1, int(args.near_tile_cache_size or 128)),
+        near_detect_backend=str(args.near_detect_backend or "auto"),
+        near_detect_device=(int(args.near_detect_device) if args.near_detect_device is not None else None),
     )
     logging.info(
         "Starting batch solve in %s (families=%s, workers=%d, downsample=%d)",
@@ -1816,16 +2012,27 @@ def launch_gui(args: argparse.Namespace) -> int:
         log = QtCore.Signal(str)
         finished = QtCore.Signal(bool, str)
 
-        def __init__(self, fits_path: str, index_root: str) -> None:
+        def __init__(self, fits_path: str, index_root: str, *, max_tiles: int = 48, tile_cache: int = 128, detect_backend: str = "auto", detect_device: int | None = None) -> None:
             super().__init__()
             self.fits_path = fits_path
             self.index_root = index_root
+            self.max_tiles = int(max_tiles)
+            self.tile_cache = int(tile_cache)
+            self.detect_backend = str(detect_backend or "auto")
+            self.detect_device = detect_device
 
         def run(self) -> None:
             try:
+                cfg = NearIndexConfig(
+                    max_tile_candidates=max(1, self.max_tiles),
+                    tile_cache_size=max(1, self.tile_cache),
+                    detect_backend=self.detect_backend,
+                    detect_device=self.detect_device,
+                )
                 result = near_solve(
                     self.fits_path,
                     self.index_root,
+                    config=cfg,
                     skip_if_valid=False,
                     fallback_to_blind=False,
                     log=logging.info,
@@ -1877,6 +2084,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.tabs.addTab(solver_tab, self._text("solver_tab"))
             self.settings_tab = self._build_settings_tab()
             self.tabs.addTab(self.settings_tab, self._text("settings_tab"))
+            # Add Performance tab for near-solver tuning
+            self.performance_tab = self._build_performance_tab()
+            self.tabs.addTab(self.performance_tab, self._text("performance_tab"))
             layout.addWidget(self.tabs)
             self.setCentralWidget(central)
 
@@ -2161,6 +2371,78 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.settings_sample_browse.clicked.connect(self._pick_settings_sample)
             return widget
 
+        def _build_performance_tab(self) -> QtWidgets.QWidget:
+            widget = QtWidgets.QWidget()
+            column = QtWidgets.QVBoxLayout(widget)
+            form = QtWidgets.QFormLayout()
+            # Near tile cache size
+            self.perf_near_cache_label = QtWidgets.QLabel()
+            self.perf_near_cache_spin = QtWidgets.QSpinBox()
+            self.perf_near_cache_spin.setRange(16, 4096)
+            self.perf_near_cache_spin.setSingleStep(16)
+            self.perf_near_cache_spin.setValue(int(self._settings.near_tile_cache_size or 128))
+            form.addRow(self.perf_near_cache_label, self.perf_near_cache_spin)
+            # Near max tile candidates
+            self.perf_near_max_tiles_label = QtWidgets.QLabel()
+            self.perf_near_max_tiles_spin = QtWidgets.QSpinBox()
+            self.perf_near_max_tiles_spin.setRange(4, 256)
+            self.perf_near_max_tiles_spin.setValue(int(self._settings.near_max_tile_candidates or 48))
+            form.addRow(self.perf_near_max_tiles_label, self.perf_near_max_tiles_spin)
+            # Star detection device selection (CPU / CUDA GPUs)
+            self.perf_detect_label = QtWidgets.QLabel()
+            self.perf_detect_combo = QtWidgets.QComboBox()
+            self._populate_detect_devices(self.perf_detect_combo)
+            form.addRow(self.perf_detect_label, self.perf_detect_combo)
+            # Save button
+            self.performance_save_btn = QtWidgets.QPushButton()
+            self.performance_save_btn.clicked.connect(self._on_save_settings_clicked)
+            btn_row = QtWidgets.QHBoxLayout()
+            btn_row.addStretch(1)
+            btn_row.addWidget(self.performance_save_btn)
+            column.addLayout(form)
+            column.addLayout(btn_row)
+            return widget
+
+        def _populate_detect_devices(self, combo: 'QtWidgets.QComboBox') -> None:
+            combo.clear()
+            # Always offer CPU
+            combo.addItem("CPU", ("cpu", -1))
+            # Try CUDA via CuPy
+            try:
+                import cupy  # type: ignore
+                from cupy.cuda import runtime as _rt  # type: ignore
+                n = int(_rt.getDeviceCount())
+                for i in range(n):
+                    props = _rt.getDeviceProperties(i)
+                    name = props.get('name') if isinstance(props, dict) else None
+                    if isinstance(name, (bytes, bytearray)):
+                        name = name.decode(errors='ignore')
+                    label = f"CUDA: {name or 'GPU'} (id {i})"
+                    combo.addItem(label, ("cuda", i))
+            except Exception:
+                pass
+            # Restore previous selection if possible, otherwise default to first CUDA if present
+            backend = (self._settings.near_detect_backend or "auto").lower()
+            device = int(self._settings.near_detect_device or 0)
+            target_data = None
+            if backend == "cuda":
+                target_data = ("cuda", device)
+            elif backend == "cpu":
+                target_data = ("cpu", -1)
+            # Try to match stored selection
+            if target_data is not None:
+                for idx in range(combo.count()):
+                    if combo.itemData(idx) == target_data:
+                        combo.setCurrentIndex(idx)
+                        break
+            else:
+                # Auto: prefer first CUDA if available
+                for idx in range(combo.count()):
+                    data = combo.itemData(idx)
+                    if isinstance(data, tuple) and data[0] == "cuda":
+                        combo.setCurrentIndex(idx)
+                        break
+
         def _pick_settings_directory(self, target: QtWidgets.QLineEdit) -> None:
             directory = QtWidgets.QFileDialog.getExistingDirectory(
                 self,
@@ -2220,6 +2502,15 @@ def launch_gui(args: argparse.Namespace) -> int:
             index_root = self.settings_index_edit.text().strip()
             if not index_root:
                 raise ValueError(self._text("settings_index_missing"))
+            # Read detection device from Performance tab
+            try:
+                sel = self.perf_detect_combo.currentData()
+                if isinstance(sel, tuple):
+                    backend_sel, dev_sel = sel
+                else:
+                    backend_sel, dev_sel = ("cpu", -1)
+            except Exception:
+                backend_sel, dev_sel = ("cpu", -1)
             return PersistentSettings(
                 db_root=db_root,
                 index_root=index_root,
@@ -2234,6 +2525,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 blind_quality_inliers=int(self.settings_blind_quality_inliers_spin.value()),
                 blind_quality_rms=float(self.settings_blind_quality_rms_spin.value()),
                 blind_fast_mode=bool(self.settings_blind_fast_check.isChecked()),
+                near_max_tile_candidates=int(self.perf_near_max_tiles_spin.value()) if hasattr(self, 'perf_near_max_tiles_spin') else 48,
+                near_tile_cache_size=int(self.perf_near_cache_spin.value()) if hasattr(self, 'perf_near_cache_spin') else 128,
+                near_detect_backend=str(backend_sel),
+                near_detect_device=int(dev_sel if isinstance(dev_sel, int) else 0),
             )
 
         def _log_settings(self, message: str) -> None:
@@ -2461,9 +2756,24 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._settings = settings
             save_persistent_settings(settings)
             self.settings_run_near_btn.setEnabled(False)
+            # Derive device selection from combo
+            try:
+                sel = self.perf_detect_combo.currentData()
+                if isinstance(sel, tuple):
+                    backend_sel, dev_sel = sel
+                else:
+                    backend_sel, dev_sel = ("cpu", -1)
+            except Exception:
+                backend_sel, dev_sel = ("cpu", -1)
+            self._settings.near_detect_backend = str(backend_sel)
+            self._settings.near_detect_device = int(dev_sel if isinstance(dev_sel, int) else 0)
             self._near_worker = NearRunner(
                 fits_path=sample_path,
                 index_root=settings.index_root,
+                max_tiles=int(self.perf_near_max_tiles_spin.value()) if hasattr(self, 'perf_near_max_tiles_spin') else int(self._settings.near_max_tile_candidates or 48),
+                tile_cache=int(self.perf_near_cache_spin.value()) if hasattr(self, 'perf_near_cache_spin') else int(self._settings.near_tile_cache_size or 128),
+                detect_backend=self._settings.near_detect_backend or "auto",
+                detect_device=self._settings.near_detect_device,
             )
             self._near_worker.log.connect(self._log_settings)
             self._near_worker.finished.connect(self._on_near_finished)
@@ -2622,6 +2932,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             if hasattr(self, "tabs"):
                 self.tabs.setTabText(0, self._text("solver_tab"))
                 self.tabs.setTabText(1, self._text("settings_tab"))
+                try:
+                    self.tabs.setTabText(2, self._text("performance_tab"))
+                except Exception:
+                    pass
             browse_label = self._text("browse_button")
             if hasattr(self, "settings_db_label"):
                 self.settings_db_label.setText(self._text("settings_db_label"))
@@ -2662,6 +2976,15 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_run_near_btn.setText(self._text("settings_near_btn"))
             if hasattr(self, "settings_log_label"):
                 self.settings_log_label.setText(self._text("settings_log"))
+            # Performance tab labels
+            if hasattr(self, "perf_near_cache_label"):
+                self.perf_near_cache_label.setText(self._text("settings_perf_near_cache_label"))
+            if hasattr(self, "perf_near_max_tiles_label"):
+                self.perf_near_max_tiles_label.setText(self._text("settings_perf_near_max_tiles_label"))
+            if hasattr(self, "perf_detect_label"):
+                self.perf_detect_label.setText(self._text("settings_perf_detect_label"))
+            if hasattr(self, "performance_save_btn"):
+                self.performance_save_btn.setText(self._text("settings_save_btn"))
             self._retranslate_status_items()
 
         def _retranslate_status_items(self) -> None:
@@ -2793,7 +3116,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             index_root = Path(index_root_text).expanduser()
             if not index_root.is_dir():
                 raise ValueError(self._text("settings_index_missing"))
-            # Persist solver panel settings for next runs
+            # Persist solver panel + performance settings for next runs
             try:
                 self._settings.solver_fov_deg = float(self.fov_spin.value())
                 self._settings.solver_search_scale = float(self.search_scale_spin.value())
@@ -2808,6 +3131,11 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._settings.solver_family = str(sel_fam).strip().lower() or None
                 self._settings.solver_blind_enabled = bool(self.blind_check.isChecked())
                 self._settings.solver_overwrite = bool(self.overwrite_check.isChecked())
+                # Pull performance tab values if present
+                if hasattr(self, 'perf_near_max_tiles_spin'):
+                    self._settings.near_max_tile_candidates = int(self.perf_near_max_tiles_spin.value())
+                if hasattr(self, 'perf_near_cache_spin'):
+                    self._settings.near_tile_cache_size = int(self.perf_near_cache_spin.value())
                 save_persistent_settings(self._settings)
             except Exception:
                 pass
@@ -2827,6 +3155,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 max_search_radius_deg=max_radius,
                 blind_enabled=self.blind_check.isChecked(),
                 blind_index_path=index_root,
+                near_max_tile_candidates=int(self._settings.near_max_tile_candidates or 48),
+                near_tile_cache_size=int(self._settings.near_tile_cache_size or 128),
+                near_detect_backend=str(self._settings.near_detect_backend or "auto"),
+                near_detect_device=int(self._settings.near_detect_device) if self._settings.near_detect_device is not None else None,
             )
 
         def _start_solving(self) -> None:
