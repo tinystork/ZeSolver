@@ -40,3 +40,38 @@ def test_synthetic_index_produces_candidate(synthetic_index, synthetic_star_cata
     stats = validate_solution(wcs, matches, thresholds={"rms_px": 1.0, "inliers": 4})
     assert stats["quality"] == "GOOD"
     assert stats["rms_px"] < 1.0
+
+
+def test_tally_candidates_respects_allowed_tiles(synthetic_index, synthetic_star_catalog):
+    positions, mags = synthetic_star_catalog
+    image_points = positions.astype(np.float32)
+    obs_stars = np.zeros(image_points.shape[0], dtype=[("x", "f4"), ("y", "f4"), ("mag", "f4")])
+    obs_stars["x"] = image_points[:, 0]
+    obs_stars["y"] = image_points[:, 1]
+    obs_stars["mag"] = mags.astype(np.float32)
+
+    quads = sample_quads(obs_stars, max_quads=100)
+    assert quads.size > 0
+    obs_hash = hash_quads(quads, image_points)
+    assert obs_hash.hashes.size > 0
+
+    unrestricted = tally_candidates(obs_hash.hashes, synthetic_index, levels=["L", "M", "S"])
+    assert unrestricted and unrestricted[0][0] == "SYNTH"
+
+    # Restrict to a non-existent tile index; expect no candidates
+    restricted_none = tally_candidates(
+        obs_hash.hashes,
+        synthetic_index,
+        levels=["L", "M", "S"],
+        allowed_tiles={42},
+    )
+    assert restricted_none == []
+
+    # Restrict to the actual tile index (0) and ensure it still returns the candidate
+    restricted_hit = tally_candidates(
+        obs_hash.hashes,
+        synthetic_index,
+        levels=["L", "M", "S"],
+        allowed_tiles={0},
+    )
+    assert restricted_hit and restricted_hit[0][0] == "SYNTH"

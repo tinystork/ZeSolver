@@ -44,3 +44,12 @@ def remove_background(img: np.ndarray, kernel_size: int = 31) -> np.ndarray:
     size = min(max(3, kernel_size), min(img.shape))
     background = median_filter(img, size=size)
     return img - background
+
+
+def downsample_image(img: np.ndarray, factor: int) -> np.ndarray:
+    """Downsample *img* by an integer *factor* using bilinear interpolation."""
+    factor = max(1, int(factor))
+    if factor == 1:
+        return img
+    scale = 1.0 / float(factor)
+    return zoom(img, scale, order=1)

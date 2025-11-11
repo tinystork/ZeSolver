@@ -14,7 +14,7 @@ import pytest
 from zeblindsolver.levels import LEVEL_SPECS
 from zeblindsolver.quad_index_builder import build_quad_index
 
-SYNTHETIC_STAR_POS = np.array(
+_STAR_TEMPLATE = np.array(
     [
         (0.0, 0.0),
         (4.0, 0.0),
@@ -27,6 +27,8 @@ SYNTHETIC_STAR_POS = np.array(
     ],
     dtype=np.float64,
 )
+# Keep the synthetic tile within the quad specs (S upper bound, L lower bound) by scaling to 0.25 deg.
+SYNTHETIC_STAR_POS = 0.25 * _STAR_TEMPLATE
 SYNTHETIC_STAR_MAGS = np.array([6.5, 7.0, 7.5, 8.0, 8.5, 9.0, 9.5, 10.0], dtype=np.float64)
 
 

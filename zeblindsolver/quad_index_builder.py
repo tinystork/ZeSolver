@@ -3,10 +3,11 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
+import math
 import os
 import concurrent.futures
 from pathlib import Path
-from typing import Any, Dict, Callable
+from typing import Any, Callable, Dict, Iterable, List, Sequence, Tuple
 
 import numpy as np
 import threading
@@ -23,6 +24,116 @@ _INDEX_LOCK = threading.Lock()
 # Cache manifest contents with a simple stat signature to avoid re-reading JSON repeatedly
 _MANIFEST_CACHE: dict[Path, tuple[tuple[int, int], dict[str, Any]]] = {}
 _MANIFEST_LOCK = threading.Lock()
+
+
+def _normalize_ra(value: float) -> float:
+    result = float(value) % 360.0
+    return result + 360.0 if result < 0.0 else result
+
+
+def _segments_for_interval(ra_min: float, ra_max: float) -> Tuple[Tuple[float, float], ...]:
+    span = float(ra_max) - float(ra_min)
+    if abs(span) >= 360.0:
+        return ((0.0, 360.0),)
+    start = _normalize_ra(ra_min)
+    end = _normalize_ra(ra_max)
+    wrapped = (end - start) % 360.0
+    if math.isclose(wrapped, 0.0) and not math.isclose(span, 0.0):
+        return ((0.0, 360.0),)
+    if end >= start:
+        return ((start, end),)
+    return ((start, 360.0), (0.0, end))
+
+
+def _segments_overlap(a0: float, a1: float, b0: float, b1: float) -> bool:
+    return (a0 <= b1) and (b0 <= a1)
+
+
+def _normalize_bounds_segments(raw_segments: Sequence[Sequence[float]]) -> Tuple[Tuple[float, float], ...]:
+    normalized: List[Tuple[float, float]] = []
+    for segment in raw_segments:
+        if len(segment) != 2:
+            continue
+        try:
+            start = float(segment[0])
+            end = float(segment[1])
+        except (TypeError, ValueError):
+            continue
+        if math.isclose(start, 0.0, abs_tol=1e-6) and math.isclose(end, 360.0, abs_tol=1e-6):
+            return ((0.0, 360.0),)
+        normalized.extend(_segments_for_interval(start, end))
+    return tuple(normalized)
+
+
+def _cone_search_window(ra_deg: float, dec_deg: float, radius_deg: float) -> tuple[Tuple[Tuple[float, float], ...], float, float]:
+    radius = min(max(float(radius_deg), 0.05), 180.0)
+    dec_min = max(-90.0, float(dec_deg) - radius)
+    dec_max = min(90.0, float(dec_deg) + radius)
+    if abs(dec_deg) + radius >= 89.5 or radius >= 90.0:
+        segments = ((0.0, 360.0),)
+    else:
+        cos_dec = max(math.cos(math.radians(dec_deg)), 1e-6)
+        span = radius / cos_dec
+        span = max(radius, min(span * 1.2, 360.0))
+        ra_min = ra_deg - span
+        ra_max = ra_deg + span
+        segments = _segments_for_interval(ra_min, ra_max)
+    return segments, dec_min, dec_max
+
+
+def _entry_intersects_search_box(
+    entry: dict[str, Any],
+    ra_segments: Tuple[Tuple[float, float], ...],
+    dec_min: float,
+    dec_max: float,
+) -> bool:
+    bounds = entry.get("bounds") or {}
+    try:
+        tile_dec_min = float(bounds.get("dec_min", -90.0))
+        tile_dec_max = float(bounds.get("dec_max", 90.0))
+    except (TypeError, ValueError):
+        tile_dec_min, tile_dec_max = -90.0, 90.0
+    if tile_dec_max < dec_min or tile_dec_min > dec_max:
+        return False
+    raw_segments = bounds.get("ra_segments")
+    if not raw_segments:
+        return True
+    segments = _normalize_bounds_segments(raw_segments)
+    if not segments:
+        return True
+    if len(segments) == 1 and math.isclose(segments[0][0], 0.0, abs_tol=1e-6) and math.isclose(segments[0][1], 360.0, abs_tol=1e-6):
+        return True
+    for t_start, t_end in segments:
+        for q_start, q_end in ra_segments:
+            if _segments_overlap(t_start, t_end, q_start, q_end):
+                return True
+    return False
+
+
+def select_tiles_in_cone(
+    manifest: dict[str, Any],
+    ra_deg: float | None,
+    dec_deg: float | None,
+    radius_deg: float | None,
+) -> list[int]:
+    """Return tile indices from *manifest* whose bounds intersect the given cone."""
+    tiles = manifest.get("tiles", []) or []
+    if ra_deg is None or dec_deg is None or radius_deg is None:
+        return list(range(len(tiles)))
+    try:
+        ra = float(ra_deg)
+        dec = float(dec_deg)
+        radius = float(radius_deg)
+    except (TypeError, ValueError):
+        return list(range(len(tiles)))
+    if not math.isfinite(ra) or not math.isfinite(dec) or radius <= 0.0:
+        return list(range(len(tiles)))
+    ra_segments, dec_min, dec_max = _cone_search_window(ra, dec, radius)
+    selected: list[int] = []
+    for idx, entry in enumerate(tiles):
+        if _entry_intersects_search_box(entry, ra_segments, dec_min, dec_max):
+            selected.append(idx)
+    return selected
 
 
 def _load_manifest(index_root: Path) -> dict[str, Any]:

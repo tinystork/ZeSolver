@@ -3,11 +3,12 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 import numpy as np
 from astropy.io import fits
@@ -15,11 +16,12 @@ from astropy.wcs import WCS
 
 from .asterisms import hash_quads, sample_quads
 from .candidate_search import tally_candidates
-from .image_prep import build_pyramid, read_fits_as_luma, remove_background
+from .image_io import load_raster_image
+from .image_prep import build_pyramid, downsample_image, read_fits_as_luma, remove_background
 from .fits_utils import parse_angle
 from .matcher import SimilarityStats, SimilarityTransform, estimate_similarity_RANSAC
 from .matcher import _derive_similarity  # quad-based hypothesis helper
-from .quad_index_builder import QuadIndex, load_manifest, lookup_hashes
+from .quad_index_builder import QuadIndex, load_manifest, lookup_hashes, select_tiles_in_cone
 from .levels import LEVEL_MAP, QuadLevelSpec
 from .star_detect import detect_stars
 from .verify import validate_solution
@@ -39,6 +41,7 @@ except PackageNotFoundError:
 
 ZEBLIND_VERSION = __version__
 logger = logging.getLogger(__name__)
+FITS_EXTENSIONS = {".fits", ".fit", ".fts"}
 
 
 @dataclass
@@ -54,6 +57,15 @@ class SolveConfig:
     verbose: bool = False
     try_parity_flip: bool = True
     fast_mode: bool = True
+    downsample: int = 1
+    ra_hint_deg: float | None = None
+    dec_hint_deg: float | None = None
+    radius_hint_deg: float | None = None
+    focal_length_mm: float | None = None
+    pixel_size_um: float | None = None
+    pixel_scale_arcsec: float | None = None
+    pixel_scale_min_arcsec: float | None = None
+    pixel_scale_max_arcsec: float | None = None
 
 
 @dataclass
@@ -80,6 +92,114 @@ def _load_tile_positions(index_root: Path, entry: dict[str, Any]) -> tuple[np.nd
     return xy.astype(np.float32), world.astype(np.float32)
 
 
+def _angular_separation(ra1: float, dec1: float, ra2: float, dec2: float) -> float:
+    r1 = math.radians(float(ra1))
+    r2 = math.radians(float(ra2))
+    d1 = math.radians(float(dec1))
+    d2 = math.radians(float(dec2))
+    cos_sep = math.sin(d1) * math.sin(d2) + math.cos(d1) * math.cos(d2) * math.cos(r1 - r2)
+    cos_sep = max(-1.0, min(1.0, cos_sep))
+    return math.degrees(math.acos(cos_sep))
+
+
+def _resolve_scale_arcsec(config: SolveConfig, header_scale_arcsec: float | None) -> float | None:
+    candidates: list[float] = []
+    if config.pixel_scale_arcsec:
+        candidates.append(float(config.pixel_scale_arcsec))
+    if config.focal_length_mm and config.pixel_size_um:
+        try:
+            focal = float(config.focal_length_mm)
+            pixel = float(config.pixel_size_um)
+            if focal > 0.0 and pixel > 0.0:
+                candidates.append(206.265 * pixel / focal)
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+    range_hint: float | None = None
+    if config.pixel_scale_min_arcsec and config.pixel_scale_max_arcsec:
+        try:
+            lo = float(config.pixel_scale_min_arcsec)
+            hi = float(config.pixel_scale_max_arcsec)
+            if lo > 0.0 and hi > 0.0:
+                range_hint = 0.5 * (lo + hi)
+        except (TypeError, ValueError):
+            range_hint = None
+    elif config.pixel_scale_min_arcsec:
+        try:
+            lo = float(config.pixel_scale_min_arcsec)
+            if lo > 0.0:
+                range_hint = lo
+        except (TypeError, ValueError):
+            range_hint = None
+    elif config.pixel_scale_max_arcsec:
+        try:
+            hi = float(config.pixel_scale_max_arcsec)
+            if hi > 0.0:
+                range_hint = hi
+        except (TypeError, ValueError):
+            range_hint = None
+    if range_hint:
+        candidates.append(range_hint)
+    if header_scale_arcsec:
+        try:
+            hdr_scale = float(header_scale_arcsec)
+            if hdr_scale > 0.0:
+                candidates.append(hdr_scale)
+        except (TypeError, ValueError):
+            pass
+    for value in candidates:
+        if value and value > 0.0 and math.isfinite(value):
+            return float(value)
+    return None
+
+
+def _radius_from_hints(
+    config: SolveConfig,
+    approx_scale_deg: float | None,
+    width: int,
+    height: int,
+) -> float | None:
+    if config.radius_hint_deg and config.radius_hint_deg > 0.0:
+        try:
+            return max(0.05, float(config.radius_hint_deg))
+        except (TypeError, ValueError):
+            pass
+    if approx_scale_deg and approx_scale_deg > 0.0:
+        diag_px = math.hypot(float(width), float(height))
+        radius = 0.5 * diag_px * approx_scale_deg * 1.1
+        return max(0.05, min(radius, 20.0))
+    return None
+
+
+def _serialize_value(value: Any) -> Any:
+    if isinstance(value, (np.floating, np.integer)):
+        return float(value)
+    return value
+
+
+def _write_wcs_sidecar(output: Path, wcs: WCS, header_updates: dict[str, Any]) -> None:
+    header = wcs.to_header(relax=True)
+    for key, value in header_updates.items():
+        header[key] = value
+    payload = {key: _serialize_value(value) for key, value in header.items()}
+    output.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def _nearest_tile_key(tile_entries: Iterable[dict[str, Any]], ra_deg: float, dec_deg: float) -> str | None:
+    best_key: str | None = None
+    best_dist = float("inf")
+    for entry in tile_entries:
+        try:
+            tra = float(entry.get("center_ra_deg", 0.0))
+            tdec = float(entry.get("center_dec_deg", 0.0))
+        except (TypeError, ValueError):
+            continue
+        dist = _angular_separation(ra_deg, dec_deg, tra, tdec)
+        if dist < best_dist:
+            best_dist = dist
+            best_key = str(entry.get("tile_key"))
+    return best_key
+
+
 def _collect_tile_matches(
     index_root: Path,
     levels: Iterable[str],
@@ -89,6 +209,7 @@ def _collect_tile_matches(
     image_positions: np.ndarray,
     tile_positions: np.ndarray,
     tile_world: np.ndarray,
+    bucket_limit: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     # Accumulate votes for (image_star, tile_star) pairs across matching quads,
     # then keep only pairs with sufficient support to reduce spurious matches.
@@ -105,7 +226,7 @@ def _collect_tile_matches(
                 continue
             obs_combo = observed_quads[idx]
             # Do not skip large buckets outright; cap per-bucket iterations to bound work
-            per_bucket_cap = 4096
+            per_bucket_cap = bucket_limit
             for off, bucket in enumerate(range(slc.start, slc.stop)):
                 if off >= per_bucket_cap:
                     break
@@ -155,6 +276,8 @@ def solve_blind(
 ) -> WcsSolution:
     config = config or SolveConfig()
     index_root = Path(index_root).expanduser().resolve()
+    downsample_factor = max(1, min(4, int(getattr(config, "downsample", 1) or 1)))
+    bucket_limit = max(1024, int(4096 / downsample_factor))
     if cancel_check and cancel_check():
         return WcsSolution(False, "cancelled", None, {}, None, {})
     manifest = load_manifest(index_root)
@@ -192,67 +315,115 @@ def solve_blind(
     if cancel_check and cancel_check():
         return WcsSolution(False, "cancelled", None, {}, None, {})
     tile_entries = manifest.get("tiles", [])
+    tile_count = len(tile_entries)
     tile_map = {entry["tile_key"]: idx for idx, entry in enumerate(tile_entries)}
     logging.getLogger().setLevel(config.log_level)
-    # Optional: use RA/DEC metadata (if present) to prioritize nearby tiles
-    preferred_tile_from_header: str | None = None
-    ra_hint = None
-    dec_hint = None
-    try:
-        hdr = fits.getheader(input_fits)
-        ra0 = parse_angle(hdr.get("RA") or hdr.get("OBJCTRA") or hdr.get("OBJRA") or hdr.get("OBJ_RA") or hdr.get("CRVAL1"), is_ra=True)
-        dec0 = parse_angle(hdr.get("DEC") or hdr.get("OBJCTDEC") or hdr.get("OBJDEC") or hdr.get("OBJ_DEC") or hdr.get("CRVAL2"), is_ra=False)
-        if ra0 is not None and dec0 is not None and tile_entries:
-            ra_hint, dec_hint = float(ra0), float(dec0)
-            # pick manifest tile whose center is closest to the metadata position
-            import math
-            def ang_sep(ra1, dec1, ra2, dec2):
-                ra1, ra2 = math.radians(ra1), math.radians(ra2)
-                d1, d2 = math.radians(dec1), math.radians(dec2)
-                return math.degrees(math.acos(max(-1.0, min(1.0, math.sin(d1)*math.sin(d2)+math.cos(d1)*math.cos(d2)*math.cos(ra1-ra2)))))
-            best_key = None
-            best_dist = 1e9
-            for entry in tile_entries:
-                tra = float(entry.get("center_ra_deg", 0.0))
-                tdec = float(entry.get("center_dec_deg", 0.0))
-                d = ang_sep(ra0, dec0, tra, tdec)
-                if d < best_dist:
-                    best_dist = d
-                    best_key = str(entry.get("tile_key"))
-            preferred_tile_from_header = best_key
-    except Exception:
-        preferred_tile_from_header = None
+    source_path = Path(input_fits)
+    suffix = source_path.suffix.lower()
+    is_fits = suffix in FITS_EXTENSIONS
+    header = None
+    image_meta: dict[str, Any] = {}
+    if is_fits:
+        try:
+            header = fits.getheader(source_path)
+        except Exception:
+            header = None
+        image = read_fits_as_luma(source_path)
+    else:
+        image, image_meta = load_raster_image(source_path)
+        logger.info(
+            "loaded %s via %s (shape=%s)",
+            suffix or "<unknown>",
+            image_meta.get("backend", "unknown"),
+            image.shape,
+        )
+    ra_hint = config.ra_hint_deg
+    dec_hint = config.dec_hint_deg
+    preferred_tile_hint: str | None = None
+    if header is not None:
+        ra0 = parse_angle(header.get("RA") or header.get("OBJCTRA") or header.get("OBJRA") or header.get("OBJ_RA") or header.get("CRVAL1"), is_ra=True)
+        dec0 = parse_angle(header.get("DEC") or header.get("OBJCTDEC") or header.get("OBJDEC") or header.get("OBJ_DEC") or header.get("CRVAL2"), is_ra=False)
+        if ra_hint is None and ra0 is not None:
+            ra_hint = float(ra0)
+        if dec_hint is None and dec0 is not None:
+            dec_hint = float(dec0)
+    if tile_entries and ra_hint is not None and dec_hint is not None:
+        preferred_tile_hint = _nearest_tile_key(tile_entries, ra_hint, dec_hint)
     stage = time.time()
     if cancel_check and cancel_check():
         return WcsSolution(False, "cancelled", None, {}, None, {})
-    image = read_fits_as_luma(input_fits)
+    allowed_tile_indices: set[int] | None = None
     height, width = image.shape
+    work_image = image
+    if downsample_factor > 1:
+        logger.info("downsampling input by factor %d", downsample_factor)
+        work_image = downsample_image(work_image, downsample_factor)
     # Estimate pixel scale (deg/px) if header contains optical info
-    try:
-        with fits.open(input_fits, mode="readonly", memmap=False) as _hdul_tmp:
-            _hdr2 = _hdul_tmp[0].header
-    except Exception:
-        _hdr2 = None
-    approx_scale_deg = None
-    if _hdr2 is not None:
+    header_scale_arcsec = None
+    if header is None and is_fits:
+        try:
+            with fits.open(source_path, mode="readonly", memmap=False) as _hdul_tmp:
+                header = _hdul_tmp[0].header
+        except Exception:
+            header = None
+    if header is not None:
         from .fits_utils import estimate_scale_and_fov as _est_scale
-        scale_arcsec, _ = _est_scale(_hdr2, width, height)
+        scale_arcsec, _ = _est_scale(header, width, height)
         if scale_arcsec:
-            approx_scale_deg = float(scale_arcsec) / 3600.0
+            header_scale_arcsec = float(scale_arcsec)
+    approx_scale_arcsec = _resolve_scale_arcsec(config, header_scale_arcsec)
+    approx_scale_deg = approx_scale_arcsec / 3600.0 if approx_scale_arcsec else None
+    approx_fov_deg = None
+    if approx_scale_deg is not None:
+        approx_fov_deg = float(approx_scale_deg) * float(max(width, height))
+    radius_for_filter = _radius_from_hints(config, approx_scale_deg, width, height)
+    if ra_hint is not None and dec_hint is not None and radius_for_filter is not None:
+        selected = select_tiles_in_cone(manifest, ra_hint, dec_hint, radius_for_filter)
+        if selected:
+            if len(selected) < tile_count:
+                allowed_tile_indices = set(selected)
+                logger.info(
+                    "RA/Dec hint constrained candidate tiles to %d/%d (radius=%.2f°)",
+                    len(selected),
+                    tile_count,
+                    radius_for_filter,
+                )
+            else:
+                logger.debug(
+                    "RA/Dec hint covers all %d tiles (radius=%.2f°) — no cone pruning applied",
+                    tile_count,
+                    radius_for_filter,
+                )
+        else:
+            logger.warning(
+                "RA/Dec hint radius %.2f° excluded all manifest tiles; ignoring cone filter",
+                radius_for_filter,
+            )
     _log_phase("read image", stage)
     stage = time.time()
     # Use a smaller median kernel for speed on typical Seestar frames
-    image = remove_background(image, kernel_size=15)
-    pyramid = build_pyramid(image)
+    kernel = max(5, int(round(15 / downsample_factor)))
+    work_image = remove_background(work_image, kernel_size=kernel)
+    pyramid = build_pyramid(work_image)
     _log_phase("preprocess", stage)
     detection = pyramid[-1]
     stage = time.time()
-    stars = detect_stars(detection)
+    min_fwhm = max(1.0, 1.5 / downsample_factor)
+    max_fwhm = max(2.5, 8.0 / downsample_factor)
+    stars = detect_stars(detection, min_fwhm_px=min_fwhm, max_fwhm_px=max_fwhm)
     if stars.size == 0:
         return WcsSolution(False, "no stars found", None, {}, None, {})
     if config.max_stars and stars.size > config.max_stars:
         stars = stars[: config.max_stars]
-    logger.info("detected %d stars (using top %d)", stars.shape[0], config.max_stars or stars.shape[0])
+    if downsample_factor > 1:
+        stars["x"] *= downsample_factor
+        stars["y"] *= downsample_factor
+    logger.info(
+        "detected %d stars (using top %d, downsample=%d)",
+        stars.shape[0],
+        config.max_stars or stars.shape[0],
+        downsample_factor,
+    )
     image_positions = _image_positions(stars)
     obs_stars = np.zeros(stars.shape[0], dtype=[("x", "f4"), ("y", "f4"), ("mag", "f4")])
     obs_stars["x"] = stars["x"]
@@ -329,6 +500,7 @@ def solve_blind(
         use_px_spec: bool = True,
         use_ra_filter: bool = True,
         agg_levels: Iterable[str] | None = None,
+        early_exit_ratio: float | None = None,
     ) -> WcsSolution | None:
         if cancel_check and cancel_check():
             return None
@@ -339,23 +511,34 @@ def solve_blind(
             level_hashes, level_quads = (obs_hash.hashes, obs_hash.indices)
         if cancel_check and cancel_check():
             return None
-        candidates = tally_candidates(level_hashes, index_root, levels=[level_name])
+        candidates = tally_candidates(
+            level_hashes,
+            index_root,
+            levels=[level_name],
+            allowed_tiles=allowed_tile_indices,
+        )
         if not candidates:
             logger.debug("level %s produced no candidates (parity=%s)", level_name, parity_label)
             return None
         ordered = _prioritize_candidates(candidates, preferred_tile)
+        if early_exit_ratio and len(ordered) >= 2:
+            top_score = max(1, ordered[0][1])
+            runner_up = max(1, ordered[1][1])
+            if runner_up == 0 or top_score >= early_exit_ratio * runner_up:
+                logger.debug(
+                    "early-exit ratio %.1fx satisfied at level %s (parity=%s)",
+                    early_exit_ratio,
+                    level_name,
+                    parity_label,
+                )
+                ordered = ordered[:1]
         # If we have RA/DEC hint, ignore far tiles to speed up and reduce false tries
-        if use_ra_filter and ra_hint is not None and dec_hint is not None:
-            import math
-            def ang_sep(ra1, dec1, ra2, dec2):
-                ra1, ra2 = math.radians(ra1), math.radians(ra2)
-                d1, d2 = math.radians(dec1), math.radians(dec2)
-                return math.degrees(math.acos(max(-1.0, min(1.0, math.sin(d1)*math.sin(d2)+math.cos(d1)*math.cos(d2)*math.cos(ra1-ra2)))))
-            # derive a radius from approximate FOV if available; otherwise 5°
-            approx_fov = None
-            if approx_scale_deg is not None:
-                approx_fov = float(approx_scale_deg) * max(image.shape)
-            radius_limit = min(8.0, max(5.0, (approx_fov or 1.5) * 3.0))
+        if use_ra_filter and allowed_tile_indices is None and ra_hint is not None and dec_hint is not None:
+            # derive a radius from explicit hint when available; otherwise approximate from FOV
+            radius_limit = radius_for_filter
+            if radius_limit is None:
+                fallback_fov = approx_fov_deg or 1.5
+                radius_limit = min(8.0, max(5.0, fallback_fov * 3.0))
             filtered: list[tuple[str, int]] = []
             for key, score in ordered:
                 if cancel_check and cancel_check():
@@ -366,7 +549,7 @@ def solve_blind(
                 entry = tile_entries[idx]
                 tra = float(entry.get("center_ra_deg", ra_hint))
                 tdec = float(entry.get("center_dec_deg", dec_hint))
-                if ang_sep(ra_hint, dec_hint, tra, tdec) <= radius_limit:
+                if _angular_separation(ra_hint, dec_hint, tra, tdec) <= radius_limit:
                     filtered.append((key, score))
             if filtered:
                 ordered = filtered
@@ -388,6 +571,8 @@ def solve_blind(
             )
             tile_index = tile_map.get(candidate_key)
             if tile_index is None:
+                continue
+            if allowed_tile_indices is not None and tile_index not in allowed_tile_indices:
                 continue
             tile_entry = tile_entries[tile_index]
             try:
@@ -412,6 +597,7 @@ def solve_blind(
                     image_positions,
                     tile_positions,
                     tile_world,
+                    bucket_limit,
                 )
                 if ip.size:
                     img_list.append(ip)
@@ -628,9 +814,10 @@ def solve_blind(
         use_px_spec: bool = True,
         use_ra_filter: bool = True,
         levels_seq: list[str] | None = None,
+        early_exit_ratio: float | None = None,
     ) -> WcsSolution | None:
         best: WcsSolution | None = None
-        preferred_tile: str | None = preferred_tile_from_header
+        preferred_tile: str | None = preferred_tile_hint
 
         def _is_better(solution: WcsSolution, current: WcsSolution | None) -> bool:
             if current is None:
@@ -653,6 +840,7 @@ def solve_blind(
                 use_px_spec=use_px_spec,
                 use_ra_filter=use_ra_filter,
                 agg_levels=cur_levels,
+                early_exit_ratio=early_exit_ratio,
             )
             # Do not bail out early if the first level fails; try remaining levels (e.g., M/S)
             if solution is None:
@@ -669,48 +857,86 @@ def solve_blind(
     best_solution: WcsSolution | None = None
     levels_all = list(levels)
     levels_fast = [lvl for lvl in ("S",) if lvl in levels_all]
-    for variant_hashes, parity_label in variants:
-        logger.info("starting candidate search (parity=%s)", parity_label)
-        # Fast mode: try S only first (guided then relaxed)
+    levels_scale_focus = [lvl for lvl in ("S", "M") if lvl in levels_all] or levels_all
+
+    def _build_level_sets(base_levels: list[str]) -> list[list[str]]:
+        sets: list[list[str]] = []
         if config.fast_mode and levels_fast:
-            best_solution = _run_levels(
-                variant_hashes,
-                parity_label,
-                use_px_spec=True,
-                use_ra_filter=True,
-                levels_seq=levels_fast,
-            )
-            if not best_solution:
-                logger.info("no solution in guided mode; retrying relaxed search (parity=%s)", parity_label)
-                best_solution = _run_levels(
+            sets.append(levels_fast)
+        if base_levels:
+            if not sets or sets[-1] != base_levels:
+                sets.append(base_levels)
+        return sets or [levels_all]
+
+    ra_available = ra_hint is not None and dec_hint is not None
+    scale_available = (approx_scale_deg is not None) or (radius_for_filter is not None)
+    phase_specs: list[dict[str, Any]] = []
+    if ra_available and scale_available:
+        phase_specs.append(
+            {
+                "name": "hinted",
+                "require_ra": True,
+                "require_scale": True,
+                "level_sets": _build_level_sets(levels_scale_focus),
+                "use_ra_filter": True,
+                "early_exit": 4.0,
+            }
+        )
+    if scale_available:
+        phase_specs.append(
+            {
+                "name": "scale_only",
+                "require_ra": False,
+                "require_scale": True,
+                "level_sets": _build_level_sets(levels_scale_focus),
+                "use_ra_filter": False,
+                "early_exit": 2.5,
+            }
+        )
+    phase_specs.append(
+        {
+            "name": "blind",
+            "require_ra": False,
+            "require_scale": False,
+            "level_sets": _build_level_sets(levels_all),
+            "use_ra_filter": False,
+            "early_exit": None,
+        }
+    )
+    for phase in phase_specs:
+        if phase["require_ra"] and not ra_available:
+            continue
+        if phase["require_scale"] and not scale_available:
+            continue
+        phase_start = time.time()
+        logger.info(
+            "phase %s starting (ra_filter=%s, level_sets=%d)",
+            phase["name"],
+            phase["use_ra_filter"],
+            len(phase["level_sets"]),
+        )
+        for level_seq in phase["level_sets"]:
+            for variant_hashes, parity_label in variants:
+                solution = _run_levels(
                     variant_hashes,
                     parity_label,
-                    use_px_spec=False,
-                    use_ra_filter=False,
-                    levels_seq=levels_fast,
+                    use_px_spec=True,
+                    use_ra_filter=phase["use_ra_filter"],
+                    levels_seq=level_seq,
+                    early_exit_ratio=phase["early_exit"],
                 )
-            if best_solution:
-                best_solution.message += f" (parity={parity_label})"
+                if solution is None:
+                    continue
+                solution.stats["phase"] = phase["name"]
+                solution.message += f" (parity={parity_label}, phase={phase['name']})"
+                solution.stats["phase_elapsed_s"] = time.time() - phase_start
+                solution.stats["phase_levels"] = list(level_seq)
+                solution.stats["phase_level_count"] = len(level_seq)
+                best_solution = solution
                 break
-        # Full run
-        best_solution = _run_levels(
-            variant_hashes,
-            parity_label,
-            use_px_spec=True,
-            use_ra_filter=True,
-            levels_seq=levels_all,
-        )
-        if not best_solution:
-            logger.info("no solution in guided mode; retrying relaxed search (parity=%s)", parity_label)
-            best_solution = _run_levels(
-                variant_hashes,
-                parity_label,
-                use_px_spec=False,
-                use_ra_filter=False,
-                levels_seq=levels_all,
-            )
+            if best_solution:
+                break
         if best_solution:
-            best_solution.message += f" (parity={parity_label})"
             break
     _log_phase("candidate search", stage)
     if not best_solution:
@@ -721,20 +947,32 @@ def solve_blind(
     }
     if cancel_check and cancel_check():
         return WcsSolution(False, "cancelled", None, {}, None, {})
-    with fits.open(input_fits, mode="update", memmap=False) as hdul:
-        header = hdul[0].header
-        for key, value in best_solution.wcs.to_header(relax=True).items():
-            header[key] = value
-        for key, value in header_updates.items():
-            header[key] = value
-        header["ZBLNDVER"] = ZEBLIND_VERSION
-        hdul.flush()
-    logger.info(
-        "blind solve succeeded (tile=%s, rms=%.3f px, inliers=%d)",
-        best_solution.tile_key,
-        best_solution.stats.get("rms_px", float("nan")),
-        best_solution.stats.get("inliers", 0),
-    )
+    if is_fits:
+        with fits.open(source_path, mode="update", memmap=False) as hdul:
+            header_out = hdul[0].header
+            for key, value in best_solution.wcs.to_header(relax=True).items():
+                header_out[key] = value
+            for key, value in header_updates.items():
+                header_out[key] = value
+            header_out["ZBLNDVER"] = ZEBLIND_VERSION
+            hdul.flush()
+        logger.info(
+            "blind solve succeeded (tile=%s, rms=%.3f px, inliers=%d)",
+            best_solution.tile_key,
+            best_solution.stats.get("rms_px", float("nan")),
+            best_solution.stats.get("inliers", 0),
+        )
+    else:
+        sidecar = source_path.with_suffix(source_path.suffix + ".wcs.json")
+        if best_solution.wcs is not None:
+            _write_wcs_sidecar(sidecar, best_solution.wcs, header_updates)
+            logger.info(
+                "blind solve succeeded (tile=%s, wrote %s)",
+                best_solution.tile_key,
+                sidecar.name,
+            )
+        else:
+            logger.info("blind solve succeeded (tile=%s)", best_solution.tile_key)
     return WcsSolution(
         True,
         best_solution.message,
@@ -772,6 +1010,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quality-rms", type=float, default=1.0)
     parser.add_argument("--quality-inliers", type=int, default=60)
     parser.add_argument("--pixel-tolerance", type=float, default=3.0)
+    parser.add_argument("--downsample", type=int, default=1, choices=range(1, 5))
+    parser.add_argument("--ra-hint", type=float, help="Center RA hint in degrees")
+    parser.add_argument("--dec-hint", type=float, help="Center Dec hint in degrees")
+    parser.add_argument("--radius-hint", type=float, help="Search radius hint in degrees")
+    parser.add_argument("--focal-length", type=float, help="Focal length hint in millimetres")
+    parser.add_argument("--pixel-size", type=float, help="Pixel size hint in microns")
+    parser.add_argument("--pixel-scale", type=float, help="Pixel scale hint in arcsec/pixel")
+    parser.add_argument("--pixel-scale-min", type=float, help="Minimum pixel scale bound (arcsec/pixel)")
+    parser.add_argument("--pixel-scale-max", type=float, help="Maximum pixel scale bound (arcsec/pixel)")
     parser.add_argument("--log-level", default="INFO")
     # Backend selection
     parser.add_argument("--solver-backend", choices=("local", "astrometry"), default=None)
@@ -829,6 +1076,15 @@ def main(argv: list[str] | None = None) -> int:
         quality_inliers=args.quality_inliers,
         pixel_tolerance=args.pixel_tolerance,
         log_level=args.log_level.upper(),
+        downsample=args.downsample,
+        ra_hint_deg=args.ra_hint,
+        dec_hint_deg=args.dec_hint,
+        radius_hint_deg=args.radius_hint,
+        focal_length_mm=args.focal_length,
+        pixel_size_um=args.pixel_size,
+        pixel_scale_arcsec=args.pixel_scale,
+        pixel_scale_min_arcsec=args.pixel_scale_min,
+        pixel_scale_max_arcsec=args.pixel_scale_max,
     )
     solution = solve_blind(args.input, args.index_root, config=config)
     if solution.success:

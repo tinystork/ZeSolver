@@ -61,7 +61,21 @@ python zesolver.py --gui
 The GUI lets you pick the ASTAP/HNSKY database folder, select an input directory
 containing FITS/TIFF/PNG frames, adjust the FOV/downsample parameters, and launch
 multi-threaded solving. Results are written back to the FITS headers (or stored
-as JSON sidecars for raster formats).
+as JSON sidecars for raster formats).  Optional RA/Dec/radius and optical hints
+(focal length, pixel size, resolution range) can be entered in the solver panel
+or passed via CLI (`--ra-hint`, `--dec-hint`, `--radius-hint`, `--focal-length`,
+`--pixel-size`, `--pixel-scale`, `--pixel-scale-min`, `--pixel-scale-max`) to
+pre-prune candidate tiles and speed up convergence.  A unified `--downsample`
+switch (and matching GUI spin box) now applies to both the near and blind
+pipelines, resampling the image pyramid, adjusting detection kernels, and
+propagating the coordinate scale automatically.
+
+**GUI workflow tip.** In the *Réglages* tab, pick your instrument in **Presets
+d’instruments** (or fill the “Par FOV” fields manually) then click **Calculer**.
+The calculator pushes the resulting focal length, pixel size, and resolution
+window straight into the blind-solver hint widgets on the **Solveur** page, so
+those fields show “Auto” only when no preset/FOV data was supplied. If you skip
+the presets, you can still override the hints manually in the Solveur tab.
 
 ## Blind solver (`zeblindsolver`)
 
@@ -83,6 +97,14 @@ zeblindsolver --input raw.fit --db "/data/D50;/data/G05" --write-to solved.fit
 a trustworthy WCS (unless `--no-blind` is provided). Successful blind solves are
 logged in both CLI and GUI modes (`run_info_blind_*` entries) and prevent GUI
 freezes because ASTAP runs in worker threads.
+
+The blind path now loads RAW/TIFF/JPG/PNG frames natively, converts them to
+float32 luminance in memory, and emits a `.wcs.json` sidecar with TAN/SIP
+keywords when the source is not a FITS container. Solving is organised in
+phases—metadata-assisted (RA+scale), scale-only, then fully blind—with fast/S
+levels attempted first when the “Fast mode” toggle is enabled. Phase statistics
+(name, elapsed time, levels explored) are surfaced through the returned
+`WcsSolution` and logs so you can gauge which hints actually helped.
 
 In the GUI, the settings tab now includes a "Blind solver (Python)" group with
 the main tunables and a "Fast mode (S-only, fallback M/L)" option that tries the

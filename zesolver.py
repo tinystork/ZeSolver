@@ -127,6 +127,14 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "search_scale_label": "Facteur rayon recherche",
         "search_attempts_label": "Tentatives rayon",
         "max_radius_label": "Rayon max (°)",
+        "ra_hint_label": "RA indice (°)",
+        "dec_hint_label": "Dec indice (°)",
+        "radius_hint_label": "Rayon indice (°)",
+        "focal_hint_label": "Focale indice (mm)",
+        "pixel_hint_label": "Taille pixel indice (µm)",
+        "scale_hint_label": "Résolution indice (\"/px)",
+        "scale_min_hint_label": "Résolution mini (\"/px)",
+        "scale_max_hint_label": "Résolution maxi (\"/px)",
         "downsample_label": "Downsample",
         "threads_label": "Threads",
         "cache_label": "Cache catalogue",
@@ -182,7 +190,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "binning": "Binning",
         "compute_button": "Calculer",
         "recommendations_title": "Recommandations d’index",
-        "est_scale": "Échantillonnage (""/px)",
+        "est_scale": 'Échantillonnage ("/px)',
         "est_fov": "Champ (°)",
         "mag_cap_suggested": "Magnitude max conseillée",
         "quads_profile": "Profil quads",
@@ -242,6 +250,14 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "search_scale_label": "Search radius scale",
         "search_attempts_label": "Radius attempts",
         "max_radius_label": "Max radius (°)",
+        "ra_hint_label": "RA hint (°)",
+        "dec_hint_label": "Dec hint (°)",
+        "radius_hint_label": "Radius hint (°)",
+        "focal_hint_label": "Focal length hint (mm)",
+        "pixel_hint_label": "Pixel size hint (µm)",
+        "scale_hint_label": "Resolution hint (\"/px)",
+        "scale_min_hint_label": "Min resolution (\"/px)",
+        "scale_max_hint_label": "Max resolution (\"/px)",
         "downsample_label": "Downsample",
         "threads_label": "Threads",
         "cache_label": "Catalog cache",
@@ -297,7 +313,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "binning": "Binning",
         "compute_button": "Compute",
         "recommendations_title": "Index recommendations",
-        "est_scale": "Pixel scale (""/px)",
+        "est_scale": 'Pixel scale ("/px)',
         "est_fov": "Field of view (°)",
         "mag_cap_suggested": "Suggested mag cap",
         "quads_profile": "Quads profile",
@@ -493,6 +509,14 @@ class PersistentSettings:
     solver_family: Optional[str] = None  # lower-case key, None = Auto
     solver_blind_enabled: bool = True
     solver_overwrite: bool = True
+    solver_hint_ra_deg: Optional[float] = None
+    solver_hint_dec_deg: Optional[float] = None
+    solver_hint_radius_deg: Optional[float] = None
+    solver_hint_focal_mm: Optional[float] = None
+    solver_hint_pixel_um: Optional[float] = None
+    solver_hint_resolution_arcsec: Optional[float] = None
+    solver_hint_resolution_min_arcsec: Optional[float] = None
+    solver_hint_resolution_max_arcsec: Optional[float] = None
     # Solver backend selection + Astrometry.net web backend
     solver_backend: str = "local"  # "local" or "astrometry"
     astrometry_api_url: str = "https://nova.astrometry.net/api"
@@ -512,6 +536,13 @@ def load_persistent_settings() -> PersistentSettings:
         return PersistentSettings()
     if not isinstance(payload, dict):
         return PersistentSettings()
+    def _float_or_none(value: object) -> Optional[float]:
+        if value in (None, "", False):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
     settings = PersistentSettings(
         schema_version=int(payload.get("schema_version", 1)),
         db_root=payload.get("db_root"),
@@ -552,6 +583,14 @@ def load_persistent_settings() -> PersistentSettings:
         solver_family=(payload.get("solver_family") or None),
         solver_blind_enabled=bool(payload.get("solver_blind_enabled", True)),
         solver_overwrite=bool(payload.get("solver_overwrite", True)),
+        solver_hint_ra_deg=_float_or_none(payload.get("solver_hint_ra_deg")),
+        solver_hint_dec_deg=_float_or_none(payload.get("solver_hint_dec_deg")),
+        solver_hint_radius_deg=_float_or_none(payload.get("solver_hint_radius_deg")),
+        solver_hint_focal_mm=_float_or_none(payload.get("solver_hint_focal_mm")),
+        solver_hint_pixel_um=_float_or_none(payload.get("solver_hint_pixel_um")),
+        solver_hint_resolution_arcsec=_float_or_none(payload.get("solver_hint_resolution_arcsec")),
+        solver_hint_resolution_min_arcsec=_float_or_none(payload.get("solver_hint_resolution_min_arcsec")),
+        solver_hint_resolution_max_arcsec=_float_or_none(payload.get("solver_hint_resolution_max_arcsec")),
         solver_backend=str(payload.get("solver_backend", "local") or "local"),
         astrometry_api_url=str(payload.get("astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api"),
         astrometry_api_key=(payload.get("astrometry_api_key") or None),
@@ -718,6 +757,14 @@ class SolveConfig:
     blind_enabled: bool = True
     blind_skip_if_valid: bool = True
     blind_index_path: Optional[Path] = None
+    hint_ra_deg: Optional[float] = None
+    hint_dec_deg: Optional[float] = None
+    hint_radius_deg: Optional[float] = None
+    hint_focal_mm: Optional[float] = None
+    hint_pixel_um: Optional[float] = None
+    hint_resolution_arcsec: Optional[float] = None
+    hint_resolution_min_arcsec: Optional[float] = None
+    hint_resolution_max_arcsec: Optional[float] = None
     # Limit concurrent disk I/O to avoid thrashing (0 = auto based on workers)
     io_concurrency: int = 0
     # Force periodic GC every N results (0 = disabled)
@@ -1181,10 +1228,11 @@ class ImageSolver:
         pixel_scale_arcsec = self._pixel_scale_arcsec(solution.cd)
         rms_arcsec = rms_px * pixel_scale_arcsec if rms_px is not None else None
         self._write_solution(metadata, solution)
+        scale_str = f'{pixel_scale_arcsec:.2f}' + '"/px'
         if label:
-            message = f"Solved via {label} ({solution.matches} matches, ~{pixel_scale_arcsec:.2f}\"/px)"
+            message = f"Solved via {label} ({solution.matches} matches, ~{scale_str})"
         else:
-            message = f"Solved ({solution.matches} matches, ~{pixel_scale_arcsec:.2f}\"/px)"
+            message = f"Solved ({solution.matches} matches, ~{scale_str})"
         if rms_arcsec is not None:
             message += f", rms {rms_arcsec:.2f}\""
         return ImageSolveResult(
@@ -1640,10 +1688,23 @@ class ImageSolver:
                 pass
             if self._cancelled():
                 return None
+            final_ra = self.config.hint_ra_deg if self.config.hint_ra_deg is not None else ra_hint
+            final_dec = self.config.hint_dec_deg if self.config.hint_dec_deg is not None else dec_hint
+            blind_cfg = BlindSolveConfig(
+                ra_hint_deg=final_ra,
+                dec_hint_deg=final_dec,
+                radius_hint_deg=self.config.hint_radius_deg,
+                focal_length_mm=self.config.hint_focal_mm,
+                pixel_size_um=self.config.hint_pixel_um,
+                pixel_scale_arcsec=self.config.hint_resolution_arcsec,
+                pixel_scale_min_arcsec=self.config.hint_resolution_min_arcsec,
+                pixel_scale_max_arcsec=self.config.hint_resolution_max_arcsec,
+                downsample=max(1, int(self.config.downsample or 1)),
+            )
             result = blind_solve(
                 fits_path=str(path),
                 index_root=str(index_root),
-                config=BlindSolveConfig(),
+                config=blind_cfg,
                 log=logging.info,
                 skip_if_valid=skip_if_valid,
                 cancel_check=(self._cancelled if self._cancel_event else None),
@@ -1978,6 +2039,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-files", type=int, help="Limit the number of files to process")
     parser.add_argument("--mag-limit", type=float, help="Optional catalogue magnitude limit")
     parser.add_argument("--cache-size", type=int, default=12, help="Catalog tile cache size")
+    parser.add_argument("--ra-hint", type=float, help="RA hint in degrees for the blind solver")
+    parser.add_argument("--dec-hint", type=float, help="Dec hint in degrees for the blind solver")
+    parser.add_argument("--radius-hint", type=float, help="Search radius hint in degrees")
+    parser.add_argument("--focal-length", type=float, help="Optical focal length hint (mm)")
+    parser.add_argument("--pixel-size", type=float, help="Sensor pixel size hint (µm)")
+    parser.add_argument("--pixel-scale", type=float, help="Pixel scale hint (\"/px)")
+    parser.add_argument("--pixel-scale-min", type=float, help="Minimum pixel scale bound (\"/px)")
+    parser.add_argument("--pixel-scale-max", type=float, help="Maximum pixel scale bound (\"/px)")
     parser.add_argument(
         "--search-radius-scale",
         type=float,
@@ -2132,6 +2201,14 @@ def run_cli(args: argparse.Namespace) -> int:
         io_concurrency=int(args.io_concurrency or 0),
         gc_interval=int(args.gc_interval or 0),
         near_warm_start=(True if args.near_warm_start is None else bool(args.near_warm_start)),
+        hint_ra_deg=args.ra_hint,
+        hint_dec_deg=args.dec_hint,
+        hint_radius_deg=args.radius_hint,
+        hint_focal_mm=args.focal_length,
+        hint_pixel_um=args.pixel_size,
+        hint_resolution_arcsec=args.pixel_scale,
+        hint_resolution_min_arcsec=args.pixel_scale_min,
+        hint_resolution_max_arcsec=args.pixel_scale_max,
     )
     logging.info(
         "Starting batch solve in %s (families=%s, workers=%d, downsample=%d)",
@@ -3122,6 +3199,54 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.max_radius_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
             max_radius = self._settings.solver_max_radius_deg if self._settings.solver_max_radius_deg is not None else 0.0
             self.max_radius_spin.setValue(max_radius)
+            self.ra_hint_spin = QtWidgets.QDoubleSpinBox()
+            self.ra_hint_spin.setRange(-1.0, 360.0)
+            self.ra_hint_spin.setDecimals(4)
+            self.ra_hint_spin.setSingleStep(0.1)
+            self.ra_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
+            self.ra_hint_spin.setValue(self._settings.solver_hint_ra_deg if self._settings.solver_hint_ra_deg is not None else -1.0)
+            self.dec_hint_spin = QtWidgets.QDoubleSpinBox()
+            self.dec_hint_spin.setRange(-91.0, 90.0)
+            self.dec_hint_spin.setDecimals(4)
+            self.dec_hint_spin.setSingleStep(0.1)
+            self.dec_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
+            self.dec_hint_spin.setValue(self._settings.solver_hint_dec_deg if self._settings.solver_hint_dec_deg is not None else -91.0)
+            self.radius_hint_spin = QtWidgets.QDoubleSpinBox()
+            self.radius_hint_spin.setRange(0.0, 30.0)
+            self.radius_hint_spin.setDecimals(2)
+            self.radius_hint_spin.setSingleStep(0.1)
+            self.radius_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
+            self.radius_hint_spin.setValue(self._settings.solver_hint_radius_deg or 0.0)
+            self.focal_hint_spin = QtWidgets.QDoubleSpinBox()
+            self.focal_hint_spin.setRange(0.0, 10000.0)
+            self.focal_hint_spin.setDecimals(1)
+            self.focal_hint_spin.setSingleStep(10.0)
+            self.focal_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
+            self.focal_hint_spin.setValue(self._settings.solver_hint_focal_mm or 0.0)
+            self.pixel_hint_spin = QtWidgets.QDoubleSpinBox()
+            self.pixel_hint_spin.setRange(0.0, 25.0)
+            self.pixel_hint_spin.setDecimals(2)
+            self.pixel_hint_spin.setSingleStep(0.1)
+            self.pixel_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
+            self.pixel_hint_spin.setValue(self._settings.solver_hint_pixel_um or 0.0)
+            self.scale_hint_spin = QtWidgets.QDoubleSpinBox()
+            self.scale_hint_spin.setRange(0.0, 60.0)
+            self.scale_hint_spin.setDecimals(2)
+            self.scale_hint_spin.setSingleStep(0.1)
+            self.scale_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
+            self.scale_hint_spin.setValue(self._settings.solver_hint_resolution_arcsec or 0.0)
+            self.scale_min_hint_spin = QtWidgets.QDoubleSpinBox()
+            self.scale_min_hint_spin.setRange(0.0, 60.0)
+            self.scale_min_hint_spin.setDecimals(2)
+            self.scale_min_hint_spin.setSingleStep(0.1)
+            self.scale_min_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
+            self.scale_min_hint_spin.setValue(self._settings.solver_hint_resolution_min_arcsec or 0.0)
+            self.scale_max_hint_spin = QtWidgets.QDoubleSpinBox()
+            self.scale_max_hint_spin.setRange(0.0, 60.0)
+            self.scale_max_hint_spin.setDecimals(2)
+            self.scale_max_hint_spin.setSingleStep(0.1)
+            self.scale_max_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
+            self.scale_max_hint_spin.setValue(self._settings.solver_hint_resolution_max_arcsec or 0.0)
             self.downsample_spin = QtWidgets.QSpinBox()
             self.downsample_spin.setRange(1, 4)
             self.downsample_spin.setValue(self._settings.solver_downsample or args.downsample or 1)
@@ -3148,6 +3273,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.search_scale_label_widget = QtWidgets.QLabel()
             self.search_attempts_label_widget = QtWidgets.QLabel()
             self.max_radius_label_widget = QtWidgets.QLabel()
+            self.ra_hint_label_widget = QtWidgets.QLabel()
+            self.dec_hint_label_widget = QtWidgets.QLabel()
+            self.radius_hint_label_widget = QtWidgets.QLabel()
+            self.focal_hint_label_widget = QtWidgets.QLabel()
+            self.pixel_hint_label_widget = QtWidgets.QLabel()
+            self.scale_hint_label_widget = QtWidgets.QLabel()
+            self.scale_min_hint_label_widget = QtWidgets.QLabel()
+            self.scale_max_hint_label_widget = QtWidgets.QLabel()
             self.downsample_label_widget = QtWidgets.QLabel()
             self.workers_label_widget = QtWidgets.QLabel()
             self.cache_label_widget = QtWidgets.QLabel()
@@ -3158,6 +3291,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.search_scale_label_widget, self.search_scale_spin)
             form.addRow(self.search_attempts_label_widget, self.search_attempts_spin)
             form.addRow(self.max_radius_label_widget, self.max_radius_spin)
+            form.addRow(self.ra_hint_label_widget, self.ra_hint_spin)
+            form.addRow(self.dec_hint_label_widget, self.dec_hint_spin)
+            form.addRow(self.radius_hint_label_widget, self.radius_hint_spin)
+            form.addRow(self.focal_hint_label_widget, self.focal_hint_spin)
+            form.addRow(self.pixel_hint_label_widget, self.pixel_hint_spin)
+            form.addRow(self.scale_hint_label_widget, self.scale_hint_spin)
+            form.addRow(self.scale_min_hint_label_widget, self.scale_min_hint_spin)
+            form.addRow(self.scale_max_hint_label_widget, self.scale_max_hint_spin)
             form.addRow(self.downsample_label_widget, self.downsample_spin)
             form.addRow(self.workers_label_widget, self.workers_spin)
             form.addRow(self.cache_label_widget, self.cache_spin)
@@ -3454,6 +3595,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self.preset_warning_label.setVisible(False)
                     except Exception:
                         pass
+                    self._on_compute_fov_clicked()
                 except Exception:
                     pass
 
@@ -3702,6 +3844,44 @@ def launch_gui(args: argparse.Namespace) -> int:
                 astrometry_fallback_local=bool(self.ast_fallback_local_check.isChecked()) if hasattr(self, 'ast_fallback_local_check') else True,
             )
 
+        def _apply_solver_hints_from_optics(
+            self,
+            *,
+            effective_focal_mm: float,
+            effective_pixel_um: float,
+            scale_arcsec: float,
+        ) -> None:
+            """Propagate optical parameters into solver hint fields."""
+            if not hasattr(self, "focal_hint_spin"):
+                return
+
+            def _set_spin(spin: QtWidgets.QDoubleSpinBox, value: float) -> None:
+                try:
+                    spin.blockSignals(True)
+                    spin.setValue(float(value))
+                finally:
+                    spin.blockSignals(False)
+
+            if effective_focal_mm > 0.0:
+                _set_spin(self.focal_hint_spin, effective_focal_mm)
+                if self._settings:
+                    self._settings.solver_hint_focal_mm = float(effective_focal_mm)
+            if effective_pixel_um > 0.0:
+                _set_spin(self.pixel_hint_spin, effective_pixel_um)
+                if self._settings:
+                    self._settings.solver_hint_pixel_um = float(effective_pixel_um)
+            if scale_arcsec > 0.0:
+                _set_spin(self.scale_hint_spin, scale_arcsec)
+                margin = 0.25  # ±25% window for min/max hints
+                min_hint = max(0.05, scale_arcsec * (1.0 - margin))
+                max_hint = scale_arcsec * (1.0 + margin)
+                _set_spin(self.scale_min_hint_spin, min_hint)
+                _set_spin(self.scale_max_hint_spin, max_hint)
+                if self._settings:
+                    self._settings.solver_hint_resolution_arcsec = float(scale_arcsec)
+                    self._settings.solver_hint_resolution_min_arcsec = float(min_hint)
+                    self._settings.solver_hint_resolution_max_arcsec = float(max_hint)
+
         def _on_compute_fov_clicked(self) -> None:
             try:
                 focal = float(self.fov_focal_spin.value())
@@ -3735,6 +3915,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.settings_max_quads_spin.setValue(int(rec["max_quads_per_tile"]))
                 except Exception:
                     pass
+                eff_pixel_um = pixel * max(1, binning)
+                self._apply_solver_hints_from_optics(
+                    effective_focal_mm=geo["eff_focal_mm"],
+                    effective_pixel_um=eff_pixel_um,
+                    scale_arcsec=geo["scale_arcsec_per_px"],
+                )
             except Exception as exc:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
 
@@ -3935,6 +4121,15 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pixel_tolerance=settings.blind_pixel_tolerance,
                 fast_mode=settings.blind_fast_mode,
                 log_level="INFO",
+                ra_hint_deg=settings.solver_hint_ra_deg,
+                dec_hint_deg=settings.solver_hint_dec_deg,
+                radius_hint_deg=settings.solver_hint_radius_deg,
+                focal_length_mm=settings.solver_hint_focal_mm,
+                pixel_size_um=settings.solver_hint_pixel_um,
+                pixel_scale_arcsec=settings.solver_hint_resolution_arcsec,
+                pixel_scale_min_arcsec=settings.solver_hint_resolution_min_arcsec,
+                pixel_scale_max_arcsec=settings.solver_hint_resolution_max_arcsec,
+                downsample=max(1, int(settings.solver_downsample or 1)),
             )
             self._blind_worker = BlindRunner(
                 fits_path=sample_path,
@@ -4108,6 +4303,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.search_scale_label_widget.setText(self._text("search_scale_label"))
             self.search_attempts_label_widget.setText(self._text("search_attempts_label"))
             self.max_radius_label_widget.setText(self._text("max_radius_label"))
+            self.ra_hint_label_widget.setText(self._text("ra_hint_label"))
+            self.dec_hint_label_widget.setText(self._text("dec_hint_label"))
+            self.radius_hint_label_widget.setText(self._text("radius_hint_label"))
+            self.focal_hint_label_widget.setText(self._text("focal_hint_label"))
+            self.pixel_hint_label_widget.setText(self._text("pixel_hint_label"))
+            self.scale_hint_label_widget.setText(self._text("scale_hint_label"))
+            self.scale_min_hint_label_widget.setText(self._text("scale_min_hint_label"))
+            self.scale_max_hint_label_widget.setText(self._text("scale_max_hint_label"))
             self.downsample_label_widget.setText(self._text("downsample_label"))
             self.workers_label_widget.setText(self._text("threads_label"))
             self.cache_label_widget.setText(self._text("cache_label"))
@@ -4486,6 +4689,30 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._settings.solver_family = str(sel_fam).strip().lower() or None
                 self._settings.solver_blind_enabled = bool(self.blind_check.isChecked())
                 self._settings.solver_overwrite = bool(self.overwrite_check.isChecked())
+                self._settings.solver_hint_ra_deg = (
+                    None if self.ra_hint_spin.value() <= -0.5 else float(self.ra_hint_spin.value())
+                )
+                self._settings.solver_hint_dec_deg = (
+                    None if self.dec_hint_spin.value() <= -90.5 else float(self.dec_hint_spin.value())
+                )
+                self._settings.solver_hint_radius_deg = (
+                    None if self.radius_hint_spin.value() <= 0.0 else float(self.radius_hint_spin.value())
+                )
+                self._settings.solver_hint_focal_mm = (
+                    None if self.focal_hint_spin.value() <= 0.0 else float(self.focal_hint_spin.value())
+                )
+                self._settings.solver_hint_pixel_um = (
+                    None if self.pixel_hint_spin.value() <= 0.0 else float(self.pixel_hint_spin.value())
+                )
+                self._settings.solver_hint_resolution_arcsec = (
+                    None if self.scale_hint_spin.value() <= 0.0 else float(self.scale_hint_spin.value())
+                )
+                self._settings.solver_hint_resolution_min_arcsec = (
+                    None if self.scale_min_hint_spin.value() <= 0.0 else float(self.scale_min_hint_spin.value())
+                )
+                self._settings.solver_hint_resolution_max_arcsec = (
+                    None if self.scale_max_hint_spin.value() <= 0.0 else float(self.scale_max_hint_spin.value())
+                )
                 # Pull performance tab values if present
                 if hasattr(self, 'perf_near_max_tiles_spin'):
                     self._settings.near_max_tile_candidates = int(self.perf_near_max_tiles_spin.value())
@@ -4494,6 +4721,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                 save_persistent_settings(self._settings)
             except Exception:
                 pass
+            ra_hint = None if self.ra_hint_spin.value() <= -0.5 else float(self.ra_hint_spin.value())
+            dec_hint = None if self.dec_hint_spin.value() <= -90.5 else float(self.dec_hint_spin.value())
+            radius_hint = None if self.radius_hint_spin.value() <= 0.0 else float(self.radius_hint_spin.value())
+            focal_hint = None if self.focal_hint_spin.value() <= 0.0 else float(self.focal_hint_spin.value())
+            pixel_hint = None if self.pixel_hint_spin.value() <= 0.0 else float(self.pixel_hint_spin.value())
+            scale_hint = None if self.scale_hint_spin.value() <= 0.0 else float(self.scale_hint_spin.value())
+            scale_min_hint = None if self.scale_min_hint_spin.value() <= 0.0 else float(self.scale_min_hint_spin.value())
+            scale_max_hint = None if self.scale_max_hint_spin.value() <= 0.0 else float(self.scale_max_hint_spin.value())
             return SolveConfig(
                 db_root=db_root,
                 input_dir=self._current_input_dir,
@@ -4510,6 +4745,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                 max_search_radius_deg=max_radius,
                 blind_enabled=self.blind_check.isChecked(),
                 blind_index_path=index_root,
+                hint_ra_deg=ra_hint,
+                hint_dec_deg=dec_hint,
+                hint_radius_deg=radius_hint,
+                hint_focal_mm=focal_hint,
+                hint_pixel_um=pixel_hint,
+                hint_resolution_arcsec=scale_hint,
+                hint_resolution_min_arcsec=scale_min_hint,
+                hint_resolution_max_arcsec=scale_max_hint,
                 near_max_tile_candidates=int(self._settings.near_max_tile_candidates or 48),
                 near_tile_cache_size=int(self._settings.near_tile_cache_size or 128),
                 near_detect_backend=str(self._settings.near_detect_backend or "auto"),
