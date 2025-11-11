@@ -5,7 +5,7 @@ import math
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Callable
 
 import numpy as np
 from astropy.io import fits
@@ -50,6 +50,11 @@ class NearSolveConfig:
     quality_inliers: int = 60
     try_parity_flip: bool = True
     log_level: str = "INFO"
+    # Optional restrictions/overrides
+    # - family: restrict candidate tiles to a single catalog family (e.g. "d50")
+    # - fov_override_deg: override approximate FOV when estimating search radius; 0/None → auto
+    family: str | None = None
+    fov_override_deg: float | None = None
 
 
 def _failure(message: str) -> WcsSolution:
@@ -272,19 +277,28 @@ def solve_near(
     index_root: Path | str,
     *,
     config: NearSolveConfig | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> WcsSolution:
     cfg = config or NearSolveConfig()
     logger.setLevel(cfg.log_level.upper())
     start = time.perf_counter()
     fits_path = Path(input_fits).expanduser().resolve()
     index_path = Path(index_root).expanduser().resolve()
+    if cancel_check and cancel_check():
+        return _failure("cancelled")
     try:
         manifest = load_manifest(index_path)
     except FileNotFoundError as exc:
         return _failure(f"index manifest missing: {exc}")
     tiles = manifest.get("tiles") or []
+    # Optional: restrict to a specific catalog family to speed up candidate selection
+    if cfg.family:
+        fam = str(cfg.family).strip().lower()
+        tiles = [entry for entry in tiles if str(entry.get("family", "")).strip().lower() == fam]
     if not tiles:
         return _failure("index manifest has no tiles")
+    if cancel_check and cancel_check():
+        return _failure("cancelled")
     try:
         with fits.open(fits_path, mode="readonly", memmap=False) as hdul:
             primary = hdul[0]
@@ -304,6 +318,8 @@ def solve_near(
     scale_arcsec, (fov_x, fov_y) = estimate_scale_and_fov(header, width, height)
     fov_candidates = [value for value in (fov_x, fov_y) if value is not None]
     approx_fov = max(fov_candidates) if fov_candidates else None
+    if cfg.fov_override_deg and cfg.fov_override_deg > 0:
+        approx_fov = float(cfg.fov_override_deg)
     approx_scale_deg = scale_arcsec / 3600.0 if scale_arcsec else None
     if approx_scale_deg is None:
         approx_fov = approx_fov or 1.5
@@ -318,6 +334,8 @@ def solve_near(
         radius,
         approx_scale_deg,
     )
+    if cancel_check and cancel_check():
+        return _failure("cancelled")
     candidates = _select_tiles(manifest, ra0, dec0, radius)
     if not candidates:
         return _failure("manifest present but no tile intersects the metadata cone")
@@ -332,6 +350,8 @@ def solve_near(
     except Exception:
         db_root_path = None
     for entry in candidates:
+        if cancel_check and cancel_check():
+            return _failure("cancelled")
         try:
             positions, world, mags = _load_tile_catalog(index_path, entry, ra0, dec0, db_root=db_root_path)
         except FileNotFoundError:
@@ -355,6 +375,8 @@ def solve_near(
         cat_positions = cat_positions[keep]
         cat_world = cat_world[keep]
         cat_mags = cat_mags[keep]
+    if cancel_check and cancel_check():
+        return _failure("cancelled")
     stars = detect_stars(image)
     if stars.size == 0:
         return _failure("no stars detected in the frame")
@@ -376,6 +398,8 @@ def solve_near(
     )
     if img_pairs.size == 0:
         return _failure("unable to build candidate matches from metadata")
+    if cancel_check and cancel_check():
+        return _failure("cancelled")
     hypothesis = estimate_similarity_RANSAC(
         img_pairs,
         cat_pairs,
@@ -402,6 +426,8 @@ def solve_near(
     )
     final_wcs = wcs
     final_stats = stats
+    if cancel_check and cancel_check():
+        return _failure("cancelled")
     try:
         ls_wcs, _ = fit_wcs_tan(matches)
     except Exception:
@@ -418,6 +444,8 @@ def solve_near(
     fov_est = approx_fov or (2.0 * np.max(np.hypot(cat_positions[:, 0], cat_positions[:, 1])))
     if final_stats.get("quality") == "GOOD" and needs_sip(final_wcs, final_stats, fov_est):
         for order in range(2, cfg.sip_order + 1):
+            if cancel_check and cancel_check():
+                return _failure("cancelled")
             candidate_wcs, _ = fit_wcs_sip(matches, order=order)
             candidate_stats = validate_solution(
                 candidate_wcs,
@@ -446,6 +474,8 @@ def solve_near(
         header_updates["PIXSCAL"] = pix_scale_arcsec
     elapsed = time.perf_counter() - start
     header_updates["NEARTIME"] = f"{elapsed:.2f}s"
+    if cancel_check and cancel_check():
+        return _failure("cancelled")
     try:
         with fits.open(fits_path, mode="update", memmap=False) as hdul:
             header = hdul[0].header

@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Dict, Callable
 
 import numpy as np
+import threading
 
 from .asterisms import hash_quads, sample_quads
 from .levels import LEVEL_MAP
@@ -17,14 +18,30 @@ logger = logging.getLogger(__name__)
 HASH_DIR = "hash_tables"
 MANIFEST_FILENAME = "manifest.json"
 _INDEX_CACHE: dict[tuple[Path, str], "QuadIndex"] = {}
+# Prevent redundant concurrent loads of the same quad table
+_INDEX_LOCK = threading.Lock()
+# Cache manifest contents with a simple stat signature to avoid re-reading JSON repeatedly
+_MANIFEST_CACHE: dict[Path, tuple[tuple[int, int], dict[str, Any]]] = {}
+_MANIFEST_LOCK = threading.Lock()
 
 
 def _load_manifest(index_root: Path) -> dict[str, Any]:
     manifest_path = index_root / MANIFEST_FILENAME
     if not manifest_path.exists():
         raise FileNotFoundError(manifest_path)
-    with manifest_path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    try:
+        st = manifest_path.stat()
+        sig = (int(st.st_mtime_ns), int(st.st_size))
+    except Exception:
+        sig = (0, 0)
+    with _MANIFEST_LOCK:
+        cached = _MANIFEST_CACHE.get(manifest_path)
+        if cached and cached[0] == sig:
+            return cached[1]
+        with manifest_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        _MANIFEST_CACHE[manifest_path] = (sig, data)
+        return data
 
 
 def load_manifest(index_root: Path | str) -> dict[str, Any]:
@@ -183,25 +200,30 @@ class QuadIndex:
     @classmethod
     def load(cls, index_root: Path, level: str) -> "QuadIndex":
         key = (index_root.resolve(), level)
-        if key in _INDEX_CACHE:
-            return _INDEX_CACHE[key]
-        table_path = index_root / HASH_DIR / f"quads_{level}.npz"
-        if not table_path.exists():
-            raise FileNotFoundError(table_path)
-        payload = np.load(table_path)
-        spec = LEVEL_MAP.get(level)
-        bucket_cap = spec.bucket_cap if spec else 0
-        index = cls(
-            level=level,
-            hashes=payload["hashes"],
-            tile_indices=payload["tile_indices"],
-            quad_indices=payload["quad_indices"],
-            bucket_hashes=payload["bucket_hashes"],
-            bucket_offsets=payload["bucket_offsets"],
-            bucket_cap=bucket_cap,
-        )
-        _INDEX_CACHE[key] = index
-        return index
+        cached = _INDEX_CACHE.get(key)
+        if cached is not None:
+            return cached
+        with _INDEX_LOCK:
+            cached = _INDEX_CACHE.get(key)
+            if cached is not None:
+                return cached
+            table_path = index_root / HASH_DIR / f"quads_{level}.npz"
+            if not table_path.exists():
+                raise FileNotFoundError(table_path)
+            payload = np.load(table_path)
+            spec = LEVEL_MAP.get(level)
+            bucket_cap = spec.bucket_cap if spec else 0
+            index = cls(
+                level=level,
+                hashes=payload["hashes"],
+                tile_indices=payload["tile_indices"],
+                quad_indices=payload["quad_indices"],
+                bucket_hashes=payload["bucket_hashes"],
+                bucket_offsets=payload["bucket_offsets"],
+                bucket_cap=bucket_cap,
+            )
+            _INDEX_CACHE[key] = index
+            return index
 
 
 def _process_tile_for_level(

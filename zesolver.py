@@ -68,6 +68,7 @@ from zesolver.zeblindsolver import (
     has_valid_wcs,
     near_solve,
 )
+from zeblindsolver.metadata_solver import NearSolveConfig as NearIndexConfig
 from zeblindsolver.db_convert import (
     DEFAULT_MAG_CAP,
     DEFAULT_MAX_QUADS_PER_TILE,
@@ -111,7 +112,7 @@ GUI_DEFAULT_LANGUAGE = "fr"
 GUI_FALLBACK_LANGUAGE = "en"
 GUI_LANG_ORDER = ("fr", "en")
 GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
-    "fr": {
+        "fr": {
         "language_menu": "Langue",
         "language_action_fr": "Français",
         "language_action_en": "Anglais",
@@ -130,7 +131,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "cache_label": "Cache catalogue",
         "max_files_label": "Limite de fichiers",
         "formats_label": "Extensions suivies",
-        "families_label": "Familles ASTAP",
+        "families_label": "Catalogue",
         "overwrite_label": "Réécrire les WCS existants",
         "blind_label": "Activer le blind solver",
         "files_header": "Fichier",
@@ -218,7 +219,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "cache_label": "Catalog cache",
         "max_files_label": "File limit",
         "formats_label": "Watched extensions",
-        "families_label": "ASTAP families",
+        "families_label": "Catalog",
         "overwrite_label": "Overwrite existing WCS",
         "blind_label": "Enable blind solver",
         "files_header": "File",
@@ -308,6 +309,19 @@ class PersistentSettings:
     blind_quality_inliers: int = 60
     blind_quality_rms: float = 1.0
     blind_fast_mode: bool = False
+    # Solver panel persisted settings
+    solver_fov_deg: float = DEFAULT_FOV_DEG
+    solver_search_scale: float = DEFAULT_SEARCH_RADIUS_SCALE
+    solver_search_attempts: int = DEFAULT_SEARCH_RADIUS_ATTEMPTS
+    solver_max_radius_deg: float = 0.0  # 0 = Auto
+    solver_downsample: int = 1
+    solver_workers: int = 0  # 0 = auto (half CPUs)
+    solver_cache_size: int = 12
+    solver_max_files: int = 0
+    solver_formats: Optional[str] = None
+    solver_family: Optional[str] = None  # lower-case key, None = Auto
+    solver_blind_enabled: bool = True
+    solver_overwrite: bool = True
 
 
 def load_persistent_settings() -> PersistentSettings:
@@ -333,6 +347,18 @@ def load_persistent_settings() -> PersistentSettings:
         blind_quality_inliers=int(payload.get("blind_quality_inliers", 12)),
         blind_quality_rms=float(payload.get("blind_quality_rms", 1.0)),
         blind_fast_mode=bool(payload.get("blind_fast_mode", False)),
+        solver_fov_deg=float(payload.get("solver_fov_deg", DEFAULT_FOV_DEG)),
+        solver_search_scale=float(payload.get("solver_search_scale", DEFAULT_SEARCH_RADIUS_SCALE)),
+        solver_search_attempts=int(payload.get("solver_search_attempts", DEFAULT_SEARCH_RADIUS_ATTEMPTS)),
+        solver_max_radius_deg=float(payload.get("solver_max_radius_deg", 0.0)),
+        solver_downsample=int(payload.get("solver_downsample", 1)),
+        solver_workers=int(payload.get("solver_workers", 0)),
+        solver_cache_size=int(payload.get("solver_cache_size", 12)),
+        solver_max_files=int(payload.get("solver_max_files", 0)),
+        solver_formats=payload.get("solver_formats"),
+        solver_family=(payload.get("solver_family") or None),
+        solver_blind_enabled=bool(payload.get("solver_blind_enabled", True)),
+        solver_overwrite=bool(payload.get("solver_overwrite", True)),
     )
 
 
@@ -662,6 +688,17 @@ class ImageSolver:
         self._db_lock = threading.Lock()
         self._family_candidates = self._init_family_candidates()
         self._family_hint: Optional[str] = None
+        # Cache to avoid repeating expensive blind index preflight checks per file
+        self._blind_index_checked: bool = False
+        self._blind_index_checked_root: Optional[Path] = None
+        # Optional cancellation event set by the GUI runner for responsive Stop
+        self._cancel_event: Optional[threading.Event] = None
+
+    def set_cancel_event(self, event: Optional[threading.Event]) -> None:
+        self._cancel_event = event
+
+    def _cancelled(self) -> bool:
+        return bool(self._cancel_event and self._cancel_event.is_set())
 
     def _init_family_candidates(self) -> tuple[str, ...]:
         ordered: list[str] = []
@@ -802,6 +839,8 @@ class ImageSolver:
         metadata: Optional[ImageMetadata] = None
         peaks: Optional[np.ndarray] = None
         try:
+            if self._cancelled():
+                return ImageSolveResult(path=path, status="skipped", message="cancelled")
             data, metadata = self._load_image(path)
             if metadata.has_wcs and not self.config.overwrite:
                 raise SolveError("WCS already present (use --overwrite to recompute)", skip=True)
@@ -811,6 +850,8 @@ class ImageSolver:
                 self.config.blind_index_path
                 and path.suffix.lower() in FITS_EXTENSIONS
             ):
+                if self._cancelled():
+                    return ImageSolveResult(path=path, status="skipped", message="cancelled")
                 near_first = self._run_index_near_solver(path)
                 if near_first is not None:
                     near_first.duration_s = time.perf_counter() - start
@@ -818,6 +859,8 @@ class ImageSolver:
                     return near_first
             if metadata.ra_deg is None or metadata.dec_deg is None:
                 raise SolveError("Missing RA/DEC metadata", skip=False)
+            if self._cancelled():
+                return ImageSolveResult(path=path, status="skipped", message="cancelled")
             peaks = _detect_stars(
                 data,
                 downsample=self.config.downsample,
@@ -825,11 +868,16 @@ class ImageSolver:
             )
             if peaks.shape[0] < 5:
                 raise SolveError("Not enough stars detected in the frame")
-            field_height = self.config.fov_deg * (metadata.height / metadata.width)
-            base_radius = 0.55 * math.hypot(self.config.fov_deg, field_height)
+            # Effective FOV for classic catalog-based solve; when GUI FOV is 0 (Auto),
+            # fall back to default to avoid a zero-radius search.
+            fov_eff = self.config.fov_deg if self.config.fov_deg and self.config.fov_deg > 0 else DEFAULT_FOV_DEG
+            field_height = fov_eff * (metadata.height / metadata.width)
+            base_radius = 0.55 * math.hypot(fov_eff, field_height)
             radius_candidates = self._radius_candidates(base_radius)
             final_error: Optional[SolveError] = None
             for radius_index, radius in enumerate(radius_candidates):
+                if self._cancelled():
+                    return ImageSolveResult(path=path, status="skipped", message="cancelled")
                 last_error: Optional[SolveError] = None
                 combined_label: Optional[str] = None
                 combined_catalog_family: Optional[str] = None
@@ -837,6 +885,8 @@ class ImageSolver:
                     combined_catalog_family = self.config.families[0]
                     combined_label = self._family_label(combined_catalog_family)
                 try:
+                    if self._cancelled():
+                        return ImageSolveResult(path=path, status="skipped", message="cancelled")
                     result = self._solve_with_catalog(
                         path=path,
                         metadata=metadata,
@@ -859,6 +909,8 @@ class ImageSolver:
                         raise last_error
                     raise SolveError("No catalogue families available in the database")
                 for idx, family in enumerate(families_to_try):
+                    if self._cancelled():
+                        return ImageSolveResult(path=path, status="skipped", message="cancelled")
                     try:
                         result = self._solve_with_catalog(
                             path=path,
@@ -910,6 +962,8 @@ class ImageSolver:
                 raise final_error
             raise SolveError("No catalogue families available in the database")
         except SolveError as exc:
+            if self._cancelled():
+                return ImageSolveResult(path=path, status="skipped", message="cancelled")
             blind_result = self._resolve_with_blind_after_failure(
                 path=path,
                 run_info=run_info,
@@ -1095,12 +1149,15 @@ class ImageSolver:
         ra_hint: Optional[float] = None,
         dec_hint: Optional[float] = None,
     ) -> Optional[BlindSolveResult]:
+        if self._cancelled():
+            return None
         if not self._should_try_blind(path):
             return None
         index_root = self.config.blind_index_path
         if not index_root:
             logging.info("Blind solver skipped for %s: no index root configured", path.name)
             return None
+        run_info.append(("run_info_blind_started", {"path": path.name}))
         logging.info(
             "Blind solver attempt for %s (index=%s, skip_if_valid=%s)",
             path.name,
@@ -1111,51 +1168,60 @@ class ImageSolver:
             # Extra diagnostics: verify index structure before calling the solver
             try:
                 root = Path(index_root).expanduser().resolve()
-                manifest = root / "manifest.json"
-                ht = root / "hash_tables"
-                l = ht / "quads_L.npz"
-                m = ht / "quads_M.npz"
-                s = ht / "quads_S.npz"
-                logging.info(
-                    "Blind index check: root=%s manifest=%s L=%s M=%s S=%s",
-                    root,
-                    "ok" if manifest.exists() else "missing",
-                    "ok" if l.exists() else "missing",
-                    "ok" if m.exists() else "missing",
-                    "ok" if s.exists() else "missing",
-                )
-                # Sanity-check: detect rings with mostly-empty tiles
-                try:
-                    health = validate_zeblind_index(root)
-                    tiles = int(health.get("manifest_tile_count", 0) or 0)
-                    empty = int(health.get("empty_tiles_total", 0) or 0)
-                    ratio = float(health.get("empty_ratio_overall", 0.0) or 0.0)
-                    rings = health.get("bad_empty_rings") or []
-                    ring_str = ",".join(str(r) for r in rings) if rings else "-"
+                needs_check = not self._blind_index_checked or (self._blind_index_checked_root != root)
+                if needs_check:
+                    preflight_start = time.perf_counter()
+                    manifest = root / "manifest.json"
+                    ht = root / "hash_tables"
+                    l = ht / "quads_L.npz"
+                    m = ht / "quads_M.npz"
+                    s = ht / "quads_S.npz"
                     logging.info(
-                        "Blind index health: %d/%d empty tiles (%.1f%%); affected rings: %s",
-                        empty,
-                        tiles,
-                        100.0 * ratio,
-                        ring_str,
+                        "Blind index check: root=%s manifest=%s L=%s M=%s S=%s",
+                        root,
+                        "ok" if manifest.exists() else "missing",
+                        "ok" if l.exists() else "missing",
+                        "ok" if m.exists() else "missing",
+                        "ok" if s.exists() else "missing",
                     )
-                    if rings:
-                        logging.warning(
-                            "Index appears incomplete (rings %s mostly empty). Rebuild the index to populate missing tiles.",
+                    # Sanity-check once per run: detect rings with mostly-empty tiles
+                    try:
+                        health = validate_zeblind_index(root)
+                        tiles = int(health.get("manifest_tile_count", 0) or 0)
+                        empty = int(health.get("empty_tiles_total", 0) or 0)
+                        ratio = float(health.get("empty_ratio_overall", 0.0) or 0.0)
+                        rings = health.get("bad_empty_rings") or []
+                        ring_str = ",".join(str(r) for r in rings) if rings else "-"
+                        logging.info(
+                            "Blind index health: %d/%d empty tiles (%.1f%%); affected rings: %s",
+                            empty,
+                            tiles,
+                            100.0 * ratio,
                             ring_str,
                         )
-                except Exception:
-                    # Non-fatal
-                    pass
+                        if rings:
+                            logging.warning(
+                                "Index appears incomplete (rings %s mostly empty). Rebuild the index to populate missing tiles.",
+                                ring_str,
+                            )
+                    except Exception:
+                        # Non-fatal
+                        pass
+                    self._blind_index_checked = True
+                    self._blind_index_checked_root = root
+                    logging.info("Blind preflight completed in %.2fs", time.perf_counter() - preflight_start)
             except Exception:
                 # Non-fatal; proceed to solver which will report a clear error
                 pass
+            if self._cancelled():
+                return None
             result = blind_solve(
                 fits_path=str(path),
                 index_root=str(index_root),
                 config=BlindSolveConfig(),
                 log=logging.info,
                 skip_if_valid=skip_if_valid,
+                cancel_check=(self._cancelled if self._cancel_event else None),
             )
         except BlindSolverRuntimeError as exc:
             logging.warning("Blind solver failed for %s: %s", path.name, exc)
@@ -1203,13 +1269,23 @@ class ImageSolver:
             index_root = self.config.blind_index_path
             if not index_root:
                 return None
+            # Use GUI FOV value as override for near solver when > 0
+            fov_override = self.config.fov_deg if self.config.fov_deg and self.config.fov_deg > 0 else None
+            family: Optional[str] = None
+            if self.config.families and len(self.config.families) == 1:
+                family = self.config.families[0]
+            near_cfg = NearIndexConfig(
+                fov_override_deg=fov_override,
+                family=family,
+            )
             result = near_solve(
                 fits_path=str(path),
                 index_root=str(index_root),
-                config=None,
+                config=near_cfg,
                 log=logging.info,
                 skip_if_valid=False,
                 fallback_to_blind=False,
+                cancel_check=(self._cancelled if self._cancel_event else None),
             )
         except BlindSolverRuntimeError as exc:
             logging.info("Near solver (index) failed for %s: %s", path.name, exc)
@@ -1295,18 +1371,43 @@ class BatchSolver:
                 message="No matching files found",
             )
             return
+        # Propagate cancellation to the solver for cooperative early exit
+        try:
+            self.solver.set_cancel_event(cancel_event)
+        except Exception:
+            pass
         workers = max(1, self.config.workers)
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(self.solver.solve_path, path): path for path in self.files}
+            it = iter(self.files)
+            inflight: dict[concurrent.futures.Future[ImageSolveResult], Path] = {}
+            # Prime up to worker count
             try:
-                for future in concurrent.futures.as_completed(futures):
+                for _ in range(workers):
                     if cancel_event and cancel_event.is_set():
                         break
-                    yield future.result()
+                    path = next(it)
+                    inflight[pool.submit(self.solver.solve_path, path)] = path
+            except StopIteration:
+                pass
+            try:
+                while inflight:
+                    future = next(concurrent.futures.as_completed(inflight))
+                    path = inflight.pop(future)
+                    try:
+                        yield future.result()
+                    except Exception as exc:
+                        yield ImageSolveResult(path=path, status="failed", message=str(exc))
+                    if cancel_event and cancel_event.is_set():
+                        break
+                    try:
+                        path = next(it)
+                    except StopIteration:
+                        continue
+                    inflight[pool.submit(self.solver.solve_path, path)] = path
             finally:
                 if cancel_event and cancel_event.is_set():
-                    for future in futures:
-                        future.cancel()
+                    for f in inflight.keys():
+                        f.cancel()
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -1496,6 +1597,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception as exc:
                 self.error.emit(str(exc))
                 return
+            # Propagate cancel event for cooperative cancellation
+            try:
+                batch.solver.set_cancel_event(self._cancel_event)
+            except Exception:
+                pass
             self.started.emit(len(batch.files))
             self.info.emit(
                 self._translate(
@@ -1505,8 +1611,17 @@ def launch_gui(args: argparse.Namespace) -> int:
                 )
             )
             try:
+                import gc as _gc
+                processed = 0
                 for result in batch.run(cancel_event=self._cancel_event):
                     self.progress.emit(result)
+                    processed += 1
+                    # Periodic GC to reduce memory high-water in long runs
+                    if processed % max(1, int(self.config.workers)) == 0:
+                        try:
+                            _gc.collect()
+                        except Exception:
+                            pass
                     if self._cancel_event.is_set():
                         self.info.emit(self._translate("runner_stop_wait"))
                         break
@@ -1797,46 +1912,48 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.options_box = QtWidgets.QGroupBox()
             form = QtWidgets.QFormLayout(self.options_box)
             self.fov_spin = QtWidgets.QDoubleSpinBox()
-            self.fov_spin.setRange(0.1, 20.0)
+            self.fov_spin.setRange(0.0, 20.0)
             self.fov_spin.setDecimals(2)
-            self.fov_spin.setValue(args.fov_deg or DEFAULT_FOV_DEG)
+            self.fov_spin.setValue(self._settings.solver_fov_deg or args.fov_deg or DEFAULT_FOV_DEG)
+            # Treat 0.0 as "Auto" in the UI
+            self.fov_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
             self.search_scale_spin = QtWidgets.QDoubleSpinBox()
             self.search_scale_spin.setRange(1.0, 10.0)
             self.search_scale_spin.setDecimals(2)
             self.search_scale_spin.setSingleStep(0.1)
-            self.search_scale_spin.setValue(args.search_radius_scale or DEFAULT_SEARCH_RADIUS_SCALE)
+            self.search_scale_spin.setValue(self._settings.solver_search_scale or args.search_radius_scale or DEFAULT_SEARCH_RADIUS_SCALE)
             self.search_attempts_spin = QtWidgets.QSpinBox()
             self.search_attempts_spin.setRange(1, 10)
-            self.search_attempts_spin.setValue(args.search_radius_attempts or DEFAULT_SEARCH_RADIUS_ATTEMPTS)
+            self.search_attempts_spin.setValue(self._settings.solver_search_attempts or args.search_radius_attempts or DEFAULT_SEARCH_RADIUS_ATTEMPTS)
             self.max_radius_spin = QtWidgets.QDoubleSpinBox()
             self.max_radius_spin.setRange(0.0, 30.0)
             self.max_radius_spin.setDecimals(2)
             self.max_radius_spin.setSingleStep(0.1)
             self.max_radius_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
-            max_radius = args.max_search_radius_deg or 0.0
+            max_radius = self._settings.solver_max_radius_deg if self._settings.solver_max_radius_deg is not None else 0.0
             self.max_radius_spin.setValue(max_radius)
             self.downsample_spin = QtWidgets.QSpinBox()
             self.downsample_spin.setRange(1, 4)
-            self.downsample_spin.setValue(args.downsample or 1)
+            self.downsample_spin.setValue(self._settings.solver_downsample or args.downsample or 1)
             self.workers_spin = QtWidgets.QSpinBox()
             self.workers_spin.setRange(1, max(32, _default_worker_count()))
-            self.workers_spin.setValue(args.workers or _default_worker_count())
+            self.workers_spin.setValue(self._settings.solver_workers or args.workers or _default_worker_count())
             self.cache_spin = QtWidgets.QSpinBox()
             self.cache_spin.setRange(2, 64)
-            self.cache_spin.setValue(args.cache_size or 12)
+            self.cache_spin.setValue(self._settings.solver_cache_size or args.cache_size or 12)
             self.max_files_spin = QtWidgets.QSpinBox()
             self.max_files_spin.setRange(0, 10000)
-            self.max_files_spin.setValue(args.max_files or 0)
-            formats_text = args.formats or ",".join(sorted(SUPPORTED_EXTENSIONS))
+            self.max_files_spin.setValue(self._settings.solver_max_files or args.max_files or 0)
+            formats_text = self._settings.solver_formats or args.formats or ",".join(sorted(SUPPORTED_EXTENSIONS))
             self.formats_edit = QtWidgets.QLineEdit(formats_text)
-            self.families_edit = QtWidgets.QLineEdit(
-                ",".join(prefill_families) if prefill_families else ""
-            )
+            # Catalog family selection (populated from index manifest). First item = Auto
+            self.families_combo = QtWidgets.QComboBox()
+            self.families_combo.setEditable(False)
+            self.families_combo.addItem(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"], "")
             self.overwrite_check = QtWidgets.QCheckBox()
-            # Default to overwriting existing WCS in the GUI
-            self.overwrite_check.setChecked(True)
+            self.overwrite_check.setChecked(bool(self._settings.solver_overwrite))
             self.blind_check = QtWidgets.QCheckBox()
-            self.blind_check.setChecked(args.blind_enabled)
+            self.blind_check.setChecked(bool(self._settings.solver_blind_enabled))
             self.fov_label_widget = QtWidgets.QLabel()
             self.search_scale_label_widget = QtWidgets.QLabel()
             self.search_attempts_label_widget = QtWidgets.QLabel()
@@ -1856,10 +1973,47 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.cache_label_widget, self.cache_spin)
             form.addRow(self.max_files_label_widget, self.max_files_spin)
             form.addRow(self.formats_label_widget, self.formats_edit)
-            form.addRow(self.families_label_widget, self.families_edit)
+            form.addRow(self.families_label_widget, self.families_combo)
             form.addRow(self.blind_check)
             form.addRow(self.overwrite_check)
             return self.options_box
+
+        def _populate_families_from_index(self, index_root_text: str) -> None:
+            """Populate the catalog family dropdown from the index manifest.
+
+            Adds an 'Auto' entry first; subsequent entries are sorted unique family keys.
+            """
+            try:
+                root = Path(index_root_text).expanduser().resolve()
+            except Exception:
+                return
+            manifest = root / "manifest.json"
+            if not manifest.is_file():
+                return
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+            except Exception:
+                return
+            tiles = payload.get("tiles") or []
+            families: set[str] = set()
+            for entry in tiles:
+                name = str(entry.get("family", "")).strip().lower()
+                if name:
+                    families.add(name)
+            items = sorted(families)
+            # Preserve current selection key if possible
+            current = self.families_combo.currentData() if hasattr(self, 'families_combo') else ""
+            self.families_combo.blockSignals(True)
+            self.families_combo.clear()
+            self.families_combo.addItem(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"], "")
+            for key in items:
+                self.families_combo.addItem(key, key)
+            # Restore previous selection if present
+            if current and current in items:
+                idx = self.families_combo.findData(current)
+                if idx >= 0:
+                    self.families_combo.setCurrentIndex(idx)
+            self.families_combo.blockSignals(False)
 
         def _build_settings_tab(self) -> QtWidgets.QWidget:
             widget = QtWidgets.QWidget()
@@ -1980,6 +2134,11 @@ def launch_gui(args: argparse.Namespace) -> int:
 
             self.settings_log_view = QtWidgets.QPlainTextEdit()
             self.settings_log_view.setReadOnly(True)
+            # Cap log memory growth: keep at most 2000 lines
+            try:
+                self.settings_log_view.document().setMaximumBlockCount(2000)
+            except Exception:
+                pass
             column.addLayout(form)
             column.addWidget(self.blind_group)
             column.addLayout(button_row)
@@ -2042,6 +2201,17 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_blind_quality_rms_spin.setValue(settings.blind_quality_rms)
             if hasattr(self, 'settings_blind_fast_check'):
                 self.settings_blind_fast_check.setChecked(settings.blind_fast_mode)
+            # Also refresh the solver tab family dropdown from the chosen index,
+            # and restore previously saved family selection if any.
+            try:
+                self._populate_families_from_index(settings.index_root or "")
+                fam = (settings.solver_family or "").strip().lower()
+                if fam:
+                    idx = self.families_combo.findData(fam)
+                    if idx >= 0:
+                        self.families_combo.setCurrentIndex(idx)
+            except Exception:
+                pass
 
         def _read_settings_from_ui(self) -> PersistentSettings:
             db_root = self.settings_db_edit.text().strip()
@@ -2113,6 +2283,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._settings = settings
             save_persistent_settings(settings)
             self._log_settings(self._text("settings_saved"))
+            # Refresh families dropdown in solver tab after saving new index root
+            try:
+                self._populate_families_from_index(settings.index_root or "")
+            except Exception:
+                pass
 
         def _on_build_index_clicked(self) -> None:
             if self._index_worker:
@@ -2301,6 +2476,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             try:
                 if success:
                     self._log_index_health(self.settings_index_edit.text().strip())
+                    # Refresh families dropdown in main solver tab
+                    try:
+                        self._populate_families_from_index(self.settings_index_edit.text().strip())
+                    except Exception:
+                        pass
             except Exception:
                 pass
             self.settings_build_btn.setEnabled(True)
@@ -2354,6 +2534,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             log_layout = QtWidgets.QVBoxLayout(self.log_box)
             self.log_view = QtWidgets.QPlainTextEdit()
             self.log_view.setReadOnly(True)
+            # Cap main log growth: keep at most 5000 lines
+            try:
+                self.log_view.document().setMaximumBlockCount(5000)
+            except Exception:
+                pass
             log_layout.addWidget(self.log_view)
             splitter.addWidget(self.log_box)
             splitter.setSizes([800, 400])
@@ -2408,6 +2593,17 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.max_files_label_widget.setText(self._text("max_files_label"))
             self.formats_label_widget.setText(self._text("formats_label"))
             self.families_label_widget.setText(self._text("families_label"))
+            # Populate catalog families from index manifest if available
+            try:
+                self._populate_families_from_index(self._settings.index_root or "")
+                # Restore saved selection
+                fam = (self._settings.solver_family or "").strip().lower()
+                if fam:
+                    idx = self.families_combo.findData(fam)
+                    if idx >= 0:
+                        self.families_combo.setCurrentIndex(idx)
+            except Exception:
+                pass
             self.blind_check.setText(self._text("blind_label"))
             self.overwrite_check.setText(self._text("overwrite_label"))
             self.files_view.setHeaderLabels(
@@ -2584,12 +2780,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 raise ValueError(self._text("error_database_missing", path=db_root))
             if not self._current_input_dir:
                 raise ValueError(self._text("error_no_input_dir"))
-            families_text = self.families_edit.text().replace(";", ",").strip()
-            families = [
-                chunk.strip().lower()
-                for chunk in families_text.split(",")
-                if chunk.strip()
-            ]
+            # Family selection via dropdown ('Auto' → no restriction)
+            selected_family = self.families_combo.currentData()
+            families = [str(selected_family).strip().lower()] if selected_family else []
             formats = tuple(self._parse_formats())
             max_files = self.max_files_spin.value() or None
             max_radius_value = self.max_radius_spin.value()
@@ -2600,6 +2793,24 @@ def launch_gui(args: argparse.Namespace) -> int:
             index_root = Path(index_root_text).expanduser()
             if not index_root.is_dir():
                 raise ValueError(self._text("settings_index_missing"))
+            # Persist solver panel settings for next runs
+            try:
+                self._settings.solver_fov_deg = float(self.fov_spin.value())
+                self._settings.solver_search_scale = float(self.search_scale_spin.value())
+                self._settings.solver_search_attempts = int(self.search_attempts_spin.value())
+                self._settings.solver_max_radius_deg = float(self.max_radius_spin.value())
+                self._settings.solver_downsample = int(self.downsample_spin.value())
+                self._settings.solver_workers = int(self.workers_spin.value())
+                self._settings.solver_cache_size = int(self.cache_spin.value())
+                self._settings.solver_max_files = int(self.max_files_spin.value())
+                self._settings.solver_formats = self.formats_edit.text().strip() or None
+                sel_fam = self.families_combo.currentData() or ""
+                self._settings.solver_family = str(sel_fam).strip().lower() or None
+                self._settings.solver_blind_enabled = bool(self.blind_check.isChecked())
+                self._settings.solver_overwrite = bool(self.overwrite_check.isChecked())
+                save_persistent_settings(self._settings)
+            except Exception:
+                pass
             return SolveConfig(
                 db_root=db_root,
                 input_dir=self._current_input_dir,

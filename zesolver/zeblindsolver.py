@@ -158,6 +158,7 @@ def blind_solve(
     config: Optional[InternalBlindConfig] = None,
     log: Optional[Callable[[str], None]] = None,
     skip_if_valid: bool = True,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> BlindSolveResult:
     logger = log or _default_log
     start = time.perf_counter()
@@ -184,7 +185,9 @@ def blind_solve(
         except Exception as exc:
             raise InvalidInputError(f"Unable to read FITS header: {exc}") from exc
     try:
-        solution = _internal_solve_blind(fits_path, index_root, config=config)
+        if cancel_check and cancel_check():
+            raise BlindSolverRuntimeError("cancelled")
+        solution = _internal_solve_blind(fits_path, index_root, config=config, cancel_check=cancel_check)
     except InvalidInputError:
         raise
     except Exception as exc:
@@ -213,6 +216,7 @@ def near_solve(
     log: Optional[Callable[[str], None]] = None,
     skip_if_valid: bool = True,
     fallback_to_blind: bool = True,
+    cancel_check: Optional[Callable[[], bool]] = None,
 ) -> BlindSolveResult:
     logger = log or _default_log
     start = time.perf_counter()
@@ -239,7 +243,9 @@ def near_solve(
         except Exception as exc:
             raise InvalidInputError(f"Unable to read FITS header: {exc}") from exc
     try:
-        solution = _internal_solve_near(fits_path, index_root, config=config)
+        if cancel_check and cancel_check():
+            raise BlindSolverRuntimeError("cancelled")
+        solution = _internal_solve_near(fits_path, index_root, config=config, cancel_check=cancel_check)
     except InvalidInputError:
         raise
     except Exception as exc:
@@ -259,6 +265,17 @@ def near_solve(
     )
     if solution.success or not fallback_to_blind:
         return result
+    if cancel_check and cancel_check():
+        return BlindSolveResult(
+            success=False,
+            message="cancelled",
+            elapsed_sec=elapsed,
+            tried_dbs=[index_root],
+            used_db=None,
+            wrote_wcs=False,
+            updated_keywords={},
+            output_path=fits_path,
+        )
     logger(f"[ZENEAR] near solve failed ({solution.message}); attempting blind fallback…")
     blind_result = blind_solve(
         fits_path,
@@ -266,6 +283,7 @@ def near_solve(
         config=None,
         log=log,
         skip_if_valid=False,
+        cancel_check=cancel_check,
     )
     prefix = f"near failed: {solution.message}"
     blind_message = blind_result["message"]

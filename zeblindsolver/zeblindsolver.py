@@ -6,7 +6,7 @@ import os
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Callable, Optional
 
 import numpy as np
 from astropy.io import fits
@@ -145,9 +145,17 @@ def _log_phase(stage: str, start: float) -> None:
     logger.debug("%s completed in %.2fs", stage, time.time() - start)
 
 
-def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: SolveConfig | None = None) -> WcsSolution:
+def solve_blind(
+    input_fits: Path | str,
+    index_root: Path | str,
+    *,
+    config: SolveConfig | None = None,
+    cancel_check: Optional[Callable[[], bool]] = None,
+) -> WcsSolution:
     config = config or SolveConfig()
     index_root = Path(index_root).expanduser().resolve()
+    if cancel_check and cancel_check():
+        return WcsSolution(False, "cancelled", None, {}, None, {})
     manifest = load_manifest(index_root)
     levels = [level["name"] for level in manifest.get("levels", [])] or ["L", "M", "S"]
     # Prefer trying smaller-diameter levels first for selectivity
@@ -180,6 +188,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
             ", ".join(missing_levels),
             ", ".join(present_levels),
         )
+    if cancel_check and cancel_check():
+        return WcsSolution(False, "cancelled", None, {}, None, {})
     tile_entries = manifest.get("tiles", [])
     tile_map = {entry["tile_key"]: idx for idx, entry in enumerate(tile_entries)}
     logging.getLogger().setLevel(config.log_level)
@@ -212,6 +222,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
     except Exception:
         preferred_tile_from_header = None
     stage = time.time()
+    if cancel_check and cancel_check():
+        return WcsSolution(False, "cancelled", None, {}, None, {})
     image = read_fits_as_luma(input_fits)
     height, width = image.shape
     # Estimate pixel scale (deg/px) if header contains optical info
@@ -246,9 +258,13 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
     obs_stars["y"] = stars["y"]
     obs_stars["mag"] = -stars["flux"]
     # Prefer local-neighborhood quads to improve geometric stability on TAN plane
+    if cancel_check and cancel_check():
+        return WcsSolution(False, "cancelled", None, {}, None, {})
     quads = sample_quads(obs_stars, config.max_quads, strategy="local_brightness")
     if quads.size == 0:
         return WcsSolution(False, "no quads sampled", None, {}, None, {})
+    if cancel_check and cancel_check():
+        return WcsSolution(False, "cancelled", None, {}, None, {})
     obs_hash = hash_quads(quads, image_positions)
     logger.info("sampled %d quads producing %d hashes", quads.shape[0], obs_hash.hashes.size)
     _log_phase("detect/quads", stage)
@@ -293,6 +309,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
     # Precompute observed hashes per level with pixel-adapted specs when possible
     obs_by_level: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for lvl in levels:
+        if cancel_check and cancel_check():
+            return WcsSolution(False, "cancelled", None, {}, None, {})
         px = _spec_pixels(lvl)
         if px is None:
             # fallback to unfiltered
@@ -311,11 +329,15 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
         use_ra_filter: bool = True,
         agg_levels: Iterable[str] | None = None,
     ) -> WcsSolution | None:
+        if cancel_check and cancel_check():
+            return None
         # Use precomputed observed quads for this level (optionally bypassing px filters)
         if use_px_spec:
             level_hashes, level_quads = obs_by_level.get(level_name, (obs_hash.hashes, obs_hash.indices))
         else:
             level_hashes, level_quads = (obs_hash.hashes, obs_hash.indices)
+        if cancel_check and cancel_check():
+            return None
         candidates = tally_candidates(level_hashes, index_root, levels=[level_name])
         if not candidates:
             logger.debug("level %s produced no candidates (parity=%s)", level_name, parity_label)
@@ -335,6 +357,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
             radius_limit = min(8.0, max(5.0, (approx_fov or 1.5) * 3.0))
             filtered: list[tuple[str, int]] = []
             for key, score in ordered:
+                if cancel_check and cancel_check():
+                    return None
                 idx = tile_map.get(key)
                 if idx is None:
                     continue
@@ -352,6 +376,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
             len(candidates),
         )
         for candidate_key, score in ordered[: config.max_candidates]:
+            if cancel_check and cancel_check():
+                return None
             logger.debug(
                 "trying tile %s (score=%d) at level %s (parity=%s)",
                 candidate_key,
@@ -373,6 +399,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
             world_list: list[np.ndarray] = []
             levels_to_use = list(agg_levels) if agg_levels is not None else list(levels)
             for lvl in levels_to_use:
+                if cancel_check and cancel_check():
+                    return None
                 ohashes, oquads = (obs_by_level[lvl] if use_px_spec else (obs_hash.hashes, obs_hash.indices))
                 ip, tp, wp = _collect_tile_matches(
                     index_root,
@@ -414,12 +442,16 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
                 src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
                 dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
                 for idx2, slc in enumerate(slices):
+                    if cancel_check and cancel_check():
+                        return None
                     if slc.start == slc.stop:
                         continue
                     if tested >= max_buckets:
                         break
                     obs_combo = level_quads[idx2]
                     for b in range(slc.start, slc.stop):
+                        if cancel_check and cancel_check():
+                            return None
                         if int(index.tile_indices[b]) != tile_index:
                             continue
                         tested += 1
@@ -458,6 +490,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
                         break
                 transform_result = best
             if transform_result is None:
+                if cancel_check and cancel_check():
+                    return None
                 transform_result = estimate_similarity_RANSAC(
                     img_points,
                     tile_points,
@@ -537,6 +571,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
             fov_deg = float(np.hypot(*np.ptp(tile_positions, axis=0))) if tile_positions.size else 0.0
             if final_stats.get("quality") == "GOOD" and needs_sip(final_wcs, final_stats, fov_deg):
                 for order in range(2, config.sip_order + 1):
+                    if cancel_check and cancel_check():
+                        return None
                     try:
                         candidate_wcs, _ = fit_wcs_sip(matches_array, order=order)
                     except Exception as exc:
@@ -681,6 +717,8 @@ def solve_blind(input_fits: Path | str, index_root: Path | str, *, config: Solve
         **best_solution.header_updates,
         "BLINDVER": ZEBLIND_VERSION,
     }
+    if cancel_check and cancel_check():
+        return WcsSolution(False, "cancelled", None, {}, None, {})
     with fits.open(input_fits, mode="update", memmap=False) as hdul:
         header = hdul[0].header
         for key, value in best_solution.wcs.to_header(relax=True).items():
