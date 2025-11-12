@@ -15,7 +15,7 @@ import numpy as np
 import threading
 
 from .asterisms import hash_quads, sample_quads
-from .levels import LEVEL_MAP
+from .levels import LEVEL_MAP, bucket_cap_for
 
 logger = logging.getLogger(__name__)
 HASH_DIR = "hash_tables"
@@ -412,7 +412,8 @@ class QuadIndex:
                         "bucket_offsets": data["bucket_offsets"],
                     }
             spec = LEVEL_MAP.get(level)
-            bucket_cap = spec.bucket_cap if spec else 0
+            default_cap = spec.bucket_cap if spec else 0
+            bucket_cap = bucket_cap_for(level, default_cap)
             index = cls(
                 level=level,
                 hashes=payload["hashes"],

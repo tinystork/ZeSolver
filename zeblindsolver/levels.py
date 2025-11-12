@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Mapping, Sequence
 
 @dataclass(frozen=True)
 class QuadLevelSpec:
@@ -30,3 +30,24 @@ LEVEL_SPECS: Sequence[QuadLevelSpec] = (
 )
 
 LEVEL_MAP: dict[str, QuadLevelSpec] = {level.name: level for level in LEVEL_SPECS}
+
+_BUCKET_CAP_OVERRIDES: dict[str, int] = {}
+
+
+def set_bucket_cap_overrides(overrides: Mapping[str, int] | None) -> None:
+    """Override per-level bucket caps at runtime (e.g. from GUI dev settings)."""
+    _BUCKET_CAP_OVERRIDES.clear()
+    if not overrides:
+        return
+    for level, value in overrides.items():
+        try:
+            cap = max(0, int(value))
+        except (TypeError, ValueError):
+            continue
+        if cap <= 0:
+            continue
+        _BUCKET_CAP_OVERRIDES[level.upper()] = cap
+
+
+def bucket_cap_for(level: str, default: int) -> int:
+    return max(0, int(_BUCKET_CAP_OVERRIDES.get(level.upper(), default)))

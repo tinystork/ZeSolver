@@ -164,6 +164,13 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "dev_bucket_label": "Limite max. paires/quads",
         "dev_bucket_hint": "0 = auto (recommandé)",
         "dev_vote_label": "Percentile votes (quads)",
+        "dev_detect_sigma_label": "Sigma détection (k·σ)",
+        "dev_detect_sigma_hint": "Multiplier l'écart-type du bruit (défaut 3.0)",
+        "dev_detect_area_label": "Surface min. (px)",
+        "dev_detect_area_hint": "Ignorer les blobs sous ce seuil (défaut 5)",
+        "dev_bucket_cap_s_label": "Cap niveau S",
+        "dev_bucket_cap_m_label": "Cap niveau M",
+        "dev_bucket_cap_l_label": "Cap niveau L",
         "status_ready": "Prêt.",
         "dialog_select_directory": "Choisir un dossier",
         "error_select_input": "Sélectionne un dossier contenant tes images.",
@@ -314,6 +321,13 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "dev_bucket_label": "Max quad pairs per bucket",
         "dev_bucket_hint": "0 = auto (recommended)",
         "dev_vote_label": "Vote percentile (quads)",
+        "dev_detect_sigma_label": "Detection sigma (k·σ)",
+        "dev_detect_sigma_hint": "Multiplier applied to noise sigma (default 3.0)",
+        "dev_detect_area_label": "Min blob area (px)",
+        "dev_detect_area_hint": "Reject detections smaller than N pixels (default 5)",
+        "dev_bucket_cap_s_label": "Bucket cap (S)",
+        "dev_bucket_cap_m_label": "Bucket cap (M)",
+        "dev_bucket_cap_l_label": "Bucket cap (L)",
         "status_ready": "Ready.",
         "dialog_select_directory": "Choose a folder",
         "error_select_input": "Select a folder containing your images.",
@@ -621,6 +635,8 @@ class SolveConfig:
     log_level: str = "INFO"
     dev_bucket_limit_override: int = 0
     dev_vote_percentile: int = 40
+    dev_detect_k_sigma: float = 3.0
+    dev_detect_min_area: int = 5
 
     def __post_init__(self) -> None:
         if self.families:
@@ -648,6 +664,13 @@ class SolveConfig:
         vote = int(getattr(self, "dev_vote_percentile", 40) or 40)
         vote = min(95, max(5, vote))
         object.__setattr__(self, "dev_vote_percentile", vote)
+        detect_sigma = float(getattr(self, "dev_detect_k_sigma", 3.0) or 3.0)
+        if not math.isfinite(detect_sigma) or detect_sigma <= 0.0:
+            detect_sigma = 3.0
+        object.__setattr__(self, "dev_detect_k_sigma", detect_sigma)
+        detect_area = int(getattr(self, "dev_detect_min_area", 5) or 5)
+        detect_area = max(1, detect_area)
+        object.__setattr__(self, "dev_detect_min_area", detect_area)
 
 
 @dataclass(slots=True)
@@ -1605,13 +1628,18 @@ class ImageSolver:
                 max_candidates=int(getattr(self.config, "blind_max_candidates", 10) or 10),
                 max_stars=int(getattr(self.config, "blind_max_stars", 500) or 500),
                 max_quads=int(getattr(self.config, "blind_max_quads", 8000) or 8000),
+                detect_k_sigma=float(getattr(self.config, "dev_detect_k_sigma", 3.0) or 3.0),
+                detect_min_area=int(getattr(self.config, "dev_detect_min_area", 5) or 5),
+                bucket_cap_S=int(getattr(self.config, "dev_bucket_cap_S", 0) or 0),
+                bucket_cap_M=int(getattr(self.config, "dev_bucket_cap_M", 0) or 0),
+                bucket_cap_L=int(getattr(self.config, "dev_bucket_cap_L", 0) or 0),
                 quality_rms=float(getattr(self.config, "blind_quality_rms", 1.2) or 1.2),
                 quality_inliers=int(getattr(self.config, "blind_quality_inliers", 40) or 40),
                 pixel_tolerance=float(getattr(self.config, "blind_pixel_tolerance", 2.5) or 2.5),
                 fast_mode=bool(getattr(self.config, "blind_fast_mode", True)),
                 log_level=getattr(self.config, "log_level", "INFO"),
-                 bucket_limit_override=int(getattr(self.config, "dev_bucket_limit_override", 0) or 0),
-                 vote_percentile=int(getattr(self.config, "dev_vote_percentile", 40) or 40),
+                bucket_limit_override=int(getattr(self.config, "dev_bucket_limit_override", 0) or 0),
+                vote_percentile=int(getattr(self.config, "dev_vote_percentile", 40) or 40),
                 # Hints / optics
                 ra_hint_deg=final_ra,
                 dec_hint_deg=final_dec,
@@ -2112,6 +2140,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=40,
         help="Developer: percentile threshold for quad vote accumulation (5-95)",
     )
+    parser.add_argument(
+        "--bucket-cap-s",
+        type=int,
+        default=0,
+        help="Developer: override level-S quad bucket cap (0 = manifest/default)",
+    )
+    parser.add_argument(
+        "--bucket-cap-m",
+        type=int,
+        default=0,
+        help="Developer: override level-M quad bucket cap (0 = manifest/default)",
+    )
+    parser.add_argument(
+        "--bucket-cap-l",
+        type=int,
+        default=0,
+        help="Developer: override level-L quad bucket cap (0 = manifest/default)",
+    )
+    parser.add_argument(
+        "--dev-detect-k-sigma",
+        type=float,
+        default=3.0,
+        help="Developer: detection sigma multiplier (default: 3.0)",
+    )
+    parser.add_argument(
+        "--dev-detect-min-area",
+        type=int,
+        default=5,
+        help="Developer: minimum blob area (pixels) for detections (default: 5)",
+    )
     parser.add_argument("--headless", action="store_true", help="Force CLI mode even if arguments are missing")
     parser.add_argument("--gui", action="store_true", help="Force GUI mode even if CLI arguments are provided")
     parser.set_defaults(blind_enabled=True)
@@ -2200,6 +2258,11 @@ def run_cli(args: argparse.Namespace) -> int:
         log_level=(args.log_level or "INFO").upper(),
         dev_bucket_limit_override=max(0, int(args.dev_bucket_limit or 0)),
         dev_vote_percentile=min(95, max(5, int(args.dev_vote_percentile or 40))),
+        bucket_cap_S=max(0, int(args.bucket_cap_s or 0)),
+        bucket_cap_M=max(0, int(args.bucket_cap_m or 0)),
+        bucket_cap_L=max(0, int(args.bucket_cap_l or 0)),
+        dev_detect_k_sigma=max(0.5, float(args.dev_detect_k_sigma or 3.0)),
+        dev_detect_min_area=max(1, int(args.dev_detect_min_area or 5)),
     )
     logging.info(
         "Starting batch solve in %s (families=%s, workers=%d, downsample=%d)",
@@ -3195,8 +3258,67 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.dev_vote_spin.setSingleStep(5)
             self.dev_vote_spin.setValue(int(self._settings.dev_vote_percentile or 40))
             form.addRow(self.dev_vote_label, self.dev_vote_spin)
+            self.dev_cap_s_label = QtWidgets.QLabel()
+            self.dev_cap_s_spin = QtWidgets.QSpinBox()
+            self.dev_cap_s_spin.setRange(512, 20000)
+            self.dev_cap_s_spin.setSingleStep(256)
+            self.dev_cap_s_spin.setValue(int(self._settings.dev_bucket_cap_S or 6000))
+            form.addRow(self.dev_cap_s_label, self.dev_cap_s_spin)
+            self.dev_cap_m_label = QtWidgets.QLabel()
+            self.dev_cap_m_spin = QtWidgets.QSpinBox()
+            self.dev_cap_m_spin.setRange(256, 20000)
+            self.dev_cap_m_spin.setSingleStep(256)
+            self.dev_cap_m_spin.setValue(int(self._settings.dev_bucket_cap_M or 4096))
+            form.addRow(self.dev_cap_m_label, self.dev_cap_m_spin)
+            self.dev_cap_l_label = QtWidgets.QLabel()
+            self.dev_cap_l_spin = QtWidgets.QSpinBox()
+            self.dev_cap_l_spin.setRange(1024, 40000)
+            self.dev_cap_l_spin.setSingleStep(512)
+            self.dev_cap_l_spin.setValue(int(self._settings.dev_bucket_cap_L or 8192))
+            form.addRow(self.dev_cap_l_label, self.dev_cap_l_spin)
+            self.dev_sigma_label = QtWidgets.QLabel()
+            self.dev_sigma_spin = QtWidgets.QDoubleSpinBox()
+            self.dev_sigma_spin.setRange(0.5, 10.0)
+            self.dev_sigma_spin.setDecimals(2)
+            self.dev_sigma_spin.setSingleStep(0.1)
+            self.dev_sigma_spin.setValue(float(self._settings.dev_detect_k_sigma or 3.0))
+            form.addRow(self.dev_sigma_label, self.dev_sigma_spin)
+            self.dev_area_label = QtWidgets.QLabel()
+            self.dev_area_spin = QtWidgets.QSpinBox()
+            self.dev_area_spin.setRange(1, 100)
+            self.dev_area_spin.setValue(int(self._settings.dev_detect_min_area or 5))
+            form.addRow(self.dev_area_label, self.dev_area_spin)
+            self.downsample_label_widget = QtWidgets.QLabel()
+            self.downsample_spin = QtWidgets.QSpinBox()
+            self.downsample_spin.setRange(1, 4)
+            self.downsample_spin.setValue(int(self._settings.solver_downsample or args.downsample or 1))
+            form.addRow(self.downsample_label_widget, self.downsample_spin)
+            self.cache_label_widget = QtWidgets.QLabel()
+            self.cache_spin = QtWidgets.QSpinBox()
+            self.cache_spin.setRange(2, 64)
+            self.cache_spin.setValue(int(self._settings.solver_cache_size or args.cache_size or 12))
+            form.addRow(self.cache_label_widget, self.cache_spin)
+            self.dev_save_btn = QtWidgets.QPushButton(self._text("settings_save_btn"))
+            form.addRow(self.dev_save_btn)
+            self.dev_save_btn.clicked.connect(self._save_dev_settings)
             form.addItem(QtWidgets.QSpacerItem(20, 20, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding))
             return widget
+
+        def _save_dev_settings(self) -> None:
+            try:
+                self._settings.dev_bucket_limit_override = int(self.dev_bucket_spin.value())
+                self._settings.dev_vote_percentile = int(self.dev_vote_spin.value())
+                self._settings.dev_bucket_cap_S = int(self.dev_cap_s_spin.value())
+                self._settings.dev_bucket_cap_M = int(self.dev_cap_m_spin.value())
+                self._settings.dev_bucket_cap_L = int(self.dev_cap_l_spin.value())
+                self._settings.dev_detect_k_sigma = float(self.dev_sigma_spin.value())
+                self._settings.dev_detect_min_area = int(self.dev_area_spin.value())
+                self._settings.solver_downsample = int(self.downsample_spin.value())
+                self._settings.solver_cache_size = int(self.cache_spin.value())
+                save_persistent_settings(self._settings)
+                self._log(self._text("settings.saved"))
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
 
         def _build_astrometry_tab(self) -> QtWidgets.QWidget:
             widget = QtWidgets.QWidget()
@@ -3384,15 +3506,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.scale_max_hint_spin.setSingleStep(0.1)
             self.scale_max_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
             self.scale_max_hint_spin.setValue(self._settings.solver_hint_resolution_max_arcsec or 0.0)
-            self.downsample_spin = QtWidgets.QSpinBox()
-            self.downsample_spin.setRange(1, 4)
-            self.downsample_spin.setValue(self._settings.solver_downsample or args.downsample or 1)
             self.workers_spin = QtWidgets.QSpinBox()
             self.workers_spin.setRange(1, max(32, _default_worker_count()))
             self.workers_spin.setValue(self._settings.solver_workers or args.workers or _default_worker_count())
-            self.cache_spin = QtWidgets.QSpinBox()
-            self.cache_spin.setRange(2, 64)
-            self.cache_spin.setValue(self._settings.solver_cache_size or args.cache_size or 12)
             self.max_files_spin = QtWidgets.QSpinBox()
             self.max_files_spin.setRange(0, 10000)
             self.max_files_spin.setValue(self._settings.solver_max_files or args.max_files or 0)
@@ -3418,9 +3534,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.scale_hint_label_widget = QtWidgets.QLabel()
             self.scale_min_hint_label_widget = QtWidgets.QLabel()
             self.scale_max_hint_label_widget = QtWidgets.QLabel()
-            self.downsample_label_widget = QtWidgets.QLabel()
             self.workers_label_widget = QtWidgets.QLabel()
-            self.cache_label_widget = QtWidgets.QLabel()
             self.max_files_label_widget = QtWidgets.QLabel()
             self.formats_label_widget = QtWidgets.QLabel()
             self.families_label_widget = QtWidgets.QLabel()
@@ -3436,9 +3550,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.scale_hint_label_widget, self.scale_hint_spin)
             form.addRow(self.scale_min_hint_label_widget, self.scale_min_hint_spin)
             form.addRow(self.scale_max_hint_label_widget, self.scale_max_hint_spin)
-            form.addRow(self.downsample_label_widget, self.downsample_spin)
             form.addRow(self.workers_label_widget, self.workers_spin)
-            form.addRow(self.cache_label_widget, self.cache_spin)
             form.addRow(self.max_files_label_widget, self.max_files_spin)
             form.addRow(self.formats_label_widget, self.formats_edit)
             form.addRow(self.families_label_widget, self.families_combo)
@@ -3572,7 +3684,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.presets_group.setTitle(self._text("presets_title"))
             presets_layout = QtWidgets.QVBoxLayout(self.presets_group)
             self.presets_combo = QtWidgets.QComboBox()
-            for p in preset_utils.list_presets():
+            preset_list = list(preset_utils.list_presets())
+            for p in preset_list:
                 self.presets_combo.addItem(p.label, p.id)
             self.preset_warning_label = QtWidgets.QLabel()
             self.preset_warning_label.setStyleSheet("color: #c08000;")
@@ -3769,6 +3882,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.presets_combo.currentIndexChanged.connect(
                 lambda idx: _apply_preset(self.presets_combo.itemData(idx))
             )
+            saved_preset = getattr(self._settings, "last_preset_id", None)
+            if saved_preset:
+                idx = self.presets_combo.findData(saved_preset)
+                if idx >= 0:
+                    self.presets_combo.setCurrentIndex(idx)
+                    _apply_preset(saved_preset)
 
             self.compute_button.clicked.connect(self._on_compute_fov_clicked)
             return widget
@@ -4020,6 +4139,16 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.dev_bucket_spin.setValue(int(settings.dev_bucket_limit_override or 0))
             if hasattr(self, "dev_vote_spin"):
                 self.dev_vote_spin.setValue(int(settings.dev_vote_percentile or 40))
+            if hasattr(self, "dev_cap_s_spin"):
+                self.dev_cap_s_spin.setValue(int(settings.dev_bucket_cap_S or 6000))
+            if hasattr(self, "dev_cap_m_spin"):
+                self.dev_cap_m_spin.setValue(int(settings.dev_bucket_cap_M or 4096))
+            if hasattr(self, "dev_cap_l_spin"):
+                self.dev_cap_l_spin.setValue(int(settings.dev_bucket_cap_L or 8192))
+            if hasattr(self, "dev_sigma_spin"):
+                self.dev_sigma_spin.setValue(float(settings.dev_detect_k_sigma or 3.0))
+            if hasattr(self, "dev_area_spin"):
+                self.dev_area_spin.setValue(int(settings.dev_detect_min_area or 5))
             # Also refresh the solver tab family dropdown from the chosen index,
             # and restore previously saved family selection if any.
             try:
@@ -4176,6 +4305,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 astrometry_fallback_local=bool(self.ast_fallback_local_check.isChecked()) if hasattr(self, 'ast_fallback_local_check') else True,
                 dev_bucket_limit_override=int(self.dev_bucket_spin.value()) if hasattr(self, "dev_bucket_spin") else 0,
                 dev_vote_percentile=int(self.dev_vote_spin.value()) if hasattr(self, "dev_vote_spin") else 40,
+                dev_detect_k_sigma=float(self.dev_sigma_spin.value()) if hasattr(self, "dev_sigma_spin") else 3.0,
+                dev_detect_min_area=int(self.dev_area_spin.value()) if hasattr(self, "dev_area_spin") else 5,
             )
 
         def _apply_solver_hints_from_optics(
@@ -4453,6 +4584,11 @@ def launch_gui(args: argparse.Namespace) -> int:
                 max_candidates=settings.blind_max_candidates,
                 max_stars=settings.blind_max_stars,
                 max_quads=settings.blind_max_quads,
+                detect_k_sigma=float(getattr(settings, "dev_detect_k_sigma", 3.0) or 3.0),
+                detect_min_area=int(getattr(settings, "dev_detect_min_area", 5) or 5),
+                bucket_cap_S=int(getattr(settings, "dev_bucket_cap_S", 0) or 0),
+                bucket_cap_M=int(getattr(settings, "dev_bucket_cap_M", 0) or 0),
+                bucket_cap_L=int(getattr(settings, "dev_bucket_cap_L", 0) or 0),
                 sip_order=2,
                 quality_rms=settings.blind_quality_rms,
                 quality_inliers=settings.blind_quality_inliers,
@@ -4654,6 +4790,22 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.dev_bucket_spin.setSpecialValueText(self._text("dev_bucket_hint"))
             if hasattr(self, "dev_vote_label"):
                 self.dev_vote_label.setText(self._text("dev_vote_label"))
+            if hasattr(self, "dev_cap_s_label"):
+                self.dev_cap_s_label.setText(self._text("dev_bucket_cap_s_label"))
+            if hasattr(self, "dev_cap_m_label"):
+                self.dev_cap_m_label.setText(self._text("dev_bucket_cap_m_label"))
+            if hasattr(self, "dev_cap_l_label"):
+                self.dev_cap_l_label.setText(self._text("dev_bucket_cap_l_label"))
+            if hasattr(self, "dev_sigma_label"):
+                self.dev_sigma_label.setText(self._text("dev_detect_sigma_label"))
+            if hasattr(self, "dev_sigma_spin"):
+                self.dev_sigma_spin.setToolTip(self._text("dev_detect_sigma_hint"))
+            if hasattr(self, "dev_area_label"):
+                self.dev_area_label.setText(self._text("dev_detect_area_label"))
+            if hasattr(self, "dev_area_spin"):
+                self.dev_area_spin.setToolTip(self._text("dev_detect_area_hint"))
+            if hasattr(self, "dev_save_btn"):
+                self.dev_save_btn.setText(self._text("settings_save_btn"))
             browse_label = self._text("browse_button")
             self.browse_in_btn.setText(browse_label)
             self.input_label.setText(self._text("input_label"))
@@ -5133,6 +5285,16 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self._settings.dev_bucket_limit_override = int(self.dev_bucket_spin.value())
                 if hasattr(self, "dev_vote_spin"):
                     self._settings.dev_vote_percentile = int(self.dev_vote_spin.value())
+                if hasattr(self, "dev_cap_s_spin"):
+                    self._settings.dev_bucket_cap_S = int(self.dev_cap_s_spin.value())
+                if hasattr(self, "dev_cap_m_spin"):
+                    self._settings.dev_bucket_cap_M = int(self.dev_cap_m_spin.value())
+                if hasattr(self, "dev_cap_l_spin"):
+                    self._settings.dev_bucket_cap_L = int(self.dev_cap_l_spin.value())
+                if hasattr(self, "dev_sigma_spin"):
+                    self._settings.dev_detect_k_sigma = float(self.dev_sigma_spin.value())
+                if hasattr(self, "dev_area_spin"):
+                    self._settings.dev_detect_min_area = int(self.dev_area_spin.value())
                 save_persistent_settings(self._settings)
             except Exception:
                 pass
@@ -5189,10 +5351,15 @@ def launch_gui(args: argparse.Namespace) -> int:
                 blind_pixel_tolerance=float(self._settings.blind_pixel_tolerance or 2.5),
                 blind_quality_inliers=int(self._settings.blind_quality_inliers or 40),
                 blind_quality_rms=float(self._settings.blind_quality_rms or 1.2),
-                blind_fast_mode=bool(self._settings.blind_fast_mode),
-                log_level=self._current_log_level,
-                dev_bucket_limit_override=int(self._settings.dev_bucket_limit_override or 0),
-                dev_vote_percentile=int(self._settings.dev_vote_percentile or 40),
+        blind_fast_mode=bool(self._settings.blind_fast_mode),
+        log_level=self._current_log_level,
+        dev_bucket_limit_override=int(self._settings.dev_bucket_limit_override or 0),
+        dev_vote_percentile=int(self._settings.dev_vote_percentile or 40),
+        bucket_cap_S=int(self._settings.dev_bucket_cap_S or 0),
+        bucket_cap_M=int(self._settings.dev_bucket_cap_M or 0),
+        bucket_cap_L=int(self._settings.dev_bucket_cap_L or 0),
+                dev_detect_k_sigma=float(self._settings.dev_detect_k_sigma or 3.0),
+                dev_detect_min_area=int(self._settings.dev_detect_min_area or 5),
             )
 
         def _start_solving(self) -> None:

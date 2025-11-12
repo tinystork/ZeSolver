@@ -24,7 +24,7 @@ from .fits_utils import parse_angle
 from .matcher import SimilarityStats, SimilarityTransform, estimate_similarity_RANSAC
 from .matcher import _derive_similarity  # quad-based hypothesis helper
 from .quad_index_builder import QuadIndex, load_manifest, lookup_hashes, select_tiles_in_cone
-from .levels import LEVEL_MAP, QuadLevelSpec
+from .levels import LEVEL_MAP, QuadLevelSpec, set_bucket_cap_overrides
 from .star_detect import detect_stars
 from .verify import validate_solution
 from .wcs_fit import fit_wcs_sip, fit_wcs_tan, needs_sip, tan_from_similarity
@@ -64,6 +64,11 @@ class SolveConfig:
     max_candidates: int = 10
     max_stars: int = 500
     max_quads: int = 8000
+    detect_k_sigma: float = 3.0
+    detect_min_area: int = 5
+    bucket_cap_S: int = 0
+    bucket_cap_M: int = 0
+    bucket_cap_L: int = 0
     sip_order: int = 2
     quality_rms: float = 1.2
     quality_inliers: int = 40
@@ -420,6 +425,12 @@ def solve_blind(
 ) -> WcsSolution:
     config = config or SolveConfig()
     _configure_tile_cache(getattr(config, "tile_cache_size", _TILE_CACHE_DEFAULT_CAPACITY))
+    cap_overrides: dict[str, int] = {}
+    for level_name, attr in (("S", "bucket_cap_S"), ("M", "bucket_cap_M"), ("L", "bucket_cap_L")):
+        value = int(getattr(config, attr, 0) or 0)
+        if value > 0:
+            cap_overrides[level_name] = value
+    set_bucket_cap_overrides(cap_overrides or None)
 
     def _finish(result: WcsSolution) -> WcsSolution:
         if logger.isEnabledFor(logging.DEBUG):
@@ -582,7 +593,15 @@ def solve_blind(
     stage = time.time()
     min_fwhm = max(1.0, 1.5 / downsample_factor)
     max_fwhm = max(2.5, 8.0 / downsample_factor)
-    stars = detect_stars(detection, min_fwhm_px=min_fwhm, max_fwhm_px=max_fwhm)
+    detect_k_sigma = max(0.5, float(getattr(config, "detect_k_sigma", 3.0)))
+    detect_min_area = max(1, int(getattr(config, "detect_min_area", 5)))
+    stars = detect_stars(
+        detection,
+        min_fwhm_px=min_fwhm,
+        max_fwhm_px=max_fwhm,
+        k_sigma=detect_k_sigma,
+        min_area=detect_min_area,
+    )
     if stars.size == 0:
         return _finish(WcsSolution(False, "no stars found", None, {}, None, {}))
     if config.max_stars and stars.size > config.max_stars:
@@ -1195,6 +1214,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-candidates", type=int, default=12)
     parser.add_argument("--max-stars", type=int, default=800)
     parser.add_argument("--max-quads", type=int, default=12000)
+    parser.add_argument("--detect-k-sigma", type=float, default=3.0)
+    parser.add_argument("--detect-min-area", type=int, default=5)
+    parser.add_argument("--bucket-cap-s", type=int, default=0)
+    parser.add_argument("--bucket-cap-m", type=int, default=0)
+    parser.add_argument("--bucket-cap-l", type=int, default=0)
     parser.add_argument("--sip-order", type=int, choices=(2, 3), default=2)
     parser.add_argument("--quality-rms", type=float, default=1.0)
     parser.add_argument("--quality-inliers", type=int, default=60)
@@ -1281,6 +1305,11 @@ def main(argv: list[str] | None = None) -> int:
         max_candidates=args.max_candidates,
         max_stars=args.max_stars,
         max_quads=args.max_quads,
+        detect_k_sigma=max(0.5, float(args.detect_k_sigma)),
+        detect_min_area=max(1, int(args.detect_min_area)),
+        bucket_cap_S=max(0, int(args.bucket_cap_s or 0)),
+        bucket_cap_M=max(0, int(args.bucket_cap_m or 0)),
+        bucket_cap_L=max(0, int(args.bucket_cap_l or 0)),
         sip_order=args.sip_order,
         quality_rms=args.quality_rms,
         quality_inliers=args.quality_inliers,

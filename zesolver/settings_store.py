@@ -19,7 +19,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 3
+SETTINGS_SCHEMA_VERSION = 5
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -71,6 +71,11 @@ class PersistentSettings:
     near_search_margin: float = 1.2
     dev_bucket_limit_override: int = 0
     dev_vote_percentile: int = 40
+    dev_detect_k_sigma: float = 3.0
+    dev_detect_min_area: int = 5
+    dev_bucket_cap_S: int = 6000
+    dev_bucket_cap_M: int = 4096
+    dev_bucket_cap_L: int = 8192
     # Solver panel persisted settings
     solver_fov_deg: float = DEFAULT_FOV_DEG
     solver_search_scale: float = DEFAULT_SEARCH_RADIUS_SCALE
@@ -183,6 +188,11 @@ def load_persistent_settings() -> PersistentSettings:
         near_search_margin=float(payload.get("near_search_margin", 1.2)),
         dev_bucket_limit_override=int(payload.get("dev_bucket_limit_override", 0)),
         dev_vote_percentile=int(payload.get("dev_vote_percentile", 40)),
+        dev_detect_k_sigma=float(payload.get("dev_detect_k_sigma", 3.0)),
+        dev_detect_min_area=int(payload.get("dev_detect_min_area", 5)),
+        dev_bucket_cap_S=int(payload.get("dev_bucket_cap_S", 6000)),
+        dev_bucket_cap_M=int(payload.get("dev_bucket_cap_M", 4096)),
+        dev_bucket_cap_L=int(payload.get("dev_bucket_cap_L", 8192)),
         solver_fov_deg=float(payload.get("solver_fov_deg", DEFAULT_FOV_DEG)),
         solver_search_scale=float(payload.get("solver_search_scale", DEFAULT_SEARCH_RADIUS_SCALE)),
         solver_search_attempts=int(payload.get("solver_search_attempts", DEFAULT_SEARCH_RADIUS_ATTEMPTS)),

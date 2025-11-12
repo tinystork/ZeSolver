@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 from astropy.io import fits
-from pathlib import Path
 
 from zesolver import zeblindsolver
+from zeblindsolver import zeblindsolver as core_solver
 from zeblindsolver.image_io import load_raster_image
 from zeblindsolver.image_prep import downsample_image
 from zeblindsolver.quad_index_builder import select_tiles_in_cone
@@ -134,3 +137,40 @@ def test_load_raster_image(tmp_path):
     assert array.dtype == np.float32
     assert 0.0 <= float(array.max()) <= 1.0
     assert meta.get("backend")
+
+
+def test_detection_params_forwarded(monkeypatch, tmp_path):
+    """Ensure SolveConfig forwards developer detection knobs into detect_stars."""
+    fits_path = tmp_path / "scene.fits"
+    fits.PrimaryHDU(data=np.zeros((16, 16), dtype=np.float32)).writeto(fits_path)
+    manifest = {
+        "levels": [{"name": "S"}, {"name": "M"}, {"name": "L"}],
+        "tiles": [],
+    }
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    hash_dir = tmp_path / "hash_tables"
+    hash_dir.mkdir()
+    for level in ("S", "M", "L"):
+        (hash_dir / f"quads_{level}.npz").write_bytes(b"")
+    recorded: dict[str, float | int] = {}
+
+    def fake_detect_stars(
+        img,
+        *,
+        min_fwhm_px,
+        max_fwhm_px,
+        k_sigma,
+        min_area,
+        backend="auto",
+        device=None,
+    ):
+        recorded["k_sigma"] = k_sigma
+        recorded["min_area"] = min_area
+        raise RuntimeError("stop_after_detection")
+
+    monkeypatch.setattr(core_solver, "detect_stars", fake_detect_stars)
+    cfg = core_solver.SolveConfig(detect_k_sigma=1.7, detect_min_area=7)
+    with pytest.raises(RuntimeError, match="stop_after_detection"):
+        core_solver.solve_blind(str(fits_path), str(tmp_path), config=cfg)
+    assert recorded["k_sigma"] == pytest.approx(1.7)
+    assert recorded["min_area"] == 7
