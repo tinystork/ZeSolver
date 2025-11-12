@@ -45,6 +45,34 @@ stars = db.query_cone(ra_deg=184.17, dec_deg=47.14, radius_deg=1.0, mag_limit=17
 print(stars[:3])
 ```
 
+## Building an index
+
+Use the `zebuildindex` CLI (`python -m zeblindsolver.db_convert`) to convert ASTAP/HNSKY
+catalogues into ZeSolver-friendly tiles and quad hash tables. The builder now exposes a
+few knobs so you can trade disk usage for I/O speed:
+
+- `--quad-storage {npz,npz_uncompressed,npy}` writes `hash_tables/quads_*` either as
+  compressed `.npz` (default), store-only `.npz` (faster loads), or directory-based `.npy`
+  bundles that ZeSolver memory-maps directly.
+- `--tile-compression {compressed,uncompressed}` controls how `tiles/*.npz` snapshots are
+  saved. Uncompressed tiles cost more disk but load ~25% faster during solving.
+- `--workers N` sets the number of processes used to hash quads. The default remains
+  `max(1, cpu_count/2)`.
+
+For example:
+
+```bash
+python -m zeblindsolver.db_convert ^
+  --db-root database ^
+  --index-root index ^
+  --max-quads-per-tile 20000 ^
+  --quad-storage npy ^
+  --tile-compression uncompressed ^
+  --workers 8
+```
+
+The Settings tab in the GUI exposes the same drop-downs right above the “Construire l’index” button, so you can pick the quad storage (compressed `.npz`, store-only `.npz`, or `.npy` folders) and tile compression modes without memorising the CLI flags.
+
 ## Batch solver GUI/CLI
 
 The `zesolver.py` entry point wraps the catalogue reader with a lightweight plate
@@ -92,6 +120,11 @@ zeblindsolver --input Light_M81.fit --db "D50;D20;W08" --profile S50 --timeout 9
 # Copy the solved FITS somewhere else
 zeblindsolver --input raw.fit --db "/data/D50;/data/G05" --write-to solved.fit
 ```
+
+The solver keeps recently accessed `tiles/*.npz` files in an in-process LRU cache keyed
+by absolute path + file signature (mtime/size). Use `--tile-cache-size N` (or the
+`ZE_TILE_CACHE_SIZE` environment variable) to tune the capacity; set it to `0` to disable
+the cache when memory is tight.
 
 `zesolver.py` automatically triggers the blind fallback when a FITS header lacks
 a trustworthy WCS (unless `--no-blind` is provided). Successful blind solves are

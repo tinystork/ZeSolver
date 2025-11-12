@@ -106,11 +106,21 @@ def build_index_from_astap(
     max_stars: int = DEFAULT_MAX_STARS,
     max_quads_per_tile: int = DEFAULT_MAX_QUADS_PER_TILE,
     skip_quads: bool = False,
+    quad_storage: str = "npz",
+    tile_compression: str = "compressed",
+    workers: int | None = None,
 ) -> Path:
     db_root = Path(db_root).expanduser().resolve()
     index_root = Path(index_root).expanduser().resolve()
     tiles_dir = index_root / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
+    compression = (tile_compression or "compressed").lower()
+    if compression not in {"compressed", "uncompressed"}:
+        raise ValueError("tile_compression must be 'compressed' or 'uncompressed'")
+    quad_fmt = (quad_storage or "npz").lower()
+    if quad_fmt not in {"npz", "npz_uncompressed", "npy"}:
+        raise ValueError("quad_storage must be 'npz', 'npz_uncompressed', or 'npy'")
+    save_tile = np.savez_compressed if compression == "compressed" else np.savez
     manifest_path = index_root / MANIFEST_FILENAME
     tile_entries = []
     tiles = list(iter_tiles(db_root))
@@ -163,7 +173,7 @@ def build_index_from_astap(
             ra = ra[order]
             dec = dec[order]
         tile_path = tiles_dir / f"{tile_meta.key}.npz"
-        np.savez_compressed(
+        save_tile(
             tile_path,
             ra_deg=stars["ra_deg"].astype(np.float64, copy=False),
             dec_deg=stars["dec_deg"].astype(np.float64, copy=False),
@@ -211,7 +221,13 @@ def build_index_from_astap(
     logger.info("Index manifest written to %s", manifest_path)
     if not skip_quads:
         for level in LEVEL_SPECS:
-            build_quad_index(index_root, level.name, max_quads_per_tile=max_quads_per_tile)
+            build_quad_index(
+                index_root,
+                level.name,
+                max_quads_per_tile=max_quads_per_tile,
+                workers=workers,
+                storage_format=quad_fmt,
+            )
     return manifest_path
 
 
@@ -233,6 +249,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Maximum quads hashed per tile",
     )
     parser.add_argument("--skip-quads", action="store_true", help="Only write manifest/tiles and skip quad hashing")
+    parser.add_argument(
+        "--quad-storage",
+        choices=("npz", "npz_uncompressed", "npy"),
+        default="npz",
+        help="Storage format for quad hash tables",
+    )
+    parser.add_argument(
+        "--tile-compression",
+        choices=("compressed", "uncompressed"),
+        default="compressed",
+        help="NPZ compression mode for tiles/*.npz",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of worker processes for quad hashing (default: half of CPUs)",
+    )
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     args = parser.parse_args(argv)
     logging.basicConfig(level=args.log_level.upper(), format="%(levelname)s: %(message)s")
@@ -244,6 +278,9 @@ def main(argv: list[str] | None = None) -> int:
             max_stars=args.max_stars,
             max_quads_per_tile=args.max_quads_per_tile,
             skip_quads=bool(args.skip_quads),
+            quad_storage=args.quad_storage,
+            tile_compression=args.tile_compression,
+            workers=args.workers,
         )
         return 0
     except Exception as exc:  # pragma: no cover - bubble error

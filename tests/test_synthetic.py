@@ -75,3 +75,28 @@ def test_tally_candidates_respects_allowed_tiles(synthetic_index, synthetic_star
         allowed_tiles={0},
     )
     assert restricted_hit and restricted_hit[0][0] == "SYNTH"
+
+
+def test_tally_candidates_accepts_weighted_hashes(synthetic_index, synthetic_star_catalog):
+    positions, mags = synthetic_star_catalog
+    image_points = positions.astype(np.float32)
+    obs_stars = np.zeros(image_points.shape[0], dtype=[("x", "f4"), ("y", "f4"), ("mag", "f4")])
+    obs_stars["x"] = image_points[:, 0]
+    obs_stars["y"] = image_points[:, 1]
+    obs_stars["mag"] = mags.astype(np.float32)
+
+    quads = sample_quads(obs_stars, max_quads=120)
+    obs_hash = hash_quads(quads, image_points)
+    assert obs_hash.hashes.size > 0
+    duplicated = np.repeat(obs_hash.hashes, 3)
+    baseline = tally_candidates(duplicated, synthetic_index, levels=["L", "M", "S"])
+    unique_hashes, _, counts = np.unique(duplicated, return_index=True, return_counts=True)
+    weighted = tally_candidates((unique_hashes, counts), synthetic_index, levels=["L", "M", "S"])
+    assert baseline == weighted
+    restricted = tally_candidates(
+        (unique_hashes, counts),
+        synthetic_index,
+        levels=["L", "M", "S"],
+        allowed_tiles={0},
+    )
+    assert restricted and restricted[0][0] == "SYNTH"

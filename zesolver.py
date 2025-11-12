@@ -72,6 +72,8 @@ from zesolver.settings_store import (
     DEFAULT_FOV_DEG,
     DEFAULT_SEARCH_RADIUS_ATTEMPTS,
     DEFAULT_SEARCH_RADIUS_SCALE,
+    QUAD_STORAGE_CHOICES,
+    TILE_COMPRESSION_CHOICES,
     PersistentSettings,
     load_persistent_settings,
     save_persistent_settings,
@@ -211,6 +213,13 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_mag_label": "Magnitude max",
         "settings_max_stars_label": "Étoiles max",
         "settings_max_quads_label": "Quads max",
+        "settings_quad_storage_label": "Format des quads",
+        "settings_quad_storage_option_npz": ".npz (compress�)",
+        "settings_quad_storage_option_npz_uncompressed": ".npz (sans compression)",
+        "settings_quad_storage_option_npy": "Dossier .npy (mapp�)",
+        "settings_tile_compression_label": "Compression des tuiles",
+        "settings_tile_compression_option_compressed": "NPZ compress�",
+        "settings_tile_compression_option_uncompressed": "NPZ non compress�",
         "settings_sample_label": "Fichier test (FITS)",
         "settings_save_btn": "Sauvegarder",
         "settings_build_btn": "Construire l'index",
@@ -346,6 +355,13 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_mag_label": "Max magnitude",
         "settings_max_stars_label": "Max stars",
         "settings_max_quads_label": "Max quads",
+        "settings_quad_storage_label": "Quad storage",
+        "settings_quad_storage_option_npz": ".npz (compressed)",
+        "settings_quad_storage_option_npz_uncompressed": ".npz (store-only ZIP)",
+        "settings_quad_storage_option_npy": "quads_<L>/ hashes.npy (mmap)",
+        "settings_tile_compression_label": "Tile compression",
+        "settings_tile_compression_option_compressed": "NPZ compressed",
+        "settings_tile_compression_option_uncompressed": "NPZ uncompressed",
         "settings_sample_label": "Sample FITS",
         "settings_save_btn": "Save settings",
         "settings_build_btn": "Build index",
@@ -1514,16 +1530,17 @@ class ImageSolver:
                     preflight_start = time.perf_counter()
                     manifest = root / "manifest.json"
                     ht = root / "hash_tables"
-                    l = ht / "quads_L.npz"
-                    m = ht / "quads_M.npz"
-                    s = ht / "quads_S.npz"
+
+                    def _has_table(level: str) -> bool:
+                        return (ht / f"quads_{level}.npz").exists() or (ht / f"quads_{level}").is_dir()
+
                     logging.info(
                         "Blind index check: root=%s manifest=%s L=%s M=%s S=%s",
                         root,
                         "ok" if manifest.exists() else "missing",
-                        "ok" if l.exists() else "missing",
-                        "ok" if m.exists() else "missing",
-                        "ok" if s.exists() else "missing",
+                        "ok" if _has_table("L") else "missing",
+                        "ok" if _has_table("M") else "missing",
+                        "ok" if _has_table("S") else "missing",
                     )
                     # Sanity-check once per run: detect rings with mostly-empty tiles
                     try:
@@ -2299,6 +2316,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             mag_cap: float,
             max_stars: int,
             max_quads_per_tile: int,
+            quad_storage: str,
+            tile_compression: str,
             quads_only: bool = False,
         ) -> None:
             super().__init__()
@@ -2307,6 +2326,15 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.mag_cap = mag_cap
             self.max_stars = max_stars
             self.max_quads_per_tile = max_quads_per_tile
+            # Normalize to known choices to avoid typos
+            quad = (quad_storage or QUAD_STORAGE_CHOICES[0]).strip().lower()
+            if quad not in QUAD_STORAGE_CHOICES:
+                quad = QUAD_STORAGE_CHOICES[0]
+            tiles = (tile_compression or TILE_COMPRESSION_CHOICES[0]).strip().lower()
+            if tiles not in TILE_COMPRESSION_CHOICES:
+                tiles = TILE_COMPRESSION_CHOICES[0]
+            self.quad_storage = quad
+            self.tile_compression = tiles
             self.quads_only = quads_only
 
         def run(self) -> None:
@@ -2341,6 +2369,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                         max_stars=self.max_stars,
                         max_quads_per_tile=self.max_quads_per_tile,
                         skip_quads=True,
+                        quad_storage=self.quad_storage,
+                        tile_compression=self.tile_compression,
                     )
                     msg = f"Index built: {manifest}"
                     self.log.emit(msg)
@@ -2359,10 +2389,25 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.log.emit(f"Checking quad tables under: {ht}")
                     logging.info("Checking quad tables under: %s", ht)
                     built_any = False
+
+                    def _existing_quad_table(level_name: str) -> Optional[Path]:
+                        npz = ht / f"quads_{level_name}.npz"
+                        if npz.exists():
+                            return npz
+                        npy = ht / f"quads_{level_name}"
+                        if npy.exists():
+                            return npy
+                        return None
+
                     for level in LEVEL_SPECS:
-                        out = ht / f"quads_{level.name}.npz"
-                        if not out.exists():
-                            msg = f"Building missing quad table: {out}"
+                        existing = _existing_quad_table(level.name)
+                        if existing is None:
+                            target = (
+                                ht / f"quads_{level.name}.npz"
+                                if self.quad_storage != "npy"
+                                else ht / f"quads_{level.name}"
+                            )
+                            msg = f"Building missing quad table: {target}"
                             self.log.emit(msg)
                             logging.info(msg)
                             def _cb(done: int, total: int, tile_key: str, lvl=level.name):
@@ -2373,15 +2418,16 @@ def launch_gui(args: argparse.Namespace) -> int:
                                 max_quads_per_tile=self.max_quads_per_tile,
                                 on_progress=_cb,
                                 workers=max(1, (os.cpu_count() or 1) // 2),
+                                storage_format=self.quad_storage,
                             )
                             done = f"Built quad table: {built}"
                             self.log.emit(done)
                             logging.info(done)
                             built_any = True
                         else:
-                            self.log.emit(f"Quad table present: {out}")
+                            self.log.emit(f"Quad table present: {existing}")
                     # Final presence check
-                    missing = [lvl.name for lvl in LEVEL_SPECS if not (ht / f"quads_{lvl.name}.npz").exists()]
+                    missing = [lvl.name for lvl in LEVEL_SPECS if _existing_quad_table(lvl.name) is None]
                     if missing:
                         raise RuntimeError(f"quad tables missing after build: {', '.join(missing)}")
                     if not built_any:
@@ -3364,6 +3410,36 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.settings_max_quads_spin.setValue(self._settings.max_quads_per_tile)
             form.addRow(self.settings_max_quads_label, self.settings_max_quads_spin)
 
+            self.settings_quad_storage_label = QtWidgets.QLabel()
+            self.settings_quad_storage_combo = QtWidgets.QComboBox()
+            self._quad_storage_keys = tuple(QUAD_STORAGE_CHOICES)
+            for key in self._quad_storage_keys:
+                self.settings_quad_storage_combo.addItem(
+                    self._text(f"settings_quad_storage_option_{key}"),
+                    key,
+                )
+            self._set_combo_current_data(
+                self.settings_quad_storage_combo,
+                (self._settings.quad_storage or QUAD_STORAGE_CHOICES[0]).lower(),
+                QUAD_STORAGE_CHOICES[0],
+            )
+            form.addRow(self.settings_quad_storage_label, self.settings_quad_storage_combo)
+
+            self.settings_tile_compression_label = QtWidgets.QLabel()
+            self.settings_tile_compression_combo = QtWidgets.QComboBox()
+            self._tile_compression_keys = tuple(TILE_COMPRESSION_CHOICES)
+            for key in self._tile_compression_keys:
+                self.settings_tile_compression_combo.addItem(
+                    self._text(f"settings_tile_compression_option_{key}"),
+                    key,
+                )
+            self._set_combo_current_data(
+                self.settings_tile_compression_combo,
+                (self._settings.tile_compression or TILE_COMPRESSION_CHOICES[0]).lower(),
+                TILE_COMPRESSION_CHOICES[0],
+            )
+            form.addRow(self.settings_tile_compression_label, self.settings_tile_compression_combo)
+
             self.settings_sample_label = QtWidgets.QLabel()
             self.settings_sample_edit = QtWidgets.QLineEdit(self._settings.sample_fits or "")
             self.settings_sample_browse = QtWidgets.QPushButton()
@@ -3770,6 +3846,18 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.settings_mag_spin.setValue(settings.mag_cap)
             self.settings_max_stars_spin.setValue(settings.max_stars)
             self.settings_max_quads_spin.setValue(settings.max_quads_per_tile)
+            if hasattr(self, "settings_quad_storage_combo"):
+                self._set_combo_current_data(
+                    self.settings_quad_storage_combo,
+                    (settings.quad_storage or QUAD_STORAGE_CHOICES[0]).lower(),
+                    QUAD_STORAGE_CHOICES[0],
+                )
+            if hasattr(self, "settings_tile_compression_combo"):
+                self._set_combo_current_data(
+                    self.settings_tile_compression_combo,
+                    (settings.tile_compression or TILE_COMPRESSION_CHOICES[0]).lower(),
+                    TILE_COMPRESSION_CHOICES[0],
+                )
             self.settings_sample_edit.setText(settings.sample_fits or "")
             # Blind group
             if hasattr(self, 'settings_blind_max_stars_spin'):
@@ -3843,6 +3931,40 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception:
                 pass
 
+        def _set_combo_current_data(self, combo: QtWidgets.QComboBox, value: str, default: str) -> None:
+            target = (value or default or "").strip().lower()
+            idx = combo.findData(target)
+            if idx < 0:
+                idx = combo.findData(default)
+            if idx < 0 and combo.count():
+                idx = 0
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+
+        def _update_quad_storage_combo_labels(self) -> None:
+            if not hasattr(self, "settings_quad_storage_combo"):
+                return
+            keys = getattr(self, "_quad_storage_keys", QUAD_STORAGE_CHOICES)
+            for key in keys:
+                idx = self.settings_quad_storage_combo.findData(key)
+                if idx >= 0:
+                    self.settings_quad_storage_combo.setItemText(
+                        idx,
+                        self._text(f"settings_quad_storage_option_{key}"),
+                    )
+
+        def _update_tile_compression_combo_labels(self) -> None:
+            if not hasattr(self, "settings_tile_compression_combo"):
+                return
+            keys = getattr(self, "_tile_compression_keys", TILE_COMPRESSION_CHOICES)
+            for key in keys:
+                idx = self.settings_tile_compression_combo.findData(key)
+                if idx >= 0:
+                    self.settings_tile_compression_combo.setItemText(
+                        idx,
+                        self._text(f"settings_tile_compression_option_{key}"),
+                    )
+
         def _read_settings_from_ui(self) -> PersistentSettings:
             db_root = self.settings_db_edit.text().strip()
             if not db_root:
@@ -3872,12 +3994,26 @@ def launch_gui(args: argparse.Namespace) -> int:
                     backend_sel, dev_sel = ("cpu", -1)
             except Exception:
                 backend_sel, dev_sel = ("cpu", -1)
+
+            quad_storage_value = QUAD_STORAGE_CHOICES[0]
+            if hasattr(self, "settings_quad_storage_combo"):
+                data = self.settings_quad_storage_combo.currentData()
+                if isinstance(data, str) and data.strip():
+                    quad_storage_value = data.strip().lower()
+            tile_compression_value = TILE_COMPRESSION_CHOICES[0]
+            if hasattr(self, "settings_tile_compression_combo"):
+                data = self.settings_tile_compression_combo.currentData()
+                if isinstance(data, str) and data.strip():
+                    tile_compression_value = data.strip().lower()
+
             return PersistentSettings(
                 db_root=db_root,
                 index_root=index_root,
                 mag_cap=float(self.settings_mag_spin.value()),
                 max_stars=int(self.settings_max_stars_spin.value()),
                 max_quads_per_tile=int(self.settings_max_quads_spin.value()),
+                quad_storage=quad_storage_value,
+                tile_compression=tile_compression_value,
                 sample_fits=self.settings_sample_edit.text().strip() or None,
                 last_preset_id=(self.presets_combo.currentData() if hasattr(self, 'presets_combo') else None),
                 last_fov_focal_mm=float(self.fov_focal_spin.value()) if hasattr(self, 'fov_focal_spin') else 0.0,
@@ -4136,6 +4272,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                             mag_cap=settings.mag_cap,
                             max_stars=settings.max_stars,
                             max_quads_per_tile=settings.max_quads_per_tile,
+                            quad_storage=settings.quad_storage,
+                            tile_compression=settings.tile_compression,
                             quads_only=True,
                         )
                         self._index_worker.log.connect(self._log_settings)
@@ -4159,6 +4297,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 mag_cap=settings.mag_cap,
                 max_stars=settings.max_stars,
                 max_quads_per_tile=settings.max_quads_per_tile,
+                quad_storage=settings.quad_storage,
+                tile_compression=settings.tile_compression,
                 quads_only=False,
             )
             self._index_worker.log.connect(self._log_settings)
@@ -4487,6 +4627,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_max_stars_label.setText(self._text("settings_max_stars_label"))
             if hasattr(self, "settings_max_quads_label"):
                 self.settings_max_quads_label.setText(self._text("settings_max_quads_label"))
+            if hasattr(self, "settings_quad_storage_label"):
+                self.settings_quad_storage_label.setText(self._text("settings_quad_storage_label"))
+                self._update_quad_storage_combo_labels()
+            if hasattr(self, "settings_tile_compression_label"):
+                self.settings_tile_compression_label.setText(self._text("settings_tile_compression_label"))
+                self._update_tile_compression_combo_labels()
             if hasattr(self, "blind_group"):
                 self.blind_group.setTitle(self._text("settings_blind_group"))
             # Presets/FOV groups

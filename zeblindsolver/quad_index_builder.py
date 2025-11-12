@@ -6,6 +6,8 @@ from dataclasses import dataclass
 import math
 import os
 import concurrent.futures
+import shutil
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Sequence, Tuple
 
@@ -318,10 +320,31 @@ class QuadIndex:
             cached = _INDEX_CACHE.get(key)
             if cached is not None:
                 return cached
-            table_path = index_root / HASH_DIR / f"quads_{level}.npz"
-            if not table_path.exists():
-                raise FileNotFoundError(table_path)
-            payload = np.load(table_path)
+            hash_dir = index_root / HASH_DIR
+            dir_path = hash_dir / f"quads_{level}"
+            file_path = hash_dir / f"quads_{level}.npz"
+            storage = "npz"
+            start = time.perf_counter()
+            if dir_path.is_dir():
+                payload = {
+                    "hashes": np.load(dir_path / "hashes.npy", mmap_mode="r", allow_pickle=False),
+                    "tile_indices": np.load(dir_path / "tile_indices.npy", mmap_mode="r", allow_pickle=False),
+                    "quad_indices": np.load(dir_path / "quad_indices.npy", mmap_mode="r", allow_pickle=False),
+                    "bucket_hashes": np.load(dir_path / "bucket_hashes.npy", mmap_mode="r", allow_pickle=False),
+                    "bucket_offsets": np.load(dir_path / "bucket_offsets.npy", mmap_mode="r", allow_pickle=False),
+                }
+                storage = "npy"
+            else:
+                if not file_path.exists():
+                    raise FileNotFoundError(file_path)
+                with np.load(file_path, allow_pickle=False) as data:
+                    payload = {
+                        "hashes": data["hashes"],
+                        "tile_indices": data["tile_indices"],
+                        "quad_indices": data["quad_indices"],
+                        "bucket_hashes": data["bucket_hashes"],
+                        "bucket_offsets": data["bucket_offsets"],
+                    }
             spec = LEVEL_MAP.get(level)
             bucket_cap = spec.bucket_cap if spec else 0
             index = cls(
@@ -332,6 +355,14 @@ class QuadIndex:
                 bucket_hashes=payload["bucket_hashes"],
                 bucket_offsets=payload["bucket_offsets"],
                 bucket_cap=bucket_cap,
+            )
+            elapsed = time.perf_counter() - start
+            logger.debug(
+                "loaded quad index %s (%s) in %.3fs (%d hashes)",
+                level,
+                storage,
+                elapsed,
+                int(index.hashes.shape[0]),
             )
             _INDEX_CACHE[key] = index
             return index
@@ -375,6 +406,7 @@ def build_quad_index(
     max_quads_per_tile: int = 20000,
     on_progress: Callable[[int, int, str], None] | None = None,
     workers: int | None = None,
+    storage_format: str = "npz",
 ) -> Path:
     index_root = Path(index_root).expanduser().resolve()
     spec = LEVEL_MAP.get(level)
@@ -386,6 +418,9 @@ def build_quad_index(
         raise ValueError(f"unknown level {level!r}, manifest has {list(levels)}")
     hash_dir = index_root / HASH_DIR
     hash_dir.mkdir(parents=True, exist_ok=True)
+    fmt = (storage_format or "npz").lower()
+    if fmt not in {"npz", "npz_uncompressed", "npy"}:
+        raise ValueError("storage_format must be one of 'npz', 'npz_uncompressed', or 'npy'")
     tile_entries = manifest.get("tiles", [])
     if not tile_entries:
         raise RuntimeError("manifest contains no tiles")
@@ -471,8 +506,29 @@ def build_quad_index(
     bucket_offsets = np.empty(len(bucket_hashes) + 1, dtype=np.uint32)
     bucket_offsets[:-1] = start_idx.astype(np.uint32)
     bucket_offsets[-1] = sorted_hashes.shape[0]
+    if fmt == "npy":
+        out_dir = hash_dir / f"quads_{level}"
+        if out_dir.exists():
+            if out_dir.is_file():
+                out_dir.unlink()
+            else:
+                shutil.rmtree(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        np.save(out_dir / "hashes.npy", sorted_hashes, allow_pickle=False)
+        np.save(out_dir / "tile_indices.npy", sorted_tiles, allow_pickle=False)
+        np.save(out_dir / "quad_indices.npy", sorted_quads, allow_pickle=False)
+        np.save(out_dir / "bucket_hashes.npy", bucket_hashes, allow_pickle=False)
+        np.save(out_dir / "bucket_offsets.npy", bucket_offsets, allow_pickle=False)
+        logger.info("built quad index %s (npy) with %d entries", out_dir, sorted_hashes.shape[0])
+        return out_dir
     out_path = hash_dir / f"quads_{level}.npz"
-    np.savez_compressed(
+    if out_path.exists():
+        if out_path.is_dir():
+            shutil.rmtree(out_path)
+        else:
+            out_path.unlink()
+    saver = np.savez_compressed if fmt == "npz" else np.savez
+    saver(
         out_path,
         hashes=sorted_hashes,
         tile_indices=sorted_tiles,
@@ -480,7 +536,7 @@ def build_quad_index(
         bucket_hashes=bucket_hashes,
         bucket_offsets=bucket_offsets,
     )
-    logger.info("built quad index %s with %d entries", out_path, sorted_hashes.shape[0])
+    logger.info("built quad index %s (%s) with %d entries", out_path, fmt, sorted_hashes.shape[0])
     return out_path
 
 

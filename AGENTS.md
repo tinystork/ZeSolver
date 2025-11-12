@@ -38,7 +38,11 @@ Build and maintain a fast, fully-Python blind and metadata-assisted WCS solver f
    - Output:
      - `index/manifest.json`
      - `index/tiles/*.npz`
-     - `index/hash_tables/quads_L.npz`, `quads_M.npz`, `quads_S.npz`
+     - `index/hash_tables/quads_L.*`, `quads_M.*`, `quads_S.*`
+   - Storage knobs:
+     - `--quad-storage {npz,npz_uncompressed,npy}` picks compressed `.npz`, store-only `.npz`, or mmap-friendly `quads_<level>/hashes.npy` directories.
+     - `--tile-compression {compressed,uncompressed}` toggles NPZ compression for tiles (uncompressed = faster reads, larger files).
+     - `--workers N` sets the number of processes used to hash quads (default: half the CPUs).
 
 2) Run the blind solver:
    - CLI: `zeblindsolve examples/Light_*.fit --index-root index`
@@ -65,9 +69,10 @@ Build and maintain a fast, fully-Python blind and metadata-assisted WCS solver f
 ## Coding Conventions
 
 - Stay in Python; keep code minimal, explicit, and testable.
-- Prefer small, targeted changes; don’t rename files or add frameworks unless necessary.
+- Prefer small, targeted changes; don't rename files or add frameworks unless necessary.
 - Update docs and GUI strings when behavior changes (FR/EN supported in `GUI_TRANSLATIONS`).
-- Normalize manifest paths; treat missing `hash_tables/quads_*.npz` as a clear, actionable error.
+- Normalize manifest paths; treat missing quad tables (`hash_tables/quads_<level>.npz` or `.npy` folders) as a clear, actionable error.
+- `_load_tile_positions` uses an in-process LRU cache keyed by absolute path + `(mtime_ns, size)`. Use the existing helper functions, and expose size tuning via `ZE_TILE_CACHE_SIZE` / `--tile-cache-size` rather than new globals.
 
 ## Typical Agent Tasks
 
@@ -78,11 +83,12 @@ Build and maintain a fast, fully-Python blind and metadata-assisted WCS solver f
   - Use vote-based pair filtering, local-neighborhood sampling, and level-specific hash specs.
   - Ensure `CRPIX` and `CRVAL` are consistent with the plane center.
 - Performance:
-  - Tune `max_quads_per_tile` (e.g. 2000–5000 for faster builds) and level strategies (`local_brightness` for M/S).
+  - Tune `max_quads_per_tile` (e.g. 2000-5000 for faster builds) and level strategies (`local_brightness` for M/S).
+  - Pick the right index layout for the machine: `--quad-storage npy` for mmap, `npz_uncompressed` when I/O dominates, `--tile-compression uncompressed` if disk allows faster solving.
 
 ## Troubleshooting
 
-- “Missing quad tables (L/M/S)” → Rebuild index; ensure `hash_tables/quads_*.npz` exist.
+- “Missing quad tables (L/M/S)” → Rebuild the index; ensure each level has either `hash_tables/quads_<level>.npz` or a `hash_tables/quads_<level>/` directory with `.npy` payloads.
 - “Tile file not found” with backslashes in path → Manifest from Windows; reader normalizes separators.
 - Too many false candidates → increase quad selectivity, lower bucket caps, or favor smaller-diameter levels.
 

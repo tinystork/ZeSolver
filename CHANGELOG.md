@@ -28,6 +28,19 @@
 - Shared the persistent settings dataclass/load/save helpers between the CLI
   entry point and the package, so tests can redirect the settings file path
   without touching the GUI stack.
+- Added a configurable in-process tile cache for `_load_tile_positions`, exposed via
+  `ZE_TILE_CACHE_SIZE` / `--tile-cache-size`, with hit/miss stats logged at DEBUG level.
+- Observed quad hashes are now deduplicated per level and `tally_candidates` accepts
+  `(hashes, counts)` tuples to weight votes; this drops redundant bucket lookups without
+  changing solve order or scores.
+- `zebuildindex` gained `--quad-storage {npz,npz_uncompressed,npy}`, `--tile-compression`,
+  and `--workers` flags so quad tables can be written as mmap-friendly `.npy` folders or
+  uncompressed `.npz` archives. `QuadIndex.load` auto-detects the format and logs load
+  timings for observability.
+- The GUI “Construire l’index” action mirrors those quad-storage/tile-compression options,
+  so `.npy` or uncompressed `.npz` tables can be produced without dropping to the CLI.
+- Documented the new builder/solver knobs in `README.md` and AGENTS.md, and added unit
+  tests for the tile cache, weighted tallies, and the storage variants.
 
 ### Fixed
 

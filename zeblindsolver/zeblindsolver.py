@@ -6,9 +6,11 @@ import logging
 import math
 import os
 import time
+from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
+import threading
 
 import numpy as np
 from astropy.io import fits
@@ -44,6 +46,19 @@ logger = logging.getLogger(__name__)
 FITS_EXTENSIONS = {".fits", ".fit", ".fts"}
 
 
+def _env_tile_cache_size(default: int = 128) -> int:
+    raw = os.environ.get("ZE_TILE_CACHE_SIZE")
+    if raw is None:
+        return default
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return default
+
+
+_TILE_CACHE_DEFAULT_CAPACITY = _env_tile_cache_size()
+
+
 @dataclass
 class SolveConfig:
     max_candidates: int = 10
@@ -66,6 +81,7 @@ class SolveConfig:
     pixel_scale_arcsec: float | None = None
     pixel_scale_min_arcsec: float | None = None
     pixel_scale_max_arcsec: float | None = None
+    tile_cache_size: int = _TILE_CACHE_DEFAULT_CAPACITY
 
 
 @dataclass
@@ -82,14 +98,138 @@ def _image_positions(stars: np.ndarray) -> np.ndarray:
     return np.column_stack((stars["x"], stars["y"]))
 
 
-def _load_tile_positions(index_root: Path, entry: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
-    # Normalize path separators to support manifests written on Windows
-    rel = str(entry["tile_file"]).replace("\\", "/")
-    tile_path = index_root / rel
+@dataclass(frozen=True)
+class _TileCacheEntry:
+    signature: tuple[int, int]
+    xy: np.ndarray
+    world: np.ndarray
+
+
+class _TileCache:
+    def __init__(self, capacity: int) -> None:
+        self._capacity = max(0, int(capacity))
+        self._entries: OrderedDict[Path, _TileCacheEntry] = OrderedDict()
+        self._lock = threading.Lock()
+        self._hits = 0
+        self._misses = 0
+
+    def _trim(self) -> None:
+        while self._capacity >= 0 and len(self._entries) > self._capacity:
+            self._entries.popitem(last=False)
+
+    def _stat_signature(self, path: Path) -> tuple[int, int]:
+        stat = path.stat()
+        mtime_ns = getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1e9))
+        return int(mtime_ns), int(stat.st_size)
+
+    def configure(self, capacity: int) -> None:
+        with self._lock:
+            self._capacity = max(0, int(capacity))
+            self._trim()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+            self._hits = 0
+            self._misses = 0
+
+    def stats(self) -> tuple[int, int]:
+        with self._lock:
+            return self._hits, self._misses
+
+    def capacity(self) -> int:
+        with self._lock:
+            return self._capacity
+
+    def load(self, path: Path) -> tuple[np.ndarray, np.ndarray]:
+        real_path = path.resolve()
+        try:
+            signature = self._stat_signature(real_path)
+        except FileNotFoundError:
+            with self._lock:
+                self._entries.pop(real_path, None)
+            raise
+        with self._lock:
+            entry = self._entries.get(real_path)
+            if entry and entry.signature == signature:
+                self._entries.move_to_end(real_path)
+                self._hits += 1
+                return entry.xy, entry.world
+            if entry:
+                self._entries.pop(real_path, None)
+            self._misses += 1
+        xy, world = _read_tile_payload(real_path)
+        xy.setflags(write=False)
+        world.setflags(write=False)
+        if self._capacity <= 0:
+            return xy, world
+        with self._lock:
+            existing = self._entries.get(real_path)
+            if existing and existing.signature == signature:
+                self._entries.move_to_end(real_path)
+                return existing.xy, existing.world
+            self._entries[real_path] = _TileCacheEntry(signature, xy, world)
+            self._entries.move_to_end(real_path)
+            self._trim()
+        return xy, world
+
+
+def _read_tile_payload(tile_path: Path) -> tuple[np.ndarray, np.ndarray]:
     with np.load(tile_path) as data:
         xy = np.column_stack((data["x_deg"], data["y_deg"]))
         world = np.column_stack((data["ra_deg"], data["dec_deg"]))
     return xy.astype(np.float32), world.astype(np.float32)
+
+
+_TILE_CACHE = _TileCache(_TILE_CACHE_DEFAULT_CAPACITY)
+
+
+def _configure_tile_cache(capacity: int | None = None) -> None:
+    if capacity is None:
+        return
+    _TILE_CACHE.configure(capacity)
+
+
+def _tile_cache_clear() -> None:
+    _TILE_CACHE.clear()
+
+
+def _tile_cache_stats() -> tuple[int, int]:
+    return _TILE_CACHE.stats()
+
+
+def _tile_cache_capacity() -> int:
+    return _TILE_CACHE.capacity()
+
+
+def _load_tile_positions(index_root: Path, entry: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    # Normalize path separators to support manifests written on Windows
+    rel = str(entry["tile_file"]).replace("\\", "/")
+    tile_path = (index_root / rel).expanduser()
+    return _TILE_CACHE.load(tile_path)
+
+
+def _deduplicate_hashes(
+    hashes: np.ndarray,
+    quads: np.ndarray,
+    *,
+    label: str | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    if hashes.size == 0:
+        return hashes, quads[:0], np.zeros(0, dtype=np.uint32)
+    unique_hashes, indices, counts = np.unique(hashes, return_index=True, return_counts=True)
+    unique_quads = quads[indices] if indices.size else quads[:0]
+    if logger.isEnabledFor(logging.DEBUG):
+        ratio = float(hashes.size) / float(unique_hashes.size or 1)
+        suffix = f" ({label})" if label else ""
+        logger.debug(
+            "observed hash dedup%s: %d -> %d unique (%.2fx)",
+            suffix,
+            hashes.size,
+            unique_hashes.size,
+            ratio,
+        )
+    return unique_hashes, unique_quads, counts.astype(np.uint32, copy=False)
 
 
 def _angular_separation(ra1: float, dec1: float, ra2: float, dec2: float) -> float:
@@ -275,11 +415,30 @@ def solve_blind(
     cancel_check: Optional[Callable[[], bool]] = None,
 ) -> WcsSolution:
     config = config or SolveConfig()
+    _configure_tile_cache(getattr(config, "tile_cache_size", _TILE_CACHE_DEFAULT_CAPACITY))
+
+    def _finish(result: WcsSolution) -> WcsSolution:
+        if logger.isEnabledFor(logging.DEBUG):
+            hits, misses = _tile_cache_stats()
+            total = hits + misses
+            capacity = _tile_cache_capacity()
+            if total:
+                hit_rate = 100.0 * hits / total
+                logger.debug(
+                    "tile cache stats: %d hits / %d misses (%.1f%% hit rate, capacity=%d)",
+                    hits,
+                    misses,
+                    hit_rate,
+                    capacity,
+                )
+            else:
+                logger.debug("tile cache stats: 0 hits / 0 misses (capacity=%d)", capacity)
+        return result
     index_root = Path(index_root).expanduser().resolve()
     downsample_factor = max(1, min(4, int(getattr(config, "downsample", 1) or 1)))
     bucket_limit = max(1024, int(4096 / downsample_factor))
     if cancel_check and cancel_check():
-        return WcsSolution(False, "cancelled", None, {}, None, {})
+        return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
     manifest = load_manifest(index_root)
     levels = [level["name"] for level in manifest.get("levels", [])] or ["L", "M", "S"]
     # Prefer trying smaller-diameter levels first for selectivity
@@ -287,7 +446,10 @@ def solve_blind(
     levels = [lvl for lvl in pref if lvl in levels] + [lvl for lvl in levels if lvl not in pref]
     # Preflight: ensure there is at least one quad hash table present.
     ht_root = index_root / "hash_tables"
-    present_levels = [lvl for lvl in levels if (ht_root / f"quads_{lvl}.npz").exists()]
+    def _has_quad_table(level_name: str) -> bool:
+        return (ht_root / f"quads_{level_name}.npz").exists() or (ht_root / f"quads_{level_name}").is_dir()
+
+    present_levels = [lvl for lvl in levels if _has_quad_table(lvl)]
     missing_levels = [lvl for lvl in levels if lvl not in present_levels]
     if not present_levels:
         manifest_path = index_root / "manifest.json"
@@ -296,7 +458,7 @@ def solve_blind(
             f"manifest={'ok' if manifest_path.exists() else 'missing'}",
         ]
         for lvl in levels:
-            details.append(f"{lvl}={'ok' if (ht_root / f'quads_{lvl}.npz').exists() else 'missing'}")
+            details.append(f"{lvl}={'ok' if _has_quad_table(lvl) else 'missing'}")
         msg = (
             "index has no quad hash tables (levels: "
             + ", ".join(levels)
@@ -305,7 +467,7 @@ def solve_blind(
             + ". Build the index with zebuildindex (see firstrun.txt)"
         )
         logger.error(msg)
-        return WcsSolution(False, msg, None, {}, None, {})
+        return _finish(WcsSolution(False, msg, None, {}, None, {}))
     if missing_levels:
         logger.warning(
             "some quad hash tables are missing: %s (continuing with %s)",
@@ -313,7 +475,7 @@ def solve_blind(
             ", ".join(present_levels),
         )
     if cancel_check and cancel_check():
-        return WcsSolution(False, "cancelled", None, {}, None, {})
+        return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
     tile_entries = manifest.get("tiles", [])
     tile_count = len(tile_entries)
     tile_map = {entry["tile_key"]: idx for idx, entry in enumerate(tile_entries)}
@@ -351,7 +513,7 @@ def solve_blind(
         preferred_tile_hint = _nearest_tile_key(tile_entries, ra_hint, dec_hint)
     stage = time.time()
     if cancel_check and cancel_check():
-        return WcsSolution(False, "cancelled", None, {}, None, {})
+        return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
     allowed_tile_indices: set[int] | None = None
     height, width = image.shape
     work_image = image
@@ -412,7 +574,7 @@ def solve_blind(
     max_fwhm = max(2.5, 8.0 / downsample_factor)
     stars = detect_stars(detection, min_fwhm_px=min_fwhm, max_fwhm_px=max_fwhm)
     if stars.size == 0:
-        return WcsSolution(False, "no stars found", None, {}, None, {})
+        return _finish(WcsSolution(False, "no stars found", None, {}, None, {}))
     if config.max_stars and stars.size > config.max_stars:
         stars = stars[: config.max_stars]
     if downsample_factor > 1:
@@ -431,14 +593,20 @@ def solve_blind(
     obs_stars["mag"] = -stars["flux"]
     # Prefer local-neighborhood quads to improve geometric stability on TAN plane
     if cancel_check and cancel_check():
-        return WcsSolution(False, "cancelled", None, {}, None, {})
+        return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
     quads = sample_quads(obs_stars, config.max_quads, strategy="local_brightness")
     if quads.size == 0:
-        return WcsSolution(False, "no quads sampled", None, {}, None, {})
+        return _finish(WcsSolution(False, "no quads sampled", None, {}, None, {}))
     if cancel_check and cancel_check():
-        return WcsSolution(False, "cancelled", None, {}, None, {})
+        return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
     obs_hash = hash_quads(quads, image_positions)
-    logger.info("sampled %d quads producing %d hashes", quads.shape[0], obs_hash.hashes.size)
+    base_hashes, base_quads, base_counts = _deduplicate_hashes(obs_hash.hashes, obs_hash.indices, label="base")
+    logger.info(
+        "sampled %d quads producing %d hashes (%d unique)",
+        quads.shape[0],
+        obs_hash.hashes.size,
+        base_hashes.size,
+    )
     _log_phase("detect/quads", stage)
     thresholds = {"rms_px": config.quality_rms, "inliers": config.quality_inliers}
 
@@ -479,17 +647,16 @@ def solve_blind(
         )
 
     # Precompute observed hashes per level with pixel-adapted specs when possible
-    obs_by_level: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    obs_by_level: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     for lvl in levels:
         if cancel_check and cancel_check():
             return WcsSolution(False, "cancelled", None, {}, None, {})
         px = _spec_pixels(lvl)
         if px is None:
-            # fallback to unfiltered
-            obs_by_level[lvl] = (obs_hash.hashes, obs_hash.indices)
+            obs_by_level[lvl] = (base_hashes, base_quads, base_counts)
         else:
             oh = hash_quads(quads, image_positions, spec=px)
-            obs_by_level[lvl] = (oh.hashes, oh.indices)
+            obs_by_level[lvl] = _deduplicate_hashes(oh.hashes, oh.indices, label=lvl)
 
     def _attempt_level(
         level_name: str,
@@ -506,13 +673,16 @@ def solve_blind(
             return None
         # Use precomputed observed quads for this level (optionally bypassing px filters)
         if use_px_spec:
-            level_hashes, level_quads = obs_by_level.get(level_name, (obs_hash.hashes, obs_hash.indices))
+            entry = obs_by_level.get(level_name)
+            if entry is None:
+                entry = (base_hashes, base_quads, base_counts)
         else:
-            level_hashes, level_quads = (obs_hash.hashes, obs_hash.indices)
+            entry = (base_hashes, base_quads, base_counts)
+        level_hashes, level_quads, level_counts = entry
         if cancel_check and cancel_check():
             return None
         candidates = tally_candidates(
-            level_hashes,
+            (level_hashes, level_counts),
             index_root,
             levels=[level_name],
             allowed_tiles=allowed_tile_indices,
@@ -587,7 +757,13 @@ def solve_blind(
             for lvl in levels_to_use:
                 if cancel_check and cancel_check():
                     return None
-                ohashes, oquads = (obs_by_level[lvl] if use_px_spec else (obs_hash.hashes, obs_hash.indices))
+                if use_px_spec:
+                    lvl_entry = obs_by_level.get(lvl)
+                    if lvl_entry is None:
+                        lvl_entry = (base_hashes, base_quads, base_counts)
+                else:
+                    lvl_entry = (base_hashes, base_quads, base_counts)
+                ohashes, oquads, _ = lvl_entry
                 ip, tp, wp = _collect_tile_matches(
                     index_root,
                     (lvl,),
@@ -851,9 +1027,9 @@ def solve_blind(
         return best
 
     stage = time.time()
-    variants = [(obs_hash.hashes, "nominal")]
+    variants = [(base_hashes, "nominal")]
     if config.try_parity_flip:
-        variants.append((obs_hash.hashes ^ 1, "mirror"))
+        variants.append((base_hashes ^ 1, "mirror"))
     best_solution: WcsSolution | None = None
     levels_all = list(levels)
     levels_fast = [lvl for lvl in ("S",) if lvl in levels_all]
@@ -940,13 +1116,13 @@ def solve_blind(
             break
     _log_phase("candidate search", stage)
     if not best_solution:
-        return WcsSolution(False, "no valid solution", None, {}, None, {})
+        return _finish(WcsSolution(False, "no valid solution", None, {}, None, {}))
     header_updates = {
         **best_solution.header_updates,
         "BLINDVER": ZEBLIND_VERSION,
     }
     if cancel_check and cancel_check():
-        return WcsSolution(False, "cancelled", None, {}, None, {})
+        return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
     if is_fits:
         with fits.open(source_path, mode="update", memmap=False) as hdul:
             header_out = hdul[0].header
@@ -973,13 +1149,15 @@ def solve_blind(
             )
         else:
             logger.info("blind solve succeeded (tile=%s)", best_solution.tile_key)
-    return WcsSolution(
-        True,
-        best_solution.message,
-        best_solution.wcs,
-        best_solution.stats,
-        best_solution.tile_key,
-        header_updates,
+    return _finish(
+        WcsSolution(
+            True,
+            best_solution.message,
+            best_solution.wcs,
+            best_solution.stats,
+            best_solution.tile_key,
+            header_updates,
+        )
     )
 
 
@@ -1019,6 +1197,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pixel-scale", type=float, help="Pixel scale hint in arcsec/pixel")
     parser.add_argument("--pixel-scale-min", type=float, help="Minimum pixel scale bound (arcsec/pixel)")
     parser.add_argument("--pixel-scale-max", type=float, help="Maximum pixel scale bound (arcsec/pixel)")
+    parser.add_argument(
+        "--tile-cache-size",
+        type=int,
+        default=None,
+        help="Tile position cache capacity (overrides ZE_TILE_CACHE_SIZE, default=128)",
+    )
     parser.add_argument("--log-level", default="INFO")
     # Backend selection
     parser.add_argument("--solver-backend", choices=("local", "astrometry"), default=None)
@@ -1033,6 +1217,21 @@ def main(argv: list[str] | None = None) -> int:
 
     # Load defaults from settings file if flags not provided
     defaults = _load_cli_defaults_from_settings()
+    tile_cache_size = args.tile_cache_size
+    if tile_cache_size is None:
+        cfg_value = defaults.get("tile_cache_size") if isinstance(defaults, dict) else None
+        if isinstance(cfg_value, int):
+            tile_cache_size = cfg_value
+    if tile_cache_size is None:
+        env_value = os.environ.get("ZE_TILE_CACHE_SIZE")
+        if env_value:
+            try:
+                tile_cache_size = int(env_value)
+            except ValueError:
+                tile_cache_size = None
+    if tile_cache_size is None:
+        tile_cache_size = _TILE_CACHE_DEFAULT_CAPACITY
+    tile_cache_size = max(0, int(tile_cache_size))
     backend = args.solver_backend or (defaults.get("solver_backend") if isinstance(defaults.get("solver_backend"), str) else "local")
     backend = (backend or "local").lower()
     if backend == "astrometry":
@@ -1085,6 +1284,7 @@ def main(argv: list[str] | None = None) -> int:
         pixel_scale_arcsec=args.pixel_scale,
         pixel_scale_min_arcsec=args.pixel_scale_min,
         pixel_scale_max_arcsec=args.pixel_scale_max,
+        tile_cache_size=tile_cache_size,
     )
     solution = solve_blind(args.input, args.index_root, config=config)
     if solution.success:

@@ -21,6 +21,9 @@ SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
 SETTINGS_SCHEMA_VERSION = 3
 
+QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
+TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
+
 
 @dataclass
 class PersistentSettings:
@@ -30,6 +33,8 @@ class PersistentSettings:
     mag_cap: float = DEFAULT_MAG_CAP
     max_stars: int = DEFAULT_MAX_STARS
     max_quads_per_tile: int = DEFAULT_MAX_QUADS_PER_TILE
+    quad_storage: str = QUAD_STORAGE_CHOICES[0]
+    tile_compression: str = TILE_COMPRESSION_CHOICES[0]
     sample_fits: Optional[str] = None
     # Preset/FOV persistence
     last_preset_id: Optional[str] = None
@@ -126,6 +131,14 @@ def load_persistent_settings() -> PersistentSettings:
         except (TypeError, ValueError):
             return None
 
+    def _normalize_choice(value: object, choices: tuple[str, ...], default: str) -> str:
+        candidate = default
+        if isinstance(value, str) and value.strip():
+            candidate = value.strip().lower()
+        if candidate not in choices:
+            return default
+        return candidate
+
     settings = PersistentSettings(
         schema_version=int(payload.get("schema_version", 1)),
         db_root=payload.get("db_root"),
@@ -133,6 +146,8 @@ def load_persistent_settings() -> PersistentSettings:
         mag_cap=float(payload.get("mag_cap", DEFAULT_MAG_CAP)),
         max_stars=int(payload.get("max_stars", DEFAULT_MAX_STARS)),
         max_quads_per_tile=int(payload.get("max_quads_per_tile", DEFAULT_MAX_QUADS_PER_TILE)),
+        quad_storage=_normalize_choice(payload.get("quad_storage"), QUAD_STORAGE_CHOICES, QUAD_STORAGE_CHOICES[0]),
+        tile_compression=_normalize_choice(payload.get("tile_compression"), TILE_COMPRESSION_CHOICES, TILE_COMPRESSION_CHOICES[0]),
         sample_fits=payload.get("sample_fits"),
         last_preset_id=(payload.get("last_preset_id") or None),
         last_fov_focal_mm=float(payload.get("last_fov_focal_mm", 0.0)),
@@ -277,6 +292,8 @@ __all__ = [
     "DEFAULT_FOV_DEG",
     "DEFAULT_SEARCH_RADIUS_ATTEMPTS",
     "DEFAULT_SEARCH_RADIUS_SCALE",
+    "QUAD_STORAGE_CHOICES",
+    "TILE_COMPRESSION_CHOICES",
     "PersistentSettings",
     "SETTINGS_PATH",
     "SETTINGS_SCHEMA_VERSION",
