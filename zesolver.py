@@ -635,6 +635,9 @@ class SolveConfig:
     log_level: str = "INFO"
     dev_bucket_limit_override: int = 0
     dev_vote_percentile: int = 40
+    dev_bucket_cap_S: int = 0
+    dev_bucket_cap_M: int = 0
+    dev_bucket_cap_L: int = 0
     dev_detect_k_sigma: float = 3.0
     dev_detect_min_area: int = 5
 
@@ -664,6 +667,12 @@ class SolveConfig:
         vote = int(getattr(self, "dev_vote_percentile", 40) or 40)
         vote = min(95, max(5, vote))
         object.__setattr__(self, "dev_vote_percentile", vote)
+        cap_s = max(0, int(getattr(self, "dev_bucket_cap_S", 0) or 0))
+        cap_m = max(0, int(getattr(self, "dev_bucket_cap_M", 0) or 0))
+        cap_l = max(0, int(getattr(self, "dev_bucket_cap_L", 0) or 0))
+        object.__setattr__(self, "dev_bucket_cap_S", cap_s)
+        object.__setattr__(self, "dev_bucket_cap_M", cap_m)
+        object.__setattr__(self, "dev_bucket_cap_L", cap_l)
         detect_sigma = float(getattr(self, "dev_detect_k_sigma", 3.0) or 3.0)
         if not math.isfinite(detect_sigma) or detect_sigma <= 0.0:
             detect_sigma = 3.0
@@ -2258,9 +2267,9 @@ def run_cli(args: argparse.Namespace) -> int:
         log_level=(args.log_level or "INFO").upper(),
         dev_bucket_limit_override=max(0, int(args.dev_bucket_limit or 0)),
         dev_vote_percentile=min(95, max(5, int(args.dev_vote_percentile or 40))),
-        bucket_cap_S=max(0, int(args.bucket_cap_s or 0)),
-        bucket_cap_M=max(0, int(args.bucket_cap_m or 0)),
-        bucket_cap_L=max(0, int(args.bucket_cap_l or 0)),
+        dev_bucket_cap_S=max(0, int(args.bucket_cap_s or 0)),
+        dev_bucket_cap_M=max(0, int(args.bucket_cap_m or 0)),
+        dev_bucket_cap_L=max(0, int(args.bucket_cap_l or 0)),
         dev_detect_k_sigma=max(0.5, float(args.dev_detect_k_sigma or 3.0)),
         dev_detect_min_area=max(1, int(args.dev_detect_min_area or 5)),
     )
@@ -5351,13 +5360,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                 blind_pixel_tolerance=float(self._settings.blind_pixel_tolerance or 2.5),
                 blind_quality_inliers=int(self._settings.blind_quality_inliers or 40),
                 blind_quality_rms=float(self._settings.blind_quality_rms or 1.2),
-        blind_fast_mode=bool(self._settings.blind_fast_mode),
-        log_level=self._current_log_level,
-        dev_bucket_limit_override=int(self._settings.dev_bucket_limit_override or 0),
-        dev_vote_percentile=int(self._settings.dev_vote_percentile or 40),
-        bucket_cap_S=int(self._settings.dev_bucket_cap_S or 0),
-        bucket_cap_M=int(self._settings.dev_bucket_cap_M or 0),
-        bucket_cap_L=int(self._settings.dev_bucket_cap_L or 0),
+                blind_fast_mode=bool(self._settings.blind_fast_mode),
+                log_level=self._current_log_level,
+                dev_bucket_limit_override=int(self._settings.dev_bucket_limit_override or 0),
+                dev_vote_percentile=int(self._settings.dev_vote_percentile or 40),
+                dev_bucket_cap_S=int(self._settings.dev_bucket_cap_S or 0),
+                dev_bucket_cap_M=int(self._settings.dev_bucket_cap_M or 0),
+                dev_bucket_cap_L=int(self._settings.dev_bucket_cap_L or 0),
                 dev_detect_k_sigma=float(self._settings.dev_detect_k_sigma or 3.0),
                 dev_detect_min_area=int(self._settings.dev_detect_min_area or 5),
             )
