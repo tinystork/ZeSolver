@@ -1,6 +1,15 @@
 """ZeSolver helper package."""
 
 from .blindindex import BlindIndex, BlindIndexCandidate, ObservedQuad
+from .settings_store import (
+    DEFAULT_FOV_DEG,
+    DEFAULT_SEARCH_RADIUS_ATTEMPTS,
+    DEFAULT_SEARCH_RADIUS_SCALE,
+    PersistentSettings,
+    SETTINGS_PATH,
+    load_persistent_settings,
+    save_persistent_settings,
+)
 from .zeblindsolver import (
     BlindSolveResult,
     BlindSolverRuntimeError,
@@ -26,4 +35,11 @@ __all__ = [
     "BlindIndexCandidate",
     "ObservedQuad",
     "NearSolveConfig",
+    "PersistentSettings",
+    "load_persistent_settings",
+    "save_persistent_settings",
+    "SETTINGS_PATH",
+    "DEFAULT_FOV_DEG",
+    "DEFAULT_SEARCH_RADIUS_SCALE",
+    "DEFAULT_SEARCH_RADIUS_ATTEMPTS",
 ]

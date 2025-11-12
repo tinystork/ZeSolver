@@ -18,7 +18,7 @@ import os
 import sys
 import threading
 import time
-from dataclasses import asdict, dataclass, field, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Iterator, List, Optional, Sequence
 
@@ -68,6 +68,14 @@ from zesolver.zeblindsolver import (
     has_valid_wcs,
     near_solve,
 )
+from zesolver.settings_store import (
+    DEFAULT_FOV_DEG,
+    DEFAULT_SEARCH_RADIUS_ATTEMPTS,
+    DEFAULT_SEARCH_RADIUS_SCALE,
+    PersistentSettings,
+    load_persistent_settings,
+    save_persistent_settings,
+)
 from zeblindsolver.metadata_solver import NearSolveConfig as NearIndexConfig
 from zeblindsolver.db_convert import (
     DEFAULT_MAG_CAP,
@@ -103,12 +111,9 @@ def _parse_formats_value(value: Optional[str]) -> list[str]:
         return list(sorted(SUPPORTED_EXTENSIONS))
     return formats
 
-DEFAULT_FOV_DEG = 1.5
 DEFAULT_MAX_IMAGE_STARS = 200
 DEFAULT_MAX_CATALOG_STARS = 2000
 DEFAULT_ALIGNMENT_STARS = 60
-DEFAULT_SEARCH_RADIUS_SCALE = 1.8
-DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 GUI_DEFAULT_LANGUAGE = "fr"
 GUI_FALLBACK_LANGUAGE = "en"
 GUI_LANG_ORDER = ("fr", "en")
@@ -179,6 +184,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "solver_tab": "Solveur",
         "settings_tab": "Réglages",
         "performance_tab": "Performance",
+        "fast_tab": "Paramètres fast solver",
         "database_tab": "Base de données",
         "database_tab_title": "Base de données",
         "presets_title": "Presets d’instruments",
@@ -232,6 +238,17 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_detect_label": "Dispositif détection (GPU/CPU)",
         "settings_perf_io_label": "Concurrence I/O (Auto=0)",
         "settings_perf_near_warm_label": "Near rapide (séquence)",
+        # Fast solver (near) tab
+        "fast_group": "Paramètres fast solver (near)",
+        "fast_quality_inliers_label": "Inliers mini (near)",
+        "fast_quality_rms_label": "RMS max px (near)",
+        "fast_pixel_tol_label": "Tolérance pixel (near)",
+        "fast_ransac_trials_label": "Essais RANSAC (near)",
+        "fast_max_img_stars_label": "Étoiles image max (near)",
+        "fast_max_cat_stars_label": "Étoiles catalogue max (near)",
+        "fast_try_parity_label": "Autoriser symétrie (flip parité)",
+        "fast_search_margin_label": "Marge de recherche (near)",
+        "fast_save_btn": "Sauvegarder",
         "settings_build_start": "Construction de l'index dans {path}… (cela peut prendre plusieurs minutes)",
         "settings_rebuild_title": "Reconstruire l'index ?",
         "settings_rebuild_text": "Un index existe déjà dans {path}. Le reconstruire ?",
@@ -302,6 +319,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "solver_tab": "Solver",
         "settings_tab": "Settings",
         "performance_tab": "Performance",
+        "fast_tab": "Fast solver settings",
         "database_tab": "Database",
         "database_tab_title": "Database",
         "presets_title": "Instrument presets",
@@ -355,6 +373,17 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_detect_label": "Star detection device",
         "settings_perf_io_label": "I/O concurrency (Auto=0)",
         "settings_perf_near_warm_label": "Fast near (sequential warm-start)",
+        # Fast solver (near) tab
+        "fast_group": "Fast solver (near)",
+        "fast_quality_inliers_label": "Min inliers (near)",
+        "fast_quality_rms_label": "Max RMS px (near)",
+        "fast_pixel_tol_label": "Pixel tolerance (near)",
+        "fast_ransac_trials_label": "RANSAC trials (near)",
+        "fast_max_img_stars_label": "Max image stars (near)",
+        "fast_max_cat_stars_label": "Max catalog stars (near)",
+        "fast_try_parity_label": "Allow parity flip",
+        "fast_search_margin_label": "Search margin (near)",
+        "fast_save_btn": "Save settings",
         "settings_build_start": "Building index at {path}… (this may take several minutes)",
         "settings_rebuild_title": "Rebuild Index?",
         "settings_rebuild_text": "An index already exists at {path}. Rebuild it?",
@@ -459,242 +488,6 @@ for _lang, _mapping in _GUI_ASTROMETRY_I18N.items():
         if _k not in base:
             base[_k] = _v
 
-SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
-# Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 3
-
-
-@dataclass
-class PersistentSettings:
-    schema_version: int = SETTINGS_SCHEMA_VERSION
-    db_root: Optional[str] = None
-    index_root: Optional[str] = None
-    mag_cap: float = DEFAULT_MAG_CAP
-    max_stars: int = DEFAULT_MAX_STARS
-    max_quads_per_tile: int = DEFAULT_MAX_QUADS_PER_TILE
-    sample_fits: Optional[str] = None
-    # Preset/FOV persistence
-    last_preset_id: Optional[str] = None
-    last_fov_focal_mm: float = 0.0
-    last_fov_pixel_um: float = 0.0
-    last_fov_res_w: int = 0
-    last_fov_res_h: int = 0
-    last_fov_reducer: float = 1.0
-    last_fov_binning: int = 1
-    # Blind solver tunables
-    blind_max_stars: int = 500
-    blind_max_quads: int = 8000
-    blind_max_candidates: int = 10
-    blind_pixel_tolerance: float = 2.5
-    blind_quality_inliers: int = 40
-    blind_quality_rms: float = 1.2
-    blind_fast_mode: bool = True
-    # Near solver performance
-    near_max_tile_candidates: int = 48
-    near_tile_cache_size: int = 128
-    near_detect_backend: str = "auto"  # auto|cpu|cuda
-    near_detect_device: int = 0
-    io_concurrency: int = 0
-    near_warm_start: bool = True
-    # Solver panel persisted settings
-    solver_fov_deg: float = DEFAULT_FOV_DEG
-    solver_search_scale: float = DEFAULT_SEARCH_RADIUS_SCALE
-    solver_search_attempts: int = DEFAULT_SEARCH_RADIUS_ATTEMPTS
-    solver_max_radius_deg: float = 0.0  # 0 = Auto
-    solver_downsample: int = 1
-    solver_workers: int = 0  # 0 = auto (half CPUs)
-    solver_cache_size: int = 12
-    solver_max_files: int = 0
-    solver_formats: Optional[str] = None
-    solver_family: Optional[str] = None  # lower-case key, None = Auto
-    solver_blind_enabled: bool = True
-    solver_overwrite: bool = True
-    solver_hint_ra_deg: Optional[float] = None
-    solver_hint_dec_deg: Optional[float] = None
-    solver_hint_radius_deg: Optional[float] = None
-    solver_hint_focal_mm: Optional[float] = None
-    solver_hint_pixel_um: Optional[float] = None
-    solver_hint_resolution_arcsec: Optional[float] = None
-    solver_hint_resolution_min_arcsec: Optional[float] = None
-    solver_hint_resolution_max_arcsec: Optional[float] = None
-    # Solver backend selection + Astrometry.net web backend
-    solver_backend: str = "local"  # "local" or "astrometry"
-    astrometry_api_url: str = "https://nova.astrometry.net/api"
-    astrometry_api_key: Optional[str] = None
-    astrometry_parallel_jobs: int = 2
-    astrometry_timeout_s: int = 600
-    astrometry_use_hints: bool = True
-    astrometry_fallback_local: bool = True
-
-
-def load_persistent_settings() -> PersistentSettings:
-    if not SETTINGS_PATH.exists():
-        return PersistentSettings()
-    try:
-        payload = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return PersistentSettings()
-    if not isinstance(payload, dict):
-        return PersistentSettings()
-    def _float_or_none(value: object) -> Optional[float]:
-        if value in (None, "", False):
-            return None
-        try:
-            return float(value)
-        except (TypeError, ValueError):
-            return None
-    settings = PersistentSettings(
-        schema_version=int(payload.get("schema_version", 1)),
-        db_root=payload.get("db_root"),
-        index_root=payload.get("index_root"),
-        mag_cap=float(payload.get("mag_cap", DEFAULT_MAG_CAP)),
-        max_stars=int(payload.get("max_stars", DEFAULT_MAX_STARS)),
-        max_quads_per_tile=int(payload.get("max_quads_per_tile", DEFAULT_MAX_QUADS_PER_TILE)),
-        sample_fits=payload.get("sample_fits"),
-        last_preset_id=(payload.get("last_preset_id") or None),
-        last_fov_focal_mm=float(payload.get("last_fov_focal_mm", 0.0)),
-        last_fov_pixel_um=float(payload.get("last_fov_pixel_um", 0.0)),
-        last_fov_res_w=int(payload.get("last_fov_res_w", 0)),
-        last_fov_res_h=int(payload.get("last_fov_res_h", 0)),
-        last_fov_reducer=float(payload.get("last_fov_reducer", 1.0)),
-        last_fov_binning=int(payload.get("last_fov_binning", 1)),
-        blind_max_stars=int(payload.get("blind_max_stars", 500)),
-        blind_max_quads=int(payload.get("blind_max_quads", 8000)),
-        blind_max_candidates=int(payload.get("blind_max_candidates", 10)),
-        blind_pixel_tolerance=float(payload.get("blind_pixel_tolerance", 2.5)),
-        blind_quality_inliers=int(payload.get("blind_quality_inliers", 40)),
-        blind_quality_rms=float(payload.get("blind_quality_rms", 1.2)),
-        blind_fast_mode=bool(payload.get("blind_fast_mode", True)),
-        near_max_tile_candidates=int(payload.get("near_max_tile_candidates", 48)),
-        near_tile_cache_size=int(payload.get("near_tile_cache_size", 128)),
-        near_detect_backend=str(payload.get("near_detect_backend", "auto")),
-        near_detect_device=int(payload.get("near_detect_device", 0)),
-        io_concurrency=int(payload.get("io_concurrency", 0)),
-        near_warm_start=bool(payload.get("near_warm_start", True)),
-        solver_fov_deg=float(payload.get("solver_fov_deg", DEFAULT_FOV_DEG)),
-        solver_search_scale=float(payload.get("solver_search_scale", DEFAULT_SEARCH_RADIUS_SCALE)),
-        solver_search_attempts=int(payload.get("solver_search_attempts", DEFAULT_SEARCH_RADIUS_ATTEMPTS)),
-        solver_max_radius_deg=float(payload.get("solver_max_radius_deg", 0.0)),
-        solver_downsample=int(payload.get("solver_downsample", 1)),
-        solver_workers=int(payload.get("solver_workers", 0)),
-        solver_cache_size=int(payload.get("solver_cache_size", 12)),
-        solver_max_files=int(payload.get("solver_max_files", 0)),
-        solver_formats=payload.get("solver_formats"),
-        solver_family=(payload.get("solver_family") or None),
-        solver_blind_enabled=bool(payload.get("solver_blind_enabled", True)),
-        solver_overwrite=bool(payload.get("solver_overwrite", True)),
-        solver_hint_ra_deg=_float_or_none(payload.get("solver_hint_ra_deg")),
-        solver_hint_dec_deg=_float_or_none(payload.get("solver_hint_dec_deg")),
-        solver_hint_radius_deg=_float_or_none(payload.get("solver_hint_radius_deg")),
-        solver_hint_focal_mm=_float_or_none(payload.get("solver_hint_focal_mm")),
-        solver_hint_pixel_um=_float_or_none(payload.get("solver_hint_pixel_um")),
-        solver_hint_resolution_arcsec=_float_or_none(payload.get("solver_hint_resolution_arcsec")),
-        solver_hint_resolution_min_arcsec=_float_or_none(payload.get("solver_hint_resolution_min_arcsec")),
-        solver_hint_resolution_max_arcsec=_float_or_none(payload.get("solver_hint_resolution_max_arcsec")),
-        solver_backend=str(payload.get("solver_backend", "local") or "local"),
-        astrometry_api_url=str(payload.get("astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api"),
-        astrometry_api_key=(payload.get("astrometry_api_key") or None),
-        astrometry_parallel_jobs=int(payload.get("astrometry_parallel_jobs", 2)),
-        astrometry_timeout_s=int(payload.get("astrometry_timeout_s", 600)),
-        astrometry_use_hints=bool(payload.get("astrometry_use_hints", True)),
-        astrometry_fallback_local=bool(payload.get("astrometry_fallback_local", True)),
-    )
-    migrated, updated = _migrate_settings_if_needed(settings)
-    if updated:
-        try:
-            save_persistent_settings(migrated)
-        except Exception:
-            pass
-        return migrated
-    return settings
-
-
-def save_persistent_settings(settings: PersistentSettings) -> None:
-    data = asdict(settings)
-    SETTINGS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    SETTINGS_PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
-
-
-def _migrate_settings_if_needed(settings: PersistentSettings) -> tuple[PersistentSettings, bool]:
-    """Upgrade persisted settings to the current schema and defaults.
-
-    Heuristics:
-    - If file predates schema v2 (no schema_version or <2), update the blind
-      solver defaults when they match the legacy fingerprint (the previous
-      shipped defaults) or when obviously too lax/buggy (inliers <= 20).
-    - Never increase work caps beyond user choices; only tighten or adopt the
-      new balanced defaults when the old defaults are detected verbatim.
-    """
-    changed = False
-    try:
-        current_version = int(getattr(settings, "schema_version", 1) or 1)
-    except Exception:
-        current_version = 1
-
-    # Legacy defaults shipped previously
-    LEGACY = {
-        "max_stars": 800,
-        "max_quads": 12000,
-        "max_candidates": 12,
-        "pixel_tol": 3.0,
-        # Some builds accidentally persisted 12 as fallback; accept both as legacy
-        "quality_inliers": {60, 12},
-        "quality_rms": 1.0,
-        "fast_mode": False,
-    }
-    # New recommended defaults
-    NEW = {
-        "max_stars": 500,
-        "max_quads": 8000,
-        "max_candidates": 10,
-        "pixel_tol": 2.5,
-        "quality_inliers": 40,
-        "quality_rms": 1.2,
-        "fast_mode": True,
-    }
-
-    if current_version < SETTINGS_SCHEMA_VERSION:
-        # Detect a legacy fingerprint (all key parameters at old defaults)
-        legacy_match = (
-            settings.blind_max_stars == LEGACY["max_stars"]
-            and settings.blind_max_quads == LEGACY["max_quads"]
-            and settings.blind_max_candidates == LEGACY["max_candidates"]
-            and abs(settings.blind_pixel_tolerance - LEGACY["pixel_tol"]) < 1e-6
-            and (settings.blind_quality_inliers in LEGACY["quality_inliers"])
-            and abs(settings.blind_quality_rms - LEGACY["quality_rms"]) < 1e-6
-            and settings.blind_fast_mode == LEGACY["fast_mode"]
-        )
-        if legacy_match:
-            settings.blind_max_stars = NEW["max_stars"]
-            settings.blind_max_quads = NEW["max_quads"]
-            settings.blind_max_candidates = NEW["max_candidates"]
-            settings.blind_pixel_tolerance = NEW["pixel_tol"]
-            settings.blind_quality_inliers = NEW["quality_inliers"]
-            settings.blind_quality_rms = NEW["quality_rms"]
-            settings.blind_fast_mode = NEW["fast_mode"]
-            changed = True
-        else:
-            # Targeted fixes: adjust obviously too-lax/buggy thresholds
-            if settings.blind_quality_inliers <= 20:
-                settings.blind_quality_inliers = max(20, NEW["quality_inliers"])
-                changed = True
-            # Adopt fast mode by default unless user already enabled it explicitly
-            # Heuristic: switch it on if other values still look legacy-ish
-            if settings.blind_fast_mode is False:
-                if (
-                    settings.blind_max_candidates >= 12
-                    or settings.blind_pixel_tolerance >= 3.0
-                    or settings.blind_max_quads >= 12000
-                ):
-                    settings.blind_fast_mode = True
-                    changed = True
-
-        settings.schema_version = SETTINGS_SCHEMA_VERSION
-        changed = True or changed
-
-    return settings, changed
-
-
 def _configure_logging(level_name: str) -> None:
     """Setup console + file logging (appends to zesolver.log)."""
     level = getattr(logging, (level_name or "").upper(), logging.INFO)
@@ -775,6 +568,24 @@ class SolveConfig:
     near_detect_backend: Optional[str] = None
     near_detect_device: Optional[int] = None
     near_warm_start: bool = True
+    near_quality_inliers: int = 60
+    near_quality_rms: float = 1.0
+    near_pixel_tolerance: float = 3.0
+    near_ransac_trials: int = 1200
+    near_max_img_stars: int = 800
+    near_max_cat_stars: int = 2000
+    near_try_parity_flip: bool = True
+    near_search_margin: float = 1.2
+    # Blind solver (Python) tunables (mirrors settings panel). These were
+    # previously only used by the settings tester; we surface them here so the
+    # batch run uses and logs the same values as the GUI:
+    blind_max_stars: int = 500
+    blind_max_quads: int = 8000
+    blind_max_candidates: int = 10
+    blind_pixel_tolerance: float = 2.5
+    blind_quality_inliers: int = 40
+    blind_quality_rms: float = 1.2
+    blind_fast_mode: bool = True
 
     def __post_init__(self) -> None:
         if self.families:
@@ -1069,6 +880,63 @@ class ImageSolver:
                 io_limit = 5 if workers >= 5 else max(1, (workers + 1) // 2)
         self._io_sema = threading.Semaphore(max(1, io_limit))
         logging.info("I/O concurrency set to %d (workers=%d)", io_limit, workers)
+        # Log the run configuration once so zesolver.log captures what the GUI selected
+        try:
+            run_cfg = {
+                "db_root": str(self.config.db_root),
+                "input_dir": str(self.config.input_dir),
+                "families": list(self.config.families) if self.config.families else None,
+                "fov_deg": float(self.config.fov_deg),
+                "downsample": int(self.config.downsample),
+                "workers": int(self.config.workers),
+                "cache_size": int(self.config.cache_size),
+                "formats": list(self.config.formats),
+                "max_files": int(self.config.max_files) if self.config.max_files is not None else None,
+                "search_radius_scale": float(self.config.search_radius_scale),
+                "search_radius_attempts": int(self.config.search_radius_attempts),
+                "max_search_radius_deg": float(self.config.max_search_radius_deg) if self.config.max_search_radius_deg is not None else None,
+                "blind_enabled": bool(self.config.blind_enabled),
+                "blind_index_path": str(self.config.blind_index_path) if self.config.blind_index_path else None,
+                "hints": {
+                    "ra_deg": self.config.hint_ra_deg,
+                    "dec_deg": self.config.hint_dec_deg,
+                    "radius_deg": self.config.hint_radius_deg,
+                    "focal_mm": self.config.hint_focal_mm,
+                    "pixel_um": self.config.hint_pixel_um,
+                    "scale_arcsec": self.config.hint_resolution_arcsec,
+                    "scale_min_arcsec": self.config.hint_resolution_min_arcsec,
+                    "scale_max_arcsec": self.config.hint_resolution_max_arcsec,
+                },
+                "near": {
+                    "max_tile_candidates": int(getattr(self.config, "near_max_tile_candidates", 48) or 48),
+                    "tile_cache_size": int(getattr(self.config, "near_tile_cache_size", 128) or 128),
+                    "detect_backend": str(getattr(self.config, "near_detect_backend", "auto") or "auto"),
+                    "detect_device": getattr(self.config, "near_detect_device", None),
+                    "warm_start": bool(getattr(self.config, "near_warm_start", True)),
+                    "quality_inliers": int(getattr(self.config, "near_quality_inliers", 60) or 60),
+                    "quality_rms": float(getattr(self.config, "near_quality_rms", 1.0) or 1.0),
+                    "pixel_tolerance": float(getattr(self.config, "near_pixel_tolerance", 3.0) or 3.0),
+                    "ransac_trials": int(getattr(self.config, "near_ransac_trials", 1200) or 1200),
+                    "max_img_stars": int(getattr(self.config, "near_max_img_stars", 800) or 800),
+                    "max_cat_stars": int(getattr(self.config, "near_max_cat_stars", 2000) or 2000),
+                    "try_parity_flip": bool(getattr(self.config, "near_try_parity_flip", True)),
+                    "search_margin": float(getattr(self.config, "near_search_margin", 1.2) or 1.2),
+                },
+                "blind": {
+                    "max_stars": int(getattr(self.config, "blind_max_stars", 500) or 500),
+                    "max_quads": int(getattr(self.config, "blind_max_quads", 8000) or 8000),
+                    "max_candidates": int(getattr(self.config, "blind_max_candidates", 10) or 10),
+                    "pixel_tolerance": float(getattr(self.config, "blind_pixel_tolerance", 2.5) or 2.5),
+                    "quality_inliers": int(getattr(self.config, "blind_quality_inliers", 40) or 40),
+                    "quality_rms": float(getattr(self.config, "blind_quality_rms", 1.2) or 1.2),
+                    "fast_mode": bool(getattr(self.config, "blind_fast_mode", True)),
+                },
+            }
+            logging.info("Run configuration: %s", json.dumps(run_cfg, ensure_ascii=False))
+            logging.info("Family candidate order: %s", ", ".join(self._family_candidates) if self._family_candidates else "(auto)")
+        except Exception:
+            # Never fail construction because of logging
+            pass
 
     @staticmethod
     def _autotune_io_limit(base_dir: Path, workers: int) -> int:
@@ -1278,7 +1146,7 @@ class ImageSolver:
             ):
                 if self._cancelled():
                     return ImageSolveResult(path=path, status="skipped", message="cancelled")
-                near_first = self._run_index_near_solver(path)
+                near_first = self._run_index_near_solver(path, metadata)
                 if near_first is not None:
                     near_first.duration_s = time.perf_counter() - start
                     near_first.run_info.extend(run_info)
@@ -1691,6 +1559,16 @@ class ImageSolver:
             final_ra = self.config.hint_ra_deg if self.config.hint_ra_deg is not None else ra_hint
             final_dec = self.config.hint_dec_deg if self.config.hint_dec_deg is not None else dec_hint
             blind_cfg = BlindSolveConfig(
+                # Tunables from GUI / persistent settings
+                max_candidates=int(getattr(self.config, "blind_max_candidates", 10) or 10),
+                max_stars=int(getattr(self.config, "blind_max_stars", 500) or 500),
+                max_quads=int(getattr(self.config, "blind_max_quads", 8000) or 8000),
+                quality_rms=float(getattr(self.config, "blind_quality_rms", 1.2) or 1.2),
+                quality_inliers=int(getattr(self.config, "blind_quality_inliers", 40) or 40),
+                pixel_tolerance=float(getattr(self.config, "blind_pixel_tolerance", 2.5) or 2.5),
+                fast_mode=bool(getattr(self.config, "blind_fast_mode", True)),
+                log_level="INFO",
+                # Hints / optics
                 ra_hint_deg=final_ra,
                 dec_hint_deg=final_dec,
                 radius_hint_deg=self.config.hint_radius_deg,
@@ -1701,6 +1579,29 @@ class ImageSolver:
                 pixel_scale_max_arcsec=self.config.hint_resolution_max_arcsec,
                 downsample=max(1, int(self.config.downsample or 1)),
             )
+            try:
+                # Log the effective blind config used
+                log_cfg = {
+                    "max_candidates": blind_cfg.max_candidates,
+                    "max_stars": blind_cfg.max_stars,
+                    "max_quads": blind_cfg.max_quads,
+                    "pixel_tolerance": blind_cfg.pixel_tolerance,
+                    "quality_inliers": blind_cfg.quality_inliers,
+                    "quality_rms": blind_cfg.quality_rms,
+                    "fast_mode": blind_cfg.fast_mode,
+                    "ra_hint": blind_cfg.ra_hint_deg,
+                    "dec_hint": blind_cfg.dec_hint_deg,
+                    "radius_hint": blind_cfg.radius_hint_deg,
+                    "focal_mm": blind_cfg.focal_length_mm,
+                    "pixel_um": blind_cfg.pixel_size_um,
+                    "scale_arcsec": blind_cfg.pixel_scale_arcsec,
+                    "scale_min": blind_cfg.pixel_scale_min_arcsec,
+                    "scale_max": blind_cfg.pixel_scale_max_arcsec,
+                    "downsample": blind_cfg.downsample,
+                }
+                logging.info("Blind config: %s", json.dumps(log_cfg, ensure_ascii=False))
+            except Exception:
+                pass
             result = blind_solve(
                 fits_path=str(path),
                 index_root=str(index_root),
@@ -1838,7 +1739,7 @@ class ImageSolver:
             run_info=list(run_info),
         )
 
-    def _run_index_near_solver(self, path: Path) -> Optional[ImageSolveResult]:
+    def _run_index_near_solver(self, path: Path, metadata: ImageMetadata) -> Optional[ImageSolveResult]:
         """Attempt a metadata-assisted near solve using the Zeblind index.
 
         Uses the same internal routine as the Settings tab tester (no quads).
@@ -1864,12 +1765,13 @@ class ImageSolver:
             # Further tighten search margin when OBJECT is present
             obj_name = None
             try:
-                obj_name = (metadata.extra.get("OBJECT") if metadata and metadata.extra else None)
+                obj_name = (metadata.extra.get("OBJECT") if metadata.extra else None)
             except Exception:
                 obj_name = None
-            search_margin = 1.2
+            base_margin = float(getattr(self.config, 'near_search_margin', 1.2) or 1.2)
+            search_margin = base_margin
             if obj_name and metadata.ra_deg is not None and metadata.dec_deg is not None:
-                search_margin = 1.05
+                search_margin = min(base_margin, 1.05)
                 logging.info("[ZENEAR] OBJECT=%s -> tighter search margin (%.2f)", obj_name, search_margin)
             near_cfg = NearIndexConfig(
                 fov_override_deg=fov_override,
@@ -1878,12 +1780,40 @@ class ImageSolver:
                 tile_cache_size=int(getattr(self.config, "near_tile_cache_size", 128) or 128),
                 detect_backend=(getattr(self.config, "near_detect_backend", None) or "auto"),
                 detect_device=(getattr(self.config, "near_detect_device", None)),
-                ransac_trials=ransac_trials,
+                ransac_trials=int(getattr(self.config, 'near_ransac_trials', 0) or 0) or ransac_trials,
                 seed_scale_deg=seed_scale,
                 seed_rotation=seed_rot,
                 seed_parity=seed_par,
                 search_margin=search_margin,
+                pixel_tolerance=float(getattr(self.config, 'near_pixel_tolerance', 3.0) or 3.0),
+                quality_inliers=int(getattr(self.config, 'near_quality_inliers', 60) or 60),
+                quality_rms=float(getattr(self.config, 'near_quality_rms', 1.0) or 1.0),
+                max_img_stars=int(getattr(self.config, 'near_max_img_stars', 800) or 800),
+                max_cat_stars=int(getattr(self.config, 'near_max_cat_stars', 2000) or 2000),
+                try_parity_flip=bool(getattr(self.config, 'near_try_parity_flip', True)),
             )
+            try:
+                log_near = {
+                    "family": near_cfg.family,
+                    "fov_override_deg": near_cfg.fov_override_deg,
+                    "max_tile_candidates": near_cfg.max_tile_candidates,
+                    "tile_cache_size": near_cfg.tile_cache_size,
+                    "detect_backend": near_cfg.detect_backend,
+                    "detect_device": near_cfg.detect_device,
+                    "ransac_trials": near_cfg.ransac_trials,
+                    "seed_scale_deg": near_cfg.seed_scale_deg,
+                    "seed_rotation": near_cfg.seed_rotation,
+                    "seed_parity": near_cfg.seed_parity,
+                    "search_margin": near_cfg.search_margin,
+                    "pixel_tolerance": near_cfg.pixel_tolerance,
+                    "quality_inliers": near_cfg.quality_inliers,
+                    "quality_rms": near_cfg.quality_rms,
+                    "max_img_stars": near_cfg.max_img_stars,
+                    "max_cat_stars": near_cfg.max_cat_stars,
+                }
+                logging.info("[ZENEAR] config: %s", json.dumps(log_near, ensure_ascii=False))
+            except Exception:
+                pass
             result = near_solve(
                 fits_path=str(path),
                 index_root=str(index_root),
@@ -2542,7 +2472,24 @@ def launch_gui(args: argparse.Namespace) -> int:
         log = QtCore.Signal(str)
         finished = QtCore.Signal(bool, str)
 
-        def __init__(self, fits_path: str, index_root: str, *, max_tiles: int = 48, tile_cache: int = 128, detect_backend: str = "auto", detect_device: int | None = None) -> None:
+        def __init__(
+            self,
+            fits_path: str,
+            index_root: str,
+            *,
+            max_tiles: int = 48,
+            tile_cache: int = 128,
+            detect_backend: str = "auto",
+            detect_device: int | None = None,
+            quality_inliers: int | None = None,
+            quality_rms: float | None = None,
+            pixel_tolerance: float | None = None,
+            ransac_trials: int | None = None,
+            max_img_stars: int | None = None,
+            max_cat_stars: int | None = None,
+            try_parity_flip: bool | None = None,
+            search_margin: float | None = None,
+        ) -> None:
             super().__init__()
             self.fits_path = fits_path
             self.index_root = index_root
@@ -2550,6 +2497,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.tile_cache = int(tile_cache)
             self.detect_backend = str(detect_backend or "auto")
             self.detect_device = detect_device
+            self.quality_inliers = quality_inliers
+            self.quality_rms = quality_rms
+            self.pixel_tolerance = pixel_tolerance
+            self.ransac_trials = ransac_trials
+            self.max_img_stars = max_img_stars
+            self.max_cat_stars = max_cat_stars
+            self.try_parity_flip = try_parity_flip
+            self.search_margin = search_margin
 
         def run(self) -> None:
             try:
@@ -2558,6 +2513,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                     tile_cache_size=max(1, self.tile_cache),
                     detect_backend=self.detect_backend,
                     detect_device=self.detect_device,
+                    quality_inliers=int(self.quality_inliers or 60),
+                    quality_rms=float(self.quality_rms or 1.0),
+                    pixel_tolerance=float(self.pixel_tolerance or 3.0),
+                    ransac_trials=int(self.ransac_trials or 1200),
+                    max_img_stars=int(self.max_img_stars or 800),
+                    max_cat_stars=int(self.max_cat_stars or 2000),
+                    try_parity_flip=bool(self.try_parity_flip if self.try_parity_flip is not None else True),
+                    search_margin=float(self.search_margin or 1.2),
                 )
                 result = near_solve(
                     self.fits_path,
@@ -2676,15 +2639,26 @@ def launch_gui(args: argparse.Namespace) -> int:
             solver_layout.addWidget(self._build_splitter())
             solver_layout.addLayout(self._build_bottom_row())
             # Wrap solver tab in a scroll area to handle small screens
-            self.tabs.addTab(self._wrap_scroll_area(solver_tab), self._text("solver_tab"))
+            self.solver_scroll = self._wrap_scroll_area(solver_tab)
+            self.tabs.addTab(self.solver_scroll, self._text("solver_tab"))
             # Database tab (db_root selection and future download UI)
             self.database_tab = self._build_database_tab()
-            self.tabs.addTab(self._wrap_scroll_area(self.database_tab), self._text("database_tab"))
+            self.database_scroll = self._wrap_scroll_area(self.database_tab)
+            self.tabs.addTab(self.database_scroll, self._text("database_tab"))
             self.settings_tab = self._build_settings_tab()
-            self.tabs.addTab(self._wrap_scroll_area(self.settings_tab), self._text("settings_tab"))
+            self.settings_scroll = self._wrap_scroll_area(self.settings_tab)
+            self.tabs.addTab(self.settings_scroll, self._text("settings_tab"))
             # Add Performance tab for near-solver tuning
             self.performance_tab = self._build_performance_tab()
-            self.tabs.addTab(self._wrap_scroll_area(self.performance_tab), self._text("performance_tab"))
+            self.performance_scroll = self._wrap_scroll_area(self.performance_tab)
+            self.tabs.addTab(self.performance_scroll, self._text("performance_tab"))
+            # Add Fast solver (near) tab for quality/tolerance settings
+            try:
+                self.fast_tab = self._build_fast_solver_tab()
+                self.fast_scroll = self._wrap_scroll_area(self.fast_tab)
+                self.tabs.addTab(self.fast_scroll, self._text("fast_tab"))
+            except Exception:
+                pass
             # Astrometry.net web backend tab (API settings)
             try:
                 self.astrometry_tab = self._build_astrometry_tab()
@@ -3649,6 +3623,77 @@ def launch_gui(args: argparse.Namespace) -> int:
             column.addLayout(btn_row)
             return widget
 
+        def _build_fast_solver_tab(self) -> QtWidgets.QWidget:
+            widget = QtWidgets.QWidget()
+            column = QtWidgets.QVBoxLayout(widget)
+            self.fast_group = QtWidgets.QGroupBox(self._text("fast_group"))
+            form = QtWidgets.QFormLayout(self.fast_group)
+            # Min inliers (near)
+            self.fast_quality_inliers_label = QtWidgets.QLabel()
+            self.fast_quality_inliers_spin = QtWidgets.QSpinBox()
+            self.fast_quality_inliers_spin.setRange(4, 200)
+            self.fast_quality_inliers_spin.setValue(int(getattr(self._settings, 'near_quality_inliers', 60) or 60))
+            form.addRow(self.fast_quality_inliers_label, self.fast_quality_inliers_spin)
+            # Max RMS px (near)
+            self.fast_quality_rms_label = QtWidgets.QLabel()
+            self.fast_quality_rms_spin = QtWidgets.QDoubleSpinBox()
+            self.fast_quality_rms_spin.setRange(0.1, 5.0)
+            self.fast_quality_rms_spin.setDecimals(2)
+            self.fast_quality_rms_spin.setSingleStep(0.1)
+            self.fast_quality_rms_spin.setValue(float(getattr(self._settings, 'near_quality_rms', 1.0) or 1.0))
+            form.addRow(self.fast_quality_rms_label, self.fast_quality_rms_spin)
+            # Pixel tolerance (near)
+            self.fast_pixel_tol_label = QtWidgets.QLabel()
+            self.fast_pixel_tol_spin = QtWidgets.QDoubleSpinBox()
+            self.fast_pixel_tol_spin.setRange(0.5, 10.0)
+            self.fast_pixel_tol_spin.setDecimals(1)
+            self.fast_pixel_tol_spin.setSingleStep(0.5)
+            self.fast_pixel_tol_spin.setValue(float(getattr(self._settings, 'near_pixel_tolerance', 3.0) or 3.0))
+            form.addRow(self.fast_pixel_tol_label, self.fast_pixel_tol_spin)
+            # RANSAC trials
+            self.fast_ransac_trials_label = QtWidgets.QLabel()
+            self.fast_ransac_trials_spin = QtWidgets.QSpinBox()
+            self.fast_ransac_trials_spin.setRange(100, 5000)
+            self.fast_ransac_trials_spin.setSingleStep(100)
+            self.fast_ransac_trials_spin.setValue(int(getattr(self._settings, 'near_ransac_trials', 1200) or 1200))
+            form.addRow(self.fast_ransac_trials_label, self.fast_ransac_trials_spin)
+            # Max image stars
+            self.fast_max_img_stars_label = QtWidgets.QLabel()
+            self.fast_max_img_stars_spin = QtWidgets.QSpinBox()
+            self.fast_max_img_stars_spin.setRange(100, 5000)
+            self.fast_max_img_stars_spin.setSingleStep(50)
+            self.fast_max_img_stars_spin.setValue(int(getattr(self._settings, 'near_max_img_stars', 800) or 800))
+            form.addRow(self.fast_max_img_stars_label, self.fast_max_img_stars_spin)
+            # Max catalog stars
+            self.fast_max_cat_stars_label = QtWidgets.QLabel()
+            self.fast_max_cat_stars_spin = QtWidgets.QSpinBox()
+            self.fast_max_cat_stars_spin.setRange(200, 100000)
+            self.fast_max_cat_stars_spin.setSingleStep(100)
+            self.fast_max_cat_stars_spin.setValue(int(getattr(self._settings, 'near_max_cat_stars', 2000) or 2000))
+            form.addRow(self.fast_max_cat_stars_label, self.fast_max_cat_stars_spin)
+            # Try parity flip
+            self.fast_try_parity_check = QtWidgets.QCheckBox()
+            self.fast_try_parity_check.setChecked(bool(getattr(self._settings, 'near_try_parity_flip', True)))
+            form.addRow(self.fast_try_parity_check)
+            # Search margin
+            self.fast_search_margin_label = QtWidgets.QLabel()
+            self.fast_search_margin_spin = QtWidgets.QDoubleSpinBox()
+            self.fast_search_margin_spin.setRange(1.0, 2.0)
+            self.fast_search_margin_spin.setDecimals(2)
+            self.fast_search_margin_spin.setSingleStep(0.05)
+            self.fast_search_margin_spin.setValue(float(getattr(self._settings, 'near_search_margin', 1.2) or 1.2))
+            form.addRow(self.fast_search_margin_label, self.fast_search_margin_spin)
+            # Assemble
+            column.addWidget(self.fast_group)
+            # Save button
+            self.fast_save_btn = QtWidgets.QPushButton()
+            self.fast_save_btn.clicked.connect(self._on_save_settings_clicked)
+            row = QtWidgets.QHBoxLayout()
+            row.addStretch(1)
+            row.addWidget(self.fast_save_btn)
+            column.addLayout(row)
+            return widget
+
         def _populate_detect_devices(self, combo: 'QtWidgets.QComboBox') -> None:
             combo.clear()
             # Always offer CPU
@@ -3777,6 +3822,26 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self.families_combo.setCurrentIndex(idx)
             except Exception:
                 pass
+            # Fast solver (near) tab values
+            try:
+                if hasattr(self, 'fast_quality_inliers_spin'):
+                    self.fast_quality_inliers_spin.setValue(int(getattr(settings, 'near_quality_inliers', 60) or 60))
+                if hasattr(self, 'fast_quality_rms_spin'):
+                    self.fast_quality_rms_spin.setValue(float(getattr(settings, 'near_quality_rms', 1.0) or 1.0))
+                if hasattr(self, 'fast_pixel_tol_spin'):
+                    self.fast_pixel_tol_spin.setValue(float(getattr(settings, 'near_pixel_tolerance', 3.0) or 3.0))
+                if hasattr(self, 'fast_ransac_trials_spin'):
+                    self.fast_ransac_trials_spin.setValue(int(getattr(settings, 'near_ransac_trials', 1200) or 1200))
+                if hasattr(self, 'fast_max_img_stars_spin'):
+                    self.fast_max_img_stars_spin.setValue(int(getattr(settings, 'near_max_img_stars', 800) or 800))
+                if hasattr(self, 'fast_max_cat_stars_spin'):
+                    self.fast_max_cat_stars_spin.setValue(int(getattr(settings, 'near_max_cat_stars', 2000) or 2000))
+                if hasattr(self, 'fast_try_parity_check'):
+                    self.fast_try_parity_check.setChecked(bool(getattr(settings, 'near_try_parity_flip', True)))
+                if hasattr(self, 'fast_search_margin_spin'):
+                    self.fast_search_margin_spin.setValue(float(getattr(settings, 'near_search_margin', 1.2) or 1.2))
+            except Exception:
+                pass
 
         def _read_settings_from_ui(self) -> PersistentSettings:
             db_root = self.settings_db_edit.text().strip()
@@ -3834,6 +3899,15 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_detect_device=int(dev_sel if isinstance(dev_sel, int) else 0),
                 io_concurrency=int(self.perf_io_spin.value()) if hasattr(self, 'perf_io_spin') else 0,
                 near_warm_start=bool(self.perf_near_warm_check.isChecked()) if hasattr(self, 'perf_near_warm_check') else True,
+                # Near (fast solver) thresholds and tuning
+                near_quality_inliers=int(self.fast_quality_inliers_spin.value()) if hasattr(self, 'fast_quality_inliers_spin') else 60,
+                near_quality_rms=float(self.fast_quality_rms_spin.value()) if hasattr(self, 'fast_quality_rms_spin') else 1.0,
+                near_pixel_tolerance=float(self.fast_pixel_tol_spin.value()) if hasattr(self, 'fast_pixel_tol_spin') else 3.0,
+                near_ransac_trials=int(self.fast_ransac_trials_spin.value()) if hasattr(self, 'fast_ransac_trials_spin') else 1200,
+                near_max_img_stars=int(self.fast_max_img_stars_spin.value()) if hasattr(self, 'fast_max_img_stars_spin') else 800,
+                near_max_cat_stars=int(self.fast_max_cat_stars_spin.value()) if hasattr(self, 'fast_max_cat_stars_spin') else 2000,
+                near_try_parity_flip=bool(self.fast_try_parity_check.isChecked()) if hasattr(self, 'fast_try_parity_check') else True,
+                near_search_margin=float(self.fast_search_margin_spin.value()) if hasattr(self, 'fast_search_margin_spin') else 1.2,
                 # Backend + astrometry
                 solver_backend=(self.backend_combo.currentData() if hasattr(self, 'backend_combo') else "local"),
                 astrometry_api_url=(self.ast_api_url_edit.text().strip() if hasattr(self, 'ast_api_url_edit') else "https://nova.astrometry.net/api"),
@@ -4176,6 +4250,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                 tile_cache=int(self.perf_near_cache_spin.value()) if hasattr(self, 'perf_near_cache_spin') else int(self._settings.near_tile_cache_size or 128),
                 detect_backend=self._settings.near_detect_backend or "auto",
                 detect_device=self._settings.near_detect_device,
+                quality_inliers=int(getattr(self._settings, 'near_quality_inliers', 60) or 60),
+                quality_rms=float(getattr(self._settings, 'near_quality_rms', 1.0) or 1.0),
+                pixel_tolerance=float(getattr(self._settings, 'near_pixel_tolerance', 3.0) or 3.0),
+                ransac_trials=int(getattr(self._settings, 'near_ransac_trials', 1200) or 1200),
+                max_img_stars=int(getattr(self._settings, 'near_max_img_stars', 800) or 800),
+                max_cat_stars=int(getattr(self._settings, 'near_max_cat_stars', 2000) or 2000),
+                try_parity_flip=bool(getattr(self._settings, 'near_try_parity_flip', True)),
+                search_margin=float(getattr(self._settings, 'near_search_margin', 1.2) or 1.2),
             )
             self._near_worker.log.connect(self._log_settings)
             self._near_worker.finished.connect(self._on_near_finished)
@@ -4345,10 +4427,30 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.max_radius_spin.setSpecialValueText(self._text("special_auto"))
             if hasattr(self, "tabs"):
                 try:
-                    self.tabs.setTabText(0, self._text("solver_tab"))
-                    self.tabs.setTabText(1, self._text("database_tab"))
-                    self.tabs.setTabText(2, self._text("settings_tab"))
-                    self.tabs.setTabText(3, self._text("performance_tab"))
+                    if hasattr(self, "solver_scroll"):
+                        idx = self.tabs.indexOf(self.solver_scroll)
+                        if idx >= 0:
+                            self.tabs.setTabText(idx, self._text("solver_tab"))
+                    if hasattr(self, "database_scroll"):
+                        idx = self.tabs.indexOf(self.database_scroll)
+                        if idx >= 0:
+                            self.tabs.setTabText(idx, self._text("database_tab"))
+                    if hasattr(self, "settings_scroll"):
+                        idx = self.tabs.indexOf(self.settings_scroll)
+                        if idx >= 0:
+                            self.tabs.setTabText(idx, self._text("settings_tab"))
+                    if hasattr(self, "performance_scroll"):
+                        idx = self.tabs.indexOf(self.performance_scroll)
+                        if idx >= 0:
+                            self.tabs.setTabText(idx, self._text("performance_tab"))
+                    if hasattr(self, "fast_scroll"):
+                        idx = self.tabs.indexOf(self.fast_scroll)
+                        if idx >= 0:
+                            self.tabs.setTabText(idx, self._text("fast_tab"))
+                    if hasattr(self, "astrometry_scroll"):
+                        idx = self.tabs.indexOf(self.astrometry_scroll)
+                        if idx >= 0:
+                            self.tabs.setTabText(idx, self._text("astrometry.tab.title"))
                 except Exception:
                     pass
             browse_label = self._text("browse_button")
@@ -4467,6 +4569,27 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.perf_near_warm_check.setText(self._text("settings_perf_near_warm_label"))
             if hasattr(self, "performance_save_btn"):
                 self.performance_save_btn.setText(self._text("settings_save_btn"))
+            # Fast solver tab labels
+            if hasattr(self, "fast_group"):
+                self.fast_group.setTitle(self._text("fast_group"))
+            if hasattr(self, "fast_quality_inliers_label"):
+                self.fast_quality_inliers_label.setText(self._text("fast_quality_inliers_label"))
+            if hasattr(self, "fast_quality_rms_label"):
+                self.fast_quality_rms_label.setText(self._text("fast_quality_rms_label"))
+            if hasattr(self, "fast_pixel_tol_label"):
+                self.fast_pixel_tol_label.setText(self._text("fast_pixel_tol_label"))
+            if hasattr(self, "fast_ransac_trials_label"):
+                self.fast_ransac_trials_label.setText(self._text("fast_ransac_trials_label"))
+            if hasattr(self, "fast_max_img_stars_label"):
+                self.fast_max_img_stars_label.setText(self._text("fast_max_img_stars_label"))
+            if hasattr(self, "fast_max_cat_stars_label"):
+                self.fast_max_cat_stars_label.setText(self._text("fast_max_cat_stars_label"))
+            if hasattr(self, "fast_try_parity_check"):
+                self.fast_try_parity_check.setText(self._text("fast_try_parity_label"))
+            if hasattr(self, "fast_search_margin_label"):
+                self.fast_search_margin_label.setText(self._text("fast_search_margin_label"))
+            if hasattr(self, "fast_save_btn"):
+                self.fast_save_btn.setText(self._text("fast_save_btn"))
             self._retranslate_status_items()
 
         def _retranslate_status_items(self) -> None:
@@ -4759,6 +4882,22 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_detect_device=int(self._settings.near_detect_device) if self._settings.near_detect_device is not None else None,
                 io_concurrency=int(self._settings.io_concurrency or 0),
                 near_warm_start=bool(self._settings.near_warm_start),
+                near_quality_inliers=int(self._settings.near_quality_inliers or 60),
+                near_quality_rms=float(self._settings.near_quality_rms or 1.0),
+                near_pixel_tolerance=float(self._settings.near_pixel_tolerance or 3.0),
+                near_ransac_trials=int(self._settings.near_ransac_trials or 1200),
+                near_max_img_stars=int(self._settings.near_max_img_stars or 800),
+                near_max_cat_stars=int(self._settings.near_max_cat_stars or 2000),
+                near_try_parity_flip=bool(self._settings.near_try_parity_flip),
+                near_search_margin=float(self._settings.near_search_margin or 1.2),
+                # Blind solver tunables from the Settings panel
+                blind_max_stars=int(self._settings.blind_max_stars or 500),
+                blind_max_quads=int(self._settings.blind_max_quads or 8000),
+                blind_max_candidates=int(self._settings.blind_max_candidates or 10),
+                blind_pixel_tolerance=float(self._settings.blind_pixel_tolerance or 2.5),
+                blind_quality_inliers=int(self._settings.blind_quality_inliers or 40),
+                blind_quality_rms=float(self._settings.blind_quality_rms or 1.2),
+                blind_fast_mode=bool(self._settings.blind_fast_mode),
             )
 
         def _start_solving(self) -> None:

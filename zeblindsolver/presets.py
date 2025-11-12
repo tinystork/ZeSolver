@@ -53,7 +53,7 @@ def list_presets() -> List[InstrumentPreset]:
             res_w=1080,
             res_h=1920,
             spec_confidence="high",
-            notes="IMX462 (2.9um), 1080x1920 sensor, 250mm effective focal length",
+            notes="Seestar S50 (250mm, 2.9um, 1080x1920 portrait, ~1.8\"/px)",
         ),
         InstrumentPreset(
             id="seestar_s30",

@@ -22,4 +22,16 @@
 - Converted the blind pipeline into multi-phase passes (hinted, scale-only,
   blind fallback) with early-exit ratios, per-phase logging, and stats surfaced
   through `WcsSolution`.
+- Added a Seestar S50 instrument preset so the GUI FOV calculator pre-fills its
+  optics fields for that scope/camera combo and immediately refreshes the solver
+  hints.
+- Shared the persistent settings dataclass/load/save helpers between the CLI
+  entry point and the package, so tests can redirect the settings file path
+  without touching the GUI stack.
+
+### Fixed
+
+- The GUI/CLI batch runner now actually invokes the metadata-based near solver
+  before falling back to the blind pipeline; the helper previously ignored the
+  loaded FITS metadata, so only the manual “Near solve” tester would ever run it.
 
