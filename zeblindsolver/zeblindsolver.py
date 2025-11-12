@@ -82,6 +82,8 @@ class SolveConfig:
     pixel_scale_min_arcsec: float | None = None
     pixel_scale_max_arcsec: float | None = None
     tile_cache_size: int = _TILE_CACHE_DEFAULT_CAPACITY
+    bucket_limit_override: int | None = None
+    vote_percentile: int = 40
 
 
 @dataclass
@@ -350,6 +352,7 @@ def _collect_tile_matches(
     tile_positions: np.ndarray,
     tile_world: np.ndarray,
     bucket_limit: int,
+    vote_percentile: int,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     # Accumulate votes for (image_star, tile_star) pairs across matching quads,
     # then keep only pairs with sufficient support to reduce spurious matches.
@@ -381,7 +384,8 @@ def _collect_tile_matches(
     # Determine a minimal vote threshold adaptively; allow 1 to seed hypotheses.
     counts = np.array(list(votes.values()), dtype=int)
     # Use a moderate percentile to keep plausible pairs; too high discards signal.
-    thr = max(1, int(np.percentile(counts, 40)))
+    percentile = min(95, max(5, vote_percentile))
+    thr = max(1, int(np.percentile(counts, percentile)))
     pairs = [(i, t, c) for (i, t), c in votes.items() if c >= thr]
     if not pairs:
         # fallback: keep top-N by votes
@@ -436,7 +440,13 @@ def solve_blind(
         return result
     index_root = Path(index_root).expanduser().resolve()
     downsample_factor = max(1, min(4, int(getattr(config, "downsample", 1) or 1)))
-    bucket_limit = max(1024, int(4096 / downsample_factor))
+    bucket_override = int(getattr(config, "bucket_limit_override", 0) or 0)
+    if bucket_override > 0:
+        bucket_limit = max(256, bucket_override)
+    else:
+        bucket_limit = max(1024, int(4096 / downsample_factor))
+    vote_percentile = int(getattr(config, "vote_percentile", 40) or 40)
+    vote_percentile = min(95, max(5, vote_percentile))
     if cancel_check and cancel_check():
         return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
     manifest = load_manifest(index_root)
@@ -774,6 +784,7 @@ def solve_blind(
                     tile_positions,
                     tile_world,
                     bucket_limit,
+                    vote_percentile,
                 )
                 if ip.size:
                     img_list.append(ip)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from collections import Counter
 from pathlib import Path
 from typing import Collection, Sequence
@@ -45,21 +46,37 @@ def tally_candidates(
             continue
         slices = lookup_hashes(index_root, level, hashes)
         for hash_idx, slc in enumerate(slices):
-            if slc.start == slc.stop:
+            bucket_size = slc.stop - slc.start
+            if bucket_size <= 0:
                 continue
-            if index.bucket_cap > 0 and (slc.stop - slc.start) > index.bucket_cap:
-                logger.debug("skipping bucket %s (size %d > cap %d)", level, slc.stop - slc.start, index.bucket_cap)
-                continue
+            step = 1
+            multiplier = 1
+            if index.bucket_cap > 0 and bucket_size > index.bucket_cap:
+                step = max(1, math.ceil(bucket_size / index.bucket_cap))
+                sampled = math.ceil(bucket_size / step)
+                if sampled > 0:
+                    ratio = bucket_size / sampled
+                    multiplier = max(1, int(round(ratio)))
+                logger.debug(
+                    "downsampling bucket %s (size %d > cap %d) with step=%d multiplier=%d",
+                    level,
+                    bucket_size,
+                    index.bucket_cap,
+                    step,
+                    multiplier,
+                )
             weight = 1
             if weight_array is not None:
                 weight = int(weight_array[hash_idx])
                 if weight <= 0:
                     continue
-            for tile_index in index.tile_indices[slc]:
+            effective_weight = weight * multiplier
+            for pos in range(slc.start, slc.stop, step):
+                tile_index = index.tile_indices[pos]
                 idx = int(tile_index)
                 if allowed_tiles is not None and idx not in allowed_tiles:
                     continue
-                votes[idx] += weight
+                votes[idx] += effective_weight
     results: list[tuple[str, int]] = []
     for tile_index, score in votes.most_common():
         key = tile_keys[tile_index] if tile_index < len(tile_keys) else f"tile_{tile_index}"

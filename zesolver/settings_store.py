@@ -35,6 +35,7 @@ class PersistentSettings:
     max_quads_per_tile: int = DEFAULT_MAX_QUADS_PER_TILE
     quad_storage: str = QUAD_STORAGE_CHOICES[0]
     tile_compression: str = TILE_COMPRESSION_CHOICES[0]
+    log_level: str = "INFO"
     sample_fits: Optional[str] = None
     # Preset/FOV persistence
     last_preset_id: Optional[str] = None
@@ -68,6 +69,8 @@ class PersistentSettings:
     near_max_cat_stars: int = 2000
     near_try_parity_flip: bool = True
     near_search_margin: float = 1.2
+    dev_bucket_limit_override: int = 0
+    dev_vote_percentile: int = 40
     # Solver panel persisted settings
     solver_fov_deg: float = DEFAULT_FOV_DEG
     solver_search_scale: float = DEFAULT_SEARCH_RADIUS_SCALE
@@ -148,6 +151,7 @@ def load_persistent_settings() -> PersistentSettings:
         max_quads_per_tile=int(payload.get("max_quads_per_tile", DEFAULT_MAX_QUADS_PER_TILE)),
         quad_storage=_normalize_choice(payload.get("quad_storage"), QUAD_STORAGE_CHOICES, QUAD_STORAGE_CHOICES[0]),
         tile_compression=_normalize_choice(payload.get("tile_compression"), TILE_COMPRESSION_CHOICES, TILE_COMPRESSION_CHOICES[0]),
+        log_level=str(payload.get("log_level", "INFO") or "INFO").upper(),
         sample_fits=payload.get("sample_fits"),
         last_preset_id=(payload.get("last_preset_id") or None),
         last_fov_focal_mm=float(payload.get("last_fov_focal_mm", 0.0)),
@@ -177,6 +181,8 @@ def load_persistent_settings() -> PersistentSettings:
         near_max_cat_stars=int(payload.get("near_max_cat_stars", 2000)),
         near_try_parity_flip=bool(payload.get("near_try_parity_flip", True)),
         near_search_margin=float(payload.get("near_search_margin", 1.2)),
+        dev_bucket_limit_override=int(payload.get("dev_bucket_limit_override", 0)),
+        dev_vote_percentile=int(payload.get("dev_vote_percentile", 40)),
         solver_fov_deg=float(payload.get("solver_fov_deg", DEFAULT_FOV_DEG)),
         solver_search_scale=float(payload.get("solver_search_scale", DEFAULT_SEARCH_RADIUS_SCALE)),
         solver_search_attempts=int(payload.get("solver_search_attempts", DEFAULT_SEARCH_RADIUS_ATTEMPTS)),

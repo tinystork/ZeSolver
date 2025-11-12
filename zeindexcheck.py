@@ -57,12 +57,38 @@ def _scan_database_root(db_root: Path) -> Dict[str, Any]:
 
 
 def _format_index_report(report: Dict[str, Any]) -> str:
-    parts = [
-        f"Manifest OK: {report.get('manifest_ok')}",
-        f"Tile count: {report.get('manifest_tile_count')}",
-        f"Quads present: {', '.join(report.get('present_quads') or [])}",
-        f"Quads missing: {', '.join(report.get('missing_quads') or [])}",
-    ]
+    if not report.get("manifest_ok"):
+        return "Manifest missing or unreadable"
+    parts = [f"Tile entries: {report.get('manifest_tile_count')}"]
+    tile_checked = report.get("tile_files_checked", 0)
+    missing_tiles = report.get("missing_tile_files") or []
+    unreadable_tiles = report.get("unreadable_tile_files") or []
+    payload_ok = report.get("tile_payload_ok", False)
+    if payload_ok:
+        parts.append(f"Tile payloads: OK (checked {tile_checked})")
+    else:
+        summary_bits = []
+        if missing_tiles:
+            summary_bits.append(f"{len(missing_tiles)} missing")
+        if unreadable_tiles:
+            summary_bits.append(f"{len(unreadable_tiles)} unreadable")
+        suffix = ", ".join(summary_bits) if summary_bits else "unknown issue"
+        parts.append(f"Tile payloads: issues detected (checked {tile_checked}, {suffix})")
+    present_quads = report.get("present_quads") or []
+    missing_quads = report.get("missing_quads") or []
+    parts.append(f"Quads present: {', '.join(present_quads) if present_quads else 'none'}")
+    parts.append(f"Quads missing: {', '.join(missing_quads) if missing_quads else 'none'}")
+    sample_errors = report.get("tile_file_sample_errors") or []
+    if sample_errors:
+        parts.append("Tile file issues (sample):")
+        for entry in sample_errors[:5]:
+            tile_key = entry.get("tile_key", "?")
+            error = entry.get("error", "unknown error")
+            path = entry.get("path")
+            if path:
+                parts.append(f"  - {tile_key}: {error} ({path})")
+            else:
+                parts.append(f"  - {tile_key}: {error}")
     if report.get("bad_empty_rings"):
         parts.append(f"Rings with empty tiles: {report['bad_empty_rings']}")
     if report.get("db_root_mismatch"):

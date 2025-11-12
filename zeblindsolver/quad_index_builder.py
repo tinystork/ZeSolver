@@ -161,16 +161,20 @@ def load_manifest(index_root: Path | str) -> dict[str, Any]:
     return _load_manifest(Path(index_root).expanduser().resolve())
 
 
+def _resolve_tile_path(index_root: Path, entry: dict[str, Any]) -> Path:
+    """Return the tile path without enforcing that it currently exists."""
+    raw = entry.get("tile_file", "")
+    rel = str(raw).replace("\\", "/")
+    return (index_root / rel).expanduser()
+
+
 def _tile_file_path(index_root: Path, entry: dict[str, Any]) -> Path:
     """Resolve a tile file path from the manifest entry.
 
     The manifest stores relative paths. Normalize any Windows-style backslashes
     to forward slashes so the index remains portable across platforms.
     """
-    raw = entry.get("tile_file", "")
-    # Normalize separators for cross-platform compatibility
-    rel = str(raw).replace("\\", "/")
-    candidate = index_root / rel
+    candidate = _resolve_tile_path(index_root, entry)
     if not candidate.exists():
         raise FileNotFoundError(candidate)
     return candidate
@@ -193,6 +197,11 @@ def validate_index(index_root: Path | str, *, db_root: Path | str | None = None)
       - ring_empty_counts: dict[int, int]
       - ring_total_counts: dict[int, int]
       - bad_empty_rings: list[int]  # rings with >=80% empty tiles
+      - tile_payload_ok: bool
+      - tile_files_checked: int
+      - missing_tile_files: list[str]
+      - unreadable_tile_files: list[str]
+      - tile_file_sample_errors: list[dict[str, str]]
     """
     root = Path(index_root).expanduser().resolve()
     result: Dict[str, Any] = {
@@ -209,6 +218,11 @@ def validate_index(index_root: Path | str, *, db_root: Path | str | None = None)
         "ring_empty_counts": {},
         "ring_total_counts": {},
         "bad_empty_rings": [],
+        "tile_payload_ok": False,
+        "tile_files_checked": 0,
+        "missing_tile_files": [],
+        "unreadable_tile_files": [],
+        "tile_file_sample_errors": [],
     }
     try:
         manifest = _load_manifest(root)
@@ -221,8 +235,9 @@ def validate_index(index_root: Path | str, *, db_root: Path | str | None = None)
     present: list[str] = []
     missing: list[str] = []
     for name in levels:
-        path = ht / f"quads_{name}.npz"
-        if path.exists():
+        path_npz = ht / f"quads_{name}.npz"
+        path_dir = ht / f"quads_{name}"
+        if path_npz.exists() or path_dir.is_dir():
             present.append(name)
         else:
             missing.append(name)
@@ -230,11 +245,59 @@ def validate_index(index_root: Path | str, *, db_root: Path | str | None = None)
     result["missing_quads"] = missing
     tiles = manifest.get("tiles", [])
     result["manifest_tile_count"] = int(len(tiles))
+    result["tile_files_checked"] = int(len(tiles))
+    # Track per-tile file status for later reporting and empty estimation
+    tile_missing: list[str] = []
+    tile_unreadable: list[str] = []
+    tile_errors: list[dict[str, str]] = []
+    tile_file_stats: Dict[int, Dict[str, Any]] = {}
+    required_arrays = ("ra_deg", "dec_deg", "x_deg", "y_deg")
+    for idx, entry in enumerate(tiles):
+        tile_key = str(entry.get("tile_key", idx))
+        tile_path = _resolve_tile_path(root, entry)
+        info: Dict[str, Any] = {"path": tile_path}
+        if not tile_path.exists():
+            info["status"] = "missing"
+            tile_missing.append(tile_key)
+            if len(tile_errors) < 20:
+                tile_errors.append(
+                    {
+                        "tile_key": tile_key,
+                        "path": str(tile_path),
+                        "error": "missing",
+                    }
+                )
+            tile_file_stats[idx] = info
+            continue
+        try:
+            with np.load(tile_path, allow_pickle=False) as data:
+                missing_keys = [key for key in required_arrays if key not in data]
+                if missing_keys:
+                    raise KeyError(f"missing arrays: {', '.join(missing_keys)}")
+                info["stars_in_file"] = int(data["ra_deg"].size)
+                info["status"] = "ok"
+        except Exception as exc:
+            info["status"] = "error"
+            info["error"] = str(exc)
+            tile_unreadable.append(tile_key)
+            if len(tile_errors) < 20:
+                tile_errors.append(
+                    {
+                        "tile_key": tile_key,
+                        "path": str(tile_path),
+                        "error": str(exc),
+                    }
+                )
+        tile_file_stats[idx] = info
+    result["missing_tile_files"] = sorted(tile_missing)
+    result["unreadable_tile_files"] = sorted(tile_unreadable)
+    result["tile_file_sample_errors"] = tile_errors
+    result["tile_payload_ok"] = not tile_missing and not tile_unreadable
     # Compute empty-tile stats per ring using manifest data when available
     empty_total = 0
     ring_empty: Dict[int, int] = {}
     ring_total: Dict[int, int] = {}
-    for entry in tiles:
+    for idx, entry in enumerate(tiles):
         try:
             # Prefer explicit tile_code if present; otherwise parse from tile_key suffix
             code = str(entry.get("tile_code") or str(entry.get("tile_key", "")).split("_", 1)[-1])
@@ -243,18 +306,21 @@ def validate_index(index_root: Path | str, *, db_root: Path | str | None = None)
             ring_idx = -1
         stars = entry.get("stars")
         is_empty = False
+        file_meta = tile_file_stats.get(idx)
         if isinstance(stars, (int, np.integer)):
             is_empty = int(stars) == 0
+            if not is_empty and file_meta and file_meta.get("status") == "ok":
+                size = file_meta.get("stars_in_file")
+                if size is not None:
+                    is_empty = int(size) == 0
         else:
-            # Fallback: inspect tile file if manifest lacks a star count
-            try:
-                tile_path = _tile_file_path(root, entry)
-                with np.load(tile_path) as data:
-                    size = int(np.shape(data.get("ra_deg", ())) and data["ra_deg"].size)
-                is_empty = size == 0
-            except Exception:
-                # Missing/unreadable tile counts as empty for the purpose of this health check
+            if not file_meta or file_meta.get("status") != "ok":
                 is_empty = True
+            else:
+                size = file_meta.get("stars_in_file")
+                is_empty = int(size or 0) == 0
+        if file_meta and file_meta.get("status") in {"missing", "error"}:
+            is_empty = True
         empty_total += 1 if is_empty else 0
         if ring_idx not in ring_total:
             ring_total[ring_idx] = 0

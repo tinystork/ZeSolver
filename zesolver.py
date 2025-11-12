@@ -124,6 +124,10 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_menu": "Langue",
         "language_action_fr": "Français",
         "language_action_en": "Anglais",
+        "log_menu": "Niveau de log",
+        "log_level_info": "Info",
+        "log_level_debug": "Debug",
+        "log_level_warning": "Warning",
         "window_title": "ZeSolver – Traitement par lot",
         "browse_button": "Parcourir…",
         "database_label": "Base de données",
@@ -156,6 +160,10 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_box": "Journal",
         "run_button": "Résoudre",
         "stop_button": "Stop",
+        "dev_tab": "Développement",
+        "dev_bucket_label": "Limite max. paires/quads",
+        "dev_bucket_hint": "0 = auto (recommandé)",
+        "dev_vote_label": "Percentile votes (quads)",
         "status_ready": "Prêt.",
         "dialog_select_directory": "Choisir un dossier",
         "error_select_input": "Sélectionne un dossier contenant tes images.",
@@ -214,12 +222,12 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_max_stars_label": "Étoiles max",
         "settings_max_quads_label": "Quads max",
         "settings_quad_storage_label": "Format des quads",
-        "settings_quad_storage_option_npz": ".npz (compress�)",
+        "settings_quad_storage_option_npz": ".npz (compress\u00e9)",
         "settings_quad_storage_option_npz_uncompressed": ".npz (sans compression)",
-        "settings_quad_storage_option_npy": "Dossier .npy (mapp�)",
+        "settings_quad_storage_option_npy": "Dossier .npy (mapp\u00e9)",
         "settings_tile_compression_label": "Compression des tuiles",
-        "settings_tile_compression_option_compressed": "NPZ compress�",
-        "settings_tile_compression_option_uncompressed": "NPZ non compress�",
+        "settings_tile_compression_option_compressed": "NPZ compress\u00e9",
+        "settings_tile_compression_option_uncompressed": "NPZ non compress\u00e9",
         "settings_sample_label": "Fichier test (FITS)",
         "settings_save_btn": "Sauvegarder",
         "settings_build_btn": "Construire l'index",
@@ -266,6 +274,10 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "language_menu": "Language",
         "language_action_fr": "French",
         "language_action_en": "English",
+        "log_menu": "Log Level",
+        "log_level_info": "Info",
+        "log_level_debug": "Debug",
+        "log_level_warning": "Warning",
         "window_title": "ZeSolver – Batch Solver",
         "browse_button": "Browse…",
         "database_label": "Database",
@@ -298,6 +310,10 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_box": "Log",
         "run_button": "Solve",
         "stop_button": "Stop",
+        "dev_tab": "Development",
+        "dev_bucket_label": "Max quad pairs per bucket",
+        "dev_bucket_hint": "0 = auto (recommended)",
+        "dev_vote_label": "Vote percentile (quads)",
         "status_ready": "Ready.",
         "dialog_select_directory": "Choose a folder",
         "error_select_input": "Select a folder containing your images.",
@@ -602,6 +618,9 @@ class SolveConfig:
     blind_quality_inliers: int = 40
     blind_quality_rms: float = 1.2
     blind_fast_mode: bool = True
+    log_level: str = "INFO"
+    dev_bucket_limit_override: int = 0
+    dev_vote_percentile: int = 40
 
     def __post_init__(self) -> None:
         if self.families:
@@ -623,6 +642,12 @@ class SolveConfig:
             raise ValueError("search_radius_attempts must be >= 1")
         if self.max_search_radius_deg is not None and self.max_search_radius_deg <= 0:
             raise ValueError("max_search_radius_deg must be positive")
+        object.__setattr__(self, "log_level", str(getattr(self, "log_level", "INFO") or "INFO").upper())
+        bucket_override = max(0, int(getattr(self, "dev_bucket_limit_override", 0) or 0))
+        object.__setattr__(self, "dev_bucket_limit_override", bucket_override)
+        vote = int(getattr(self, "dev_vote_percentile", 40) or 40)
+        vote = min(95, max(5, vote))
+        object.__setattr__(self, "dev_vote_percentile", vote)
 
 
 @dataclass(slots=True)
@@ -1584,7 +1609,9 @@ class ImageSolver:
                 quality_inliers=int(getattr(self.config, "blind_quality_inliers", 40) or 40),
                 pixel_tolerance=float(getattr(self.config, "blind_pixel_tolerance", 2.5) or 2.5),
                 fast_mode=bool(getattr(self.config, "blind_fast_mode", True)),
-                log_level="INFO",
+                log_level=getattr(self.config, "log_level", "INFO"),
+                 bucket_limit_override=int(getattr(self.config, "dev_bucket_limit_override", 0) or 0),
+                 vote_percentile=int(getattr(self.config, "dev_vote_percentile", 40) or 40),
                 # Hints / optics
                 ra_hint_deg=final_ra,
                 dec_hint_deg=final_dec,
@@ -1606,6 +1633,8 @@ class ImageSolver:
                     "quality_inliers": blind_cfg.quality_inliers,
                     "quality_rms": blind_cfg.quality_rms,
                     "fast_mode": blind_cfg.fast_mode,
+                    "bucket_limit_override": getattr(blind_cfg, "bucket_limit_override", 0),
+                    "vote_percentile": getattr(blind_cfg, "vote_percentile", 40),
                     "ra_hint": blind_cfg.ra_hint_deg,
                     "dec_hint": blind_cfg.dec_hint_deg,
                     "radius_hint": blind_cfg.radius_hint_deg,
@@ -2071,6 +2100,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Disable the automatic blind fallback when WCS metadata is missing",
     )
     parser.add_argument("--log-level", default="INFO", help="Logging level")
+    parser.add_argument(
+        "--dev-bucket-limit",
+        type=int,
+        default=0,
+        help="Developer: override per-bucket quad sampling limit (0 = auto)",
+    )
+    parser.add_argument(
+        "--dev-vote-percentile",
+        type=int,
+        default=40,
+        help="Developer: percentile threshold for quad vote accumulation (5-95)",
+    )
     parser.add_argument("--headless", action="store_true", help="Force CLI mode even if arguments are missing")
     parser.add_argument("--gui", action="store_true", help="Force GUI mode even if CLI arguments are provided")
     parser.set_defaults(blind_enabled=True)
@@ -2156,6 +2197,9 @@ def run_cli(args: argparse.Namespace) -> int:
         hint_resolution_arcsec=args.pixel_scale,
         hint_resolution_min_arcsec=args.pixel_scale_min,
         hint_resolution_max_arcsec=args.pixel_scale_max,
+        log_level=(args.log_level or "INFO").upper(),
+        dev_bucket_limit_override=max(0, int(args.dev_bucket_limit or 0)),
+        dev_vote_percentile=min(95, max(5, int(args.dev_vote_percentile or 40))),
     )
     logging.info(
         "Starting batch solve in %s (families=%s, workers=%d, downsample=%d)",
@@ -2202,6 +2246,10 @@ def launch_gui(args: argparse.Namespace) -> int:
         raise SystemExit("PySide6>=6 is required for the GUI. Install it and retry.") from exc
     prefill_families = _normalize_family_args(args.family)
     persistent_settings = load_persistent_settings()
+    stored_level = str(getattr(persistent_settings, "log_level", args.log_level) or "INFO").upper()
+    if stored_level != (args.log_level or "INFO").upper():
+        _configure_logging(stored_level)
+    persistent_settings.log_level = stored_level
 
     class SolveRunner(QtCore.QThread):
         progress = QtCore.Signal(object)
@@ -2461,25 +2509,30 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._config = blind_config
 
         def run(self) -> None:
+            config = self._config or BlindSolveConfig()
+            level_name = str(getattr(config, "log_level", "INFO") or "INFO").upper()
+            level_value = getattr(logging, level_name, logging.INFO)
+
             # Forward Python logging to GUI log during blind run (like index builder)
             class _ForwardLogHandler(logging.Handler):
-                def __init__(self, sink):
-                    super().__init__(level=logging.INFO)
+                def __init__(self, sink, level):
+                    super().__init__(level=level)
                     self._sink = sink
+
                 def emit(self, record: logging.LogRecord) -> None:
                     try:
                         msg = self.format(record)
                     except Exception:
                         msg = record.getMessage()
                     self._sink.emit(msg)
-            handler = _ForwardLogHandler(self.log)
+
+            handler = _ForwardLogHandler(self.log, level_value)
             handler.setFormatter(logging.Formatter("%(levelname)s: %(message)s"))
             root_logger = logging.getLogger()
             root_logger.addHandler(handler)
             prev_level = root_logger.level
-            root_logger.setLevel(logging.INFO)
+            root_logger.setLevel(level_value)
             try:
-                config = self._config or BlindSolveConfig()
                 self.log.emit(f"Starting blind solve for {Path(self.fits_path).name}…")
                 result = blind_solve(
                     self.fits_path,
@@ -2661,13 +2714,16 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._results_seen = 0
             self._language_actions: dict[str, QtGui.QAction] = {}
             self._settings = settings
+            self._current_log_level = str(getattr(settings, "log_level", "INFO") or "INFO").upper()
             self._index_worker: Optional[IndexBuilder] = None
             self._blind_worker: Optional[BlindRunner] = None
             self._near_worker: Optional[NearRunner] = None
             self._scanner: Optional[FileScanner] = None
             self._scan_buffer: list[Path] = []
             self._scan_flush_threshold = 250
+            self._log_level_actions: dict[str, QtGui.QAction] = {}
             self._build_ui()
+            self._set_log_level(self._current_log_level, persist=False)
             self._populate_settings_ui()
             self._prefill_from_args(args)
             self._apply_language()
@@ -2691,6 +2747,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.database_tab = self._build_database_tab()
             self.database_scroll = self._wrap_scroll_area(self.database_tab)
             self.tabs.addTab(self.database_scroll, self._text("database_tab"))
+            self.dev_tab = self._build_dev_tab()
+            self.dev_scroll = self._wrap_scroll_area(self.dev_tab)
+            self.tabs.addTab(self.dev_scroll, self._text("dev_tab"))
             self.settings_tab = self._build_settings_tab()
             self.settings_scroll = self._wrap_scroll_area(self.settings_tab)
             self.tabs.addTab(self.settings_scroll, self._text("settings_tab"))
@@ -2748,6 +2807,44 @@ def launch_gui(args: argparse.Namespace) -> int:
                 )
                 self.language_menu.addAction(action)
                 self._language_actions[code] = action
+            self.log_menu = menu_bar.addMenu("")
+            self._log_level_actions.clear()
+            for level in ("INFO", "DEBUG", "WARNING"):
+                action = QtGui.QAction(self)
+                action.setCheckable(True)
+                action.triggered.connect(
+                    lambda checked, lvl=level: self._on_log_level_selected(lvl) if checked else None
+                )
+                self.log_menu.addAction(action)
+                self._log_level_actions[level] = action
+
+        def _on_log_level_selected(self, level: str) -> None:
+            if not level:
+                return
+            self._set_log_level(level)
+
+        def _set_log_level(self, level: str, *, persist: bool = True) -> None:
+            normalized = str(level or "INFO").upper()
+            if normalized not in self._log_level_actions:
+                normalized = "INFO"
+            self._current_log_level = normalized
+            _configure_logging(normalized)
+            self._sync_log_level_actions()
+            if self._settings:
+                self._settings.log_level = normalized
+                if persist:
+                    try:
+                        save_persistent_settings(self._settings)
+                    except Exception:
+                        pass
+
+        def _sync_log_level_actions(self) -> None:
+            for level, action in self._log_level_actions.items():
+                try:
+                    action.blockSignals(True)
+                    action.setChecked(level == self._current_log_level)
+                finally:
+                    action.blockSignals(False)
 
         def _build_paths_row(self) -> QtWidgets.QLayout:
             grid = QtWidgets.QGridLayout()
@@ -3079,6 +3176,26 @@ def launch_gui(args: argparse.Namespace) -> int:
                 except Exception:
                     pass
             self.db_tab_edit.textChanged.connect(_sync_db_text)
+            return widget
+
+        def _build_dev_tab(self) -> QtWidgets.QWidget:
+            widget = QtWidgets.QWidget()
+            form = QtWidgets.QFormLayout(widget)
+            self.dev_bucket_label = QtWidgets.QLabel()
+            self.dev_bucket_spin = QtWidgets.QSpinBox()
+            self.dev_bucket_spin.setRange(0, 20000)
+            self.dev_bucket_spin.setSingleStep(256)
+            self.dev_bucket_spin.setAccelerated(True)
+            self.dev_bucket_spin.setValue(int(self._settings.dev_bucket_limit_override or 0))
+            self.dev_bucket_spin.setSpecialValueText("")
+            form.addRow(self.dev_bucket_label, self.dev_bucket_spin)
+            self.dev_vote_label = QtWidgets.QLabel()
+            self.dev_vote_spin = QtWidgets.QSpinBox()
+            self.dev_vote_spin.setRange(5, 95)
+            self.dev_vote_spin.setSingleStep(5)
+            self.dev_vote_spin.setValue(int(self._settings.dev_vote_percentile or 40))
+            form.addRow(self.dev_vote_label, self.dev_vote_spin)
+            form.addItem(QtWidgets.QSpacerItem(20, 20, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding))
             return widget
 
         def _build_astrometry_tab(self) -> QtWidgets.QWidget:
@@ -3899,6 +4016,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.ast_fallback_local_check.setChecked(bool(settings.astrometry_fallback_local))
             except Exception:
                 pass
+            if hasattr(self, "dev_bucket_spin"):
+                self.dev_bucket_spin.setValue(int(settings.dev_bucket_limit_override or 0))
+            if hasattr(self, "dev_vote_spin"):
+                self.dev_vote_spin.setValue(int(settings.dev_vote_percentile or 40))
             # Also refresh the solver tab family dropdown from the chosen index,
             # and restore previously saved family selection if any.
             try:
@@ -4014,6 +4135,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 max_quads_per_tile=int(self.settings_max_quads_spin.value()),
                 quad_storage=quad_storage_value,
                 tile_compression=tile_compression_value,
+                log_level=self._current_log_level,
                 sample_fits=self.settings_sample_edit.text().strip() or None,
                 last_preset_id=(self.presets_combo.currentData() if hasattr(self, 'presets_combo') else None),
                 last_fov_focal_mm=float(self.fov_focal_spin.value()) if hasattr(self, 'fov_focal_spin') else 0.0,
@@ -4052,6 +4174,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 astrometry_timeout_s=int(self.ast_timeout_spin.value()) if hasattr(self, 'ast_timeout_spin') else 600,
                 astrometry_use_hints=bool(self.ast_use_hints_check.isChecked()) if hasattr(self, 'ast_use_hints_check') else True,
                 astrometry_fallback_local=bool(self.ast_fallback_local_check.isChecked()) if hasattr(self, 'ast_fallback_local_check') else True,
+                dev_bucket_limit_override=int(self.dev_bucket_spin.value()) if hasattr(self, "dev_bucket_spin") else 0,
+                dev_vote_percentile=int(self.dev_vote_spin.value()) if hasattr(self, "dev_vote_spin") else 40,
             )
 
         def _apply_solver_hints_from_optics(
@@ -4334,7 +4458,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 quality_inliers=settings.blind_quality_inliers,
                 pixel_tolerance=settings.blind_pixel_tolerance,
                 fast_mode=settings.blind_fast_mode,
-                log_level="INFO",
+                log_level=self._current_log_level,
+                bucket_limit_override=int(settings.dev_bucket_limit_override or 0),
+                vote_percentile=int(settings.dev_vote_percentile or 40),
                 ra_hint_deg=settings.solver_hint_ra_deg,
                 dec_hint_deg=settings.solver_hint_dec_deg,
                 radius_hint_deg=settings.solver_hint_radius_deg,
@@ -4512,6 +4638,22 @@ def launch_gui(args: argparse.Namespace) -> int:
                     label_key = f"language_action_{code}"
                     action.setText(self._text(label_key))
                     action.setChecked(code == self._language)
+            if hasattr(self, "dev_scroll"):
+                idx = self.tabs.indexOf(self.dev_scroll)
+                if idx >= 0:
+                    self.tabs.setTabText(idx, self._text("dev_tab"))
+            if hasattr(self, "log_menu"):
+                self.log_menu.setTitle(self._text("log_menu"))
+                for level, action in self._log_level_actions.items():
+                    label_key = f"log_level_{level.lower()}"
+                    action.setText(self._text(label_key))
+                self._sync_log_level_actions()
+            if hasattr(self, "dev_bucket_label"):
+                self.dev_bucket_label.setText(self._text("dev_bucket_label"))
+            if hasattr(self, "dev_bucket_spin"):
+                self.dev_bucket_spin.setSpecialValueText(self._text("dev_bucket_hint"))
+            if hasattr(self, "dev_vote_label"):
+                self.dev_vote_label.setText(self._text("dev_vote_label"))
             browse_label = self._text("browse_button")
             self.browse_in_btn.setText(browse_label)
             self.input_label.setText(self._text("input_label"))
@@ -4987,6 +5129,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self._settings.near_max_tile_candidates = int(self.perf_near_max_tiles_spin.value())
                 if hasattr(self, 'perf_near_cache_spin'):
                     self._settings.near_tile_cache_size = int(self.perf_near_cache_spin.value())
+                if hasattr(self, "dev_bucket_spin"):
+                    self._settings.dev_bucket_limit_override = int(self.dev_bucket_spin.value())
+                if hasattr(self, "dev_vote_spin"):
+                    self._settings.dev_vote_percentile = int(self.dev_vote_spin.value())
                 save_persistent_settings(self._settings)
             except Exception:
                 pass
@@ -5044,6 +5190,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 blind_quality_inliers=int(self._settings.blind_quality_inliers or 40),
                 blind_quality_rms=float(self._settings.blind_quality_rms or 1.2),
                 blind_fast_mode=bool(self._settings.blind_fast_mode),
+                log_level=self._current_log_level,
+                dev_bucket_limit_override=int(self._settings.dev_bucket_limit_override or 0),
+                dev_vote_percentile=int(self._settings.dev_vote_percentile or 40),
             )
 
         def _start_solving(self) -> None:
@@ -5239,10 +5388,33 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
             self.statusBar().showMessage(message, 5000)
 
+        def _shutdown_thread(self, thread: QtCore.QThread | None, *, cancel_method: str | None = None, timeout_ms: int = 5000) -> None:
+            if thread is None:
+                return
+            try:
+                if cancel_method and hasattr(thread, cancel_method):
+                    getattr(thread, cancel_method)()
+            except Exception:
+                pass
+            try:
+                if thread.isRunning():
+                    thread.wait(timeout_ms)
+            except Exception:
+                pass
+
         def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # pragma: no cover - GUI hook
-            if self._worker:
-                self._worker.request_cancel()
-                self._worker.wait(1500)
+            self._shutdown_thread(self._worker, cancel_method="request_cancel")
+            self._worker = None
+            self._shutdown_thread(self._scanner, cancel_method="cancel")
+            self._scanner = None
+            self._shutdown_thread(self._index_worker)
+            self._index_worker = None
+            self._shutdown_thread(self._blind_worker)
+            self._blind_worker = None
+            self._shutdown_thread(self._near_worker)
+            self._near_worker = None
+            self._shutdown_thread(self._dl_worker, cancel_method="stop")
+            self._dl_worker = None
             super().closeEvent(event)
 
     QtWidgets.QApplication.setApplicationName("ZeSolver")
