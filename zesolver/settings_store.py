@@ -76,6 +76,11 @@ class PersistentSettings:
     dev_bucket_cap_S: int = 6000
     dev_bucket_cap_M: int = 4096
     dev_bucket_cap_L: int = 8192
+    dev_hash_quads_S: int = DEFAULT_MAX_QUADS_PER_TILE
+    dev_hash_quads_M: int = DEFAULT_MAX_QUADS_PER_TILE
+    dev_hash_quads_L: int = DEFAULT_MAX_QUADS_PER_TILE
+    dev_family_auto: bool = True
+    dev_family_selection: Optional[list[str]] = None
     # Solver panel persisted settings
     solver_fov_deg: float = DEFAULT_FOV_DEG
     solver_search_scale: float = DEFAULT_SEARCH_RADIUS_SCALE
@@ -139,6 +144,18 @@ def load_persistent_settings() -> PersistentSettings:
         except (TypeError, ValueError):
             return None
 
+    def _list_or_none(value: object) -> Optional[list[str]]:
+        if isinstance(value, list):
+            cleaned = []
+            for entry in value:
+                if not isinstance(entry, str):
+                    entry = str(entry)
+                entry = entry.strip().lower()
+                if entry:
+                    cleaned.append(entry)
+            return cleaned or None
+        return None
+
     def _normalize_choice(value: object, choices: tuple[str, ...], default: str) -> str:
         candidate = default
         if isinstance(value, str) and value.strip():
@@ -193,6 +210,11 @@ def load_persistent_settings() -> PersistentSettings:
         dev_bucket_cap_S=int(payload.get("dev_bucket_cap_S", 6000)),
         dev_bucket_cap_M=int(payload.get("dev_bucket_cap_M", 4096)),
         dev_bucket_cap_L=int(payload.get("dev_bucket_cap_L", 8192)),
+        dev_hash_quads_S=int(payload.get("dev_hash_quads_S", DEFAULT_MAX_QUADS_PER_TILE)),
+        dev_hash_quads_M=int(payload.get("dev_hash_quads_M", DEFAULT_MAX_QUADS_PER_TILE)),
+        dev_hash_quads_L=int(payload.get("dev_hash_quads_L", DEFAULT_MAX_QUADS_PER_TILE)),
+        dev_family_auto=bool(payload.get("dev_family_auto", True)),
+        dev_family_selection=_list_or_none(payload.get("dev_family_selection")),
         solver_fov_deg=float(payload.get("solver_fov_deg", DEFAULT_FOV_DEG)),
         solver_search_scale=float(payload.get("solver_search_scale", DEFAULT_SEARCH_RADIUS_SCALE)),
         solver_search_attempts=int(payload.get("solver_search_attempts", DEFAULT_SEARCH_RADIUS_ATTEMPTS)),

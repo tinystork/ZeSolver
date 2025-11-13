@@ -20,7 +20,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, List, Optional, Sequence
+from typing import Any, Callable, Iterable, Iterator, List, Mapping, Optional, Sequence
 
 import numpy as np
 from astropy.coordinates import Angle
@@ -171,12 +171,29 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "dev_bucket_cap_s_label": "Cap niveau S",
         "dev_bucket_cap_m_label": "Cap niveau M",
         "dev_bucket_cap_l_label": "Cap niveau L",
+        "dev_workers_label": "Threads (solveur)",
+        "dev_workers_auto": "Auto (0 — recommandé)",
+        "dev_workers_hint": "Limité à 75 % des cœurs disponibles. Augmenter davantage peut rendre le système instable.",
+        "dev_family_group": "Bases supplémentaires",
+        "dev_family_auto": "Auto (toutes les bases disponibles)",
+        "dev_family_hint": "Décoche Auto pour choisir quelles bases utiliser quand le solveur est en mode Auto.",
+        "dev_family_missing": "Aucune base détectée (index absent).",
+        "dev_family_none_error": "Sélectionne au moins une base quand Auto est désactivé.",
+        "dev_hash_group": "Reconstruction des hashes",
+        "dev_hash_button": "Recréer hash {level}",
+        "dev_hash_value_hint": "Nombre max de quads par tuile utilisé pendant la reconstruction.",
+        "dev_hash_started": "Recréation hash {level} démarrée.",
+        "dev_hash_done": "Recréation hash {level} terminée.",
+        "dev_hash_failed": "Recréation hash {level} : {message}",
+        "dev_hash_busy": "Une construction est déjà en cours.",
         "status_ready": "Prêt.",
         "dialog_select_directory": "Choisir un dossier",
         "error_select_input": "Sélectionne un dossier contenant tes images.",
         "error_input_missing": "Dossier introuvable: {path}",
         "error_database_required": "Renseigne le dossier base de données.",
         "error_database_missing": "Base introuvable: {path}",
+        "file_missing": "Fichier introuvable : {path}",
+        "file_open_failed": "Impossible d'ouvrir le fichier : {path}",
         "error_no_input_dir": "Aucun dossier d'entrée sélectionné.",
         "dialog_config_title": "Configuration",
         "dialog_no_files": "Aucun fichier à résoudre.",
@@ -328,12 +345,29 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "dev_bucket_cap_s_label": "Bucket cap (S)",
         "dev_bucket_cap_m_label": "Bucket cap (M)",
         "dev_bucket_cap_l_label": "Bucket cap (L)",
+        "dev_workers_label": "Worker threads",
+        "dev_workers_auto": "Auto (0 — recommended)",
+        "dev_workers_hint": "Capped to 75% of CPU cores. Pushing higher may destabilize the system.",
+        "dev_family_group": "Additional catalogs",
+        "dev_family_auto": "Auto (use every available family)",
+        "dev_family_hint": "Uncheck Auto to pick which catalog families are used when the solver stays on Auto.",
+        "dev_family_missing": "No catalog families detected (index missing).",
+        "dev_family_none_error": "Select at least one catalog family when Auto is disabled.",
+        "dev_hash_group": "Hash tables",
+        "dev_hash_button": "Rebuild hash {level}",
+        "dev_hash_value_hint": "Maximum quads per tile used while rebuilding.",
+        "dev_hash_started": "Hash rebuild {level} started.",
+        "dev_hash_done": "Hash rebuild {level} finished.",
+        "dev_hash_failed": "Hash rebuild {level}: {message}",
+        "dev_hash_busy": "A build is already running.",
         "status_ready": "Ready.",
         "dialog_select_directory": "Choose a folder",
         "error_select_input": "Select a folder containing your images.",
         "error_input_missing": "Folder not found: {path}",
         "error_database_required": "Provide the catalog database folder.",
         "error_database_missing": "Database not found: {path}",
+        "file_missing": "File not found: {path}",
+        "file_open_failed": "Unable to open file: {path}",
         "error_no_input_dir": "No input directory selected.",
         "dialog_config_title": "Configuration",
         "dialog_no_files": "No files to solve.",
@@ -474,6 +508,7 @@ _GUI_ASTROMETRY_I18N = {
         "solver.backend.local": "Local (ZeBlind)",
         "solver.backend.astrometry": "Astrometry.net (web)",
         "solver.backend.note": "Choisissez le solveur à utiliser pour cette exécution.",
+        "solver.status.blind_disabled": "Mode ZeNear seul (blind solver désactivé).",
         "solver.status.using_backend": "Solveur utilisé : {backend}",
         "astrometry.tab.title": "Astrometry.net",
         "astrometry.api_url": "URL de l’API",
@@ -503,6 +538,7 @@ _GUI_ASTROMETRY_I18N = {
         "solver.backend.local": "Local (ZeBlind)",
         "solver.backend.astrometry": "Astrometry.net (web)",
         "solver.backend.note": "Choose the solver to use for this run.",
+        "solver.status.blind_disabled": "ZeNear-only mode (blind solver disabled).",
         "solver.status.using_backend": "Using backend: {backend}",
         "astrometry.tab.title": "Astrometry.net",
         "astrometry.api_url": "API URL",
@@ -1725,6 +1761,8 @@ class ImageSolver:
 
         On success, writes a JSON WCS sidecar next to the raster and returns a solved result.
         """
+        if not self.config.blind_enabled:
+            return None
         index_root = self.config.blind_index_path
         if not index_root:
             return None
@@ -1962,7 +2000,7 @@ class ImageSolver:
         metadata: Optional[ImageMetadata],
         peaks: Optional[np.ndarray],
     ) -> Optional[ImageSolveResult]:
-        if not self.config.overwrite:
+        if not self.config.blind_enabled or not self.config.overwrite:
             return None
 
         if cached_result and cached_result["success"]:
@@ -2439,6 +2477,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             quad_storage: str,
             tile_compression: str,
             quads_only: bool = False,
+            levels: Optional[Sequence[str]] = None,
+            level_quads: Optional[Mapping[str, int]] = None,
         ) -> None:
             super().__init__()
             self.db_root = db_root
@@ -2456,6 +2496,26 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.quad_storage = quad
             self.tile_compression = tiles
             self.quads_only = quads_only
+            normalized_levels: tuple[str, ...] = ()
+            if levels:
+                cleaned = []
+                for lvl in levels:
+                    key = str(lvl).strip().upper()
+                    if key:
+                        cleaned.append(key)
+                normalized_levels = tuple(dict.fromkeys(cleaned))
+            self.levels = normalized_levels
+            overrides: dict[str, int] = {}
+            if level_quads:
+                for key, value in level_quads.items():
+                    try:
+                        number = int(value)
+                    except Exception:
+                        continue
+                    if number <= 0:
+                        continue
+                    overrides[str(key).strip().upper()] = number
+            self.level_quads = overrides
 
         def run(self) -> None:
             # Bridge Python logging (INFO+) into the GUI log during the build
@@ -2519,9 +2579,18 @@ def launch_gui(args: argparse.Namespace) -> int:
                             return npy
                         return None
 
-                    for level in LEVEL_SPECS:
+                    requested_levels = getattr(self, "levels", ())
+                    if requested_levels:
+                        target_levels = [lvl for lvl in LEVEL_SPECS if lvl.name in requested_levels]
+                        if not target_levels:
+                            raise RuntimeError(f"Unknown quad levels: {', '.join(requested_levels)}")
+                    else:
+                        target_levels = list(LEVEL_SPECS)
+
+                    for level in target_levels:
                         existing = _existing_quad_table(level.name)
                         if existing is None:
+                            limit = int(self.level_quads.get(level.name, self.max_quads_per_tile))
                             target = (
                                 ht / f"quads_{level.name}.npz"
                                 if self.quad_storage != "npy"
@@ -2535,7 +2604,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                             built = build_quad_index(
                                 idx_root,
                                 level.name,
-                                max_quads_per_tile=self.max_quads_per_tile,
+                                max_quads_per_tile=limit,
                                 on_progress=_cb,
                                 workers=max(1, (os.cpu_count() or 1) // 2),
                                 storage_format=self.quad_storage,
@@ -2547,7 +2616,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                         else:
                             self.log.emit(f"Quad table present: {existing}")
                     # Final presence check
-                    missing = [lvl.name for lvl in LEVEL_SPECS if _existing_quad_table(lvl.name) is None]
+                    missing = [lvl.name for lvl in target_levels if _existing_quad_table(lvl.name) is None]
                     if missing:
                         raise RuntimeError(f"quad tables missing after build: {', '.join(missing)}")
                     if not built_any:
@@ -2782,10 +2851,18 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._worker: Optional[SolveRunner] = None
             self._pending_files: List[Path] = []
             self._item_by_path: dict[Path, QtWidgets.QTreeWidgetItem] = {}
+            self._dev_family_checks: dict[str, QtWidgets.QCheckBox] = {}
+            self._pending_family_selection: Optional[list[str]] = (
+                list(settings.dev_family_selection) if settings.dev_family_selection else None
+            )
+            self._syncing_workers_controls = False
+            self._dev_workers_choice = self._clamp_worker_choice(getattr(settings, "solver_workers", 0))
+            self._pending_hash_level: Optional[str] = None
             self._current_input_dir: Optional[Path] = None
             self._results_seen = 0
             self._language_actions: dict[str, QtGui.QAction] = {}
             self._settings = settings
+            self._settings.solver_workers = self._dev_workers_choice
             self._current_log_level = str(getattr(settings, "log_level", "INFO") or "INFO").upper()
             self._index_worker: Optional[IndexBuilder] = None
             self._blind_worker: Optional[BlindRunner] = None
@@ -3273,18 +3350,21 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.dev_cap_s_spin.setSingleStep(256)
             self.dev_cap_s_spin.setValue(int(self._settings.dev_bucket_cap_S or 6000))
             form.addRow(self.dev_cap_s_label, self.dev_cap_s_spin)
+            self.dev_cap_s_spin.valueChanged.connect(lambda _: self._update_hash_button_labels())
             self.dev_cap_m_label = QtWidgets.QLabel()
             self.dev_cap_m_spin = QtWidgets.QSpinBox()
             self.dev_cap_m_spin.setRange(256, 20000)
             self.dev_cap_m_spin.setSingleStep(256)
             self.dev_cap_m_spin.setValue(int(self._settings.dev_bucket_cap_M or 4096))
             form.addRow(self.dev_cap_m_label, self.dev_cap_m_spin)
+            self.dev_cap_m_spin.valueChanged.connect(lambda _: self._update_hash_button_labels())
             self.dev_cap_l_label = QtWidgets.QLabel()
             self.dev_cap_l_spin = QtWidgets.QSpinBox()
             self.dev_cap_l_spin.setRange(1024, 40000)
             self.dev_cap_l_spin.setSingleStep(512)
             self.dev_cap_l_spin.setValue(int(self._settings.dev_bucket_cap_L or 8192))
             form.addRow(self.dev_cap_l_label, self.dev_cap_l_spin)
+            self.dev_cap_l_spin.valueChanged.connect(lambda _: self._update_hash_button_labels())
             self.dev_sigma_label = QtWidgets.QLabel()
             self.dev_sigma_spin = QtWidgets.QDoubleSpinBox()
             self.dev_sigma_spin.setRange(0.5, 10.0)
@@ -3307,10 +3387,63 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.cache_spin.setRange(2, 64)
             self.cache_spin.setValue(int(self._settings.solver_cache_size or args.cache_size or 12))
             form.addRow(self.cache_label_widget, self.cache_spin)
+            self.dev_workers_label = QtWidgets.QLabel()
+            self.dev_workers_combo = QtWidgets.QComboBox()
+            self._populate_dev_workers_combo()
+            form.addRow(self.dev_workers_label, self.dev_workers_combo)
+            self.dev_workers_hint_label = QtWidgets.QLabel()
+            self.dev_workers_hint_label.setWordWrap(True)
+            form.addRow(self.dev_workers_hint_label)
+            # Catalog family overrides (auto/custom)
+            self.dev_family_group = QtWidgets.QGroupBox()
+            self.dev_family_group.setTitle(self._text("dev_family_group"))
+            family_layout = QtWidgets.QVBoxLayout(self.dev_family_group)
+            self.dev_family_auto_check = QtWidgets.QCheckBox()
+            self.dev_family_auto_check.setChecked(bool(self._settings.dev_family_auto))
+            self.dev_family_auto_check.setText(self._text("dev_family_auto"))
+            self.dev_family_auto_check.toggled.connect(self._update_dev_family_box_enabled)
+            family_layout.addWidget(self.dev_family_auto_check)
+            self.dev_family_hint = QtWidgets.QLabel()
+            self.dev_family_hint.setWordWrap(True)
+            self.dev_family_hint.setText(self._text("dev_family_hint"))
+            family_layout.addWidget(self.dev_family_hint)
+            self.dev_family_box = QtWidgets.QWidget()
+            self.dev_family_box_layout = QtWidgets.QVBoxLayout(self.dev_family_box)
+            self.dev_family_box_layout.setContentsMargins(0, 0, 0, 0)
+            family_layout.addWidget(self.dev_family_box)
+            form.addRow(self.dev_family_group)
+            self._refresh_dev_family_choices([])
+            # Hash rebuild shortcuts
+            self.dev_hash_group = QtWidgets.QGroupBox()
+            self.dev_hash_group.setTitle(self._text("dev_hash_group"))
+            hash_layout = QtWidgets.QVBoxLayout(self.dev_hash_group)
+            self.dev_hash_buttons: dict[str, QtWidgets.QPushButton] = {}
+            self.dev_hash_quads_spin: dict[str, QtWidgets.QSpinBox] = {}
+            for level in ("S", "M", "L"):
+                row = QtWidgets.QHBoxLayout()
+                btn = QtWidgets.QPushButton()
+                btn.clicked.connect(lambda _, lvl=level: self._rebuild_hash_level(lvl))
+                row.addWidget(btn)
+                spin = QtWidgets.QSpinBox()
+                spin.setRange(100, 100000)
+                default_quads = getattr(self._settings, f"dev_hash_quads_{level}", None)
+                if not default_quads:
+                    default_quads = self._settings.max_quads_per_tile or DEFAULT_MAX_QUADS_PER_TILE
+                spin.setValue(int(default_quads))
+                spin.setSuffix(" quads")
+                spin.setToolTip(self._text("dev_hash_value_hint"))
+                row.addWidget(spin)
+                row.addStretch(1)
+                hash_layout.addLayout(row)
+                self.dev_hash_buttons[level] = btn
+                self.dev_hash_quads_spin[level] = spin
+            form.addRow(self.dev_hash_group)
             self.dev_save_btn = QtWidgets.QPushButton(self._text("settings_save_btn"))
             form.addRow(self.dev_save_btn)
             self.dev_save_btn.clicked.connect(self._save_dev_settings)
             form.addItem(QtWidgets.QSpacerItem(20, 20, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding))
+            self._update_hash_button_labels()
+            self._update_dev_family_box_enabled()
             return widget
 
         def _save_dev_settings(self) -> None:
@@ -3324,10 +3457,276 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._settings.dev_detect_min_area = int(self.dev_area_spin.value())
                 self._settings.solver_downsample = int(self.downsample_spin.value())
                 self._settings.solver_cache_size = int(self.cache_spin.value())
+                auto_mode = bool(self.dev_family_auto_check.isChecked())
+                self._settings.dev_family_auto = auto_mode
+                if auto_mode:
+                    self._settings.dev_family_selection = None
+                else:
+                    selection = self._selected_dev_families()
+                    if not selection:
+                        QtWidgets.QMessageBox.warning(
+                            self,
+                            self._text("dialog_config_title"),
+                            self._text("dev_family_none_error"),
+                        )
+                        return
+                    self._settings.dev_family_selection = selection
+                if hasattr(self, "dev_hash_quads_spin"):
+                    for level, spin in self.dev_hash_quads_spin.items():
+                        try:
+                            value = max(100, int(spin.value()))
+                        except Exception:
+                            value = DEFAULT_MAX_QUADS_PER_TILE
+                        setattr(self._settings, f"dev_hash_quads_{level}", value)
+                self._settings.solver_workers = self._clamp_worker_choice(self._dev_workers_choice)
                 save_persistent_settings(self._settings)
                 self._log(self._text("settings.saved"))
             except Exception as exc:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+
+        def _refresh_dev_family_choices(self, families: Sequence[str]) -> None:
+            if not hasattr(self, "dev_family_box_layout"):
+                return
+            layout = self.dev_family_box_layout
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+            self._dev_family_checks = {}
+            unique = sorted({str(fam).strip().lower() for fam in families if str(fam).strip()})
+            if not unique:
+                label = QtWidgets.QLabel(self._text("dev_family_missing"))
+                label.setWordWrap(True)
+                layout.addWidget(label)
+                layout.addStretch(1)
+                self._update_dev_family_box_enabled()
+                return
+            for fam in unique:
+                cb = QtWidgets.QCheckBox(fam.upper())
+                layout.addWidget(cb)
+                self._dev_family_checks[fam] = cb
+            layout.addStretch(1)
+            selection = self._pending_family_selection or self._settings.dev_family_selection
+            self._apply_dev_family_selection(selection)
+            self._update_dev_family_box_enabled()
+
+        def _apply_dev_family_selection(self, selection: Optional[Sequence[str]]) -> None:
+            if not self._dev_family_checks:
+                self._pending_family_selection = list(selection) if selection else None
+                return
+            chosen: set[str] = set()
+            if selection:
+                for entry in selection:
+                    if not isinstance(entry, str):
+                        entry = str(entry)
+                    key = entry.strip().lower()
+                    if key and key in self._dev_family_checks:
+                        chosen.add(key)
+            if not chosen:
+                chosen = set(self._dev_family_checks.keys())
+            for fam, checkbox in self._dev_family_checks.items():
+                checkbox.setChecked(fam in chosen)
+            self._pending_family_selection = None
+
+        def _update_dev_family_box_enabled(self) -> None:
+            if not hasattr(self, "dev_family_box"):
+                return
+            auto_mode = bool(self.dev_family_auto_check.isChecked()) if hasattr(self, "dev_family_auto_check") else True
+            self.dev_family_box.setEnabled(not auto_mode)
+
+        def _selected_dev_families(self) -> list[str]:
+            if not self._dev_family_checks:
+                return list(self._settings.dev_family_selection or [])
+            return [fam for fam, checkbox in self._dev_family_checks.items() if checkbox.isChecked()]
+
+        def _set_hash_buttons_enabled(self, enabled: bool) -> None:
+            if not hasattr(self, "dev_hash_buttons"):
+                return
+            for button in self.dev_hash_buttons.values():
+                button.setEnabled(enabled)
+            if hasattr(self, "dev_hash_quads_spin"):
+                for spin in self.dev_hash_quads_spin.values():
+                    spin.setEnabled(enabled)
+
+        def _max_worker_cap(self) -> int:
+            cpus = os.cpu_count() or 1
+            cap = math.floor(cpus * 0.75)
+            return max(1, cap)
+
+        def _clamp_worker_choice(self, value: object) -> int:
+            cap = self._max_worker_cap()
+            try:
+                raw = int(value or 0)
+            except Exception:
+                raw = 0
+            if raw < 0:
+                raw = 0
+            if raw > cap:
+                raw = cap
+            return raw
+
+        def _effective_workers_for_choice(self, choice: int) -> int:
+            cap = self._max_worker_cap()
+            if choice <= 0:
+                effective = max(1, _default_worker_count())
+            else:
+                effective = choice
+            return min(cap, max(1, effective))
+
+        def _selected_worker_value(self) -> int:
+            if hasattr(self, "_dev_workers_choice"):
+                return int(self._dev_workers_choice)
+            try:
+                return int(self.workers_spin.value())
+            except Exception:
+                return 0
+
+        def _effective_workers_for_run(self) -> int:
+            return self._effective_workers_for_choice(self._selected_worker_value())
+
+        def _populate_dev_workers_combo(self) -> None:
+            if not hasattr(self, "dev_workers_combo"):
+                return
+            combo = self.dev_workers_combo
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem(self._text("dev_workers_auto"), 0)
+            cap = self._max_worker_cap()
+            for value in range(1, cap + 1):
+                combo.addItem(str(value), value)
+            choice = self._clamp_worker_choice(self._dev_workers_choice)
+            self._dev_workers_choice = choice
+            idx = combo.findData(choice)
+            if idx < 0:
+                idx = 0
+            combo.setCurrentIndex(idx)
+            if not getattr(self, "_dev_workers_combo_connected", False):
+                combo.currentIndexChanged.connect(self._on_dev_workers_changed)
+                self._dev_workers_combo_connected = True
+            combo.blockSignals(False)
+            self._sync_workers_spin_from_dev_choice()
+
+        def _select_dev_workers_combo_value(self, value: int) -> None:
+            if not hasattr(self, "dev_workers_combo"):
+                return
+            combo = self.dev_workers_combo
+            idx = combo.findData(value)
+            if idx < 0:
+                return
+            combo.blockSignals(True)
+            combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+        def _on_dev_workers_changed(self) -> None:
+            if not hasattr(self, "dev_workers_combo"):
+                return
+            data = self.dev_workers_combo.currentData()
+            if data is None:
+                return
+            self._dev_workers_choice = self._clamp_worker_choice(data)
+            self._settings.solver_workers = self._dev_workers_choice
+            self._sync_workers_spin_from_dev_choice()
+
+        def _sync_workers_spin_from_dev_choice(self) -> None:
+            if not hasattr(self, "workers_spin"):
+                return
+            value = self._effective_workers_for_choice(self._dev_workers_choice)
+            self._syncing_workers_controls = True
+            try:
+                self.workers_spin.setValue(value)
+            finally:
+                self._syncing_workers_controls = False
+
+        def _on_workers_spin_changed(self, value: int) -> None:
+            if getattr(self, "_syncing_workers_controls", False):
+                return
+            value = max(1, min(self._max_worker_cap(), int(value)))
+            self._dev_workers_choice = value
+            self._select_dev_workers_combo_value(value)
+            self._settings.solver_workers = self._dev_workers_choice
+
+        def _level_quads_from_settings(self, settings: Optional[PersistentSettings] = None) -> dict[str, int]:
+            cfg = settings or self._settings
+            mapping: dict[str, int] = {}
+            base = int(getattr(cfg, "max_quads_per_tile", DEFAULT_MAX_QUADS_PER_TILE) or DEFAULT_MAX_QUADS_PER_TILE)
+            for level in ("S", "M", "L"):
+                value = getattr(cfg, f"dev_hash_quads_{level}", None)
+                try:
+                    number = int(value) if value is not None else base
+                except Exception:
+                    number = base
+                mapping[level] = max(100, number)
+            return mapping
+
+        def _update_hash_button_labels(self) -> None:
+            if not hasattr(self, "dev_hash_buttons"):
+                return
+            for level, button in self.dev_hash_buttons.items():
+                button.setText(self._text("dev_hash_button", level=level))
+
+        def _rebuild_hash_level(self, level: str) -> None:
+            level_key = str(level).strip().upper()
+            if level_key not in {"S", "M", "L"}:
+                return
+            if self._index_worker:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    self._text("dialog_config_title"),
+                    self._text("dev_hash_busy"),
+                )
+                return
+            if not self._settings.index_root:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("settings_index_missing"))
+                return
+            if not self._settings.db_root:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_database_required"))
+                return
+            quads_value = None
+            if hasattr(self, "dev_hash_quads_spin"):
+                spin = self.dev_hash_quads_spin.get(level_key)
+                if spin is not None:
+                    try:
+                        quads_value = max(100, int(spin.value()))
+                    except Exception:
+                        quads_value = None
+            if not quads_value:
+                fallback_attr = f"dev_hash_quads_{level_key}"
+                quads_value = getattr(self._settings, fallback_attr, None)
+            if not quads_value:
+                quads_value = self._settings.max_quads_per_tile or DEFAULT_MAX_QUADS_PER_TILE
+            level_quads = {level_key: int(quads_value)}
+            builder = IndexBuilder(
+                db_root=self._settings.db_root,
+                index_root=self._settings.index_root,
+                mag_cap=self._settings.mag_cap,
+                max_stars=self._settings.max_stars,
+                max_quads_per_tile=int(quads_value),
+                quad_storage=self._settings.quad_storage,
+                tile_compression=self._settings.tile_compression,
+                quads_only=True,
+                levels=(level_key,),
+                level_quads=level_quads,
+            )
+            self._index_worker = builder
+            self._pending_hash_level = level_key
+            self._set_hash_buttons_enabled(False)
+            self.settings_build_btn.setEnabled(False)
+            if hasattr(self, "settings_run_blind_btn"):
+                self.settings_run_blind_btn.setEnabled(False)
+            if hasattr(self, "settings_run_near_btn"):
+                self.settings_run_near_btn.setEnabled(False)
+            builder.log.connect(self._log_settings)
+            builder.progress.connect(self._on_index_progress)
+            builder.finished.connect(self._on_index_finished)
+            try:
+                self.settings_progress.setRange(0, 1)
+                self.settings_progress.setValue(0)
+                self.settings_progress.setFormat(f"{level_key} ...")
+            except Exception:
+                pass
+            builder.start()
+            self._log_settings(self._text("dev_hash_started", level=level_key))
 
         def _build_astrometry_tab(self) -> QtWidgets.QWidget:
             widget = QtWidgets.QWidget()
@@ -3516,8 +3915,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.scale_max_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
             self.scale_max_hint_spin.setValue(self._settings.solver_hint_resolution_max_arcsec or 0.0)
             self.workers_spin = QtWidgets.QSpinBox()
-            self.workers_spin.setRange(1, max(32, _default_worker_count()))
-            self.workers_spin.setValue(self._settings.solver_workers or args.workers or _default_worker_count())
+            cap_workers = self._max_worker_cap()
+            self.workers_spin.setRange(1, cap_workers)
+            self.workers_spin.setValue(self._effective_workers_for_choice(self._dev_workers_choice))
+            self.workers_spin.valueChanged.connect(self._on_workers_spin_changed)
             self.max_files_spin = QtWidgets.QSpinBox()
             self.max_files_spin.setRange(0, 10000)
             self.max_files_spin.setValue(self._settings.solver_max_files or args.max_files or 0)
@@ -3575,13 +3976,16 @@ def launch_gui(args: argparse.Namespace) -> int:
             try:
                 root = Path(index_root_text).expanduser().resolve()
             except Exception:
+                self._refresh_dev_family_choices([])
                 return
             manifest = root / "manifest.json"
             if not manifest.is_file():
+                self._refresh_dev_family_choices([])
                 return
             try:
                 payload = json.loads(manifest.read_text(encoding="utf-8"))
             except Exception:
+                self._refresh_dev_family_choices([])
                 return
             tiles = payload.get("tiles") or []
             families: set[str] = set()
@@ -3603,6 +4007,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 if idx >= 0:
                     self.families_combo.setCurrentIndex(idx)
             self.families_combo.blockSignals(False)
+            self._refresh_dev_family_choices(items)
 
         def _build_settings_tab(self) -> QtWidgets.QWidget:
             widget = QtWidgets.QWidget()
@@ -4158,6 +4563,26 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.dev_sigma_spin.setValue(float(settings.dev_detect_k_sigma or 3.0))
             if hasattr(self, "dev_area_spin"):
                 self.dev_area_spin.setValue(int(settings.dev_detect_min_area or 5))
+            if hasattr(self, "dev_workers_label"):
+                self.dev_workers_label.setText(self._text("dev_workers_label"))
+            if hasattr(self, "dev_workers_hint_label"):
+                self.dev_workers_hint_label.setText(self._text("dev_workers_hint"))
+            self._dev_workers_choice = self._clamp_worker_choice(settings.solver_workers or 0)
+            if hasattr(self, "dev_workers_combo"):
+                self._populate_dev_workers_combo()
+            if hasattr(self, "dev_family_auto_check"):
+                self.dev_family_auto_check.setChecked(bool(getattr(settings, "dev_family_auto", True)))
+            if hasattr(self, "dev_family_hint"):
+                self.dev_family_hint.setText(self._text("dev_family_hint"))
+            self._apply_dev_family_selection(getattr(settings, "dev_family_selection", None))
+            self._update_dev_family_box_enabled()
+            self._update_hash_button_labels()
+            if hasattr(self, "dev_hash_quads_spin"):
+                for level, spin in self.dev_hash_quads_spin.items():
+                    value = getattr(settings, f"dev_hash_quads_{level}", None)
+                    if not value:
+                        value = settings.max_quads_per_tile or DEFAULT_MAX_QUADS_PER_TILE
+                    spin.setValue(int(value))
             # Also refresh the solver tab family dropdown from the chosen index,
             # and restore previously saved family selection if any.
             try:
@@ -4530,15 +4955,18 @@ def launch_gui(args: argparse.Namespace) -> int:
                         if hasattr(self, 'settings_run_near_btn'):
                             self.settings_run_near_btn.setEnabled(False)
                         self._log_settings(self._text("settings_build_start", path=str(idx_path)))
+                        level_quads = self._level_quads_from_settings(settings)
+                        default_quads = max(level_quads.values()) if level_quads else settings.max_quads_per_tile
                         self._index_worker = IndexBuilder(
                             db_root=settings.db_root,
                             index_root=settings.index_root,
                             mag_cap=settings.mag_cap,
                             max_stars=settings.max_stars,
-                            max_quads_per_tile=settings.max_quads_per_tile,
+                            max_quads_per_tile=int(default_quads),
                             quad_storage=settings.quad_storage,
                             tile_compression=settings.tile_compression,
                             quads_only=True,
+                            level_quads=level_quads,
                         )
                         self._index_worker.log.connect(self._log_settings)
                         self._index_worker.progress.connect(self._on_index_progress)
@@ -4555,15 +4983,18 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_run_near_btn.setEnabled(False)
             # Inform user build is long-running
             self._log_settings(self._text("settings_build_start", path=str(Path(settings.index_root).expanduser().resolve())))
+            level_quads = self._level_quads_from_settings(settings)
+            default_quads = max(level_quads.values()) if level_quads else settings.max_quads_per_tile
             self._index_worker = IndexBuilder(
                 db_root=settings.db_root,
                 index_root=settings.index_root,
                 mag_cap=settings.mag_cap,
                 max_stars=settings.max_stars,
-                max_quads_per_tile=settings.max_quads_per_tile,
+                max_quads_per_tile=int(default_quads),
                 quad_storage=settings.quad_storage,
                 tile_compression=settings.tile_compression,
                 quads_only=False,
+                level_quads=level_quads,
             )
             self._index_worker.log.connect(self._log_settings)
             self._index_worker.progress.connect(self._on_index_progress)
@@ -4701,6 +5132,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_progress.setFormat("Idle")
             except Exception:
                 pass
+            if self._pending_hash_level:
+                level = self._pending_hash_level
+                self._pending_hash_level = None
+                key = "dev_hash_done" if success else "dev_hash_failed"
+                self._log_settings(self._text(key, level=level, message=message))
+                self._set_hash_buttons_enabled(True)
 
         def _on_index_progress(self, value: int, total: int, label: str) -> None:
             try:
@@ -4734,6 +5171,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             )
             self.files_view.setRootIsDecorated(False)
             self.files_view.setAlternatingRowColors(True)
+            self.files_view.itemActivated.connect(self._on_file_item_activated)
             splitter.addWidget(self.files_view)
             self.log_box = QtWidgets.QGroupBox()
             log_layout = QtWidgets.QVBoxLayout(self.log_box)
@@ -4813,6 +5251,21 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.dev_area_label.setText(self._text("dev_detect_area_label"))
             if hasattr(self, "dev_area_spin"):
                 self.dev_area_spin.setToolTip(self._text("dev_detect_area_hint"))
+            if hasattr(self, "dev_workers_label"):
+                self.dev_workers_label.setText(self._text("dev_workers_label"))
+            if hasattr(self, "dev_workers_hint_label"):
+                self.dev_workers_hint_label.setText(self._text("dev_workers_hint"))
+            if hasattr(self, "dev_workers_combo"):
+                self.dev_workers_combo.setItemText(0, self._text("dev_workers_auto"))
+            if hasattr(self, "dev_family_group"):
+                self.dev_family_group.setTitle(self._text("dev_family_group"))
+            if hasattr(self, "dev_family_auto_check"):
+                self.dev_family_auto_check.setText(self._text("dev_family_auto"))
+            if hasattr(self, "dev_family_hint"):
+                self.dev_family_hint.setText(self._text("dev_family_hint"))
+            if hasattr(self, "dev_hash_group"):
+                self.dev_hash_group.setTitle(self._text("dev_hash_group"))
+            self._update_hash_button_labels()
             if hasattr(self, "dev_save_btn"):
                 self.dev_save_btn.setText(self._text("settings_save_btn"))
             browse_label = self._text("browse_button")
@@ -5169,15 +5622,18 @@ def launch_gui(args: argparse.Namespace) -> int:
                 return
             self.files_view.setUpdatesEnabled(False)
             try:
-                items = []
+                entries: list[tuple[Path, QtWidgets.QTreeWidgetItem]] = []
                 for path in self._scan_buffer:
                     item = QtWidgets.QTreeWidgetItem(
                         [self._format_path(path), self._status_label_for("waiting"), ""]
                     )
                     item.setData(1, QtCore.Qt.UserRole, "waiting")
-                    items.append(item)
-                if items:
-                    self.files_view.addTopLevelItems(items)
+                    entries.append((path, item))
+                if entries:
+                    self.files_view.addTopLevelItems([item for _, item in entries])
+                    for path, item in entries:
+                        resolved = self._store_item_path(item, path)
+                        self._item_by_path[resolved] = item
                     self.files_view.resizeColumnToContents(0)
             except Exception:
                 pass
@@ -5212,7 +5668,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 )
                 item.setData(1, QtCore.Qt.UserRole, "waiting")
                 self.files_view.addTopLevelItem(item)
-                self._item_by_path[path.resolve()] = item
+                resolved = self._store_item_path(item, path)
+                self._item_by_path[resolved] = item
             self.files_view.resizeColumnToContents(0)
 
         def _format_path(self, path: Path) -> str:
@@ -5236,6 +5693,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             # Family selection via dropdown ('Auto' → no restriction)
             selected_family = self.families_combo.currentData()
             families = [str(selected_family).strip().lower()] if selected_family else []
+            if not families and not getattr(self._settings, "dev_family_auto", True):
+                custom = [fam for fam in (self._settings.dev_family_selection or []) if fam]
+                families = custom
             formats = tuple(self._parse_formats())
             max_files = self.max_files_spin.value() or None
             max_radius_value = self.max_radius_spin.value()
@@ -5253,7 +5713,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._settings.solver_search_attempts = int(self.search_attempts_spin.value())
                 self._settings.solver_max_radius_deg = float(self.max_radius_spin.value())
                 self._settings.solver_downsample = int(self.downsample_spin.value())
-                self._settings.solver_workers = int(self.workers_spin.value())
+                self._settings.solver_workers = self._selected_worker_value()
                 self._settings.solver_cache_size = int(self.cache_spin.value())
                 self._settings.solver_max_files = int(self.max_files_spin.value())
                 self._settings.solver_formats = self.formats_edit.text().strip() or None
@@ -5304,6 +5764,23 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self._settings.dev_detect_k_sigma = float(self.dev_sigma_spin.value())
                 if hasattr(self, "dev_area_spin"):
                     self._settings.dev_detect_min_area = int(self.dev_area_spin.value())
+                if hasattr(self, "dev_family_auto_check"):
+                    auto_mode = bool(self.dev_family_auto_check.isChecked())
+                    self._settings.dev_family_auto = auto_mode
+                    if auto_mode:
+                        self._settings.dev_family_selection = None
+                    else:
+                        selection = self._selected_dev_families()
+                        if not selection:
+                            raise ValueError(self._text("dev_family_none_error"))
+                        self._settings.dev_family_selection = selection
+                if hasattr(self, "dev_hash_quads_spin"):
+                    for level, spin in self.dev_hash_quads_spin.items():
+                        try:
+                            value = max(100, int(spin.value()))
+                        except Exception:
+                            value = DEFAULT_MAX_QUADS_PER_TILE
+                        setattr(self._settings, f"dev_hash_quads_{level}", value)
                 save_persistent_settings(self._settings)
             except Exception:
                 pass
@@ -5322,7 +5799,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 fov_deg=self.fov_spin.value(),
                 downsample=self.downsample_spin.value(),
                 overwrite=self.overwrite_check.isChecked(),
-                workers=self.workers_spin.value(),
+                workers=self._effective_workers_for_run(),
                 formats=formats,
                 max_files=max_files,
                 cache_size=self.cache_spin.value(),
@@ -5400,6 +5877,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._set_running(True)
             backend = (self.backend_combo.currentData() if hasattr(self, 'backend_combo') else 'local')
             self._log(self._text("solver.status.using_backend", backend=self.backend_combo.currentText() if hasattr(self, 'backend_combo') else 'Local'))
+            if not config.blind_enabled:
+                self._log(self._text("solver.status.blind_disabled"))
             if backend == 'astrometry':
                 # Use finer-grained progress (100 steps per file) so we can reflect upload/queue stages
                 try:
@@ -5507,7 +5986,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             if item is None:
                 item = QtWidgets.QTreeWidgetItem([self._format_path(result.path), "", ""])
                 self.files_view.addTopLevelItem(item)
-                self._item_by_path[key] = item
+                resolved = self._store_item_path(item, result.path)
+                self._item_by_path[resolved] = item
             item.setText(1, self._status_label_for(result.status))
             item.setData(1, QtCore.Qt.UserRole, result.status)
             item.setText(2, result.message or "")
@@ -5520,6 +6000,59 @@ def launch_gui(args: argparse.Namespace) -> int:
             if color:
                 for idx in range(3):
                     item.setForeground(idx, color)
+            else:
+                # Reset to default palette for statuses without explicit colors
+                for idx in range(3):
+                    item.setForeground(idx, QtGui.QBrush())
+
+        def _store_item_path(self, item: QtWidgets.QTreeWidgetItem, path: Path) -> Path:
+            try:
+                resolved = path.resolve()
+            except Exception:
+                resolved = path
+            try:
+                item.setData(0, QtCore.Qt.UserRole, str(resolved))
+            except Exception:
+                item.setData(0, QtCore.Qt.UserRole, str(resolved))
+            return resolved
+
+        def _item_path(self, item: QtWidgets.QTreeWidgetItem) -> Optional[Path]:
+            raw = item.data(0, QtCore.Qt.UserRole)
+            if not raw:
+                return None
+            try:
+                return Path(str(raw))
+            except Exception:
+                return None
+
+        def _on_file_item_activated(self, item: QtWidgets.QTreeWidgetItem, column: int) -> None:
+            path = self._item_path(item)
+            if not path:
+                return
+            self._open_path_in_viewer(path)
+
+        def _open_path_in_viewer(self, path: Path) -> None:
+            try:
+                if not path.exists():
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "ZeSolver",
+                        self._text("file_missing", path=path),
+                    )
+                    return
+                url = QtCore.QUrl.fromLocalFile(str(path))
+                if not QtGui.QDesktopServices.openUrl(url):
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "ZeSolver",
+                        self._text("file_open_failed", path=path),
+                    )
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "ZeSolver",
+                    f"{self._text('file_open_failed', path=path)} ({exc})",
+                )
 
         def _on_worker_error(self, message: str) -> None:
             QtWidgets.QMessageBox.critical(self, "ZeSolver", message)
