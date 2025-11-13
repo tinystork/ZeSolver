@@ -397,9 +397,28 @@ def _collect_tile_matches(
         top = sorted(votes.items(), key=lambda kv: kv[1], reverse=True)[: max(200, int(len(votes) * 0.1))]
         pairs = [(i, t, c) for (i, t), c in top]
     pairs.sort(key=lambda itc: itc[2], reverse=True)
+    img_cap = image_positions.shape[0]
+    tile_cap = tile_positions.shape[0]
+    if img_cap == 0 or tile_cap == 0:
+        empty = np.empty((0, 2), dtype=np.float32)
+        return empty, empty, empty
+    filtered: list[tuple[int, int, int]] = []
+    dropped = 0
+    for i, t, c in pairs:
+        if 0 <= i < img_cap and 0 <= t < tile_cap:
+            filtered.append((i, t, c))
+        else:
+            dropped += 1
+    if not filtered:
+        empty = np.empty((0, 2), dtype=np.float32)
+        if dropped:
+            logger.warning("discarded %d invalid vote pairs (image=%d, tile=%d)", dropped, img_cap, tile_cap)
+        return empty, empty, empty
+    if dropped:
+        logger.debug("discarded %d vote pairs outside valid ranges (image=%d, tile=%d)", dropped, img_cap, tile_cap)
     # Cap pairs to bound runtime but keep enough support for RANSAC
-    cap = min(len(pairs), max(800, int(image_positions.shape[0] * 12)))
-    chosen = pairs[:cap]
+    cap = min(len(filtered), max(800, int(img_cap * 12)))
+    chosen = filtered[:cap]
     img_pts = np.array([image_positions[i] for i, _, _ in chosen], dtype=np.float32)
     tile_pts = np.array([tile_positions[t] for _, t, _ in chosen], dtype=np.float32)
     world_pts = np.array([tile_world[t] for _, t, _ in chosen], dtype=np.float32)
@@ -851,6 +870,16 @@ def solve_blind(
                         if tested >= max_buckets:
                             break
                         tile_combo = index.quad_indices[b]
+                        if np.any(obs_combo < 0) or np.any(obs_combo >= image_positions.shape[0]):
+                            logger.debug("skipping quad with invalid image indices (level=%s)", level_name)
+                            continue
+                        if np.any(tile_combo < 0) or np.any(tile_combo >= tile_positions.shape[0]):
+                            logger.debug(
+                                "skipping quad with invalid tile indices (tile=%s, level=%s)",
+                                tile_index,
+                                level_name,
+                            )
+                            continue
                         src4 = image_positions[obs_combo].astype(np.float64)
                         dst4 = tile_positions[tile_combo].astype(np.float64)
                         hyp = _derive_similarity(src4, dst4)

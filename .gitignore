@@ -7,4 +7,6 @@ zesolver/__pycache__/
 *.log
 astapsourcereadonly/
 index/
-ansvr
+ansvr/
+ZeSolverindex/
+astap/

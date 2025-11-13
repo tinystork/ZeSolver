@@ -88,6 +88,7 @@ from zeblindsolver.db_convert import (
 from zeblindsolver.zeblindsolver import SolveConfig as BlindSolveConfig, solve_blind as python_solve_blind
 from zeblindsolver.quad_index_builder import validate_index as validate_zeblind_index
 from zeblindsolver import presets as preset_utils
+from tools import benchmark_solver as bench
 
 
 FITS_EXTENSIONS = {".fit", ".fits", ".fts"}
@@ -565,6 +566,162 @@ _GUI_ASTROMETRY_I18N = {
     },
 }
 for _lang, _mapping in _GUI_ASTROMETRY_I18N.items():
+    base = GUI_TRANSLATIONS.setdefault(_lang, {})
+    for _k, _v in _mapping.items():
+        if _k not in base:
+            base[_k] = _v
+
+_GUI_BENCHMARK_I18N = {
+    "fr": {
+        "benchmark_tab": "Benchmark",
+        "benchmark_sources_group": "Sources d'entrée",
+        "benchmark_inputs_hint": "Un chemin, motif glob ou fichier @liste par ligne.",
+        "benchmark_inputs_placeholder": "D:\\captures\\*.fit\n@liste.txt\nC:\\session",
+        "benchmark_add_file_btn": "Ajouter fichiers…",
+        "benchmark_add_dir_btn": "Ajouter dossier…",
+        "benchmark_add_list_btn": "Ajouter fichier liste…",
+        "benchmark_browse_file_btn": "Parcourir…",
+        "benchmark_save_file_btn": "Enregistrer…",
+        "benchmark_index_label": "Index ZeBlind",
+        "benchmark_grid_label": "Fichier de grille (JSON)",
+        "benchmark_output_json_label": "Rapport JSON",
+        "benchmark_output_csv_label": "Rapport CSV",
+        "benchmark_options_group": "Options générales",
+        "benchmark_limit_label": "Limite d'entrées",
+        "benchmark_log_level_label": "Niveau de log",
+        "benchmark_allow_write_label": "Écrire le WCS dans les fichiers d'origine",
+        "benchmark_continue_label": "Essayer toutes les variantes même après un succès",
+        "benchmark_tile_cache_label": "Cache tuiles (0 = auto)",
+        "benchmark_sip_label": "Ordre SIP",
+        "benchmark_parity_label": "Tester l'inversion de parité",
+        "benchmark_full_mode_label": "Mode complet (désactive Fast)",
+        "benchmark_base_group": "Paramètres SolveConfig",
+        "benchmark_max_candidates_label": "Candidats max",
+        "benchmark_max_stars_label": "Étoiles image max",
+        "benchmark_max_quads_label": "Quads max",
+        "benchmark_detect_sigma_label": "Detection k-sigma",
+        "benchmark_detect_area_label": "Surface mini détectée",
+        "benchmark_bucket_cap_s_label": "Limite seau S",
+        "benchmark_bucket_cap_m_label": "Limite seau M",
+        "benchmark_bucket_cap_l_label": "Limite seau L",
+        "benchmark_bucket_override_label": "Limite globale seaux",
+        "benchmark_vote_label": "Percentile de vote",
+        "benchmark_downsample_label": "Downsample",
+        "benchmark_quality_rms_label": "Qualité RMS (px)",
+        "benchmark_quality_inliers_label": "Qualité inliers",
+        "benchmark_pixel_tol_label": "Tolérance pixel",
+        "benchmark_hints_group": "Indices (optionnel)",
+        "benchmark_ra_label": "Indice RA (°)",
+        "benchmark_dec_label": "Indice Dec (°)",
+        "benchmark_radius_label": "Indice rayon (°)",
+        "benchmark_focal_label": "Indice focale (mm)",
+        "benchmark_pixel_label": "Indice taille pixel (µm)",
+        "benchmark_scale_label": "Indice résolution (\"/px)",
+        "benchmark_scale_min_label": "Résolution mini",
+        "benchmark_scale_max_label": "Résolution maxi",
+        "benchmark_hint_placeholder": "Auto",
+        "benchmark_log_placeholder": "Les journaux du benchmark s'affichent ici.",
+        "benchmark_run_button": "Lancer le benchmark",
+        "benchmark_stop_button": "Stop",
+        "benchmark_status_idle": "En attente",
+        "benchmark_status_starting": "Initialisation du benchmark…",
+        "benchmark_status_running": "{done}/{total} — {name}",
+        "benchmark_status_done": "Terminé : {summary}",
+        "benchmark_status_cancelled": "Benchmark interrompu",
+        "benchmark_status_failed": "Échec : {error}",
+        "benchmark_log_done": "Benchmark terminé : {summary}",
+        "benchmark_log_cancelled": "Benchmark interrompu par l'utilisateur",
+        "benchmark_log_failed": "Erreur benchmark : {error}",
+        "benchmark_dialog_open_file": "Choisir un fichier",
+        "benchmark_dialog_save_file": "Enregistrer sous",
+        "benchmark_dialog_filter_all": "Tous les fichiers (*)",
+        "benchmark_dialog_filter_json": "Fichiers {ext} (*.{ext_lower})",
+        "benchmark_dialog_filter_csv": "Fichiers {ext} (*.{ext_lower})",
+        "benchmark_dialog_add_files": "Sélectionner des fichiers FITS",
+        "benchmark_dialog_add_directory": "Sélectionner un dossier",
+        "benchmark_dialog_add_list": "Sélectionner un fichier liste",
+        "benchmark_error_inputs": "Ajoutez au moins une source (fichier, dossier, glob ou fichier @liste).",
+        "benchmark_error_index": "Sélectionnez un dossier d'index.",
+        "benchmark_error_index_missing": "Dossier d'index introuvable : {path}",
+        "benchmark_error_grid_missing": "Fichier de grille introuvable : {path}",
+        "benchmark_error_number": "Valeur invalide pour {field}.",
+    },
+    "en": {
+        "benchmark_tab": "Benchmark",
+        "benchmark_sources_group": "Input sources",
+        "benchmark_inputs_hint": "One path, glob, or @list file per line.",
+        "benchmark_inputs_placeholder": "D:\\captures\\*.fit\n@night1.lst\nC:\\session",
+        "benchmark_add_file_btn": "Add files…",
+        "benchmark_add_dir_btn": "Add folder…",
+        "benchmark_add_list_btn": "Add list file…",
+        "benchmark_browse_file_btn": "Browse…",
+        "benchmark_save_file_btn": "Save as…",
+        "benchmark_index_label": "Index root",
+        "benchmark_grid_label": "Sweep grid (JSON)",
+        "benchmark_output_json_label": "Output JSON",
+        "benchmark_output_csv_label": "Output CSV",
+        "benchmark_options_group": "General options",
+        "benchmark_limit_label": "Input limit",
+        "benchmark_log_level_label": "Log level",
+        "benchmark_allow_write_label": "Write WCS into originals",
+        "benchmark_continue_label": "Try all sweeps even after success",
+        "benchmark_tile_cache_label": "Tile cache size (0 = auto)",
+        "benchmark_sip_label": "SIP order",
+        "benchmark_parity_label": "Allow parity flip",
+        "benchmark_full_mode_label": "Full mode (disable fast heuristics)",
+        "benchmark_base_group": "SolveConfig overrides",
+        "benchmark_max_candidates_label": "Max candidates",
+        "benchmark_max_stars_label": "Max image stars",
+        "benchmark_max_quads_label": "Max quads",
+        "benchmark_detect_sigma_label": "Detect k-sigma",
+        "benchmark_detect_area_label": "Detect min area",
+        "benchmark_bucket_cap_s_label": "Bucket cap S",
+        "benchmark_bucket_cap_m_label": "Bucket cap M",
+        "benchmark_bucket_cap_l_label": "Bucket cap L",
+        "benchmark_bucket_override_label": "Bucket limit override",
+        "benchmark_vote_label": "Vote percentile",
+        "benchmark_downsample_label": "Downsample",
+        "benchmark_quality_rms_label": "Quality RMS (px)",
+        "benchmark_quality_inliers_label": "Quality inliers",
+        "benchmark_pixel_tol_label": "Pixel tolerance",
+        "benchmark_hints_group": "Hints (optional)",
+        "benchmark_ra_label": "RA hint (deg)",
+        "benchmark_dec_label": "Dec hint (deg)",
+        "benchmark_radius_label": "Radius hint (deg)",
+        "benchmark_focal_label": "Focal length (mm)",
+        "benchmark_pixel_label": "Pixel size (µm)",
+        "benchmark_scale_label": "Pixel scale (arcsec/px)",
+        "benchmark_scale_min_label": "Pixel scale min",
+        "benchmark_scale_max_label": "Pixel scale max",
+        "benchmark_hint_placeholder": "Auto",
+        "benchmark_log_placeholder": "Benchmark logs will appear here.",
+        "benchmark_run_button": "Run benchmark",
+        "benchmark_stop_button": "Stop",
+        "benchmark_status_idle": "Idle",
+        "benchmark_status_starting": "Preparing benchmark…",
+        "benchmark_status_running": "{done}/{total} — {name}",
+        "benchmark_status_done": "Done: {summary}",
+        "benchmark_status_cancelled": "Benchmark cancelled",
+        "benchmark_status_failed": "Failed: {error}",
+        "benchmark_log_done": "Benchmark complete: {summary}",
+        "benchmark_log_cancelled": "Benchmark cancelled by user",
+        "benchmark_log_failed": "Benchmark error: {error}",
+        "benchmark_dialog_open_file": "Select file",
+        "benchmark_dialog_save_file": "Save file",
+        "benchmark_dialog_filter_all": "All files (*)",
+        "benchmark_dialog_filter_json": "{ext} files (*.{ext_lower})",
+        "benchmark_dialog_filter_csv": "{ext} files (*.{ext_lower})",
+        "benchmark_dialog_add_files": "Select FITS files",
+        "benchmark_dialog_add_directory": "Select folder",
+        "benchmark_dialog_add_list": "Select list file",
+        "benchmark_error_inputs": "Add at least one input source (file, folder, glob, or @list).",
+        "benchmark_error_index": "Select an index directory.",
+        "benchmark_error_index_missing": "Index directory not found: {path}",
+        "benchmark_error_grid_missing": "Grid file not found: {path}",
+        "benchmark_error_number": "Invalid value for {field}.",
+    },
+}
+for _lang, _mapping in _GUI_BENCHMARK_I18N.items():
     base = GUI_TRANSLATIONS.setdefault(_lang, {})
     for _k, _v in _mapping.items():
         if _k not in base:
@@ -2708,6 +2865,59 @@ def launch_gui(args: argparse.Namespace) -> int:
                 except Exception:
                     pass
 
+    class BenchmarkRunner(QtCore.QThread):
+        log = QtCore.Signal(str)
+        progress = QtCore.Signal(int, int, str)
+        finished = QtCore.Signal(bool, str)
+
+        def __init__(self, inputs: list[str], args: argparse.Namespace) -> None:
+            super().__init__()
+            self._inputs = list(inputs)
+            self._args = args
+            self._cancel = threading.Event()
+
+        def cancel(self) -> None:
+            self._cancel.set()
+
+        def _emit_progress(self, done: int, total: int, attempt: bench.AttemptResult) -> None:
+            name = Path(attempt.image).name if attempt and attempt.image else ""
+            try:
+                self.progress.emit(done, total, name)
+            except Exception:
+                pass
+
+        def run(self) -> None:
+            try:
+                sweeps = bench.load_sweeps(self._args.grid)
+                images = bench.resolve_inputs(self._inputs, self._args.limit)
+            except Exception as exc:
+                self.finished.emit(False, str(exc))
+                return
+            if not images:
+                self.finished.emit(False, "no inputs matched the provided sources")
+                return
+            base_config = bench.build_base_config(self._args)
+            try:
+                results = bench.run_benchmark(
+                    images,
+                    sweeps,
+                    base_config,
+                    self._args,
+                    log=self.log.emit,
+                    cancel_check=self._cancel.is_set,
+                    progress=self._emit_progress,
+                )
+                bench.write_outputs(results, sweeps, base_config, self._args)
+            except Exception as exc:
+                self.finished.emit(False, str(exc))
+                return
+            if self._cancel.is_set():
+                self.finished.emit(False, "cancelled")
+                return
+            solved_images = {entry.image for entry in results if entry.success}
+            summary = f"{len(results)} attempts, {len(solved_images)} successes"
+            self.finished.emit(True, summary)
+
     class NearRunner(QtCore.QThread):
         log = QtCore.Signal(str)
         finished = QtCore.Signal(bool, str)
@@ -2867,6 +3077,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._index_worker: Optional[IndexBuilder] = None
             self._blind_worker: Optional[BlindRunner] = None
             self._near_worker: Optional[NearRunner] = None
+            self._benchmark_worker: Optional[BenchmarkRunner] = None
             self._scanner: Optional[FileScanner] = None
             self._scan_buffer: list[Path] = []
             self._scan_flush_threshold = 250
@@ -2906,6 +3117,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.performance_tab = self._build_performance_tab()
             self.performance_scroll = self._wrap_scroll_area(self.performance_tab)
             self.tabs.addTab(self.performance_scroll, self._text("performance_tab"))
+            self.benchmark_tab = self._build_benchmark_tab()
+            self.benchmark_scroll = self._wrap_scroll_area(self.benchmark_tab)
+            self.tabs.addTab(self.benchmark_scroll, self._text("benchmark_tab"))
             # Add Fast solver (near) tab for quality/tolerance settings
             try:
                 self.fast_tab = self._build_fast_solver_tab()
@@ -4349,6 +4563,221 @@ def launch_gui(args: argparse.Namespace) -> int:
             column.addLayout(btn_row)
             return widget
 
+        def _build_benchmark_tab(self) -> QtWidgets.QWidget:
+            widget = QtWidgets.QWidget()
+            layout = QtWidgets.QVBoxLayout(widget)
+
+            # Input sources group
+            self.bench_sources_group = QtWidgets.QGroupBox(self._text("benchmark_sources_group"))
+            sources_layout = QtWidgets.QVBoxLayout(self.bench_sources_group)
+            self.bench_inputs_label = QtWidgets.QLabel(self._text("benchmark_inputs_hint"))
+            self.bench_inputs_edit = QtWidgets.QPlainTextEdit()
+            self.bench_inputs_edit.setPlaceholderText(self._text("benchmark_inputs_placeholder"))
+            self.bench_inputs_edit.setTabChangesFocus(True)
+            sources_layout.addWidget(self.bench_inputs_label)
+            sources_layout.addWidget(self.bench_inputs_edit)
+            btn_row = QtWidgets.QHBoxLayout()
+            self.bench_add_file_btn = QtWidgets.QPushButton(self._text("benchmark_add_file_btn"))
+            self.bench_add_dir_btn = QtWidgets.QPushButton(self._text("benchmark_add_dir_btn"))
+            self.bench_add_list_btn = QtWidgets.QPushButton(self._text("benchmark_add_list_btn"))
+            self.bench_add_file_btn.clicked.connect(self._on_benchmark_add_files_clicked)
+            self.bench_add_dir_btn.clicked.connect(self._on_benchmark_add_directory_clicked)
+            self.bench_add_list_btn.clicked.connect(self._on_benchmark_add_list_clicked)
+            btn_row.addWidget(self.bench_add_file_btn)
+            btn_row.addWidget(self.bench_add_dir_btn)
+            btn_row.addWidget(self.bench_add_list_btn)
+            btn_row.addStretch(1)
+            sources_layout.addLayout(btn_row)
+
+            def _wrap_path_row(line_edit: QtWidgets.QLineEdit, button: QtWidgets.QPushButton) -> QtWidgets.QWidget:
+                container = QtWidgets.QWidget()
+                row = QtWidgets.QHBoxLayout(container)
+                row.setContentsMargins(0, 0, 0, 0)
+                row.addWidget(line_edit)
+                row.addWidget(button)
+                return container
+
+            path_form = QtWidgets.QFormLayout()
+            self.bench_path_form = path_form
+
+            self.bench_index_edit = QtWidgets.QLineEdit()
+            self.bench_index_btn = QtWidgets.QPushButton(self._text("browse_button"))
+            self.bench_index_btn.clicked.connect(lambda: self._pick_directory(self.bench_index_edit))
+            self.bench_index_row = _wrap_path_row(self.bench_index_edit, self.bench_index_btn)
+            path_form.addRow(self._text("benchmark_index_label"), self.bench_index_row)
+
+            self.bench_grid_edit = QtWidgets.QLineEdit()
+            self.bench_grid_btn = QtWidgets.QPushButton(self._text("benchmark_browse_file_btn"))
+            self.bench_grid_btn.clicked.connect(lambda: self._benchmark_pick_file(self.bench_grid_edit, save=False))
+            self.bench_grid_row = _wrap_path_row(self.bench_grid_edit, self.bench_grid_btn)
+            path_form.addRow(self._text("benchmark_grid_label"), self.bench_grid_row)
+
+            self.bench_output_json_edit = QtWidgets.QLineEdit()
+            self.bench_output_json_btn = QtWidgets.QPushButton(self._text("benchmark_save_file_btn"))
+            self.bench_output_json_btn.clicked.connect(lambda: self._benchmark_pick_file(self.bench_output_json_edit, save=True, suffix="json"))
+            self.bench_output_json_row = _wrap_path_row(self.bench_output_json_edit, self.bench_output_json_btn)
+            path_form.addRow(
+                self._text("benchmark_output_json_label"),
+                self.bench_output_json_row,
+            )
+
+            self.bench_output_csv_edit = QtWidgets.QLineEdit()
+            self.bench_output_csv_btn = QtWidgets.QPushButton(self._text("benchmark_save_file_btn"))
+            self.bench_output_csv_btn.clicked.connect(lambda: self._benchmark_pick_file(self.bench_output_csv_edit, save=True, suffix="csv"))
+            self.bench_output_csv_row = _wrap_path_row(self.bench_output_csv_edit, self.bench_output_csv_btn)
+            path_form.addRow(
+                self._text("benchmark_output_csv_label"),
+                self.bench_output_csv_row,
+            )
+            sources_layout.addLayout(path_form)
+            layout.addWidget(self.bench_sources_group)
+
+            # General options
+            self.bench_options_group = QtWidgets.QGroupBox(self._text("benchmark_options_group"))
+            options_form = QtWidgets.QFormLayout(self.bench_options_group)
+            self.bench_options_form = options_form
+            self.bench_limit_spin = QtWidgets.QSpinBox()
+            self.bench_limit_spin.setRange(0, 10000)
+            self.bench_limit_spin.setSpecialValueText(self._text("special_auto"))
+            options_form.addRow(self._text("benchmark_limit_label"), self.bench_limit_spin)
+            self.bench_log_combo = QtWidgets.QComboBox()
+            self.bench_log_combo.addItem(self._text("log_level_info"), "INFO")
+            self.bench_log_combo.addItem(self._text("log_level_debug"), "DEBUG")
+            self.bench_log_combo.addItem(self._text("log_level_warning"), "WARNING")
+            options_form.addRow(self._text("benchmark_log_level_label"), self.bench_log_combo)
+            self.bench_allow_write_check = QtWidgets.QCheckBox(self._text("benchmark_allow_write_label"))
+            options_form.addRow(QtWidgets.QLabel(""), self.bench_allow_write_check)
+            self.bench_continue_check = QtWidgets.QCheckBox(self._text("benchmark_continue_label"))
+            options_form.addRow(QtWidgets.QLabel(""), self.bench_continue_check)
+            self.bench_tile_cache_spin = QtWidgets.QSpinBox()
+            self.bench_tile_cache_spin.setRange(0, 4096)
+            self.bench_tile_cache_spin.setSpecialValueText(self._text("special_auto"))
+            options_form.addRow(self._text("benchmark_tile_cache_label"), self.bench_tile_cache_spin)
+            self.bench_sip_combo = QtWidgets.QComboBox()
+            self.bench_sip_combo.addItem("2", 2)
+            self.bench_sip_combo.addItem("3", 3)
+            options_form.addRow(self._text("benchmark_sip_label"), self.bench_sip_combo)
+            self.bench_parity_check = QtWidgets.QCheckBox(self._text("benchmark_parity_label"))
+            options_form.addRow(QtWidgets.QLabel(""), self.bench_parity_check)
+            self.bench_full_mode_check = QtWidgets.QCheckBox(self._text("benchmark_full_mode_label"))
+            options_form.addRow(QtWidgets.QLabel(""), self.bench_full_mode_check)
+            layout.addWidget(self.bench_options_group)
+
+            # Base SolveConfig overrides
+            self.bench_base_group = QtWidgets.QGroupBox(self._text("benchmark_base_group"))
+            base_form = QtWidgets.QFormLayout(self.bench_base_group)
+            self.bench_base_form = base_form
+            self.bench_max_candidates_spin = QtWidgets.QSpinBox()
+            self.bench_max_candidates_spin.setRange(1, 100)
+            base_form.addRow(self._text("benchmark_max_candidates_label"), self.bench_max_candidates_spin)
+            self.bench_max_stars_spin = QtWidgets.QSpinBox()
+            self.bench_max_stars_spin.setRange(100, 5000)
+            base_form.addRow(self._text("benchmark_max_stars_label"), self.bench_max_stars_spin)
+            self.bench_max_quads_spin = QtWidgets.QSpinBox()
+            self.bench_max_quads_spin.setRange(1000, 40000)
+            self.bench_max_quads_spin.setSingleStep(500)
+            base_form.addRow(self._text("benchmark_max_quads_label"), self.bench_max_quads_spin)
+            self.bench_detect_sigma_spin = QtWidgets.QDoubleSpinBox()
+            self.bench_detect_sigma_spin.setRange(0.5, 10.0)
+            self.bench_detect_sigma_spin.setSingleStep(0.1)
+            base_form.addRow(self._text("benchmark_detect_sigma_label"), self.bench_detect_sigma_spin)
+            self.bench_detect_area_spin = QtWidgets.QSpinBox()
+            self.bench_detect_area_spin.setRange(1, 100)
+            base_form.addRow(self._text("benchmark_detect_area_label"), self.bench_detect_area_spin)
+            self.bench_bucket_cap_s_spin = QtWidgets.QSpinBox()
+            self.bench_bucket_cap_s_spin.setRange(0, 50000)
+            base_form.addRow(self._text("benchmark_bucket_cap_s_label"), self.bench_bucket_cap_s_spin)
+            self.bench_bucket_cap_m_spin = QtWidgets.QSpinBox()
+            self.bench_bucket_cap_m_spin.setRange(0, 50000)
+            base_form.addRow(self._text("benchmark_bucket_cap_m_label"), self.bench_bucket_cap_m_spin)
+            self.bench_bucket_cap_l_spin = QtWidgets.QSpinBox()
+            self.bench_bucket_cap_l_spin.setRange(0, 50000)
+            base_form.addRow(self._text("benchmark_bucket_cap_l_label"), self.bench_bucket_cap_l_spin)
+            self.bench_bucket_override_spin = QtWidgets.QSpinBox()
+            self.bench_bucket_override_spin.setRange(0, 10000)
+            base_form.addRow(self._text("benchmark_bucket_override_label"), self.bench_bucket_override_spin)
+            self.bench_vote_spin = QtWidgets.QSpinBox()
+            self.bench_vote_spin.setRange(5, 95)
+            base_form.addRow(self._text("benchmark_vote_label"), self.bench_vote_spin)
+            self.bench_downsample_spin = QtWidgets.QSpinBox()
+            self.bench_downsample_spin.setRange(1, 4)
+            base_form.addRow(self._text("benchmark_downsample_label"), self.bench_downsample_spin)
+            self.bench_quality_rms_spin = QtWidgets.QDoubleSpinBox()
+            self.bench_quality_rms_spin.setRange(0.1, 5.0)
+            self.bench_quality_rms_spin.setSingleStep(0.1)
+            base_form.addRow(self._text("benchmark_quality_rms_label"), self.bench_quality_rms_spin)
+            self.bench_quality_inliers_spin = QtWidgets.QSpinBox()
+            self.bench_quality_inliers_spin.setRange(10, 500)
+            base_form.addRow(self._text("benchmark_quality_inliers_label"), self.bench_quality_inliers_spin)
+            self.bench_pixel_tol_spin = QtWidgets.QDoubleSpinBox()
+            self.bench_pixel_tol_spin.setRange(0.5, 10.0)
+            self.bench_pixel_tol_spin.setSingleStep(0.1)
+            base_form.addRow(self._text("benchmark_pixel_tol_label"), self.bench_pixel_tol_spin)
+            layout.addWidget(self.bench_base_group)
+
+            # Hints group
+            self.bench_hints_group = QtWidgets.QGroupBox(self._text("benchmark_hints_group"))
+            hints_form = QtWidgets.QFormLayout(self.bench_hints_group)
+            self.bench_hints_form = hints_form
+            self.bench_ra_edit = QtWidgets.QLineEdit()
+            self.bench_ra_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
+            hints_form.addRow(self._text("benchmark_ra_label"), self.bench_ra_edit)
+            self.bench_dec_edit = QtWidgets.QLineEdit()
+            self.bench_dec_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
+            hints_form.addRow(self._text("benchmark_dec_label"), self.bench_dec_edit)
+            self.bench_radius_edit = QtWidgets.QLineEdit()
+            self.bench_radius_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
+            hints_form.addRow(self._text("benchmark_radius_label"), self.bench_radius_edit)
+            self.bench_focal_edit = QtWidgets.QLineEdit()
+            self.bench_focal_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
+            hints_form.addRow(self._text("benchmark_focal_label"), self.bench_focal_edit)
+            self.bench_pixel_edit = QtWidgets.QLineEdit()
+            self.bench_pixel_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
+            hints_form.addRow(self._text("benchmark_pixel_label"), self.bench_pixel_edit)
+            self.bench_scale_edit = QtWidgets.QLineEdit()
+            self.bench_scale_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
+            hints_form.addRow(self._text("benchmark_scale_label"), self.bench_scale_edit)
+            self.bench_scale_min_edit = QtWidgets.QLineEdit()
+            self.bench_scale_min_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
+            hints_form.addRow(self._text("benchmark_scale_min_label"), self.bench_scale_min_edit)
+            self.bench_scale_max_edit = QtWidgets.QLineEdit()
+            self.bench_scale_max_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
+            hints_form.addRow(self._text("benchmark_scale_max_label"), self.bench_scale_max_edit)
+            layout.addWidget(self.bench_hints_group)
+
+            # Progress + controls
+            self.bench_progress = QtWidgets.QProgressBar()
+            self.bench_progress.setRange(0, 1)
+            self.bench_progress.setValue(0)
+            self.bench_status_label = QtWidgets.QLabel(self._text("benchmark_status_idle"))
+            status_row = QtWidgets.QHBoxLayout()
+            status_row.addWidget(self.bench_progress, stretch=1)
+            status_row.addWidget(self.bench_status_label)
+            layout.addLayout(status_row)
+
+            self.bench_log_edit = QtWidgets.QPlainTextEdit()
+            self.bench_log_edit.setReadOnly(True)
+            self.bench_log_edit.setPlaceholderText(self._text("benchmark_log_placeholder"))
+            try:
+                self.bench_log_edit.document().setMaximumBlockCount(2000)
+            except Exception:
+                pass
+            layout.addWidget(self.bench_log_edit)
+
+            btns = QtWidgets.QHBoxLayout()
+            btns.addStretch(1)
+            self.bench_run_btn = QtWidgets.QPushButton(self._text("benchmark_run_button"))
+            self.bench_run_btn.clicked.connect(self._on_benchmark_run_clicked)
+            self.bench_stop_btn = QtWidgets.QPushButton(self._text("benchmark_stop_button"))
+            self.bench_stop_btn.setEnabled(False)
+            self.bench_stop_btn.clicked.connect(self._on_benchmark_stop_clicked)
+            btns.addWidget(self.bench_run_btn)
+            btns.addWidget(self.bench_stop_btn)
+            layout.addLayout(btns)
+
+            layout.addStretch(1)
+            return widget
+
         def _build_fast_solver_tab(self) -> QtWidgets.QWidget:
             widget = QtWidgets.QWidget()
             column = QtWidgets.QVBoxLayout(widget)
@@ -4614,6 +5043,55 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.fast_search_margin_spin.setValue(float(getattr(settings, 'near_search_margin', 1.2) or 1.2))
             except Exception:
                 pass
+            self._populate_benchmark_tab_from_settings()
+
+        def _populate_benchmark_tab_from_settings(self) -> None:
+            if not hasattr(self, "bench_inputs_edit"):
+                return
+            settings = self._settings
+            self.bench_inputs_edit.setPlainText(settings.benchmark_inputs or "")
+            self.bench_index_edit.setText(settings.benchmark_index_root or settings.index_root or "")
+            self.bench_grid_edit.setText(settings.benchmark_grid_path or "")
+            self.bench_output_json_edit.setText(settings.benchmark_output_json or "")
+            self.bench_output_csv_edit.setText(settings.benchmark_output_csv or "")
+            self.bench_allow_write_check.setChecked(bool(settings.benchmark_allow_write))
+            self.bench_continue_check.setChecked(bool(settings.benchmark_continue_all))
+            self.bench_limit_spin.setValue(max(0, int(settings.benchmark_limit or 0)))
+            log_value = (settings.benchmark_log_level or "INFO").upper()
+            idx = self.bench_log_combo.findData(log_value)
+            if idx >= 0:
+                self.bench_log_combo.setCurrentIndex(idx)
+            self.bench_tile_cache_spin.setValue(max(0, int(settings.benchmark_tile_cache_size or 0)))
+            sip = settings.benchmark_sip_order if settings.benchmark_sip_order in (2, 3) else 2
+            sip_idx = self.bench_sip_combo.findData(sip)
+            if sip_idx >= 0:
+                self.bench_sip_combo.setCurrentIndex(sip_idx)
+            self.bench_parity_check.setChecked(bool(settings.benchmark_try_parity))
+            self.bench_full_mode_check.setChecked(bool(settings.benchmark_full_mode))
+            self.bench_max_candidates_spin.setValue(int(settings.blind_max_candidates or 10))
+            self.bench_max_stars_spin.setValue(int(settings.blind_max_stars or 500))
+            self.bench_max_quads_spin.setValue(int(settings.blind_max_quads or 8000))
+            self.bench_detect_sigma_spin.setValue(float(settings.dev_detect_k_sigma or 3.0))
+            self.bench_detect_area_spin.setValue(int(settings.dev_detect_min_area or 5))
+            self.bench_bucket_cap_s_spin.setValue(int(settings.dev_bucket_cap_S or 6000))
+            self.bench_bucket_cap_m_spin.setValue(int(settings.dev_bucket_cap_M or 4096))
+            self.bench_bucket_cap_l_spin.setValue(int(settings.dev_bucket_cap_L or 8192))
+            self.bench_bucket_override_spin.setValue(int(settings.dev_bucket_limit_override or 0))
+            self.bench_vote_spin.setValue(int(settings.dev_vote_percentile or 40))
+            self.bench_downsample_spin.setValue(int(settings.solver_downsample or 1))
+            self.bench_quality_rms_spin.setValue(float(settings.blind_quality_rms or 1.2))
+            self.bench_quality_inliers_spin.setValue(int(settings.blind_quality_inliers or 40))
+            self.bench_pixel_tol_spin.setValue(float(settings.blind_pixel_tolerance or 2.5))
+            def _fmt(value: Optional[float]) -> str:
+                return "" if value is None else f"{value}"
+            self.bench_ra_edit.setText(_fmt(settings.solver_hint_ra_deg))
+            self.bench_dec_edit.setText(_fmt(settings.solver_hint_dec_deg))
+            self.bench_radius_edit.setText(_fmt(settings.solver_hint_radius_deg))
+            self.bench_focal_edit.setText(_fmt(settings.solver_hint_focal_mm))
+            self.bench_pixel_edit.setText(_fmt(settings.solver_hint_pixel_um))
+            self.bench_scale_edit.setText(_fmt(settings.solver_hint_resolution_arcsec))
+            self.bench_scale_min_edit.setText(_fmt(settings.solver_hint_resolution_min_arcsec))
+            self.bench_scale_max_edit.setText(_fmt(settings.solver_hint_resolution_max_arcsec))
 
         def _set_combo_current_data(self, combo: QtWidgets.QComboBox, value: str, default: str) -> None:
             target = (value or default or "").strip().lower()
@@ -4741,6 +5219,19 @@ def launch_gui(args: argparse.Namespace) -> int:
                 dev_vote_percentile=int(self.dev_vote_spin.value()) if hasattr(self, "dev_vote_spin") else 40,
                 dev_detect_k_sigma=float(self.dev_sigma_spin.value()) if hasattr(self, "dev_sigma_spin") else 3.0,
                 dev_detect_min_area=int(self.dev_area_spin.value()) if hasattr(self, "dev_area_spin") else 5,
+                benchmark_inputs=self.bench_inputs_edit.toPlainText().strip() or None,
+                benchmark_index_root=self.bench_index_edit.text().strip() or None,
+                benchmark_grid_path=self.bench_grid_edit.text().strip() or None,
+                benchmark_output_json=self.bench_output_json_edit.text().strip() or None,
+                benchmark_output_csv=self.bench_output_csv_edit.text().strip() or None,
+                benchmark_allow_write=bool(self.bench_allow_write_check.isChecked()),
+                benchmark_continue_all=bool(self.bench_continue_check.isChecked()),
+                benchmark_limit=int(self.bench_limit_spin.value() or 0),
+                benchmark_log_level=str(self.bench_log_combo.currentData() or "INFO").upper(),
+                benchmark_tile_cache_size=int(self.bench_tile_cache_spin.value() or 0),
+                benchmark_sip_order=int(self.bench_sip_combo.currentData() or 2),
+                benchmark_full_mode=bool(self.bench_full_mode_check.isChecked()),
+                benchmark_try_parity=bool(self.bench_parity_check.isChecked()),
             )
 
         def _apply_solver_hints_from_optics(
@@ -5339,6 +5830,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                         idx = self.tabs.indexOf(self.performance_scroll)
                         if idx >= 0:
                             self.tabs.setTabText(idx, self._text("performance_tab"))
+                    if hasattr(self, "benchmark_scroll"):
+                        idx = self.tabs.indexOf(self.benchmark_scroll)
+                        if idx >= 0:
+                            self.tabs.setTabText(idx, self._text("benchmark_tab"))
                     if hasattr(self, "fast_scroll"):
                         idx = self.tabs.indexOf(self.fast_scroll)
                         if idx >= 0:
@@ -5492,6 +5987,86 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.fast_search_margin_label.setText(self._text("fast_search_margin_label"))
             if hasattr(self, "fast_save_btn"):
                 self.fast_save_btn.setText(self._text("fast_save_btn"))
+            if hasattr(self, "bench_sources_group"):
+                self.bench_sources_group.setTitle(self._text("benchmark_sources_group"))
+                self.bench_inputs_label.setText(self._text("benchmark_inputs_hint"))
+                self.bench_inputs_edit.setPlaceholderText(self._text("benchmark_inputs_placeholder"))
+                self.bench_add_file_btn.setText(self._text("benchmark_add_file_btn"))
+                self.bench_add_dir_btn.setText(self._text("benchmark_add_dir_btn"))
+                self.bench_add_list_btn.setText(self._text("benchmark_add_list_btn"))
+                self.bench_index_btn.setText(self._text("browse_button"))
+                self.bench_grid_btn.setText(self._text("benchmark_browse_file_btn"))
+                self.bench_output_json_btn.setText(self._text("benchmark_save_file_btn"))
+                self.bench_output_csv_btn.setText(self._text("benchmark_save_file_btn"))
+                if hasattr(self, "bench_path_form"):
+                    label = self.bench_path_form.labelForField(self.bench_index_row)
+                    if label:
+                        label.setText(self._text("benchmark_index_label"))
+                    label = self.bench_path_form.labelForField(self.bench_grid_row)
+                    if label:
+                        label.setText(self._text("benchmark_grid_label"))
+                    label = self.bench_path_form.labelForField(self.bench_output_json_row)
+                    if label:
+                        label.setText(self._text("benchmark_output_json_label"))
+                    label = self.bench_path_form.labelForField(self.bench_output_csv_row)
+                    if label:
+                        label.setText(self._text("benchmark_output_csv_label"))
+                self.bench_options_group.setTitle(self._text("benchmark_options_group"))
+                if hasattr(self, "bench_options_form"):
+                    label = self.bench_options_form.labelForField(self.bench_limit_spin)
+                    if label:
+                        label.setText(self._text("benchmark_limit_label"))
+                    label = self.bench_options_form.labelForField(self.bench_log_combo)
+                    if label:
+                        label.setText(self._text("benchmark_log_level_label"))
+                    label = self.bench_options_form.labelForField(self.bench_tile_cache_spin)
+                    if label:
+                        label.setText(self._text("benchmark_tile_cache_label"))
+                    label = self.bench_options_form.labelForField(self.bench_sip_combo)
+                    if label:
+                        label.setText(self._text("benchmark_sip_label"))
+                self.bench_allow_write_check.setText(self._text("benchmark_allow_write_label"))
+                self.bench_continue_check.setText(self._text("benchmark_continue_label"))
+                self.bench_parity_check.setText(self._text("benchmark_parity_label"))
+                self.bench_full_mode_check.setText(self._text("benchmark_full_mode_label"))
+                self.bench_base_group.setTitle(self._text("benchmark_base_group"))
+                if hasattr(self, "bench_base_form"):
+                    def _set_base_label(widget: QtWidgets.QWidget, key: str) -> None:
+                        label = self.bench_base_form.labelForField(widget)
+                        if label:
+                            label.setText(self._text(key))
+                    _set_base_label(self.bench_max_candidates_spin, "benchmark_max_candidates_label")
+                    _set_base_label(self.bench_max_stars_spin, "benchmark_max_stars_label")
+                    _set_base_label(self.bench_max_quads_spin, "benchmark_max_quads_label")
+                    _set_base_label(self.bench_detect_sigma_spin, "benchmark_detect_sigma_label")
+                    _set_base_label(self.bench_detect_area_spin, "benchmark_detect_area_label")
+                    _set_base_label(self.bench_bucket_cap_s_spin, "benchmark_bucket_cap_s_label")
+                    _set_base_label(self.bench_bucket_cap_m_spin, "benchmark_bucket_cap_m_label")
+                    _set_base_label(self.bench_bucket_cap_l_spin, "benchmark_bucket_cap_l_label")
+                    _set_base_label(self.bench_bucket_override_spin, "benchmark_bucket_override_label")
+                    _set_base_label(self.bench_vote_spin, "benchmark_vote_label")
+                    _set_base_label(self.bench_downsample_spin, "benchmark_downsample_label")
+                    _set_base_label(self.bench_quality_rms_spin, "benchmark_quality_rms_label")
+                    _set_base_label(self.bench_quality_inliers_spin, "benchmark_quality_inliers_label")
+                    _set_base_label(self.bench_pixel_tol_spin, "benchmark_pixel_tol_label")
+                self.bench_hints_group.setTitle(self._text("benchmark_hints_group"))
+                if hasattr(self, "bench_hints_form"):
+                    def _set_hint_label(widget: QtWidgets.QWidget, key: str) -> None:
+                        label = self.bench_hints_form.labelForField(widget)
+                        if label:
+                            label.setText(self._text(key))
+                        widget.setPlaceholderText(self._text("benchmark_hint_placeholder"))
+                    _set_hint_label(self.bench_ra_edit, "benchmark_ra_label")
+                    _set_hint_label(self.bench_dec_edit, "benchmark_dec_label")
+                    _set_hint_label(self.bench_radius_edit, "benchmark_radius_label")
+                    _set_hint_label(self.bench_focal_edit, "benchmark_focal_label")
+                    _set_hint_label(self.bench_pixel_edit, "benchmark_pixel_label")
+                    _set_hint_label(self.bench_scale_edit, "benchmark_scale_label")
+                    _set_hint_label(self.bench_scale_min_edit, "benchmark_scale_min_label")
+                    _set_hint_label(self.bench_scale_max_edit, "benchmark_scale_max_label")
+                self.bench_log_edit.setPlaceholderText(self._text("benchmark_log_placeholder"))
+                self.bench_run_btn.setText(self._text("benchmark_run_button"))
+                self.bench_stop_btn.setText(self._text("benchmark_stop_button"))
             self._retranslate_status_items()
 
         def _retranslate_status_items(self) -> None:
@@ -5563,6 +6138,211 @@ def launch_gui(args: argparse.Namespace) -> int:
                 line_edit.setText(directory)
                 if trigger_scan:
                     self.scan_files()
+
+        def _benchmark_pick_file(
+            self,
+            line_edit: QtWidgets.QLineEdit,
+            *,
+            save: bool,
+            suffix: str | None = None,
+        ) -> None:
+            start = line_edit.text().strip() or str(Path.home())
+            caption = self._text("benchmark_dialog_save_file") if save else self._text("benchmark_dialog_open_file")
+            filters: list[str] = [self._text("benchmark_dialog_filter_all")]
+            if suffix:
+                key = f"benchmark_dialog_filter_{suffix.lower()}"
+                filters.insert(0, self._text(key, ext=suffix.upper(), ext_lower=suffix.lower()))
+            filter_text = ";;".join(filters)
+            if save:
+                path, _ = QtWidgets.QFileDialog.getSaveFileName(self, caption, start, filter_text)
+            else:
+                path, _ = QtWidgets.QFileDialog.getOpenFileName(self, caption, start, filter_text)
+            if path:
+                line_edit.setText(path)
+
+        def _append_benchmark_input(self, entry: str) -> None:
+            entry = entry.strip()
+            if not entry:
+                return
+            current = self.bench_inputs_edit.toPlainText().splitlines()
+            current = [line.strip() for line in current if line.strip()]
+            if entry not in current:
+                current.append(entry)
+            self.bench_inputs_edit.setPlainText("\n".join(current))
+
+        def _on_benchmark_add_files_clicked(self) -> None:
+            files, _ = QtWidgets.QFileDialog.getOpenFileNames(
+                self,
+                self._text("benchmark_dialog_add_files"),
+                self.bench_index_edit.text().strip() or str(Path.home()),
+                "FITS (*.fit *.fits *.fts *.fit.gz *.fits.gz *.fts.gz);;All Files (*)",
+            )
+            for path in files:
+                self._append_benchmark_input(path)
+
+        def _on_benchmark_add_directory_clicked(self) -> None:
+            directory = QtWidgets.QFileDialog.getExistingDirectory(
+                self,
+                self._text("benchmark_dialog_add_directory"),
+                self.bench_index_edit.text().strip() or str(Path.home()),
+            )
+            if directory:
+                self._append_benchmark_input(directory)
+
+        def _on_benchmark_add_list_clicked(self) -> None:
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self,
+                self._text("benchmark_dialog_add_list"),
+                self.bench_index_edit.text().strip() or str(Path.home()),
+                "Text (*.txt *.lst);;All Files (*)",
+            )
+            if path:
+                self._append_benchmark_input(f"@{path}")
+
+        def _on_benchmark_run_clicked(self) -> None:
+            if self._benchmark_worker:
+                return
+            try:
+                inputs, args = self._collect_benchmark_job()
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                return
+            self.bench_log_edit.clear()
+            self.bench_progress.setMaximum(1)
+            self.bench_progress.setValue(0)
+            self.bench_status_label.setText(self._text("benchmark_status_starting"))
+            self._benchmark_worker = BenchmarkRunner(inputs, args)
+            self._benchmark_worker.log.connect(self._append_benchmark_log)
+            self._benchmark_worker.progress.connect(self._on_benchmark_progress)
+            self._benchmark_worker.finished.connect(self._on_benchmark_finished)
+            self._set_benchmark_running(True)
+            self._benchmark_worker.start()
+
+        def _on_benchmark_stop_clicked(self) -> None:
+            if not self._benchmark_worker:
+                return
+            try:
+                self._benchmark_worker.cancel()
+            except Exception:
+                pass
+            self.bench_stop_btn.setEnabled(False)
+
+        def _append_benchmark_log(self, message: str) -> None:
+            self.bench_log_edit.appendPlainText(message)
+
+        def _benchmark_inputs_from_ui(self) -> list[str]:
+            return [line.strip() for line in self.bench_inputs_edit.toPlainText().splitlines() if line.strip()]
+
+        def _parse_optional_float(self, text: str, *, label_key: str) -> float | None:
+            value = text.strip()
+            if not value:
+                return None
+            try:
+                return float(value)
+            except ValueError:
+                raise ValueError(self._text("benchmark_error_number", field=self._text(label_key)))
+
+        def _collect_benchmark_job(self) -> tuple[list[str], argparse.Namespace]:
+            entries = self._benchmark_inputs_from_ui()
+            if not entries:
+                raise ValueError(self._text("benchmark_error_inputs"))
+            index_root = self.bench_index_edit.text().strip() or (self._settings.index_root or "")
+            if not index_root:
+                raise ValueError(self._text("benchmark_error_index"))
+            index_path = Path(index_root).expanduser()
+            if not index_path.exists():
+                raise ValueError(self._text("benchmark_error_index_missing", path=index_path))
+            grid_text = self.bench_grid_edit.text().strip()
+            grid_path = Path(grid_text).expanduser() if grid_text else None
+            if grid_path and not grid_path.exists():
+                raise ValueError(self._text("benchmark_error_grid_missing", path=grid_path))
+            out_json = Path(self.bench_output_json_edit.text().strip()).expanduser() if self.bench_output_json_edit.text().strip() else None
+            out_csv = Path(self.bench_output_csv_edit.text().strip()).expanduser() if self.bench_output_csv_edit.text().strip() else None
+            limit_value = self.bench_limit_spin.value()
+            limit = limit_value if limit_value > 0 else None
+            tile_cache = self.bench_tile_cache_spin.value()
+            tile_cache_value = tile_cache if tile_cache > 0 else None
+            log_level = str(self.bench_log_combo.currentData() or "INFO").upper()
+            sip_order = int(self.bench_sip_combo.currentData() or 2)
+            ra_hint = self._parse_optional_float(self.bench_ra_edit.text(), label_key="benchmark_ra_label")
+            dec_hint = self._parse_optional_float(self.bench_dec_edit.text(), label_key="benchmark_dec_label")
+            radius_hint = self._parse_optional_float(self.bench_radius_edit.text(), label_key="benchmark_radius_label")
+            focal_hint = self._parse_optional_float(self.bench_focal_edit.text(), label_key="benchmark_focal_label")
+            pixel_hint = self._parse_optional_float(self.bench_pixel_edit.text(), label_key="benchmark_pixel_label")
+            scale_hint = self._parse_optional_float(self.bench_scale_edit.text(), label_key="benchmark_scale_label")
+            scale_min_hint = self._parse_optional_float(self.bench_scale_min_edit.text(), label_key="benchmark_scale_min_label")
+            scale_max_hint = self._parse_optional_float(self.bench_scale_max_edit.text(), label_key="benchmark_scale_max_label")
+            args = argparse.Namespace(
+                inputs=entries,
+                index_root=index_path,
+                grid=grid_path,
+                continue_after_success=self.bench_continue_check.isChecked(),
+                allow_write=self.bench_allow_write_check.isChecked(),
+                limit=limit,
+                output_json=out_json,
+                output_csv=out_csv,
+                log_level=log_level,
+                max_candidates=self.bench_max_candidates_spin.value(),
+                max_stars=self.bench_max_stars_spin.value(),
+                max_quads=self.bench_max_quads_spin.value(),
+                detect_k_sigma=self.bench_detect_sigma_spin.value(),
+                detect_min_area=self.bench_detect_area_spin.value(),
+                bucket_cap_s=self.bench_bucket_cap_s_spin.value(),
+                bucket_cap_m=self.bench_bucket_cap_m_spin.value(),
+                bucket_cap_l=self.bench_bucket_cap_l_spin.value(),
+                sip_order=sip_order,
+                quality_rms=self.bench_quality_rms_spin.value(),
+                quality_inliers=self.bench_quality_inliers_spin.value(),
+                pixel_tolerance=self.bench_pixel_tol_spin.value(),
+                downsample=self.bench_downsample_spin.value(),
+                vote_percentile=self.bench_vote_spin.value(),
+                bucket_limit_override=self.bench_bucket_override_spin.value(),
+                tile_cache_size=tile_cache_value,
+                focal_length_mm=focal_hint,
+                pixel_size_um=pixel_hint,
+                pixel_scale_arcsec=scale_hint,
+                pixel_scale_min_arcsec=scale_min_hint,
+                pixel_scale_max_arcsec=scale_max_hint,
+                ra_hint_deg=ra_hint,
+                dec_hint_deg=dec_hint,
+                radius_hint_deg=radius_hint,
+                no_parity_flip=not self.bench_parity_check.isChecked(),
+                full_mode=self.bench_full_mode_check.isChecked(),
+            )
+            return entries, args
+
+        def _set_benchmark_running(self, running: bool) -> None:
+            self.bench_run_btn.setEnabled(not running)
+            self.bench_stop_btn.setEnabled(running)
+            self.bench_sources_group.setEnabled(not running)
+            self.bench_options_group.setEnabled(not running)
+            self.bench_base_group.setEnabled(not running)
+            self.bench_hints_group.setEnabled(not running)
+
+        def _on_benchmark_progress(self, done: int, total: int, name: str) -> None:
+            total = max(1, total)
+            self.bench_progress.setMaximum(total)
+            self.bench_progress.setValue(min(done, total))
+            self.bench_status_label.setText(
+                self._text("benchmark_status_running", done=done, total=total, name=name or "")
+            )
+
+        def _on_benchmark_finished(self, success: bool, message: str) -> None:
+            self._set_benchmark_running(False)
+            self.bench_progress.setValue(self.bench_progress.maximum())
+            if self._benchmark_worker:
+                self._benchmark_worker.deleteLater()
+            self._benchmark_worker = None
+            if success:
+                self.bench_status_label.setText(self._text("benchmark_status_done", summary=message))
+                self._append_benchmark_log(self._text("benchmark_log_done", summary=message))
+            else:
+                if message.strip().lower() == "cancelled":
+                    self.bench_status_label.setText(self._text("benchmark_status_cancelled"))
+                    self._append_benchmark_log(self._text("benchmark_log_cancelled"))
+                else:
+                    self.bench_status_label.setText(self._text("benchmark_status_failed", error=message))
+                    self._append_benchmark_log(self._text("benchmark_log_failed", error=message))
 
         def scan_files(self) -> None:
             # Cancel previous scan if any
@@ -6122,6 +6902,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._blind_worker = None
             self._shutdown_thread(self._near_worker)
             self._near_worker = None
+            self._shutdown_thread(self._benchmark_worker, cancel_method="cancel")
+            self._benchmark_worker = None
             self._shutdown_thread(self._dl_worker, cancel_method="stop")
             self._dl_worker = None
             super().closeEvent(event)

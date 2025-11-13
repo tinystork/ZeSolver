@@ -19,7 +19,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 5
+SETTINGS_SCHEMA_VERSION = 6
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -110,6 +110,19 @@ class PersistentSettings:
     astrometry_timeout_s: int = 600
     astrometry_use_hints: bool = True
     astrometry_fallback_local: bool = True
+    benchmark_inputs: Optional[str] = None
+    benchmark_index_root: Optional[str] = None
+    benchmark_grid_path: Optional[str] = None
+    benchmark_output_json: Optional[str] = None
+    benchmark_output_csv: Optional[str] = None
+    benchmark_allow_write: bool = False
+    benchmark_continue_all: bool = False
+    benchmark_limit: int = 0
+    benchmark_log_level: str = "INFO"
+    benchmark_tile_cache_size: int = 128
+    benchmark_sip_order: int = 2
+    benchmark_full_mode: bool = False
+    benchmark_try_parity: bool = True
 
 
 def _resolve_settings_path() -> Path:
@@ -164,6 +177,11 @@ def load_persistent_settings() -> PersistentSettings:
             return default
         return candidate
 
+    bench_sip = int(payload.get("benchmark_sip_order", 2) or 2)
+    if bench_sip not in (2, 3):
+        bench_sip = 2
+    bench_limit = int(payload.get("benchmark_limit", 0) or 0)
+    bench_tile_cache = int(payload.get("benchmark_tile_cache_size", 128) or 128)
     settings = PersistentSettings(
         schema_version=int(payload.get("schema_version", 1)),
         db_root=payload.get("db_root"),
@@ -242,6 +260,19 @@ def load_persistent_settings() -> PersistentSettings:
         astrometry_timeout_s=int(payload.get("astrometry_timeout_s", 600)),
         astrometry_use_hints=bool(payload.get("astrometry_use_hints", True)),
         astrometry_fallback_local=bool(payload.get("astrometry_fallback_local", True)),
+        benchmark_inputs=payload.get("benchmark_inputs"),
+        benchmark_index_root=payload.get("benchmark_index_root"),
+        benchmark_grid_path=payload.get("benchmark_grid_path"),
+        benchmark_output_json=payload.get("benchmark_output_json"),
+        benchmark_output_csv=payload.get("benchmark_output_csv"),
+        benchmark_allow_write=bool(payload.get("benchmark_allow_write", False)),
+        benchmark_continue_all=bool(payload.get("benchmark_continue_all", False)),
+        benchmark_limit=max(0, bench_limit),
+        benchmark_log_level=str(payload.get("benchmark_log_level", "INFO") or "INFO").upper(),
+        benchmark_tile_cache_size=max(0, bench_tile_cache),
+        benchmark_sip_order=bench_sip,
+        benchmark_full_mode=bool(payload.get("benchmark_full_mode", False)),
+        benchmark_try_parity=bool(payload.get("benchmark_try_parity", True)),
     )
     migrated, updated = _migrate_settings_if_needed(settings)
     if updated:

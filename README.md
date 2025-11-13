@@ -35,6 +35,41 @@ pip install -e .
 python tools/inspect_290.py --db ./database --family g05 --limit 3 --json report.json
 ```
 
+## Brute-force benchmark sweeps
+
+When tuning solver heuristics you can exhaustively try several `SolveConfig` profiles on a small
+image set with the new helper below:
+
+```bash
+python tools/benchmark_solver.py ^
+  --index-root index ^
+  --output-json bench.json ^
+  --output-csv bench.csv ^
+  examples/*.fit
+```
+
+The harness keeps a pristine copy of every FITS by default (set `--allow-write` if in-place header
+updates are desired), prints the outcome of each preset, and optionally writes structured logs for
+post-processing. It accepts directories, glob patterns, or list files (`@images.lst`) and stops on
+the first success per frame unless `--continue-after-success` is set.
+
+Prefer the GUI? The new **Benchmark** tab mirrors every CLI option: paste your file list (one path,
+glob, or `@list` per line), point it to the same index directory, and launch the sweep directly from
+ZeSolver. The log pane reports each attempt, while JSON/CSV outputs can be configured in the same
+panel for post-run analysis.
+
+Custom sweeps can be supplied through `--grid sweeps.json`:
+
+```json
+[
+  {"label": "fast", "max_stars": 600, "detect_k_sigma": 3.0},
+  {"label": "deep", "overrides": {"max_stars": 1200, "vote_percentile": 28}}
+]
+```
+
+Each entry is merged into the base CLI options (matching the `zeblindsolve` defaults), making it easy
+to benchmark a chain of candidate tunings on the same corpus.
+
 Within Python:
 
 ```python
