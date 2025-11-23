@@ -99,4 +99,35 @@ Build and maintain a fast, fully-Python blind and metadata-assisted WCS solver f
 ---
 
 By following this guide, you ensure all future contributions remain compliant with the project’s constraints: pure Python, no ASTAP code execution or integration, and clean separation of database vs. index artifacts.
+---
 
+## Strategic Roadmap: From Monolithic to Tiled Architecture
+
+**Diagnosis:** Analysis has shown that `zeblind`'s slow performance and low success rate are caused by two primary architectural issues:
+1.  **Monolithic Index:** A single, large `.npz` index file is loaded entirely into memory, causing extremely long start-up times and high RAM usage.
+2.  **Brittle Quad Sampling:** The method for generating quad hashes (based on the "brightest-N" stars) is not robust, leading to a low probability of matching image hashes with index hashes.
+
+**Objective:** Refactor `zeblind` to implement a high-performance, tiled architecture inspired by the successful concepts of `astap` and `astrometry.net`, while remaining pure Python.
+
+**Action Plan Summary (See `followup.md` for full details):**
+
+### Phase 1: Transition to a Tiled/Bucketed Index
+- **Action:** Replace the single `.npz` index with a "bucketed" structure of many small, independent files. Each file will contain quads for a specific range of hashes (e.g., based on the first 12 bits of the hash).
+- **Implementation:**
+  - Modify the index builder (`tools/build_blind_index.py`) to write to these bucket files.
+  - Rewrite the query logic (`zesolver/blindindex.py`) to use **memory-mapping (`mmap`)** to open only the necessary bucket files on-demand.
+- **Outcome:** Near-instantaneous load times and drastically reduced memory consumption.
+
+### Phase 2: Implement Robust, Geometric Quad Sampling
+- **Action:** Replace the "brightest-N" quad sampling logic with a geometrically stable algorithm.
+- **Implementation:**
+  - In both the indexer and the solver (`zeblindsolver/asterisms.py`), implement a sampling method that generates quads based on pairs of stars and their neighbors at multiple distance scales. This makes hash generation far more reliable and resilient to star magnitude variations.
+- **Outcome:** A massive increase in the solver's success rate.
+
+### Phase 3: (Recommended) Enhance Star Detection
+- **Action:** Improve the quality of the initial star list.
+- **Implementation:**
+  - In `zeblindsolver/star_detect.py`, move from a global threshold to an **adaptive local threshold** to better handle varying sky backgrounds.
+- **Outcome:** A cleaner input signal for the entire solving pipeline, further boosting reliability.
+
+For a detailed technical guide on how to implement these changes, refer to the **`followup.md`** file.

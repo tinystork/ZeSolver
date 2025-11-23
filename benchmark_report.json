@@ -1,0 +1,1707 @@
+{
+  "generated_at": "2025-11-13T12:01:52.899881+00:00",
+  "index_root": "D:\\ASTRO\\ZeSolver\\ZeSolverindex",
+  "allow_write": true,
+  "continue_after_success": false,
+  "base_config": {
+    "max_candidates": 20,
+    "max_stars": 800,
+    "max_quads": 30000,
+    "detect_k_sigma": 2.0,
+    "detect_min_area": 5,
+    "bucket_cap_S": 6000,
+    "bucket_cap_M": 4096,
+    "bucket_cap_L": 8192,
+    "sip_order": 2,
+    "quality_rms": 1.5,
+    "quality_inliers": 25,
+    "pixel_tolerance": 3.1,
+    "log_level": "INFO",
+    "verbose": false,
+    "try_parity_flip": false,
+    "fast_mode": true,
+    "downsample": 1,
+    "ra_hint_deg": null,
+    "dec_hint_deg": null,
+    "radius_hint_deg": null,
+    "focal_length_mm": 250.0,
+    "pixel_size_um": 2.9,
+    "pixel_scale_arcsec": 2.3926739999999995,
+    "pixel_scale_min_arcsec": 1.7945054999999996,
+    "pixel_scale_max_arcsec": 2.9908424999999994,
+    "tile_cache_size": 128,
+    "bucket_limit_override": 10000,
+    "vote_percentile": 15
+  },
+  "sweeps": [
+    {
+      "label": "baseline",
+      "overrides": {},
+      "description": "CLI defaults."
+    },
+    {
+      "label": "dense-stars",
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "description": "Loosen detection caps for crowded fields."
+    },
+    {
+      "label": "loose-detect",
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "description": "Aggressive detection for faint/noisy frames."
+    },
+    {
+      "label": "wide-buckets",
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "description": "Relax voting quotas when few quads match."
+    },
+    {
+      "label": "downsample-2",
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "description": "Use 2x downsampling for very large sensors."
+    }
+  ],
+  "runs": [
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214318.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 60.53714120015502,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214318.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 40.19383040070534,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214318.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 60.49607050046325,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214318.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 61.12786040082574,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214318.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 27.85037470050156,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214329.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 59.17074640095234,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214329.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 43.60809059999883,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214329.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 48.17094260081649,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214329.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 61.1312032006681,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214329.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 25.770972300320864,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214340.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 57.768125999718904,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214340.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 35.583276100456715,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214340.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 49.77996619977057,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214340.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 58.96085450053215,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214340.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 25.330623300746083,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214351.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 60.85310110077262,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214351.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 37.02501279860735,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214351.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 48.499364798888564,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214351.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 57.01252840086818,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214351.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 26.059682600200176,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214403.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 53.88053720071912,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214403.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 35.41748630069196,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214403.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 52.37308759987354,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214403.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 51.99033820070326,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214403.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 25.691825000569224,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214421.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": true,
+      "elapsed_s": 49.046005100011826,
+      "message": "solution found (level=S, parity=nominal) (parity=nominal, phase=hinted)",
+      "tile_key": "g05_0812",
+      "overrides": {},
+      "stats": {
+        "quality": "GOOD",
+        "success": true,
+        "rms_px": 1.3165517536903248,
+        "inliers": 4,
+        "phase": "hinted",
+        "phase_elapsed_s": 0.5718560218811035,
+        "phase_levels": [
+          "S"
+        ],
+        "phase_level_count": 1
+      }
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214432.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 56.18623129837215,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214432.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 32.08397419936955,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214432.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 48.34953480027616,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214432.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 53.26089829951525,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214432.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 26.179274700582027,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214444.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 50.87295080162585,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214444.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 32.891990300267935,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214444.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 48.355359399691224,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214444.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 50.756933998316526,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214444.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 24.923079799860716,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214455.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 49.7010402996093,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214455.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 32.416728200390935,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214455.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 53.708276798948646,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214455.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 54.362045200541615,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214455.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 25.227202201262116,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214506.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 54.60679480060935,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214506.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 36.3720164000988,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214506.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 49.98564209975302,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214506.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 56.841096099466085,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214506.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 26.404322300106287,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214526.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 54.51908819936216,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214526.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 32.70507330074906,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214526.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 46.93489480018616,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214526.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 56.763778399676085,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214526.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 25.391828199848533,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214538.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 51.666814701631665,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214538.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 31.45399389974773,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214538.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 52.05717989988625,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214538.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 53.15794130042195,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214538.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 23.816199000924826,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214549.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 52.908406699076295,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214549.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 33.034508401528,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214549.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 49.76792090013623,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214549.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 52.30020990036428,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214549.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 30.048619899898767,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214600.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 101.21278200112283,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214600.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 100.7702663000673,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214600.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 76.98966700024903,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214600.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 107.07221759855747,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214600.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": true,
+      "elapsed_s": 36.13030229881406,
+      "message": "solution found (level=L, parity=nominal) (parity=nominal, phase=blind)",
+      "tile_key": "d50_1426",
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {
+        "quality": "GOOD",
+        "success": true,
+        "rms_px": 0.0006874680798204802,
+        "inliers": 2,
+        "phase": "blind",
+        "phase_elapsed_s": 2.911494731903076,
+        "phase_levels": [
+          "S",
+          "M",
+          "L"
+        ],
+        "phase_level_count": 3
+      }
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214612.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 64.94734430126846,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214612.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 35.156263899058104,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214612.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 52.69278289936483,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214612.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 84.50944739952683,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214612.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 34.48551860079169,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214632.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 65.8501584995538,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214632.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 40.22103370167315,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214632.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 61.31797540001571,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214632.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 67.21651919931173,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214632.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": true,
+      "elapsed_s": 40.79454020038247,
+      "message": "solution found (level=L, parity=nominal) (parity=nominal, phase=blind)",
+      "tile_key": "v50_1427",
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {
+        "quality": "GOOD",
+        "success": true,
+        "rms_px": 1.4323836266565015,
+        "inliers": 4,
+        "phase": "blind",
+        "phase_elapsed_s": 3.2438876628875732,
+        "phase_levels": [
+          "S",
+          "M",
+          "L"
+        ],
+        "phase_level_count": 3
+      }
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214643.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 72.68332770094275,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214643.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 49.097009900957346,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214643.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 57.98576050065458,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214643.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 75.12859239988029,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214643.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 33.61575910076499,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214654.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 70.38349680043757,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214654.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 42.400803400203586,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214654.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 72.05563870072365,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214654.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 69.03235330060124,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214654.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 37.73673040047288,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214706.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 54.87907760031521,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214706.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 30.27770010009408,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214706.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 52.18242609873414,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214706.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 46.72506600059569,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214706.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": true,
+      "elapsed_s": 24.954957898706198,
+      "message": "solution found (level=L, parity=nominal) (parity=nominal, phase=blind)",
+      "tile_key": "v50_1427",
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {
+        "quality": "GOOD",
+        "success": true,
+        "rms_px": 0.0008527019253058408,
+        "inliers": 3,
+        "phase": "blind",
+        "phase_elapsed_s": 2.2774906158447266,
+        "phase_levels": [
+          "S",
+          "M",
+          "L"
+        ],
+        "phase_level_count": 3
+      }
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214717.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 56.13319450058043,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214717.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 34.40423459932208,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214717.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 55.363007199019194,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214717.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 53.74543770030141,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214717.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": true,
+      "elapsed_s": 25.56684960052371,
+      "message": "solution found (level=L, parity=nominal) (parity=nominal, phase=blind)",
+      "tile_key": "v50_1427",
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {
+        "quality": "GOOD",
+        "success": true,
+        "rms_px": 0.0004371689800796316,
+        "inliers": 2,
+        "phase": "blind",
+        "phase_elapsed_s": 2.6720831394195557,
+        "phase_levels": [
+          "S",
+          "M",
+          "L"
+        ],
+        "phase_level_count": 3
+      }
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214737.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 52.44933999888599,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214737.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 34.46151329949498,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214737.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 46.14097029902041,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214737.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 51.8052064999938,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214737.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 25.62574290111661,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214748.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 54.74048840068281,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214748.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 35.08842879906297,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214748.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 49.577278800308704,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214748.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 52.32236330024898,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214748.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": false,
+      "elapsed_s": 25.827943298965693,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214759.fit",
+      "sweep_index": 1,
+      "profile": "baseline",
+      "success": false,
+      "elapsed_s": 56.361156798899174,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {},
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214759.fit",
+      "sweep_index": 2,
+      "profile": "dense-stars",
+      "success": false,
+      "elapsed_s": 35.78404499962926,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "max_stars": 900,
+        "max_quads": 12000
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214759.fit",
+      "sweep_index": 3,
+      "profile": "loose-detect",
+      "success": false,
+      "elapsed_s": 47.00428130105138,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "detect_k_sigma": 2.2,
+        "detect_min_area": 4,
+        "max_stars": 1200,
+        "pixel_tolerance": 3.2
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214759.fit",
+      "sweep_index": 4,
+      "profile": "wide-buckets",
+      "success": false,
+      "elapsed_s": 55.70046789944172,
+      "message": "no valid solution",
+      "tile_key": null,
+      "overrides": {
+        "bucket_limit_override": 6144,
+        "vote_percentile": 32
+      },
+      "stats": {}
+    },
+    {
+      "image": "D:\\ASTRO\\ZeSolver\\examples\\Light_M 81_10.0s_IRCUT_20250314-214759.fit",
+      "sweep_index": 5,
+      "profile": "downsample-2",
+      "success": true,
+      "elapsed_s": 22.401351099833846,
+      "message": "solution found (level=L, parity=nominal) (parity=nominal, phase=blind)",
+      "tile_key": "v50_1427",
+      "overrides": {
+        "downsample": 2,
+        "max_quads": 20000,
+        "vote_percentile": 25
+      },
+      "stats": {
+        "quality": "GOOD",
+        "success": true,
+        "rms_px": 0.0009721904372751471,
+        "inliers": 2,
+        "phase": "blind",
+        "phase_elapsed_s": 1.4940602779388428,
+        "phase_levels": [
+          "S",
+          "M",
+          "L"
+        ],
+        "phase_level_count": 3
+      }
+    }
+  ]
+}

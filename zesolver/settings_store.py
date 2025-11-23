@@ -19,7 +19,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 6
+SETTINGS_SCHEMA_VERSION = 7
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -110,6 +110,7 @@ class PersistentSettings:
     astrometry_timeout_s: int = 600
     astrometry_use_hints: bool = True
     astrometry_fallback_local: bool = True
+    db_family_cache: Optional[list[str]] = None
     benchmark_inputs: Optional[str] = None
     benchmark_index_root: Optional[str] = None
     benchmark_grid_path: Optional[str] = None
@@ -260,6 +261,7 @@ def load_persistent_settings() -> PersistentSettings:
         astrometry_timeout_s=int(payload.get("astrometry_timeout_s", 600)),
         astrometry_use_hints=bool(payload.get("astrometry_use_hints", True)),
         astrometry_fallback_local=bool(payload.get("astrometry_fallback_local", True)),
+        db_family_cache=_list_or_none(payload.get("db_family_cache")),
         benchmark_inputs=payload.get("benchmark_inputs"),
         benchmark_index_root=payload.get("benchmark_index_root"),
         benchmark_grid_path=payload.get("benchmark_grid_path"),

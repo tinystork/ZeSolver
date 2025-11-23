@@ -45,6 +45,7 @@ except PackageNotFoundError:  # pragma: no cover - running from source tree
 
 try:
     from zewcs290 import CatalogDB
+    from zewcs290.catalog290 import CatalogFamilySpec, FAMILY_SPECS
 except Exception as exc:  # pragma: no cover - easier failure path for CLI users
     raise SystemExit(
         "Unable to import zewcs290. Make sure you run the script from the repository root "
@@ -294,6 +295,11 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_build_start": "Construction de l'index dans {path}… (cela peut prendre plusieurs minutes)",
         "settings_rebuild_title": "Reconstruire l'index ?",
         "settings_rebuild_text": "Un index existe déjà dans {path}. Le reconstruire ?",
+        "db_family_scan_found": "Bases ASTAP détectées ({count}) dans {path} : {families}",
+        "db_family_scan_empty": "Aucune base ASTAP détectée dans {path}.",
+        "db_family_new_detected": "Nouvelles bases détectées mais absentes de l'index : {families}",
+        "db_family_prompt_title": "Nouvelles bases détectées",
+        "db_family_prompt_body": "Les bases {families} ne figurent pas encore dans l'index. Voulez-vous lancer une reconstruction maintenant ?",
     },
         "en": {
         "language_menu": "Language",
@@ -468,6 +474,11 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_build_start": "Building index at {path}… (this may take several minutes)",
         "settings_rebuild_title": "Rebuild Index?",
         "settings_rebuild_text": "An index already exists at {path}. Rebuild it?",
+        "db_family_scan_found": "Detected {count} ASTAP catalog(s) under {path}: {families}",
+        "db_family_scan_empty": "No ASTAP catalog detected under {path}.",
+        "db_family_new_detected": "New catalog families detected but missing from the index: {families}",
+        "db_family_prompt_title": "New catalogs detected",
+        "db_family_prompt_body": "The families {families} are not indexed yet. Rebuild the index now?",
     },
 }
 
@@ -726,6 +737,53 @@ for _lang, _mapping in _GUI_BENCHMARK_I18N.items():
     for _k, _v in _mapping.items():
         if _k not in base:
             base[_k] = _v
+
+
+def _available_family_specs() -> list[CatalogFamilySpec]:
+    build_all = getattr(CatalogFamilySpec, "build_all", None)
+    raw: Iterable[CatalogFamilySpec]
+    try:
+        if callable(build_all):
+            payload = build_all()
+            if isinstance(payload, dict):
+                raw = payload.values()
+            else:
+                raw = payload
+        else:
+            raw = FAMILY_SPECS.values()
+    except Exception:
+        raw = FAMILY_SPECS.values()
+    specs = [spec for spec in raw if spec is not None]
+    specs.sort(key=lambda spec: getattr(spec, "key", getattr(spec, "title", "")))
+    return specs
+
+
+def _scan_astap_families(root: Path) -> list[str]:
+    """Return sorted ASTAP/HNSKY family keys detected under the given root."""
+    try:
+        base = Path(root).expanduser().resolve()
+    except Exception:
+        return []
+    if not base.exists():
+        return []
+    detected: set[str] = set()
+    for spec in _available_family_specs():
+        try:
+            pattern = spec.glob_pattern()
+        except Exception:
+            continue
+        if not pattern:
+            continue
+        try:
+            matches = any(base.glob(pattern))
+        except Exception:
+            continue
+        if matches:
+            key = getattr(spec, "key", getattr(spec, "title", ""))
+            key = str(key).strip().lower()
+            if key:
+                detected.add(key)
+    return sorted(detected)
 
 def _configure_logging(level_name: str) -> None:
     """Setup console + file logging (appends to zesolver.log)."""
@@ -2618,6 +2676,27 @@ def launch_gui(args: argparse.Namespace) -> int:
                 except Exception:
                     pass
 
+    class DbFamilyScanner(QtCore.QThread):
+        result = QtCore.Signal(str, list)
+
+        def __init__(self, root: Path) -> None:
+            super().__init__()
+            try:
+                self._root = Path(root).expanduser().resolve()
+            except Exception:
+                self._root = Path(root)
+
+        def run(self) -> None:  # pragma: no cover - GUI helper thread
+            try:
+                families = _scan_astap_families(self._root)
+            except Exception:
+                families = []
+            try:
+                resolved = str(self._root)
+            except Exception:
+                resolved = ""
+            self.result.emit(resolved, families)
+
     class IndexBuilder(QtCore.QThread):
         log = QtCore.Signal(str)
         progress = QtCore.Signal(int, int, str)
@@ -3082,11 +3161,22 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._scan_buffer: list[Path] = []
             self._scan_flush_threshold = 250
             self._log_level_actions: dict[str, QtGui.QAction] = {}
+            self._db_family_scan_thread: Optional[DbFamilyScanner] = None
+            self._db_scan_timer = QtCore.QTimer(self)
+            self._db_scan_timer.setSingleShot(True)
+            self._db_scan_timer.timeout.connect(self._run_db_family_scan)
+            self._pending_db_scan_path: str = (self._settings.db_root or "").strip()
+            self._active_db_scan_root: Optional[str] = None
+            self._db_family_latest: set[str] = set((self._settings.db_family_cache or []) or [])
+            self._index_families: set[str] = set()
+            self._last_family_prompt: set[str] = set()
+            self._last_family_notice: set[str] = set()
             self._build_ui()
             self._set_log_level(self._current_log_level, persist=False)
             self._populate_settings_ui()
             self._prefill_from_args(args)
             self._apply_language()
+            self._schedule_db_scan(self._settings.db_root or "", delay_ms=200)
 
         # --- UI building helpers -------------------------------------------------
         def _build_ui(self) -> None:
@@ -3539,7 +3629,117 @@ def launch_gui(args: argparse.Namespace) -> int:
                 except Exception:
                     pass
             self.db_tab_edit.textChanged.connect(_sync_db_text)
+            self.db_tab_edit.textChanged.connect(self._on_db_root_text_changed)
             return widget
+
+        def _schedule_db_scan(self, path_text: str, *, delay_ms: int = 800) -> None:
+            if not hasattr(self, "_db_scan_timer"):
+                return
+            text = (path_text or "").strip()
+            self._pending_db_scan_path = text
+            self._db_scan_timer.stop()
+            if not text:
+                self._stop_db_family_scan()
+                return
+            try:
+                delay = max(0, int(delay_ms))
+            except Exception:
+                delay = 800
+            self._db_scan_timer.start(delay)
+
+        def _run_db_family_scan(self) -> None:
+            path_text = getattr(self, "_pending_db_scan_path", "") or ""
+            if not path_text:
+                return
+            try:
+                root = Path(path_text).expanduser()
+            except Exception:
+                return
+            if not root.exists():
+                return
+            self._stop_db_family_scan()
+            scanner = DbFamilyScanner(root)
+            scanner.result.connect(self._on_db_family_scan_result)
+            scanner.finished.connect(lambda: setattr(self, "_db_family_scan_thread", None))
+            try:
+                self._active_db_scan_root = str(root.resolve())
+            except Exception:
+                self._active_db_scan_root = str(root)
+            self._db_family_scan_thread = scanner
+            scanner.start()
+
+        def _stop_db_family_scan(self) -> None:
+            if getattr(self, "_db_family_scan_thread", None) is not None:
+                self._shutdown_thread(self._db_family_scan_thread)
+                self._db_family_scan_thread = None
+            self._active_db_scan_root = None
+
+        def _on_db_root_text_changed(self, text: str) -> None:
+            self._schedule_db_scan(text)
+
+        def _on_db_family_scan_result(self, root_text: str, families: list[str]) -> None:
+            current_root = self._active_db_scan_root or ""
+            try:
+                reported_str = str(Path(root_text).expanduser().resolve())
+            except Exception:
+                reported_str = root_text.strip()
+            if current_root:
+                try:
+                    if os.path.normcase(reported_str) != os.path.normcase(current_root):
+                        return
+                except Exception:
+                    if reported_str != current_root:
+                        return
+            family_set = {str(f).strip().lower() for f in families if str(f).strip()}
+            if family_set != getattr(self, "_db_family_latest", set()):
+                self._db_family_latest = family_set
+                db_path = self.settings_db_edit.text().strip() or current_root or root_text
+                if family_set:
+                    names = ", ".join(sorted(f.upper() for f in family_set))
+                    self._log_settings(
+                        self._text(
+                            "db_family_scan_found",
+                            path=db_path,
+                            count=len(family_set),
+                            families=names,
+                        )
+                    )
+                else:
+                    self._log_settings(self._text("db_family_scan_empty", path=db_path))
+                cached = set((self._settings.db_family_cache or []) or [])
+                if family_set != cached:
+                    self._settings.db_family_cache = sorted(family_set)
+                    try:
+                        save_persistent_settings(self._settings)
+                    except Exception:
+                        pass
+            self._maybe_prompt_family_gap()
+
+        def _maybe_prompt_family_gap(self) -> None:
+            family_set = set(getattr(self, "_db_family_latest", set()))
+            missing = family_set - getattr(self, "_index_families", set())
+            if not missing:
+                self._last_family_notice = set()
+                self._last_family_prompt = set()
+                return
+            if not hasattr(self, "_last_family_notice"):
+                self._last_family_notice = set()
+            if missing == getattr(self, "_last_family_notice", set()):
+                return
+            self._last_family_notice = set(missing)
+            names = ", ".join(sorted(f.upper() for f in missing))
+            self._log_settings(self._text("db_family_new_detected", families=names))
+            if missing.issubset(getattr(self, "_last_family_prompt", set())):
+                return
+            self._last_family_prompt = set(missing)
+            reply = QtWidgets.QMessageBox.question(
+                self,
+                self._text("db_family_prompt_title"),
+                self._text("db_family_prompt_body", families=names),
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            )
+            if reply == QtWidgets.QMessageBox.Yes:
+                self._on_build_index_clicked()
 
         def _build_dev_tab(self) -> QtWidgets.QWidget:
             widget = QtWidgets.QWidget()
@@ -4187,19 +4387,23 @@ def launch_gui(args: argparse.Namespace) -> int:
 
             Adds an 'Auto' entry first; subsequent entries are sorted unique family keys.
             """
+            self._index_families = set()
             try:
                 root = Path(index_root_text).expanduser().resolve()
             except Exception:
                 self._refresh_dev_family_choices([])
+                self._maybe_prompt_family_gap()
                 return
             manifest = root / "manifest.json"
             if not manifest.is_file():
                 self._refresh_dev_family_choices([])
+                self._maybe_prompt_family_gap()
                 return
             try:
                 payload = json.loads(manifest.read_text(encoding="utf-8"))
             except Exception:
                 self._refresh_dev_family_choices([])
+                self._maybe_prompt_family_gap()
                 return
             tiles = payload.get("tiles") or []
             families: set[str] = set()
@@ -4222,6 +4426,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.families_combo.setCurrentIndex(idx)
             self.families_combo.blockSignals(False)
             self._refresh_dev_family_choices(items)
+            self._index_families = set(items)
+            self._maybe_prompt_family_gap()
 
         def _build_settings_tab(self) -> QtWidgets.QWidget:
             widget = QtWidgets.QWidget()
@@ -4480,6 +4686,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 except Exception:
                     pass
             self.settings_db_edit.textChanged.connect(_sync_db_tab_text)
+            self.settings_db_edit.textChanged.connect(self._on_db_root_text_changed)
             self.settings_index_browse.clicked.connect(
                 lambda: self._pick_settings_directory(self.settings_index_edit)
             )
@@ -5219,6 +5426,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 dev_vote_percentile=int(self.dev_vote_spin.value()) if hasattr(self, "dev_vote_spin") else 40,
                 dev_detect_k_sigma=float(self.dev_sigma_spin.value()) if hasattr(self, "dev_sigma_spin") else 3.0,
                 dev_detect_min_area=int(self.dev_area_spin.value()) if hasattr(self, "dev_area_spin") else 5,
+                db_family_cache=list(self._settings.db_family_cache or []) if getattr(self._settings, "db_family_cache", None) else None,
                 benchmark_inputs=self.bench_inputs_edit.toPlainText().strip() or None,
                 benchmark_index_root=self.bench_index_edit.text().strip() or None,
                 benchmark_grid_path=self.bench_grid_edit.text().strip() or None,
@@ -6904,6 +7112,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._near_worker = None
             self._shutdown_thread(self._benchmark_worker, cancel_method="cancel")
             self._benchmark_worker = None
+            try:
+                self._db_scan_timer.stop()
+            except Exception:
+                pass
+            self._shutdown_thread(self._db_family_scan_thread)
+            self._db_family_scan_thread = None
             self._shutdown_thread(self._dl_worker, cancel_method="stop")
             self._dl_worker = None
             super().closeEvent(event)

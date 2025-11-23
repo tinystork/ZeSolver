@@ -21,6 +21,8 @@ def detect_stars(
     max_fwhm_px: float = 8.0,
     k_sigma: float = 3.0,
     min_area: int = 5,
+    mode: str = "global",  # "adaptive" | "global"
+    bg_sigma: float | None = None,
     backend: str = "auto",  # "auto" | "cpu" | "cuda"
     device: int | None = None,
 ) -> np.ndarray:
@@ -31,8 +33,12 @@ def detect_stars(
       - "cpu": force NumPy/SciPy path
       - "cuda": use CuPy on the selected CUDA device
     device: CUDA device index (0..N-1) when backend="cuda" or "auto" with GPUs.
+    mode:
+      - "adaptive" (default): local background/variance via large Gaussian; robust to gradients
+      - "global": legacy mean + k_sigma threshold
     """
     data = np.asarray(img, dtype=np.float32)
+    bg_sigma_val = float(bg_sigma) if bg_sigma is not None else max(min_fwhm_px * 3.0, 5.0)
     use_cuda = False
     if backend.lower() == "cuda":
         use_cuda = _HAVE_CUPY
@@ -51,10 +57,19 @@ def detect_stars(
             with _cp.cuda.Device(dev_id):
                 d_data = _cp.asarray(data)
                 d_blur = _cpx_nd.gaussian_filter(d_data, sigma=min_fwhm_px)
-                mean = float(_cp.nanmean(d_blur).get())
-                std = float(_cp.nanstd(d_blur).get())
-                threshold = mean + k_sigma * std
-                d_mask = d_blur > threshold
+                mode_lower = (mode or "adaptive").lower()
+                if mode_lower == "adaptive":
+                    d_bg = _cpx_nd.gaussian_filter(d_data, sigma=bg_sigma_val)
+                    d_bg2 = _cpx_nd.gaussian_filter(d_data * d_data, sigma=bg_sigma_val)
+                    d_var = _cp.maximum(d_bg2 - d_bg * d_bg, 0.0)
+                    d_std = _cp.sqrt(d_var + 1e-6)
+                    d_threshold = d_bg + k_sigma * d_std
+                    d_mask = d_blur > d_threshold
+                else:
+                    mean = float(_cp.nanmean(d_blur).get())
+                    std = float(_cp.nanstd(d_blur).get())
+                    threshold = mean + k_sigma * std
+                    d_mask = d_blur > threshold
                 if not bool(d_mask.any().get()):
                     return np.zeros(0, dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")])
                 d_labeled, count = _cpx_nd.label(d_mask)
@@ -93,9 +108,17 @@ def detect_stars(
             pass
     # CPU path (default)
     blurred = gaussian_filter(data, sigma=min_fwhm_px)
-    mean = float(np.nanmean(blurred))
-    std = float(np.nanstd(blurred))
-    threshold = mean + k_sigma * std
+    mode_lower = (mode or "adaptive").lower()
+    if mode_lower == "adaptive":
+        bg = gaussian_filter(data, sigma=bg_sigma_val)
+        bg2 = gaussian_filter(data * data, sigma=bg_sigma_val)
+        var = np.maximum(bg2 - bg * bg, 0.0)
+        std = np.sqrt(var + 1e-6)
+        threshold = bg + k_sigma * std
+    else:
+        mean = float(np.nanmean(blurred))
+        std = float(np.nanstd(blurred))
+        threshold = mean + k_sigma * std
     mask = blurred > threshold
     if not mask.any():
         return np.zeros(0, dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")])

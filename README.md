@@ -106,7 +106,8 @@ python -m zeblindsolver.db_convert ^
   --workers 8
 ```
 
-The Settings tab in the GUI exposes the same drop-downs right above the “Construire l’index” button, so you can pick the quad storage (compressed `.npz`, store-only `.npz`, or `.npy` folders) and tile compression modes without memorising the CLI flags.
+The Settings tab in the GUI exposes the same drop-downs right above the "Construire l'index" button, so you can pick the quad storage (compressed `.npz`, store-only `.npz`, or `.npy` folders) and tile compression modes without memorising the CLI flags.
+Whenever you drop additional ASTAP/HNSKY databases in your configured `database/` directory, the GUI now scans the folder in the background and logs the newly detected families, offering to kick off an index rebuild so the fresh catalogs become available inside the solver without blocking the interface.
 
 ## Batch solver GUI/CLI
 
