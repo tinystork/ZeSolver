@@ -106,6 +106,7 @@ def build_index_from_astap(
     max_stars: int = DEFAULT_MAX_STARS,
     max_quads_per_tile: int = DEFAULT_MAX_QUADS_PER_TILE,
     skip_quads: bool = False,
+    quads_only: bool = False,
     quad_storage: str = "npz",
     tile_compression: str = "compressed",
     workers: int | None = None,
@@ -114,6 +115,8 @@ def build_index_from_astap(
     index_root = Path(index_root).expanduser().resolve()
     tiles_dir = index_root / "tiles"
     tiles_dir.mkdir(parents=True, exist_ok=True)
+    if skip_quads and quads_only:
+        raise ValueError("skip_quads and quads_only cannot be combined")
     compression = (tile_compression or "compressed").lower()
     if compression not in {"compressed", "uncompressed"}:
         raise ValueError("tile_compression must be 'compressed' or 'uncompressed'")
@@ -122,112 +125,120 @@ def build_index_from_astap(
         raise ValueError("quad_storage must be 'npz', 'npz_uncompressed', or 'npy'")
     save_tile = np.savez_compressed if compression == "compressed" else np.savez
     manifest_path = index_root / MANIFEST_FILENAME
-    tile_entries = []
-    tiles = list(iter_tiles(db_root))
-    logger.info("Starting conversion of %d tiles from %s", len(tiles), db_root)
-    for tile_index, tile_meta in enumerate(_progress_iter(tiles, desc="convert")):
-        stars = load_tile_stars(db_root, tile_meta)
-        total = len(stars)
-        if total:
-            ra = stars["ra_deg"].astype(np.float64, copy=False)
-            dec = stars["dec_deg"].astype(np.float64, copy=False)
-            center_ra_deg, center_dec_deg = _cartesian_center(ra, dec)
-            x_deg, y_deg = project_tan(ra, dec, center_ra_deg, center_dec_deg)
-            valid = np.isfinite(x_deg) & np.isfinite(y_deg)
-            if not valid.any():
-                logger.warning(
-                    "tile %s: cartesian center %.2f/%.2f yielded no TAN projection, falling back to layout center",
-                    tile_meta.key,
-                    center_ra_deg,
-                    center_dec_deg,
-                )
-                center_ra_deg = tile_meta.center_ra_deg
-                center_dec_deg = tile_meta.center_dec_deg
+    if quads_only:
+        if not manifest_path.exists():
+            raise FileNotFoundError(f"Manifest missing at {manifest_path} (required for quads-only rebuild)")
+        if not tiles_dir.is_dir():
+            raise FileNotFoundError(f"{tiles_dir} missing; run a full zebuildindex first")
+        logger.info("Skipping tile conversion; rebuilding quad tables only in %s", index_root)
+    else:
+        tile_entries = []
+        tiles = list(iter_tiles(db_root))
+        logger.info("Starting conversion of %d tiles from %s", len(tiles), db_root)
+        for tile_index, tile_meta in enumerate(_progress_iter(tiles, desc="convert")):
+            stars = load_tile_stars(db_root, tile_meta)
+            total = len(stars)
+            if total:
+                ra = stars["ra_deg"].astype(np.float64, copy=False)
+                dec = stars["dec_deg"].astype(np.float64, copy=False)
+                center_ra_deg, center_dec_deg = _cartesian_center(ra, dec)
                 x_deg, y_deg = project_tan(ra, dec, center_ra_deg, center_dec_deg)
                 valid = np.isfinite(x_deg) & np.isfinite(y_deg)
-            stars = stars[valid]
-            ra = ra[valid]
-            dec = dec[valid]
-            x_deg = x_deg[valid]
-            y_deg = y_deg[valid]
-        else:
-            center_ra_deg = tile_meta.center_ra_deg
-            center_dec_deg = tile_meta.center_dec_deg
-            ra = np.empty(0, dtype=np.float64)
-            dec = np.empty(0, dtype=np.float64)
-            x_deg = np.empty(0, dtype=np.float32)
-            y_deg = np.empty(0, dtype=np.float32)
-        if mag_cap is not None:
-            mask_mag = stars["mag"] <= mag_cap
-            stars = stars[mask_mag]
-            x_deg = x_deg[mask_mag]
-            y_deg = y_deg[mask_mag]
-            ra = ra[mask_mag]
-            dec = dec[mask_mag]
-        if stars.size > max_stars:
-            order = np.argsort(stars["mag"])
-            order = order[:max_stars]
-            stars = stars[order]
-            x_deg = x_deg[order]
-            y_deg = y_deg[order]
-            ra = ra[order]
-            dec = dec[order]
-        tile_path = tiles_dir / f"{tile_meta.key}.npz"
-        save_tile(
-            tile_path,
-            ra_deg=stars["ra_deg"].astype(np.float64, copy=False),
-            dec_deg=stars["dec_deg"].astype(np.float64, copy=False),
-            mag=stars["mag"].astype(np.float32, copy=False),
-            x_deg=x_deg.astype(np.float32, copy=False),
-            y_deg=y_deg.astype(np.float32, copy=False),
-        )
-        if stars.size:
-            bounds = _bounds_from_points(ra, dec, center_ra_deg)
-        else:
-            bounds = _serialize_bounds(tile_meta.bounds)
-        tile_entries.append(
-            {
-                "tile_index": tile_index,
-                "tile_key": tile_meta.key,
-                "family": tile_meta.family,
-                "tile_code": tile_meta.tile_code,
-                "center_ra_deg": float(center_ra_deg),
-                "center_dec_deg": float(center_dec_deg),
-                "bounds": bounds,
-                "stars": int(stars.size),
-                # Store relative path using POSIX separators for cross-platform portability
-                "tile_file": tile_path.relative_to(index_root).as_posix(),
-                "usable_ratio": float(stars.size / total) if total else 0.0,
-            }
-        )
-        logger.debug(
-            "converted %s -> %s (%d stars of %d total)",
-            tile_meta.key,
-            tile_path,
-            stars.size,
-            total,
-        )
-    manifest = {
-        "version": 1,
-        "mag_cap": mag_cap,
-        "max_stars": max_stars,
-        "levels": [level.to_manifest() for level in LEVEL_SPECS],
-        "generated_at": datetime.utcnow().isoformat() + "Z",
-        "db_root": str(db_root),
-        "tile_count": len(tile_entries),
-        "tiles": tile_entries,
-    }
-    manifest_path.write_text(json.dumps(manifest, indent=2))
-    logger.info("Index manifest written to %s", manifest_path)
-    if not skip_quads:
-        for level in LEVEL_SPECS:
-            build_quad_index(
-                index_root,
-                level.name,
-                max_quads_per_tile=max_quads_per_tile,
-                workers=workers,
-                storage_format=quad_fmt,
+                if not valid.any():
+                    logger.warning(
+                        "tile %s: cartesian center %.2f/%.2f yielded no TAN projection, falling back to layout center",
+                        tile_meta.key,
+                        center_ra_deg,
+                        center_dec_deg,
+                    )
+                    center_ra_deg = tile_meta.center_ra_deg
+                    center_dec_deg = tile_meta.center_dec_deg
+                    x_deg, y_deg = project_tan(ra, dec, center_ra_deg, center_dec_deg)
+                    valid = np.isfinite(x_deg) & np.isfinite(y_deg)
+                stars = stars[valid]
+                ra = ra[valid]
+                dec = dec[valid]
+                x_deg = x_deg[valid]
+                y_deg = y_deg[valid]
+            else:
+                center_ra_deg = tile_meta.center_ra_deg
+                center_dec_deg = tile_meta.center_dec_deg
+                ra = np.empty(0, dtype=np.float64)
+                dec = np.empty(0, dtype=np.float64)
+                x_deg = np.empty(0, dtype=np.float32)
+                y_deg = np.empty(0, dtype=np.float32)
+            if mag_cap is not None:
+                mask_mag = stars["mag"] <= mag_cap
+                stars = stars[mask_mag]
+                x_deg = x_deg[mask_mag]
+                y_deg = y_deg[mask_mag]
+                ra = ra[mask_mag]
+                dec = dec[mask_mag]
+            if stars.size > max_stars:
+                order = np.argsort(stars["mag"])
+                order = order[:max_stars]
+                stars = stars[order]
+                x_deg = x_deg[order]
+                y_deg = y_deg[order]
+                ra = ra[order]
+                dec = dec[order]
+            tile_path = tiles_dir / f"{tile_meta.key}.npz"
+            save_tile(
+                tile_path,
+                ra_deg=stars["ra_deg"].astype(np.float64, copy=False),
+                dec_deg=stars["dec_deg"].astype(np.float64, copy=False),
+                mag=stars["mag"].astype(np.float32, copy=False),
+                x_deg=x_deg.astype(np.float32, copy=False),
+                y_deg=y_deg.astype(np.float32, copy=False),
             )
+            if stars.size:
+                bounds = _bounds_from_points(ra, dec, center_ra_deg)
+            else:
+                bounds = _serialize_bounds(tile_meta.bounds)
+            tile_entries.append(
+                {
+                    "tile_index": tile_index,
+                    "tile_key": tile_meta.key,
+                    "family": tile_meta.family,
+                    "tile_code": tile_meta.tile_code,
+                    "center_ra_deg": float(center_ra_deg),
+                    "center_dec_deg": float(center_dec_deg),
+                    "bounds": bounds,
+                    "stars": int(stars.size),
+                    # Store relative path using POSIX separators for cross-platform portability
+                    "tile_file": tile_path.relative_to(index_root).as_posix(),
+                    "usable_ratio": float(stars.size / total) if total else 0.0,
+                }
+            )
+            logger.debug(
+                "converted %s -> %s (%d stars of %d total)",
+                tile_meta.key,
+                tile_path,
+                stars.size,
+                total,
+            )
+        manifest = {
+            "version": 1,
+            "mag_cap": mag_cap,
+            "max_stars": max_stars,
+            "levels": [level.to_manifest() for level in LEVEL_SPECS],
+            "generated_at": datetime.utcnow().isoformat() + "Z",
+            "db_root": str(db_root),
+            "tile_count": len(tile_entries),
+            "tiles": tile_entries,
+        }
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        logger.info("Index manifest written to %s", manifest_path)
+    if skip_quads:
+        return manifest_path
+    for level in LEVEL_SPECS:
+        build_quad_index(
+            index_root,
+            level.name,
+            max_quads_per_tile=max_quads_per_tile,
+            workers=workers,
+            storage_format=quad_fmt,
+        )
     return manifest_path
 
 
@@ -250,6 +261,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--skip-quads", action="store_true", help="Only write manifest/tiles and skip quad hashing")
     parser.add_argument(
+        "--quads-only",
+        action="store_true",
+        help="Reuse existing tiles/manifest and rebuild only quad hash tables",
+    )
+    parser.add_argument(
         "--quad-storage",
         choices=("npz", "npz_uncompressed", "npy"),
         default="npz",
@@ -271,6 +287,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=args.log_level.upper(), format="%(levelname)s: %(message)s")
     try:
+        if args.skip_quads and args.quads_only:
+            parser.error("--quads-only cannot be combined with --skip-quads")
         build_index_from_astap(
             args.db_root,
             args.index_root,
@@ -278,6 +296,7 @@ def main(argv: list[str] | None = None) -> int:
             max_stars=args.max_stars,
             max_quads_per_tile=args.max_quads_per_tile,
             skip_quads=bool(args.skip_quads),
+            quads_only=bool(args.quads_only),
             quad_storage=args.quad_storage,
             tile_compression=args.tile_compression,
             workers=args.workers,

@@ -5,7 +5,10 @@ import shutil
 from pathlib import Path
 
 import numpy as np
+import pytest
 
+import zeblindsolver.db_convert as db_convert_mod
+from zeblindsolver.db_convert import build_index_from_astap
 from zeblindsolver.levels import LEVEL_SPECS
 from zeblindsolver.quad_index_builder import QuadIndex, build_quad_index, lookup_hashes, _INDEX_CACHE
 
@@ -63,11 +66,11 @@ def test_quad_index_storage_variants(tmp_path, synthetic_star_catalog):
     for fmt in ("npz", "npz_uncompressed", "npy"):
         dst = tmp_path / f"index_{fmt}"
         shutil.copytree(base_root, dst)
-        build_quad_index(dst, "L", max_quads_per_tile=200, storage_format=fmt)
+        build_quad_index(dst, "S", max_quads_per_tile=200, storage_format=fmt)
         _INDEX_CACHE.clear()
-        index = QuadIndex.load(dst, "L")
+        index = QuadIndex.load(dst, "S")
         sample = index.hashes[: min(5, index.hashes.shape[0])]
-        slices = [(slc.start, slc.stop) for slc in lookup_hashes(dst, "L", sample)]
+        slices = [(slc.start, slc.stop) for slc in lookup_hashes(dst, "S", sample)]
         results[fmt] = {
             "hashes": index.hashes.copy(),
             "tiles": index.tile_indices.copy(),
@@ -80,3 +83,42 @@ def test_quad_index_storage_variants(tmp_path, synthetic_star_catalog):
         assert np.array_equal(payload["tiles"], baseline["tiles"])
         assert np.array_equal(payload["quads"], baseline["quads"])
         assert payload["slices"] == baseline["slices"]
+
+
+def test_quads_only_rebuild(tmp_path, synthetic_star_catalog, monkeypatch):
+    s_spec = next(spec for spec in db_convert_mod.LEVEL_SPECS if spec.name == "S")
+    monkeypatch.setattr(db_convert_mod, "LEVEL_SPECS", (s_spec,))
+    positions, mags = synthetic_star_catalog
+    index_root = _create_base_index(tmp_path, positions, mags)
+    manifest = index_root / "manifest.json"
+    assert manifest.exists()
+    hash_dir = index_root / "hash_tables"
+    if hash_dir.exists():
+        shutil.rmtree(hash_dir)
+    rebuilt = build_index_from_astap(
+        db_root=tmp_path / "fake_db",
+        index_root=index_root,
+        max_quads_per_tile=128,
+        quads_only=True,
+        quad_storage="npz",
+        tile_compression="compressed",
+        workers=1,
+    )
+    assert rebuilt == manifest
+    for level in db_convert_mod.LEVEL_SPECS:
+        table = hash_dir / f"quads_{level.name}.npz"
+        assert table.exists()
+        with np.load(table, allow_pickle=False) as payload:
+            metadata = json.loads(str(payload["metadata"][0]))
+        assert metadata["sampler"] == "pairwise_multiscale_v1"
+
+
+def test_quads_only_requires_manifest(tmp_path):
+    index_root = tmp_path / "no_manifest"
+    index_root.mkdir()
+    with pytest.raises(FileNotFoundError):
+        build_index_from_astap(
+            db_root=tmp_path / "any",
+            index_root=index_root,
+            quads_only=True,
+        )

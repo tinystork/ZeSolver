@@ -1,8 +1,10 @@
 Français :
 1. Préparez vos bases ASTAP/HNSKY dans `database/` (D50, D80, etc.).
-2. Construisez l’index tangentiel + tables de quads en lançant :
+2. Construisez l'index tangentiel + tables de quads en lançant :
    `zebuildindex --db-root database --index-root index --mag-cap 15.5 --max-stars 2000 --max-quads-per-tile 20000`
    Cela écrit des `.npz` par tuile, un `manifest.json` et des tables `hash_tables/quads_*`.
+   Après une mise à jour du solveur qui change la génération des quads, relancez la même commande avec `--quads-only`
+   pour régénérer uniquement les tables `hash_tables` sans reconvertir toute la base ASTAP.
 3. Pour un premier blind solve, exécutez :
    `zeblindsolve examples/Light_M81.fit --index-root index --max-candidates 12 --max-stars 800 --quality-rms 1.0 --quality-inliers 60`
    Le FITS reçoit un WCS TAN vérifié et des mots‑clés normalisés: `SOLVED`, `SOLVER=ZeSolver`,
@@ -15,6 +17,8 @@ English :
 2. Build the tangent-plane tiles and quad hashes:
    `zebuildindex --db-root database --index-root index --mag-cap 15.5 --max-stars 2000 --max-quads-per-tile 20000`
    This produces per-tile `.npz` blobs, a `manifest.json`, and `hash_tables/quads_*`.
+   After an update that tweaks quad sampling, rerun the same command with `--quads-only` to refresh just the
+   `hash_tables` directory without reconverting the full ASTAP database.
 3. Run the blind solver for the first time:
    `zeblindsolve examples/Light_M81.fit --index-root index --max-candidates 12 --max-stars 800 --quality-rms 1.0 --quality-inliers 60`
    The FITS header will be updated with normalized keywords: `SOLVED`, `SOLVER=ZeSolver`,

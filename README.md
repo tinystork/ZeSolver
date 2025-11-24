@@ -108,6 +108,21 @@ python -m zeblindsolver.db_convert ^
 
 The Settings tab in the GUI exposes the same drop-downs right above the "Construire l'index" button, so you can pick the quad storage (compressed `.npz`, store-only `.npz`, or `.npy` folders) and tile compression modes without memorising the CLI flags.
 Whenever you drop additional ASTAP/HNSKY databases in your configured `database/` directory, the GUI now scans the folder in the background and logs the newly detected families, offering to kick off an index rebuild so the fresh catalogs become available inside the solver without blocking the interface.
+When the quad sampler or hash encoder changes, you can refresh the hash tables without re-projecting every tile by adding `--quads-only` to the `zebuildindex` command. This flag reuses the existing `tiles/` snapshots and `manifest.json`, wipes the old `hash_tables/quads_*`, and regenerates them with the current sampler metadata so the solver reports an actionable "stale index" error instead of failing mid-run.
+eg : 
+python -m zeblindsolver.db_convert --db-root ".\database" --index-root ".\index" --mag-cap 15.5 --max-stars 2000 --max-quads-per-tile 20000 --quad-storage npy --tile-compression uncompressed --workers 8 --quads-only
+or
+python -m zeblindsolver.db_convert `
+  --db-root .\database `
+  --index-root .\index `
+  --mag-cap 15.5 `
+  --max-stars 2000 `
+  --max-quads-per-tile 20000 `
+  --quad-storage npy `
+  --tile-compression uncompressed `
+  --workers 8 `
+  --quads-only
+
 
 ## Batch solver GUI/CLI
 

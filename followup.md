@@ -52,8 +52,9 @@ L'objectif est de restructurer `zeblind` pour adopter les concepts qui font la f
         4.  La géométrie du quad `A,B,C,D` est alors utilisée pour calculer le hash.
     *   Cette méthode garantit la création d'une collection de motifs beaucoup plus riche et plus stable.
 
-- [ ] **Étape 2.2 : Reconstruire l'index complet.**
+- [x] **Étape 2.2 : Reconstruire l'index complet.**
     *   Une fois le nouvel algorithme de génération de quads implémenté, il sera nécessaire de reconstruire entièrement la base de données de l'index. Cet index sera plus grand mais infiniment plus utile.
+    *   `zebuildindex` expose désormais l'option `--quads-only` pour relancer uniquement la phase de hash (sans re-projeter tout ASTAP), ce qui facilite les reconstructions complètes à chaque changement du sampler.
 
 ---
 
@@ -66,5 +67,9 @@ L'objectif est de restructurer `zeblind` pour adopter les concepts qui font la f
 
 - [ ] **Étape 3.2 : Envisager des méthodes plus avancées.**
     *   Pour aller plus loin, des techniques comme la **transformée en ondelettes** ou la **Différence de Gaussiennes (DoG)** sont la norme dans les logiciels professionnels (comme SExtractor) pour séparer les étoiles du bruit et des artéfacts à différentes échelles.
+    *   Piste DoG multi-échelle : (1) estimer le bruit local (médiane ou gaussien large) ; (2) filtrer l'image avec deux gaussiennes centrées autour du FWHM estimé (ex. sigma et 1.6–2.0*sigma) puis soustraire pour obtenir une carte DoG qui maximise les sources ponctuelles ; (3) calculer une carte sigma locale (grille 8x8/16x16) sur la carte DoG et seuiller à k*sigma (k ajustable) ; (4) extraire les composantes connexes, rejeter les blobs allongés/gros (cosmiques/traînées), recentrer par barycentre, mesurer flux et FWHM locale ; (5) fusionner les détections proches issues de plusieurs paires de sigmas.
+    *   Piste ondelettes (starlet) : (1) décomposition à trous sur 3–5 échelles ; (2) estimation du bruit par échelle (MAD) puis seuillage dur/soft à k*sigma ; (3) somme pondérée des cartes seuillées pour une carte de probabilité ; (4) détection des maxima locaux sur cette carte et report au plan d'origine pour une position sub-pixel ; (5) option de pondération par l'échelle dominante pour écarter galaxies/étirements.
+    *   Intégration (sans code pour l'instant) : prévoir un paramètre `--detect-method {adaptive,dog,wavelet}` (et une option GUI), exposer `--dog-sigma`, `--dog-k`, `--wavelet-levels`, `--wavelet-k`, et retomber automatiquement sur la méthode adaptative si les libs requises manquent. Ajouter des tests synthétiques (PSF gaussienne + bruit blanc + gradient) pour comparer TP/FP et la stabilité sub-pixel entre méthodes.
+    Pour aller plus loin, lors de l'implémentation, vous pourriez vous inspirer (ou même utiliser) des fonctions existantes dans des bibliothèques comme photutils (affiliée à Astropy), qui implémente déjà des détecteurs d'étoiles performants (par exemple DAOStarFinder et IRAFStarFinder) et des outils de segmentation.
 
 En suivant ce plan, `zeblind` sera transformé d'un prototype conceptuel à un solveur performant, rapide et efficace, fidèle à l'inspiration d'ASTAP.
