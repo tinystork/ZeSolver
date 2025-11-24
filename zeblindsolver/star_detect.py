@@ -14,6 +14,40 @@ except Exception:  # pragma: no cover
     _HAVE_CUPY = False
 
 
+def _grid_edges(length: int, divisions: int) -> np.ndarray:
+    """Return monotonic integer edges covering [0, length]."""
+    divisions = max(1, int(divisions))
+    edges = np.linspace(0, int(length), divisions + 1, dtype=int)
+    edges[0] = 0
+    edges[-1] = int(length)
+    return edges
+
+
+def _local_grid_threshold(array, *, k_sigma: float, divisions: int, xp):
+    """Compute a per-pixel threshold map using block-wise statistics."""
+    divisions = max(1, int(divisions))
+    mean = xp.nanmean(array)
+    std = xp.nanstd(array)
+    threshold = xp.full_like(array, mean + k_sigma * std)
+    rows = _grid_edges(array.shape[0], divisions)
+    cols = _grid_edges(array.shape[1], divisions)
+    for r in range(divisions):
+        y0, y1 = int(rows[r]), int(rows[r + 1])
+        if y1 <= y0:
+            continue
+        for c in range(divisions):
+            x0, x1 = int(cols[c]), int(cols[c + 1])
+            if x1 <= x0:
+                continue
+            block = array[y0:y1, x0:x1]
+            if block.size == 0:
+                continue
+            local_mean = xp.nanmean(block)
+            local_std = xp.nanstd(block)
+            threshold[y0:y1, x0:x1] = local_mean + k_sigma * local_std
+    return threshold
+
+
 def detect_stars(
     img: np.ndarray,
     *,
@@ -21,10 +55,11 @@ def detect_stars(
     max_fwhm_px: float = 8.0,
     k_sigma: float = 3.0,
     min_area: int = 5,
-    mode: str = "global",  # "adaptive" | "global"
+    mode: str = "adaptive",  # "adaptive" | "global"
     bg_sigma: float | None = None,
     backend: str = "auto",  # "auto" | "cpu" | "cuda"
     device: int | None = None,
+    grid_divisions: int = 8,
 ) -> np.ndarray:
     """Detect bright, stellar-like sources.
 
@@ -34,7 +69,8 @@ def detect_stars(
       - "cuda": use CuPy on the selected CUDA device
     device: CUDA device index (0..N-1) when backend="cuda" or "auto" with GPUs.
     mode:
-      - "adaptive" (default): local background/variance via large Gaussian; robust to gradients
+      - "adaptive" (default): divide the smoothed image into a grid, compute local mean/std,
+        and threshold each cell independently (robust to gradients)
       - "global": legacy mean + k_sigma threshold
     """
     data = np.asarray(img, dtype=np.float32)
@@ -60,10 +96,12 @@ def detect_stars(
                 mode_lower = (mode or "adaptive").lower()
                 if mode_lower == "adaptive":
                     d_bg = _cpx_nd.gaussian_filter(d_data, sigma=bg_sigma_val)
-                    d_bg2 = _cpx_nd.gaussian_filter(d_data * d_data, sigma=bg_sigma_val)
-                    d_var = _cp.maximum(d_bg2 - d_bg * d_bg, 0.0)
-                    d_std = _cp.sqrt(d_var + 1e-6)
-                    d_threshold = d_bg + k_sigma * d_std
+                    d_threshold = _local_grid_threshold(
+                        d_bg,
+                        k_sigma=k_sigma,
+                        divisions=grid_divisions,
+                        xp=_cp,
+                    )
                     d_mask = d_blur > d_threshold
                 else:
                     mean = float(_cp.nanmean(d_blur).get())
@@ -111,10 +149,12 @@ def detect_stars(
     mode_lower = (mode or "adaptive").lower()
     if mode_lower == "adaptive":
         bg = gaussian_filter(data, sigma=bg_sigma_val)
-        bg2 = gaussian_filter(data * data, sigma=bg_sigma_val)
-        var = np.maximum(bg2 - bg * bg, 0.0)
-        std = np.sqrt(var + 1e-6)
-        threshold = bg + k_sigma * std
+        threshold = _local_grid_threshold(
+            bg,
+            k_sigma=k_sigma,
+            divisions=grid_divisions,
+            xp=np,
+        )
     else:
         mean = float(np.nanmean(blurred))
         std = float(np.nanstd(blurred))

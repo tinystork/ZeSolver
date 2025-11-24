@@ -20,12 +20,71 @@ from .levels import LEVEL_MAP, bucket_cap_for
 logger = logging.getLogger(__name__)
 HASH_DIR = "hash_tables"
 MANIFEST_FILENAME = "manifest.json"
+QUAD_TABLE_VERSION = 2
+QUAD_SAMPLER_TAG = "pairwise_multiscale_v1"
+QUAD_METADATA_FILE = "metadata.json"
 _INDEX_CACHE: dict[tuple[Path, str], "QuadIndex"] = {}
 # Prevent redundant concurrent loads of the same quad table
 _INDEX_LOCK = threading.Lock()
 # Cache manifest contents with a simple stat signature to avoid re-reading JSON repeatedly
 _MANIFEST_CACHE: dict[Path, tuple[tuple[int, int], dict[str, Any]]] = {}
 _MANIFEST_LOCK = threading.Lock()
+
+
+def _metadata_text(metadata: dict[str, Any]) -> str:
+    return json.dumps(metadata, sort_keys=True)
+
+
+def _metadata_array(metadata: dict[str, Any]) -> np.ndarray:
+    text = _metadata_text(metadata)
+    return np.array([text], dtype=f"<U{len(text)}")
+
+
+def _validate_metadata(metadata: dict[str, Any], *, level: str) -> dict[str, Any]:
+    version = int(metadata.get("version", 0))
+    if version < QUAD_TABLE_VERSION:
+        raise RuntimeError(
+            f"quad table schema v{version} is outdated (need >= v{QUAD_TABLE_VERSION}); rebuild required"
+        )
+    sampler = str(metadata.get("sampler", ""))
+    if sampler != QUAD_SAMPLER_TAG:
+        raise RuntimeError(
+            f"quad table sampler {sampler!r} incompatible with {QUAD_SAMPLER_TAG}; rebuild required"
+        )
+    lvl = metadata.get("level")
+    if lvl and str(lvl) != level:
+        raise RuntimeError(f"quad table level mismatch ({lvl} vs {level}); rebuild required")
+    return metadata
+
+
+def quad_table_metadata(index_root: Path | str, level: str) -> dict[str, Any]:
+    """Return validated metadata for an existing quad table."""
+    root = Path(index_root).expanduser().resolve()
+    dir_path = root / HASH_DIR / f"quads_{level}"
+    file_path = root / HASH_DIR / f"quads_{level}.npz"
+    metadata: dict[str, Any]
+    if dir_path.is_dir():
+        meta_path = dir_path / QUAD_METADATA_FILE
+        if not meta_path.exists():
+            raise RuntimeError(f"quad table metadata missing for {level}: {meta_path}")
+        metadata = json.loads(meta_path.read_text(encoding="utf-8"))
+    elif file_path.exists():
+        with np.load(file_path, allow_pickle=False) as data:
+            if "metadata" not in data:
+                raise RuntimeError(f"quad table metadata missing for {level}: {file_path}")
+            metadata = json.loads(str(data["metadata"][0]))
+    else:
+        raise FileNotFoundError(f"quad table not found for level {level}")
+    return _validate_metadata(metadata, level=str(level))
+
+
+def quad_table_is_current(index_root: Path | str, level: str) -> bool:
+    """Return True if the quad table exists and passes metadata validation."""
+    try:
+        quad_table_metadata(index_root, level)
+        return True
+    except Exception:
+        return False
 
 
 def _normalize_ra(value: float) -> float:
@@ -375,6 +434,7 @@ class QuadIndex:
     bucket_hashes: np.ndarray
     bucket_offsets: np.ndarray
     bucket_cap: int
+    metadata: dict[str, Any]
 
     @classmethod
     def load(cls, index_root: Path, level: str) -> "QuadIndex":
@@ -392,6 +452,13 @@ class QuadIndex:
             storage = "npz"
             start = time.perf_counter()
             if dir_path.is_dir():
+                meta_path = dir_path / QUAD_METADATA_FILE
+                if not meta_path.exists():
+                    raise RuntimeError(f"quad table metadata missing for {level}: {meta_path}")
+                metadata = _validate_metadata(
+                    json.loads(meta_path.read_text(encoding="utf-8")),
+                    level=level,
+                )
                 payload = {
                     "hashes": np.load(dir_path / "hashes.npy", mmap_mode="r", allow_pickle=False),
                     "tile_indices": np.load(dir_path / "tile_indices.npy", mmap_mode="r", allow_pickle=False),
@@ -404,6 +471,12 @@ class QuadIndex:
                 if not file_path.exists():
                     raise FileNotFoundError(file_path)
                 with np.load(file_path, allow_pickle=False) as data:
+                    if "metadata" not in data:
+                        raise RuntimeError(f"quad table metadata missing for {level}: {file_path}")
+                    metadata = _validate_metadata(
+                        json.loads(str(data["metadata"][0])),
+                        level=level,
+                    )
                     payload = {
                         "hashes": data["hashes"],
                         "tile_indices": data["tile_indices"],
@@ -422,6 +495,7 @@ class QuadIndex:
                 bucket_hashes=payload["bucket_hashes"],
                 bucket_offsets=payload["bucket_offsets"],
                 bucket_cap=bucket_cap,
+                metadata=metadata,
             )
             elapsed = time.perf_counter() - start
             logger.debug(
@@ -454,8 +528,7 @@ def _process_tile_for_level(
         from .levels import LEVEL_MAP  # local import is safe in subproc
         from .asterisms import sample_quads, hash_quads
         spec = LEVEL_MAP.get(level_name)
-        strategy = "biased_brightness" if level_name == "L" else "local_brightness"
-        quads = sample_quads(stars, max_quads_per_tile, strategy=strategy)
+        quads = sample_quads(stars, max_quads_per_tile, strategy="log_spaced")
         if quads.size == 0:
             return None
         quad_hash = hash_quads(quads, coords, spec=spec)
@@ -573,6 +646,15 @@ def build_quad_index(
     bucket_offsets = np.empty(len(bucket_hashes) + 1, dtype=np.uint32)
     bucket_offsets[:-1] = start_idx.astype(np.uint32)
     bucket_offsets[-1] = sorted_hashes.shape[0]
+    metadata = {
+        "version": QUAD_TABLE_VERSION,
+        "sampler": QUAD_SAMPLER_TAG,
+        "level": level,
+        "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "max_quads_per_tile": int(max_quads_per_tile),
+        "storage": fmt,
+    }
+    meta_text = _metadata_text(metadata)
     if fmt == "npy":
         out_dir = hash_dir / f"quads_{level}"
         if out_dir.exists():
@@ -586,6 +668,7 @@ def build_quad_index(
         np.save(out_dir / "quad_indices.npy", sorted_quads, allow_pickle=False)
         np.save(out_dir / "bucket_hashes.npy", bucket_hashes, allow_pickle=False)
         np.save(out_dir / "bucket_offsets.npy", bucket_offsets, allow_pickle=False)
+        (out_dir / QUAD_METADATA_FILE).write_text(meta_text, encoding="utf-8")
         logger.info("built quad index %s (npy) with %d entries", out_dir, sorted_hashes.shape[0])
         return out_dir
     out_path = hash_dir / f"quads_{level}.npz"
@@ -602,6 +685,7 @@ def build_quad_index(
         quad_indices=sorted_quads,
         bucket_hashes=bucket_hashes,
         bucket_offsets=bucket_offsets,
+        metadata=_metadata_array(metadata),
     )
     logger.info("built quad index %s (%s) with %d entries", out_path, fmt, sorted_hashes.shape[0])
     return out_path

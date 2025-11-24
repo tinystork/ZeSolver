@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from .levels import QuadLevelSpec
+from .quad_sampling import generate_pairwise_quads
 
 MIN_RATIO = 0.25
 MAX_RATIO = 4.0
@@ -34,64 +35,6 @@ def _quad_diameter(points: np.ndarray) -> float:
     diffs = points[:, None, :] - points[None, :, :]
     dists = np.hypot(diffs[..., 0], diffs[..., 1])
     return float(np.nanmax(dists))
-
-
-def _select_neighbors_multiscale(
-    positions: np.ndarray,
-    seed: int,
-    *,
-    scale_bins: int = 6,
-    neighbors_per_bin: int = 4,
-) -> list[int]:
-    """Pick neighbors for *seed* across logarithmically spaced distance bins."""
-    dx = positions[:, 0] - positions[seed, 0]
-    dy = positions[:, 1] - positions[seed, 1]
-    dist2 = dx * dx + dy * dy
-    finite_mask = np.isfinite(dist2)
-    finite_mask[seed] = False
-    if not finite_mask.any():
-        return []
-    positive = dist2[finite_mask]
-    positive = positive[positive > 0.0]
-    if positive.size == 0:
-        return []
-    dmin = float(np.nanmin(positive))
-    dmax = float(np.nanmax(positive))
-    if not np.isfinite(dmin) or not np.isfinite(dmax) or dmax <= 0.0:
-        return []
-    bin_count = max(1, min(scale_bins, int(positive.size)))
-    if dmax <= dmin * 1.05:
-        edges = np.linspace(dmin, dmax + 1e-12, num=bin_count + 1)
-    else:
-        edges = np.geomspace(max(dmin, 1e-12), dmax, num=bin_count + 1)
-    edges[-1] = max(edges[-1], dmax)
-    order = np.argsort(np.where(np.isfinite(dist2), dist2, np.inf))
-    valid_order = [idx for idx in order if finite_mask[idx] and dist2[idx] > 0.0]
-    if not valid_order:
-        return []
-    dist_sorted = dist2[valid_order]
-    bin_lists: list[list[int]] = []
-    for i in range(edges.shape[0] - 1):
-        start = edges[i]
-        end = edges[i + 1]
-        mask = (dist_sorted >= start) & (dist_sorted < end if i < edges.shape[0] - 2 else dist_sorted <= end)
-        if not mask.any():
-            continue
-        candidates = np.asarray(valid_order, dtype=np.int64)[mask][:neighbors_per_bin]
-        if candidates.size:
-            bin_lists.append(candidates.tolist())
-    if not bin_lists:
-        return []
-    prioritized: list[int] = []
-    seen: set[int] = set()
-    for depth in range(neighbors_per_bin):
-        for group in bin_lists:
-            if depth < len(group):
-                idx = int(group[depth])
-                if idx not in seen:
-                    prioritized.append(idx)
-                    seen.add(idx)
-    return prioritized
 
 
 def _legacy_biased_brightness(order: np.ndarray, max_quads: int) -> np.ndarray:
@@ -175,13 +118,23 @@ def _hash_from_indexes(
     return hash_value, order
 
 
+def _priority_order_indices(stars: np.ndarray) -> np.ndarray:
+    names = stars.dtype.names or ()
+    if "mag" in names:
+        return np.argsort(stars["mag"])
+    if "flux" in names:
+        return np.argsort(stars["flux"])[::-1]
+    return np.arange(stars.shape[0])
+
+
 def sample_quads(stars: np.ndarray, max_quads: int, strategy: str = "log_spaced") -> np.ndarray:
-    """Return up to *max_quads* quads with multi-scale distance coverage.
+    """Return up to *max_quads* quads using robust pair-based sampling.
 
     Default (any non-legacy strategy):
-      - iterate over all finite stars in spatial order
-      - pick neighbors for each seed across logarithmic distance bins
-      - interleave bins to mix small/medium/large quads and stop once *max_quads* is reached
+      - iterate over stars ordered by brightness/flux
+      - form base pairs (A,B) across logarithmically spaced distance bins
+      - gather nearby companions around the A-B segment to pick C/D with stable relative geometry
+      - interleave scales until *max_quads* are generated
 
     Legacy fallbacks (for backward compatibility):
       - "legacy_brightness": previous brightest-pool sampling
@@ -190,44 +143,34 @@ def sample_quads(stars: np.ndarray, max_quads: int, strategy: str = "log_spaced"
     if max_quads <= 0 or stars.shape[0] < 4:
         return np.zeros((0, 4), dtype=np.uint16)
     method = (strategy or "log_spaced").lower()
-    mags = stars["mag"]
-    order = np.argsort(mags)
+    priority_order = _priority_order_indices(stars)
     if method == "legacy_brightness":
-        return _legacy_biased_brightness(order, max_quads)
+        return _legacy_biased_brightness(priority_order, max_quads)
     if method == "legacy_local":
-        return _legacy_local_brightness(order, stars, max_quads)
+        return _legacy_local_brightness(priority_order, stars, max_quads)
 
-    positions = np.column_stack((stars["x"].astype(np.float64), stars["y"].astype(np.float64)))
+    positions = np.column_stack(
+        (stars["x"].astype(np.float64), stars["y"].astype(np.float64))
+    )
     finite_mask = np.isfinite(positions).all(axis=1)
-    valid_indices = np.nonzero(finite_mask)[0]
-    if valid_indices.size < 4:
+    if finite_mask.sum() < 4:
         return np.zeros((0, 4), dtype=np.uint16)
-    spatial_order = np.lexsort((positions[valid_indices, 1], positions[valid_indices, 0]))
-    seeds = valid_indices[spatial_order]
-    combos: list[tuple[int, int, int, int]] = []
-    seen_quads: set[tuple[int, int, int, int]] = set()
-    per_seed_cap = min(max_quads, 512)
-    for seed in seeds:
-        if len(combos) >= max_quads:
-            break
-        neighbors = _select_neighbors_multiscale(positions, seed)
-        if len(neighbors) < 3:
-            continue
-        per_seed_limit = min(per_seed_cap, max_quads - len(combos))
-        added = 0
-        for a, b, c in itertools.combinations(neighbors, 3):
-            quad = (seed, a, b, c)
-            key = tuple(sorted(quad))
-            if key in seen_quads:
-                continue
-            seen_quads.add(key)
-            combos.append(quad)
-            added += 1
-            if added >= per_seed_limit or len(combos) >= max_quads:
-                break
-    if not combos:
+    valid_positions = positions[finite_mask]
+    index_map = np.nonzero(finite_mask)[0]
+    lookup = np.full(stars.shape[0], -1, dtype=np.int32)
+    lookup[index_map] = np.arange(index_map.shape[0], dtype=np.int32)
+    seed_order = np.array(
+        [lookup[idx] for idx in priority_order if lookup[idx] >= 0],
+        dtype=np.int32,
+    )
+    quads = generate_pairwise_quads(
+        valid_positions,
+        seed_order=seed_order,
+        max_quads=max_quads,
+    )
+    if quads.size == 0:
         return np.zeros((0, 4), dtype=np.uint16)
-    return np.array(combos, dtype=np.uint16)
+    return index_map[quads]
 
 
 def hash_quads(quads: np.ndarray, positions: np.ndarray, *, spec: QuadLevelSpec | None = None) -> QuadHash:

@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import shutil
 import sys
 import threading
 import time
@@ -87,7 +88,7 @@ from zeblindsolver.db_convert import (
     build_index_from_astap,
 )
 from zeblindsolver.zeblindsolver import SolveConfig as BlindSolveConfig, solve_blind as python_solve_blind
-from zeblindsolver.quad_index_builder import validate_index as validate_zeblind_index
+from zeblindsolver.quad_index_builder import quad_table_metadata, validate_index as validate_zeblind_index
 from zeblindsolver import presets as preset_utils
 from tools import benchmark_solver as bench
 
@@ -2825,6 +2826,28 @@ def launch_gui(args: argparse.Namespace) -> int:
 
                     for level in target_levels:
                         existing = _existing_quad_table(level.name)
+                        valid_metadata: dict[str, Any] | None = None
+                        if existing is not None:
+                            try:
+                                valid_metadata = quad_table_metadata(idx_root, level.name)
+                            except Exception as exc:
+                                warn = f"Quad table stale or invalid ({existing}): {exc}; rebuilding…"
+                                self.log.emit(warn)
+                                logging.info(warn)
+                                try:
+                                    if existing.is_dir():
+                                        shutil.rmtree(existing)
+                                    else:
+                                        existing.unlink()
+                                except Exception as remove_exc:
+                                    logging.warning("Failed to remove %s: %s", existing, remove_exc)
+                                existing = None
+                            else:
+                                sampler = valid_metadata.get("sampler", "?")
+                                generated = valid_metadata.get("generated_at", "?")
+                                summary = f"Quad table present: {existing} (sampler {sampler}, generated {generated})"
+                                self.log.emit(summary)
+                                logging.info(summary)
                         if existing is None:
                             limit = int(self.level_quads.get(level.name, self.max_quads_per_tile))
                             target = (
@@ -2832,11 +2855,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                                 if self.quad_storage != "npy"
                                 else ht / f"quads_{level.name}"
                             )
-                            msg = f"Building missing quad table: {target}"
+                            msg = f"Building quad table: {target}"
                             self.log.emit(msg)
                             logging.info(msg)
+
                             def _cb(done: int, total: int, tile_key: str, lvl=level.name):
                                 self.progress.emit(done, total, f"{lvl}:{tile_key}")
+
                             built = build_quad_index(
                                 idx_root,
                                 level.name,
@@ -2849,8 +2874,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                             self.log.emit(done)
                             logging.info(done)
                             built_any = True
-                        else:
-                            self.log.emit(f"Quad table present: {existing}")
                     # Final presence check
                     missing = [lvl.name for lvl in target_levels if _existing_quad_table(lvl.name) is None]
                     if missing:
