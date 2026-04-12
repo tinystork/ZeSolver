@@ -12,6 +12,7 @@ from astropy.io import fits
 from .fits_utils import estimate_scale_and_fov as _estimate_scale_and_fov
 from .fits_utils import parse_angle as _parse_angle
 from .astrometry_client import AstrometryClient, AstrometryClientError, parse_wcs_bytes
+from .wcs_header import sanitize_wcs_keywords
 try:
     # Internal blind solver for fallback
     from .zeblindsolver import solve_blind as _solve_blind_internal
@@ -124,6 +125,8 @@ def _prepare_submission_image(data: np.ndarray, header: Optional[fits.Header]) -
 def _write_wcs_header(fits_path: Path, cards: Dict[str, Any], *, backend_label: str = "astrometry.net") -> None:
     with fits.open(fits_path, mode="update", memmap=False) as hdul:
         hdr = hdul[0].header
+        # Replace any pre-existing WCS cards to avoid mixed/legacy headers.
+        sanitize_wcs_keywords(hdr, remove_sip=True)
         # Merge returned WCS cards
         for k, v in cards.items():
             try:

@@ -29,6 +29,7 @@ from .levels import LEVEL_MAP, QuadLevelSpec, set_bucket_cap_overrides
 from .star_detect import detect_stars
 from .verify import validate_solution
 from .wcs_fit import fit_wcs_sip, fit_wcs_tan, needs_sip, tan_from_similarity
+from .wcs_header import apply_wcs_solution_to_header
 
 try:
     from importlib.metadata import PackageNotFoundError, version as pkg_version
@@ -1292,10 +1293,12 @@ def solve_blind(
     if is_fits:
         with fits.open(source_path, mode="update", memmap=False) as hdul:
             header_out = hdul[0].header
-            for key, value in best_solution.wcs.to_header(relax=True).items():
-                header_out[key] = value
-            for key, value in header_updates.items():
-                header_out[key] = value
+            apply_wcs_solution_to_header(
+                header_out,
+                best_solution.wcs,
+                header_updates=header_updates,
+                remove_sip_before_write=True,
+            )
             header_out["ZBLNDVER"] = ZEBLIND_VERSION
             hdul.flush()
         logger.info(
