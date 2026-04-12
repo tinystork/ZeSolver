@@ -1,4 +1,4 @@
-# zewcs290
+# ZeSolver
 
 An offline WCS (World Coordinate System) solver designed specifically for Seestar / ZeSolver
 workflows. The project ingests the ASTAP / HNSKY ``.1476`` (Dxx/V50) and ``.290`` (G05) Gaia
@@ -29,7 +29,9 @@ pyproject.toml     # Build + dependency metadata
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+pip install -r requirements.txt
+python zesolver.py
+
 
 # Inspect a Gaia G05 catalogue directory
 python tools/inspect_290.py --db ./database --family g05 --limit 3 --json report.json

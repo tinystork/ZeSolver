@@ -13,4 +13,5 @@ astap/
 ASTAP-main/
 dataset_set/
 testrunlog/
+*.swp
 
