@@ -1,75 +1,217 @@
-# Feuille de Route pour l'Évolution de ZeBlind Solver
+# Follow-up ZeSolver (virage perf) — 2026-04-12
 
-## 1. Contexte et Diagnostic
+## Contexte actuel
 
-L'analyse actuelle de `zeblind` a révélé deux goulots d'étranglement majeurs qui expliquent à la fois sa lenteur et son faible taux de succès par rapport à des solutions comme ASTAP :
+- Fiabilité Near en forte hausse, run lourd en cours jugé solide sur les **300+ premières images**.
+- Le nouveau goulot est maintenant le **débit** (objectif produit: **10k+ images**).
+- ASTAP reste une référence de robustesse mais est limité par son mode séquentiel dans notre usage.
 
-1.  **Index Monolithique et Chargement Intégral (`Eager Loading`) :** `zeblind` construit un index unique et massif pour tout le ciel (`.npz`) et le charge entièrement en mémoire au démarrage.
-    *   **Conséquence :** Temps de chargement extrêmement long et consommation mémoire rédhibitoire.
+## ✅ Ce qui est validé
 
-2.  **Génération Fragile des Motifs-Étoiles (Quads) :** La sélection des étoiles pour former les "empreintes digitales" (quads) est basée sur des heuristiques trop restrictives (ex: les N étoiles les plus brillantes).
-    *   **Conséquence :** Le solveur ne génère pas les bons motifs depuis l'image à analyser, et ne trouve donc aucune correspondance dans l'index. C'est la cause principale de l'échec de résolution.
+- RA/Dec lock phase-aware (hinted uniquement, pool global en scale_only/blind).
+- Reproductibilité Near renforcée:
+  - seed RANSAC stable par FITS,
+  - warm-start Near désactivé en parallèle.
+- Rescue Near (incluant relâchement RMS) validé.
+- P2/P3 clôturés:
+  - `near_ransac_seed` exposé en CLI/UI/config,
+  - audit terminé: plus d'appel `estimate_similarity_RANSAC` sans `random_state`.
 
-## 2. Plan d'Action Détaillé
+## 🎯 Nouveau cap prioritaire (Q1)
 
-L'objectif est de restructurer `zeblind` pour adopter les concepts qui font la force d'ASTAP : une structure d'index modulaire et une génération de motifs robuste.
+Passer de “solver fiable” à “solver fiable **et** rapide à grande échelle”.
 
----
+### Priorité 1 — parallélisation CPU + mode auto (court terme, ROI max)
 
-### Phase 1 : Remplacer l'Index Monolithique par un Index "en Tuiles"
+1. Stabiliser un profil workers/I/O/cache pour run massif.
+2. Ajouter un **mode auto** qui adapte la concurrence à la machine (CPU/RAM/IO/GPU).
+3. Réduire le temps des branches d'échec (timeouts internes, retries inutiles).
+4. Mesurer throughput réel en images/min sur paliers (500 / 2k / 10k).
 
-**Objectif :** Éliminer le temps de chargement et réduire l'empreinte mémoire à quasi zéro, en imitant l'approche "à la demande" d'ASTAP.
+### Priorité 2 — GPU utile (ciblé, pas dogmatique)
 
-- [x] **Étape 1.1 : Définir un format d'index "en seaux" (Bucketed).**
-    *   Abandonner le fichier `.npz` unique. L'index sera découpé en un grand nombre de petits fichiers binaires (par exemple, 4096 fichiers).
-    *   Chaque fichier (ou "seau") correspondra à une plage de hashes. Par exemple, `index_000.bin` contiendra tous les quads dont le hash commence par `0x000...`, `index_001.bin` pour ceux commençant par `0x001...`, etc. (en se basant sur les 12 premiers bits du hash).
-    *   Chaque fichier seau contiendra une liste de hashes (triés) et les données associées (coordonnées des étoiles du quad).
+1. Réactiver proprement la voie GPU de détection d'étoiles.
+2. Bench A/B CPU vs GPU sur mêmes lots.
+3. Garder le fallback CPU robuste et automatique.
 
-- [x] **Étape 1.2 : Mettre à jour le script de construction de l'index (`tools/build_blind_index.py`).**
-    *   Modifier le script pour qu'au lieu de tout stocker en mémoire, il écrive chaque quad généré dans le fichier "seau" approprié en fonction du préfixe de son hash.
-    *   **Point crucial :** À la fin du processus, chaque fichier seau doit être trié par valeur de hash. Cela permettra une recherche par dichotomie (binaire) ultra-rapide.
+### Priorité 3 — pipeline hybride CPU+GPU (progressif)
 
-- [x] **Étape 1.3 : Réécrire la logique de chargement et de recherche (`zesolver/blindindex.py`).**
-    *   La méthode `BlindIndex.load` ne doit plus rien charger. Elle doit simplement vérifier la présence du répertoire contenant les fichiers de l'index.
-    *   La méthode `BlindIndex.query` doit être complètement réécrite :
-        1.  Pour chaque hash généré depuis l'image, déterminer le fichier seau pertinent (ex: `hash >> 52` pour un préfixe de 12 bits sur un hash de 64 bits).
-        2.  Utiliser le **memory-mapping** (`mmap` en Python) pour ouvrir ce petit fichier seau. C'est quasi-instantané et n'utilise presque pas de RAM.
-        3.  Effectuer une **recherche binaire** (`numpy.searchsorted` ou `bisect`) sur les hashes dans le fichier mappé en mémoire pour trouver des correspondances.
+Objectif: faire tourner CPU et GPU en parallèle sur des étapes différentes, avec fallback automatique.
 
----
+- Étape 1: GPU détection étoiles (N+1), CPU matching/RANSAC/WCS (N)
+- Étape 2: étude de portage de sous-blocs pair-build/RANSAC si gain mesuré
+- Étape 3: scheduler hybride piloté par télémétrie (occupation CPU/GPU, latence I/O, VRAM)
 
-### Phase 2 : Rendre la Génération de Quads Robuste
+Attendu: gain de débit net sans dégrader la reproductibilité.
 
-**Objectif :** Augmenter drastiquement le taux de succès en générant les mêmes motifs stables et variés qu'ASTAP, indépendamment des variations de magnitude des étoiles.
+## 🧭 Décisions d'architecture (update 12:27)
 
-- [x] **Étape 2.1 : Remplacer l'algorithme de sélection des quads.**
-    *   Cette modification doit être appliquée à la fois dans le **constructeur d'index** et dans le **solveur** (`zeblindsolver/asterisms.py`).
-    *   Abandonner la logique "prendre les N étoiles les plus brillantes".
-    *   Adopter l'approche d'astrometry.net :
-        1.  Itérer sur une grande partie des étoiles de l'image (ou de la tuile catalogue). Appelons l'étoile de départ `A`.
-        2.  Pour chaque `A`, trouver une voisine `B` à une certaine distance. Pour être robuste au zoom, il faut tester plusieurs échelles de distance (proches, moyennes, lointaines).
-        3.  Considérer le segment `A-B` comme une base. Chercher maintenant deux autres étoiles, `C` et `D`, dont les positions relatives par rapport à ce segment `A-B` sont stables.
-        4.  La géométrie du quad `A,B,C,D` est alors utilisée pour calculer le hash.
-    *   Cette méthode garantit la création d'une collection de motifs beaucoup plus riche et plus stable.
+- **GPU confirmé fonctionnel**, mais charge faible observée (normal avec offload limité à la détection).
+- Direction retenue: **pipeline hybride progressif** plutôt que simple "charger plus d'images en GPU".
+- Principe cible:
+  - GPU pour les briques massivement parallèles,
+  - CPU pour orchestration/fallback et parties non portées,
+  - chevauchement CPU/GPU (pipeline) pour éviter les temps morts.
+- Contrainte non négociable: le mode **CPU-only** reste pleinement opérationnel.
 
-- [x] **Étape 2.2 : Reconstruire l'index complet.**
-    *   Une fois le nouvel algorithme de génération de quads implémenté, il sera nécessaire de reconstruire entièrement la base de données de l'index. Cet index sera plus grand mais infiniment plus utile.
-    *   `zebuildindex` expose désormais l'option `--quads-only` pour relancer uniquement la phase de hash (sans re-projeter tout ASTAP), ce qui facilite les reconstructions complètes à chaque changement du sampler.
+## 🚀 Mise en place accélération (démarrée)
 
----
+Implémentation initiale effectuée pour ouvrir un vrai cycle d'optimisation débit sans retoucher le code à chaque essai:
 
-### Phase 3 : (Optionnel) Améliorer la Détection d'Étoiles
+- Nouveaux réglages Near de détection exposés en **CLI + config + UI**:
+  - `near_detect_k_sigma`
+  - `near_detect_min_area`
+  - `near_detect_max_labels`
+- Nouvelles options CLI:
+  - `--near-detect-k-sigma`
+  - `--near-detect-min-area`
+  - `--near-detect-max-labels`
+- Propagation complète jusqu'au moteur Near (`metadata_solver.NearSolveConfig`) et logs de run.
 
-**Objectif :** Fournir une liste d'étoiles plus propre et plus complète en entrée de la phase 2, améliorant encore les chances de succès.
+Objectif: lancer des benchs contrôlés CPU/GPU et quantifier l'impact perf/qualité sans modifier le code entre runs.
 
-- [x] **Étape 3.1 : Implémenter un seuillage adaptatif.**
-    *   Dans `zeblindsolver/star_detect.py`, remplacer le calcul global de la `moyenne` et de l'`écart-type` par un calcul local. Une méthode simple est de diviser l'image en une grille (ex: 8x8) et de calculer ces valeurs pour chaque cellule, afin de s'adapter aux variations de fond de ciel.
+## ✅ Suite follow-up en cours (CPU bottleneck)
 
-- [ ] **Étape 3.2 : Envisager des méthodes plus avancées.**
-    *   Pour aller plus loin, des techniques comme la **transformée en ondelettes** ou la **Différence de Gaussiennes (DoG)** sont la norme dans les logiciels professionnels (comme SExtractor) pour séparer les étoiles du bruit et des artéfacts à différentes échelles.
-    *   Piste DoG multi-échelle : (1) estimer le bruit local (médiane ou gaussien large) ; (2) filtrer l'image avec deux gaussiennes centrées autour du FWHM estimé (ex. sigma et 1.6–2.0*sigma) puis soustraire pour obtenir une carte DoG qui maximise les sources ponctuelles ; (3) calculer une carte sigma locale (grille 8x8/16x16) sur la carte DoG et seuiller à k*sigma (k ajustable) ; (4) extraire les composantes connexes, rejeter les blobs allongés/gros (cosmiques/traînées), recentrer par barycentre, mesurer flux et FWHM locale ; (5) fusionner les détections proches issues de plusieurs paires de sigmas.
-    *   Piste ondelettes (starlet) : (1) décomposition à trous sur 3–5 échelles ; (2) estimation du bruit par échelle (MAD) puis seuillage dur/soft à k*sigma ; (3) somme pondérée des cartes seuillées pour une carte de probabilité ; (4) détection des maxima locaux sur cette carte et report au plan d'origine pour une position sub-pixel ; (5) option de pondération par l'échelle dominante pour écarter galaxies/étirements.
-    *   Intégration (sans code pour l'instant) : prévoir un paramètre `--detect-method {adaptive,dog,wavelet}` (et une option GUI), exposer `--dog-sigma`, `--dog-k`, `--wavelet-levels`, `--wavelet-k`, et retomber automatiquement sur la méthode adaptative si les libs requises manquent. Ajouter des tests synthétiques (PSF gaussienne + bruit blanc + gradient) pour comparer TP/FP et la stabilité sub-pixel entre méthodes.
-    Pour aller plus loin, lors de l'implémentation, vous pourriez vous inspirer (ou même utiliser) des fonctions existantes dans des bibliothèques comme photutils (affiliée à Astropy), qui implémente déjà des détecteurs d'étoiles performants (par exemple DAOStarFinder et IRAFStarFinder) et des outils de segmentation.
+Première brique implémentée pour attaquer le goulot CPU métier sans risque de régression fonctionnelle:
 
-En suivant ce plan, `zeblind` sera transformé d'un prototype conceptuel à un solveur performant, rapide et efficace, fidèle à l'inspiration d'ASTAP.
+- **Instrumentation fine des timings Near** dans les logs:
+  - `detect`, `pair-build`, `ransac`, `fit`, `write`, `total`
+- **Micro-optimisation CPU sur la réduction catalogue** (`max_cat_stars`):
+  - bascule vers `argpartition` sur gros volumes,
+  - tri stable du sous-ensemble retenu pour garder un comportement déterministe.
+
+But: identifier précisément le vrai coût dominant (pair-build vs ransac vs fit) avant portage hybride ciblé.
+
+- **Run analysé (CPU6, 500)**: hotspot confirmé `detect` ≈ **95.5%** du temps Near moyen (`pair-build` ≈ 0.2%, `ransac` ≈ 2.2%).
+- **Étape suivante implémentée**: optimisation CPU du détecteur (`star_detect.py`) avec extraction flux/centroïdes vectorisée (suppression de boucles masques par label).
+- Validation smoke: sur image test, `near total` est passé d'environ **2.30s** à **1.41s** (détecteur dominant réduit).
+- **Validation post-opt (CPU6, 500)**: 500/500 en 325.54s (92.15 img/min), near mean 3.73s, p95 5.2s.
+
+## Plan d'exécution recommandé
+
+### Palier A (immédiat)
+- Terminer run lourd en cours et extraire métriques:
+  - solved/failed/skipped,
+  - temps total,
+  - images/min,
+  - distribution Near/Blind.
+
+### Palier B (CPU tuning + auto)
+- Sweep contrôlé des workers + I/O concurrency + cache tile.
+- Implémenter un preset **auto**:
+  - auto-workers (CPU/logical cores),
+  - auto I/O concurrency (débit disque),
+  - garde-fous mémoire (RAM/VRAM),
+  - adaptation conservative sur petites machines.
+- Choisir un preset “production 10k” stable et documenté.
+
+### Palier C (GPU + hybride)
+- Vérifier activation GPU effective (pas seulement config).
+- Bench sur lot identique:
+  - CPU-only,
+  - GPU-detect,
+  - pipeline hybride.
+- Ajouter un mode d'ordonnancement adaptatif CPU/GPU (auto) selon la machine.
+- Décision guidée par métriques (débit + stabilité + variabilité).
+
+### ✅ Point 2 (mode auto smart) — implémentation initiale faite
+
+- `workers=0` conserve le mode auto adaptatif (déjà exposé UI) avec profil moins conservatif.
+- Ajout de garde-fous auto pour `io_concurrency=0`:
+  - prise en compte RAM machine,
+  - prise en compte backend near (`cpu`/`cuda`) pour éviter la saturation,
+  - log explicite des ajustements auto (`I/O auto-guard adjusted ...`).
+- Hint UI mis à jour: auto adapté machine (CPU/RAM), mode manuel = potentiellement plus rapide mais moins stable.
+
+## Critères de sortie “10k-ready”
+
+- Stabilité: pas de dérive run-to-run sur un lot fixe.
+- Robustesse: taux d'échec maîtrisé et explicable.
+- Débit: gain significatif vs profil actuel CPU-only.
+- Opérationnel: logs exploitables et paramètres reproductibles.
+
+## Notes
+
+- Le gain GPU est réaliste, mais la VRAM faible peut limiter l'accélération brute.
+- Le meilleur levier durable est un **pipeline hybride** + un **mode auto** qui s'adapte au matériel.
+- Le mode hybride CPU+GPU est techniquement pertinent et **non délirant**: c'est une stratégie standard de pipeline haut débit.
+- CPU-only doit rester un chemin nominal (robuste et maintenu).
+
+## ✅ Point 3 (pipeline hybride) — étape 1 implémentée
+
+- Ajout d'un garde-fou de pipeline hybride côté Near: `detect_gpu_slots` (défaut `1`).
+- But: limiter la contention CPU↔GPU quand plusieurs workers lancent la détection en même temps.
+- Comportement:
+  - backend `cpu` => aucun impact,
+  - backend `auto/cuda` + runtime CUDA OK => section détection GPU régulée via slots partagés,
+  - runtime CUDA non prêt => fallback CPU inchangé (pas de sérialisation inutile).
+- Exposition CLI: `--near-detect-gpu-slots` (et logging de config + usage réel).
+- Logs Near enrichis: `near detect backend used ... gpu_slots=...` pour audit de charge.
+
+Première intention: créer un vrai chevauchement progressif (détection GPU régulée, appariement/RANSAC CPU en parallèle) sans casser le chemin CPU-only.
+
+### ✅ Validation hybride rapide (350 images, workers=6)
+
+- `cpu_350_run_6_slots1_latest`: 247.0s, 85.02 img/min
+- `auto_350_run_6_slots1_latest`: 230.7s, 91.03 img/min (**+7.07%** vs CPU)
+- `auto_350_run_6_slots2_latest`: 226.7s, 92.63 img/min (**+1.76%** vs slots=1)
+
+Lecture: la régulation `detect_gpu_slots` apporte un gain mesurable; `slots=2` est meilleur que `slots=1` sur ce profil machine/lot, avec backend CUDA effectivement utilisé.
+
+## 🧩 Nouvelle mission UX (pré-intégration ZeMosaic) — 2026-04-12
+
+Objectif produit validé: ZeSolver doit devenir consommable par un utilisateur non technique,
+puis s'intégrer proprement dans l'environnement ZeMosaic (CLI d'abord, UI simple ensuite).
+
+### Principes
+
+- Le mode avancé actuel reste disponible (power users).
+- Le mode par défaut doit être **Simple / guidé** (assistant first-run + workflow clair).
+- Le dossier de rejet est secondaire côté ZeSolver brut: la logique finale de routage des non-résolus sera alignée sur ZeMosaic.
+
+### Parcours UX cible (mode simple)
+
+1. **Premier démarrage (wizard)**
+   - Vérifier la présence d'un répertoire `database` (catalogues étoiles) et d'un index ZeSolver valide.
+   - Proposer soit l'ajout/téléchargement de bases compatibles, soit l'usage d'un jeu recommandé (ex: équivalent D50).
+   - Choisir un profil instrument (S50/S30/C11/Evolux 62, presets extensibles).
+
+2. **Index/hashes**
+   - proposer soit:
+     - construire les hashes depuis la base,
+     - soit pointer vers un répertoire de hashes existant.
+   - afficher un check de validité avant lancement solve.
+
+3. **Run dossier**
+   - choisir dossier d'entrée,
+   - option explicite: nettoyage WCS existants (via `zewcscleaner.py` côté CLI),
+   - lancer solve batch.
+
+4. **Sortie utilisateur**
+   - résumé simple (résolus/non résolus/temps),
+   - export d'un rapport,
+   - non résolus routés selon convention d'intégration ZeMosaic.
+
+### Décision d'implémentation
+
+- Prioriser d'abord la **surcouche UX simple** (wizard + presets + checks),
+- garder les réglages experts derrière un mode "Avancé",
+- préparer l'API/CLI pour appel propre depuis ZeMosaic (contrat d'entrée/sortie stable).
+
+### Clarification importante (source de vérité)
+
+- **ZeSolver n'exige pas l'exécutable ASTAP** pour son fonctionnement normal (solveur Python + index local).
+- Ce qui est requis: les **catalogues/bases** (répertoire `database`) et/ou un **index ZeSolver** valide (`manifest` + `tiles/hash_tables`).
+- Donc en UX: on demande un chemin de bases/index, pas un binaire ASTAP.
+
+
+## 🚧 Avancement mission UX — démarrage effectif
+
+- [x] Ajout d’un toggle **Mode simple (recommandé)** dans l’onglet Solveur.
+- [x] Ajout d’un assistant pré-lancement (mode simple):
+  - vérifie `database`,
+  - guide vers l’onglet Réglages si `index` manquant,
+  - affiche une confirmation de run lisible (dossier, nb fichiers, backend, overwrite).
+- [ ] Étape suivante: intégrer l’option de nettoyage WCS (`zewcscleaner.py`) dans ce flux simple.
+- [x] Flux simple: option intégrée de nettoyage WCS pré-run (FITS uniquement, via `zewcscleaner.py`, backup `.bak` activé).
+- [x] Menu "Interface" ajouté (Expert / Easy / Wizard), avec **Easy par défaut** au démarrage.

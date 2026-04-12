@@ -58,6 +58,10 @@ class PersistentSettings:
     near_tile_cache_size: int = 128
     near_detect_backend: str = "auto"  # auto|cpu|cuda
     near_detect_device: int = 0
+    near_detect_k_sigma: float = 4.0
+    near_detect_min_area: int = 8
+    near_detect_max_labels: int = 2500
+    near_detect_gpu_slots: int = 1
     io_concurrency: int = 0
     near_warm_start: bool = True
     # Near (fast) solver quality and tuning
@@ -65,6 +69,8 @@ class PersistentSettings:
     near_quality_rms: float = 1.0
     near_pixel_tolerance: float = 3.0
     near_ransac_trials: int = 1200
+    # -1 => auto/stable per-file seed; >=0 => explicit override
+    near_ransac_seed: int = -1
     near_max_img_stars: int = 800
     near_max_cat_stars: int = 2000
     near_try_parity_flip: bool = True
@@ -87,7 +93,7 @@ class PersistentSettings:
     solver_search_attempts: int = DEFAULT_SEARCH_RADIUS_ATTEMPTS
     solver_max_radius_deg: float = 0.0  # 0 = Auto
     solver_downsample: int = 1
-    solver_workers: int = 0  # 0 = auto (half CPUs)
+    solver_workers: int = 0  # 0 = auto (adaptive)
     solver_cache_size: int = 12
     solver_max_files: int = 0
     solver_formats: Optional[str] = None
@@ -212,12 +218,17 @@ def load_persistent_settings() -> PersistentSettings:
         near_tile_cache_size=int(payload.get("near_tile_cache_size", 128)),
         near_detect_backend=str(payload.get("near_detect_backend", "auto")),
         near_detect_device=int(payload.get("near_detect_device", 0)),
+        near_detect_k_sigma=float(payload.get("near_detect_k_sigma", 4.0)),
+        near_detect_min_area=int(payload.get("near_detect_min_area", 8)),
+        near_detect_max_labels=int(payload.get("near_detect_max_labels", 2500)),
+        near_detect_gpu_slots=max(1, int(payload.get("near_detect_gpu_slots", 1) or 1)),
         io_concurrency=int(payload.get("io_concurrency", 0)),
         near_warm_start=bool(payload.get("near_warm_start", True)),
         near_quality_inliers=int(payload.get("near_quality_inliers", 60)),
         near_quality_rms=float(payload.get("near_quality_rms", 1.0)),
         near_pixel_tolerance=float(payload.get("near_pixel_tolerance", 3.0)),
         near_ransac_trials=int(payload.get("near_ransac_trials", 1200)),
+        near_ransac_seed=(int(payload["near_ransac_seed"]) if payload.get("near_ransac_seed") is not None else -1),
         near_max_img_stars=int(payload.get("near_max_img_stars", 800)),
         near_max_cat_stars=int(payload.get("near_max_cat_stars", 2000)),
         near_try_parity_flip=bool(payload.get("near_try_parity_flip", True)),

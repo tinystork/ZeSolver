@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import math
 import time
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ import numpy as np
 from astropy.io import fits
 
 from .fits_utils import estimate_scale_and_fov, parse_angle, to_luminance_for_solve
+from .image_prep import remove_background
 from .matcher import SimilarityTransform, estimate_similarity_RANSAC
 from .projections import project_tan
 from .quad_index_builder import load_manifest
@@ -65,8 +67,17 @@ class NearSolveConfig:
     # Star detection compute backend
     detect_backend: str = "auto"  # "auto" | "cpu" | "cuda"
     detect_device: int | None = None
+    # Star detection tuning (for throughput/quality trade-off)
+    detect_k_sigma: float = 4.0
+    detect_min_area: int = 8
+    detect_max_labels: int = 2500
+    # Max concurrent GPU detection slots across workers (hybrid pipeline guard).
+    # 1 = serialize detect on GPU to reduce CPU<->GPU contention; >1 allows more overlap.
+    detect_gpu_slots: int = 1
     # RANSAC settings
     ransac_trials: int = 1200
+    # Optional deterministic seed. When None, derived from FITS path for reproducibility.
+    ransac_seed: int | None = None
     # Optional warm-start seed (from previous near solution)
     seed_scale_deg: float | None = None
     seed_rotation: float | None = None  # radians
@@ -75,6 +86,12 @@ class NearSolveConfig:
 
 def _failure(message: str) -> WcsSolution:
     return WcsSolution(False, message, None, {}, None, {})
+
+
+def _stable_seed_for_path(path: Path) -> int:
+    payload = str(path).encode("utf-8", errors="ignore")
+    digest = hashlib.blake2b(payload, digest_size=8).digest()
+    return int.from_bytes(digest, "little") & 0xFFFFFFFF
 
 
 def _wrap_ra(delta: float) -> float:
@@ -137,6 +154,42 @@ def _select_tiles(manifest: dict, ra0: float, dec0: float, radius: float, limit:
 _TILE_RAW_CACHE: "OrderedDict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]" = OrderedDict()
 _TILE_RAW_CACHE_LOCK = threading.Lock()
 _TILE_RAW_CACHE_CAP = 128
+
+# Global GPU detect slot controls (shared across images/workers)
+_GPU_DETECT_LOCK = threading.Lock()
+_GPU_DETECT_SEMAPHORES: dict[int, threading.Semaphore] = {}
+_CUDA_READY_CACHE: Optional[tuple[bool, str]] = None
+
+
+def _cuda_runtime_ready() -> tuple[bool, str]:
+    global _CUDA_READY_CACHE
+    cached = _CUDA_READY_CACHE
+    if cached is not None:
+        return cached
+    try:
+        import cupy  # type: ignore
+        from cupy.cuda import runtime as _rt  # type: ignore
+        from cupy.cuda import nvrtc as _nvrtc  # type: ignore
+        n = int(_rt.getDeviceCount())
+        if n <= 0:
+            _CUDA_READY_CACHE = (False, "no CUDA device detected")
+        else:
+            # Probes NVRTC availability; this is where missing libnvrtc usually surfaces.
+            _nvrtc.getVersion()
+            _CUDA_READY_CACHE = (True, f"{n} CUDA device(s)")
+    except Exception as exc:
+        _CUDA_READY_CACHE = (False, str(exc))
+    return _CUDA_READY_CACHE
+
+
+def _gpu_detect_semaphore(slots: int) -> threading.Semaphore:
+    slots = max(1, int(slots))
+    with _GPU_DETECT_LOCK:
+        sem = _GPU_DETECT_SEMAPHORES.get(slots)
+        if sem is None:
+            sem = threading.Semaphore(slots)
+            _GPU_DETECT_SEMAPHORES[slots] = sem
+        return sem
 
 
 def _tile_path_from_entry(index_root: Path, entry: dict) -> Path:
@@ -252,6 +305,7 @@ def _build_candidate_pairs(
     center_xy: tuple[float, float],
     approx_scale_deg: float,
     pixel_tolerance: float,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if image_positions.size == 0 or catalog_positions.size == 0:
         return (np.empty((0, 2), dtype=np.float32),) * 3
@@ -265,6 +319,8 @@ def _build_candidate_pairs(
     base_window = max(0.01, approx_scale_deg * max(pixel_tolerance * 2.5, 0.5))
     votes: list[tuple[int, int, float]] = []
     for img_idx, radius_px in enumerate(img_radius_px):
+        if cancel_check and cancel_check():
+            return (np.empty((0, 2), dtype=np.float32),) * 3
         target = radius_px * approx_scale_deg
         window = max(base_window, target * 0.25)
         left = np.searchsorted(radius_sorted, target - window, side="left")
@@ -334,6 +390,7 @@ def solve_near(
     start = time.perf_counter()
     fits_path = Path(input_fits).expanduser().resolve()
     index_path = Path(index_root).expanduser().resolve()
+    ransac_seed = int(cfg.ransac_seed) if cfg.ransac_seed is not None else _stable_seed_for_path(fits_path)
     if cancel_check and cancel_check():
         return _failure("cancelled")
     try:
@@ -387,6 +444,7 @@ def solve_near(
     if cancel_check and cancel_check():
         return _failure("cancelled")
     candidates = _select_tiles(manifest, ra0, dec0, radius, cfg.max_tile_candidates)
+    logger.info("near candidates selected: %d", len(candidates))
     if not candidates:
         return _failure("manifest present but no tile intersects the metadata cone")
     catalog_positions: list[np.ndarray] = []
@@ -424,29 +482,143 @@ def solve_near(
             return _failure(f"tile files missing: {missing_tiles[0]}")
         return _failure("candidate tiles found but none yielded catalog stars")
     cat_positions = np.vstack(catalog_positions)
+    logger.info("near catalog stacks: tiles=%d stars=%d", len(catalog_positions), int(sum(arr.shape[0] for arr in catalog_positions)))
     cat_world = np.vstack(catalog_world)
     cat_mags = np.concatenate(catalog_mags)
     if cfg.max_cat_stars and cat_positions.shape[0] > cfg.max_cat_stars:
-        order = np.argsort(cat_mags)
-        keep = order[: cfg.max_cat_stars]
+        k = int(cfg.max_cat_stars)
+        n = int(cat_positions.shape[0])
+        # Faster than full argsort on large catalogs while keeping deterministic
+        # ordering of the retained subset by magnitude.
+        if n > (4 * k):
+            keep = np.argpartition(cat_mags, k - 1)[:k]
+            keep = keep[np.argsort(cat_mags[keep], kind="stable")]
+        else:
+            order = np.argsort(cat_mags, kind="stable")
+            keep = order[:k]
         cat_positions = cat_positions[keep]
         cat_world = cat_world[keep]
         cat_mags = cat_mags[keep]
     if cancel_check and cancel_check():
         return _failure("cancelled")
-    stars = detect_stars(
-        image,
-        backend=str(getattr(cfg, "detect_backend", "auto") or "auto").lower(),
-        device=getattr(cfg, "detect_device", None),
+    logger.info("near detect start")
+    t_detect0 = time.perf_counter()
+    work_image = image
+    try:
+        kernel = max(7, int(round(min(height, width) / 120)))
+        work_image = remove_background(work_image, kernel_size=kernel)
+    except TypeError:
+        work_image = remove_background(work_image)
+    except Exception:
+        work_image = image
+    detect_backend = str(getattr(cfg, "detect_backend", "auto") or "auto").lower()
+    detect_device = getattr(cfg, "detect_device", None)
+    detect_k_sigma = float(getattr(cfg, "detect_k_sigma", 4.0) or 4.0)
+    detect_min_area = int(getattr(cfg, "detect_min_area", 8) or 8)
+    detect_max_labels = int(getattr(cfg, "detect_max_labels", 2500) or 2500)
+    detect_trace: dict[str, str] = {}
+    detect_gpu_slots = max(1, int(getattr(cfg, "detect_gpu_slots", 1) or 1))
+    use_gpu_slot_guard = False
+    if detect_backend in {"cuda", "auto"}:
+        ready, reason = _cuda_runtime_ready()
+        if ready:
+            use_gpu_slot_guard = True
+        elif detect_backend == "cuda":
+            logger.warning("near detect CUDA runtime not ready (%s) -> fallback to CPU expected", reason)
+    if use_gpu_slot_guard:
+        with _gpu_detect_semaphore(detect_gpu_slots):
+            stars = detect_stars(
+                work_image,
+                backend=detect_backend,
+                device=detect_device,
+                mode="global",
+                k_sigma=detect_k_sigma,
+                min_area=detect_min_area,
+                max_labels=detect_max_labels,
+                backend_trace=detect_trace,
+            )
+    else:
+        stars = detect_stars(
+            work_image,
+            backend=detect_backend,
+            device=detect_device,
+            mode="global",
+            k_sigma=detect_k_sigma,
+            min_area=detect_min_area,
+            max_labels=detect_max_labels,
+            backend_trace=detect_trace,
+        )
+    logger.info(
+        "near detect backend used: requested=%s used=%s device=%s gpu_slots=%d%s%s",
+        detect_backend,
+        detect_trace.get("used", "unknown"),
+        detect_device,
+        detect_gpu_slots,
+        " (fallback)" if detect_trace.get("fallback") else "",
+        f" reason={detect_trace.get('error')}" if detect_trace.get("error") else "",
     )
+    # Faint/edge frames can be over-suppressed by aggressive background removal.
+    # Retry on raw image with progressively looser thresholds only when support is low.
+    if stars.size < 12:
+        logger.info("near detect fallback #1 (raw/global k=3.0), stars=%d", int(stars.size))
+        detect_trace_fb1: dict[str, str] = {}
+        stars_fb = detect_stars(
+            image,
+            backend=detect_backend,
+            device=detect_device,
+            mode="global",
+            k_sigma=max(2.2, detect_k_sigma - 1.0),
+            min_area=5,
+            max_labels=2500,
+            backend_trace=detect_trace_fb1,
+        )
+        logger.info(
+            "near detect fallback #1 backend used: requested=%s used=%s device=%s gpu_slots=%d%s%s",
+            detect_backend,
+            detect_trace_fb1.get("used", "unknown"),
+            detect_device,
+            detect_gpu_slots,
+            " (fallback)" if detect_trace_fb1.get("fallback") else "",
+            f" reason={detect_trace_fb1.get('error')}" if detect_trace_fb1.get("error") else "",
+        )
+        if stars_fb.size > stars.size:
+            stars = stars_fb
+    if stars.size < 8:
+        logger.info("near detect fallback #2 (raw/global k=2.5), stars=%d", int(stars.size))
+        detect_trace_fb2: dict[str, str] = {}
+        stars_fb2 = detect_stars(
+            image,
+            backend=detect_backend,
+            device=detect_device,
+            mode="global",
+            k_sigma=max(2.0, detect_k_sigma - 1.5),
+            min_area=4,
+            max_labels=3500,
+            backend_trace=detect_trace_fb2,
+        )
+        logger.info(
+            "near detect fallback #2 backend used: requested=%s used=%s device=%s gpu_slots=%d%s%s",
+            detect_backend,
+            detect_trace_fb2.get("used", "unknown"),
+            detect_device,
+            detect_gpu_slots,
+            " (fallback)" if detect_trace_fb2.get("fallback") else "",
+            f" reason={detect_trace_fb2.get('error')}" if detect_trace_fb2.get("error") else "",
+        )
+        if stars_fb2.size > stars.size:
+            stars = stars_fb2
+    t_detect_s = time.perf_counter() - t_detect0
     if stars.size == 0:
         return _failure("no stars detected in the frame")
+    logger.info("near detected stars: %d", int(stars.size))
     if cfg.max_img_stars and stars.size > cfg.max_img_stars:
         stars = stars[: cfg.max_img_stars]
     image_positions = np.column_stack((stars["x"], stars["y"])).astype(np.float32, copy=False)
     img_ranks = _compute_ranks(stars["flux"], descending=True)
     cat_ranks = _compute_ranks(cat_mags, descending=False)
     center_xy = (width / 2.0, height / 2.0)
+    logger.info("near pair-build start")
+    t_pair0 = time.perf_counter()
     img_pairs, cat_pairs, cat_world_pairs = _build_candidate_pairs(
         image_positions,
         cat_positions,
@@ -456,12 +628,16 @@ def solve_near(
         center_xy,
         approx_scale_deg,
         cfg.pixel_tolerance,
+        cancel_check=cancel_check,
     )
+    t_pair_s = time.perf_counter() - t_pair0
+    logger.info("near pair-build done: %d pairs", int(img_pairs.shape[0]))
     if img_pairs.size == 0:
         return _failure("unable to build candidate matches from metadata")
     if cancel_check and cancel_check():
         return _failure("cancelled")
     # Try a cheap least-squares fit first if a parity hint is provided and enough pairs exist
+    t_ransac0 = time.perf_counter()
     used_transform: SimilarityTransform | None = None
     hypothesis = None
     if img_pairs.shape[0] >= 6 and cat_pairs.shape[0] >= 6 and cfg.seed_rotation is not None and cfg.seed_scale_deg is not None:
@@ -475,6 +651,7 @@ def solve_near(
                 min_inliers=4,
                 allow_reflection=cfg.try_parity_flip,
                 early_stop_inliers=int(getattr(cfg, "quality_inliers", 60) or 60),
+                random_state=ransac_seed,
             )
             if ls is not None:
                 used_transform, _ = ls
@@ -482,6 +659,7 @@ def solve_near(
         except Exception:
             hypothesis = None
     if hypothesis is None:
+        logger.info("near ransac start (trials=%d)", int(getattr(cfg, "ransac_trials", 1200) or 1200))
         hypothesis = estimate_similarity_RANSAC(
         img_pairs,
         cat_pairs,
@@ -490,9 +668,12 @@ def solve_near(
         min_inliers=4,
         allow_reflection=cfg.try_parity_flip,
         early_stop_inliers=int(getattr(cfg, "quality_inliers", 60) or 60),
+        random_state=(ransac_seed ^ 0x9E3779B9),
     )
+        logger.info("near ransac done")
     if hypothesis is None:
         return _failure("near solver could not estimate a similarity transform")
+    t_ransac_s = time.perf_counter() - t_ransac0
     transform, _ = hypothesis
     used_transform = used_transform or transform
     inlier_mask, _ = _compute_inliers(transform, img_pairs, cat_pairs, cfg.pixel_tolerance)
@@ -501,12 +682,22 @@ def solve_near(
     img_in = img_pairs[inlier_mask]
     cat_world_in = cat_world_pairs[inlier_mask]
     matches = np.column_stack((img_in, cat_world_in)).astype(np.float64, copy=False)
+    t_fit0 = time.perf_counter()
     tile_center = (float(ra0), float(dec0))
     wcs = tan_from_similarity(transform, image.shape, tile_center=tile_center)
+    # Keep user value as an upper bound, but adapt to available support.
+    # On narrow/FOV-limited frames, fixed 60 inliers is often unattainable
+    # even for geometrically excellent solutions.
+    n_pairs = int(matches.shape[0])
+    adaptive_inliers = min(
+        int(cfg.quality_inliers),
+        max(4, int(0.3 * max(0, n_pairs))),
+    )
+    thresholds = {"rms_px": cfg.quality_rms, "inliers": adaptive_inliers}
     stats = validate_solution(
         wcs,
         matches,
-        thresholds={"rms_px": cfg.quality_rms, "inliers": cfg.quality_inliers},
+        thresholds=thresholds,
     )
     final_wcs = wcs
     final_stats = stats
@@ -520,7 +711,7 @@ def solve_near(
         ls_stats = validate_solution(
             ls_wcs,
             matches,
-            thresholds={"rms_px": cfg.quality_rms, "inliers": cfg.quality_inliers},
+            thresholds=thresholds,
         )
         if ls_stats.get("rms_px", float("inf")) < final_stats.get("rms_px", float("inf")):
             final_wcs = ls_wcs
@@ -534,7 +725,7 @@ def solve_near(
             candidate_stats = validate_solution(
                 candidate_wcs,
                 matches,
-                thresholds={"rms_px": cfg.quality_rms, "inliers": cfg.quality_inliers},
+                thresholds=thresholds,
             )
             if candidate_stats["rms_px"] < final_stats["rms_px"]:
                 final_wcs = candidate_wcs
@@ -549,6 +740,7 @@ def solve_near(
         "NEAR_VER": NEAR_SOLVER_VERSION,
         "RMSPX": final_stats.get("rms_px"),
         "INLIERS": final_stats.get("inliers"),
+        "REQINL": adaptive_inliers,
         "TILE_ID": candidates[0].get("tile_key") if candidates else None,
         "SOLVMODE": "NEAR",
         "SOLVER": "ZeSolver",
@@ -563,10 +755,12 @@ def solve_near(
     pix_scale_arcsec = _pix_scale_arcsec(final_wcs)
     if pix_scale_arcsec is not None:
         header_updates["PIXSCAL"] = pix_scale_arcsec
+    t_fit_s = time.perf_counter() - t_fit0
     elapsed = time.perf_counter() - start
     header_updates["NEARTIME"] = f"{elapsed:.2f}s"
     if cancel_check and cancel_check():
         return _failure("cancelled")
+    t_write0 = time.perf_counter()
     try:
         with fits.open(fits_path, mode="update", memmap=False) as hdul:
             header = hdul[0].header
@@ -578,12 +772,23 @@ def solve_near(
             hdul.flush()
     except Exception as exc:
         return _failure(f"unable to write WCS to FITS: {exc}")
+    t_write_s = time.perf_counter() - t_write0
     logger.info(
         "near solve succeeded for %s (rms=%.3f px, inliers=%d, %.1fs)",
         fits_path.name,
         final_stats.get("rms_px", float("nan")),
         final_stats.get("inliers", 0),
         elapsed,
+    )
+    logger.info(
+        "near timings for %s: detect=%.3fs pair=%.3fs ransac=%.3fs fit=%.3fs write=%.3fs total=%.3fs",
+        fits_path.name,
+        float(t_detect_s),
+        float(t_pair_s),
+        float(t_ransac_s),
+        float(t_fit_s),
+        float(t_write_s),
+        float(elapsed),
     )
     return WcsSolution(
         True,

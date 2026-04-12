@@ -131,3 +131,56 @@ By following this guide, you ensure all future contributions remain compliant wi
 - **Outcome:** A cleaner input signal for the entire solving pipeline, further boosting reliability.
 
 For a detailed technical guide on how to implement these changes, refer to the **`followup.md`** file.
+
+
+## Current Focus (2026-04-11)
+
+A focused audit was run on speed + success-rate versus ASTAP.
+
+### Observed baseline
+
+- Repository benchmark (`benchmark_report.json`): **6 / 111** successful solves.
+- Most failures return `no valid solution`; failures are also costly in runtime.
+- `downsample-2` is currently the only profile with consistent wins (5/22).
+
+### Suspected root causes
+
+1. Metadata-assisted near solve is brittle when headers are incomplete/noisy (RA/DEC/scale hints).
+2. Quad/hash robustness issue remains (test path can hit `no quads were hashed for level L`).
+3. Validation thresholds and solve acceptance criteria need harmonization (near vs blind).
+4. Candidate + matching loops still spend too much CPU in failing branches.
+
+### Implementation priority
+
+- P0 Robustness first, then P1 quality gates, then P2 throughput optimization.
+- Any optimization that reduces success rate is out of scope.
+- Keep full Python compliance (no ASTAP executable/code integration).
+
+### Working log convention
+
+A repo-local `memory.md` file tracks discoveries, actions, and outcomes chronologically.
+Update it as work progresses (diagnostics, patches, benchmark deltas, regressions).
+
+## Current Focus (2026-04-12, throughput pivot)
+
+Reliability has improved substantially on heavy runs (first 300+ images reported stable with ZeNear).
+The primary bottleneck is now end-to-end throughput for the 10k+ images objective.
+
+### Updated priority order
+
+1. **P0 Throughput engineering (CPU first):**
+   - optimize worker count, I/O concurrency, and tile cache behavior,
+   - reduce expensive fail-path work,
+   - benchmark images/min at scale (500 -> 2k -> 10k).
+2. **P1 GPU re-activation (targeted stages):**
+   - restore effective GPU usage where it pays off (star detection first),
+   - keep robust automatic CPU fallback.
+3. **P2 Hybrid pipeline (CPU + GPU simultaneously):**
+   - overlap stages (GPU detect on N+1 while CPU matches/validates N),
+   - pursue measurable throughput gains without sacrificing reproducibility.
+
+### Guardrails for this phase
+
+- Do not trade away solve stability for raw speed.
+- Keep deterministic behavior auditable (seeded RANSAC paths).
+- Measure before/after every tuning step on the same dataset slice.

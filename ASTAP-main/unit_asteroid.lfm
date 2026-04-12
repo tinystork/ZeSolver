@@ -1,0 +1,392 @@
+object form_asteroids1: Tform_asteroids1
+  Left = 98
+  Height = 447
+  Top = 181
+  Width = 665
+  Caption = 'Annotation of asteroids and comets'
+  ClientHeight = 447
+  ClientWidth = 665
+  KeyPreview = True
+  OnClose = FormClose
+  OnKeyPress = FormKeyPress
+  OnShow = FormShow
+  Position = poScreenCenter
+  LCLVersion = '3.8.0.0'
+  object annotate_asteroids1: TButton
+    Left = 184
+    Height = 25
+    Hint = 'Annotate asteroids'
+    Top = 416
+    Width = 224
+    Caption = 'Annotate asteroids && comets'
+    TabOrder = 0
+    OnClick = annotate_asteroids1Click
+  end
+  object cancel_button1: TButton
+    Left = 432
+    Height = 25
+    Hint = 'Cancel'
+    Top = 416
+    Width = 75
+    Caption = 'Cancel'
+    TabOrder = 1
+    OnClick = cancel_button1Click
+  end
+  object help_asteroid_annotation1: TLabel
+    Cursor = crHandPoint
+    Left = 533
+    Height = 30
+    Hint = 'Help asteroid annotation'
+    Top = 411
+    Width = 9
+    Caption = '?'
+    Font.Color = clBlue
+    Font.Height = -21
+    ParentColor = False
+    ParentFont = False
+    ParentShowHint = False
+    ShowHint = True
+    OnClick = help_asteroid_annotation1Click
+  end
+  object Group_Box1: TGroupBox
+    Left = 6
+    Height = 288
+    Top = 0
+    Width = 650
+    Caption = 'Database'
+    ClientHeight = 264
+    ClientWidth = 646
+    TabOrder = 2
+    OnClick = Group_Box1Click
+    object file_to_add1: TButton
+      Left = 16
+      Height = 29
+      Hint = 'Browse and select MPCORB.DAT to use'
+      Top = 32
+      Width = 35
+      AutoSize = True
+      Caption = '...'
+      ParentFont = False
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 0
+      OnClick = file_to_add1Click
+    end
+    object mpcorb_filedate1: TLabel
+      Left = 84
+      Height = 19
+      Top = 32
+      Width = 18
+      Caption = '---'
+      ParentColor = False
+    end
+    object up_to_number1: TLabel
+      Left = 63
+      Height = 19
+      Top = 105
+      Width = 115
+      Alignment = taRightJustify
+      Anchors = [akTop, akRight]
+      Caption = 'Use up to number:'
+      ParentBidiMode = False
+      ParentColor = False
+    end
+    object max_nr_asteroids1: TEdit
+      Left = 184
+      Height = 27
+      Hint = 'Specify here the number of asteroids to extract.'
+      Top = 104
+      Width = 78
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 4
+      Text = '10000'
+    end
+    object up_to_magn1: TLabel
+      Left = 52
+      Height = 19
+      Top = 136
+      Width = 126
+      Alignment = taRightJustify
+      Anchors = [akTop, akRight]
+      Caption = 'Down to magnitude:'
+      ParentBidiMode = False
+      ParentColor = False
+    end
+    object max_magn_asteroids1: TEdit
+      Left = 184
+      Height = 27
+      Hint = 'Specify here the limiting magnitude for extracting asteroids.'
+      Top = 136
+      Width = 64
+      MaxLength = 4
+      ParentColor = True
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 5
+      Text = '17'
+    end
+    object max_magn_asteroids2: TUpDown
+      Left = 248
+      Height = 27
+      Top = 136
+      Width = 14
+      Associate = max_magn_asteroids1
+      Max = 25
+      Min = 0
+      Position = 17
+      TabOrder = 6
+    end
+    object showfullnames1: TCheckBox
+      Left = 312
+      Height = 23
+      Top = 164
+      Width = 117
+      Caption = 'Show full names'
+      Checked = True
+      State = cbChecked
+      TabOrder = 10
+    end
+    object ColorBox1: TColorBox
+      Left = 312
+      Height = 22
+      Top = 105
+      Width = 100
+      DefaultColorColor = clFuchsia
+      ItemHeight = 16
+      TabOrder = 7
+    end
+    object add_subtitle1: TCheckBox
+      Left = 312
+      Height = 23
+      Hint = 'Add to the bottom of the image date and position.'
+      Top = 212
+      Width = 133
+      Caption = 'Add image subtitle'
+      Checked = True
+      ParentShowHint = False
+      ShowHint = True
+      State = cbChecked
+      TabOrder = 12
+    end
+    object add_annotations1: TCheckBox
+      Left = 312
+      Height = 23
+      Hint = 'The asteroids will be marked by annotions in the header and preserved if saved. The annotations can be used later to manual stack the images later to visualise very faint asteroids.'
+      Top = 236
+      Width = 253
+      Caption = 'Add as annotations to the FITS header'
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 13
+    end
+    object file_to_add2: TButton
+      Left = 16
+      Height = 29
+      Hint = 'Browse and select MPCORB.DAT to use'
+      Top = 64
+      Width = 35
+      AutoSize = True
+      Caption = '...'
+      ParentFont = False
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 2
+      OnClick = file_to_add2Click
+    end
+    object mpcorb_filedate2: TLabel
+      Left = 84
+      Height = 19
+      Top = 64
+      Width = 18
+      Caption = '---'
+      ParentColor = False
+    end
+    object mpcorb_path2: TLabel
+      Left = 248
+      Height = 19
+      Hint = 'Path to CometEls.txt file'
+      Top = 64
+      Width = 91
+      Caption = 'AllCometEls.txt'
+      ParentColor = False
+    end
+    object showmagnitude1: TCheckBox
+      Left = 312
+      Height = 23
+      Top = 188
+      Width = 121
+      Caption = 'Show magnitude'
+      TabOrder = 11
+    end
+    object mpcorb_path1: TLabel
+      Left = 248
+      Height = 19
+      Hint = 'Path to MPCORB.DAT file'
+      Top = 32
+      Width = 85
+      Caption = 'MPCORB.DAT'
+      ParentColor = False
+    end
+    object BitBtn1: TBitBtn
+      Left = 52
+      Height = 24
+      Hint = 'Clear and disable'
+      Top = 32
+      Width = 24
+      ImageIndex = 3
+      OnClick = BitBtn1Click
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 1
+    end
+    object BitBtn2: TBitBtn
+      Left = 52
+      Height = 24
+      Hint = 'Clear and disable'
+      Top = 64
+      Width = 24
+      ImageIndex = 3
+      OnClick = BitBtn2Click
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 3
+    end
+    object annotation_size1: TEdit
+      Left = 424
+      Height = 27
+      Hint = 'Annotation diameter. For diameter 5 or smaller, two lines will be used for annotation.  Comets annotations are five times larger.'
+      Top = 104
+      Width = 48
+      MaxLength = 4
+      ParentColor = True
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 14
+      Text = '40'
+    end
+    object annotation_size2: TUpDown
+      Left = 472
+      Height = 27
+      Top = 104
+      Width = 14
+      Associate = annotation_size1
+      Increment = 2
+      Max = 500
+      Min = 2
+      Position = 40
+      TabOrder = 8
+    end
+    object font_follows_diameter1: TCheckBox
+      Left = 312
+      Height = 23
+      Hint = 'Font and line thickness follow annotation diameter.'
+      Top = 140
+      Width = 221
+      Caption = 'Font follows annotation diameter'
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 9
+    end
+    object download_mpcorb1: TBitBtn
+      Left = 16
+      Height = 29
+      Hint = 'Download MPCORB.DAT or CometEls.txt using default browser'
+      Top = 0
+      Width = 112
+      AutoSize = True
+      Caption = '⇩ Download ⇩'
+      Font.Color = clBlue
+      OnClick = download_mpcorb1Click
+      ParentFont = False
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 15
+    end
+  end
+  object Group_Box2: TGroupBox
+    Left = 6
+    Height = 122
+    Top = 288
+    Width = 648
+    Caption = 'Image data'
+    ClientHeight = 98
+    ClientWidth = 644
+    TabOrder = 3
+    object date_obs1: TEdit
+      Left = 128
+      Height = 27
+      Hint = 'Format YYYY-MM-DDTHH:MM:SS.SSS. Timezone 0, universal time'
+      Top = 8
+      Width = 249
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 0
+      Text = '2020-02-11T22:10:41.222'
+    end
+    object date_label1: TLabel
+      Left = 85
+      Height = 19
+      Top = 8
+      Width = 32
+      Anchors = [akTop, akRight]
+      Caption = 'Date:'
+      ParentColor = False
+    end
+    object latitude1: TEdit
+      Left = 128
+      Height = 27
+      Hint = 'The latitude of the observatory in degrees.'
+      Top = 40
+      Width = 144
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 1
+      Text = '0'
+      OnChange = latitude1Change
+    end
+    object Label2: TLabel
+      Left = 64
+      Height = 19
+      Top = 40
+      Width = 53
+      Anchors = [akTop, akRight]
+      Caption = 'Latitude:'
+      ParentColor = False
+    end
+    object Label3: TLabel
+      Left = 52
+      Height = 19
+      Top = 72
+      Width = 65
+      Anchors = [akTop, akRight]
+      Caption = 'Longitude:'
+      ParentColor = False
+    end
+    object longitude1: TEdit
+      Left = 127
+      Height = 27
+      Hint = 'The longitude of the observatory in degrees. For east enter positive, for west enter negative values.'
+      Top = 72
+      Width = 145
+      ParentShowHint = False
+      ShowHint = True
+      TabOrder = 2
+      Text = '0'
+      OnChange = longitude1Change
+    end
+    object label_start_mid1: TLabel
+      Left = 384
+      Height = 19
+      Top = 8
+      Width = 145
+      Caption = 'Start of the observation'
+      ParentColor = False
+    end
+  end
+  object OpenDialog1: TOpenDialog
+    Title = 'Open an existing file'
+    Left = 560
+    Top = 344
+  end
+end
