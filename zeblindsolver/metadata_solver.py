@@ -22,6 +22,7 @@ from zewcs290.catalog290 import CatalogDB
 from .star_detect import detect_stars
 from .verify import validate_solution
 from .wcs_fit import fit_wcs_sip, fit_wcs_tan, needs_sip, tan_from_similarity
+from .wcs_header import apply_wcs_solution_to_header
 from .zeblindsolver import WcsSolution
 
 try:
@@ -764,11 +765,12 @@ def solve_near(
     try:
         with fits.open(fits_path, mode="update", memmap=False) as hdul:
             header = hdul[0].header
-            for key, value in final_wcs.to_header(relax=True).items():
-                header[key] = value
-            for key, value in header_updates.items():
-                if value is not None:
-                    header[key] = value
+            apply_wcs_solution_to_header(
+                header,
+                final_wcs,
+                header_updates=header_updates,
+                remove_sip_before_write=True,
+            )
             hdul.flush()
     except Exception as exc:
         return _failure(f"unable to write WCS to FITS: {exc}")
