@@ -45,6 +45,17 @@ def _derive_similarity(
     return rot_scale, translation
 
 
+def _init_rng(random_state: int | np.random.Generator | None) -> np.random.Generator:
+    if isinstance(random_state, np.random.Generator):
+        return random_state
+    if random_state is None:
+        return np.random.default_rng()
+    try:
+        return np.random.default_rng(int(random_state) & 0xFFFFFFFF)
+    except Exception:
+        return np.random.default_rng()
+
+
 def estimate_similarity_RANSAC(
     image_points: np.ndarray,
     catalog_points: np.ndarray,
@@ -54,10 +65,11 @@ def estimate_similarity_RANSAC(
     min_inliers: int = 3,
     allow_reflection: bool = False,
     early_stop_inliers: int = 0,
+    random_state: int | np.random.Generator | None = None,
 ) -> tuple[SimilarityTransform, SimilarityStats] | None:
     if len(image_points) < 2 or len(catalog_points) < 2:
         return None
-    rng = np.random.default_rng()
+    rng = _init_rng(random_state)
     best_mask: np.ndarray | None = None
     best_transform: tuple[np.complex128, np.complex128] | None = None
     best_parity = 1

@@ -35,6 +35,35 @@ pip install -e .
 python tools/inspect_290.py --db ./database --family g05 --limit 3 --json report.json
 ```
 
+## Optional GPU acceleration (Near star detection)
+
+ZeSolver works fully on CPU by default. GPU acceleration is optional and currently targets the
+Near star-detection path.
+
+### 1) Install GPU Python runtime (Linux + NVIDIA, CUDA 12.x)
+
+```bash
+pip install -U cupy-cuda12x nvidia-cuda-runtime-cu12 nvidia-cuda-nvrtc-cu12
+```
+
+### 2) Enable it in ZeSolver
+
+- Performance tab:
+  - Star detection backend: `Auto` or `CUDA`
+  - Star detection device: `Auto` or `CUDA:0`
+
+### 3) Validate in logs
+
+Look for lines like:
+
+- `near detect backend used: requested=auto used=cuda device=0`
+
+If runtime pieces are missing, ZeSolver safely falls back to CPU and logs the reason, for example:
+
+- `near detect backend used: requested=auto used=cpu device=0 (fallback) reason=Failure finding "libnvrtc.so"...`
+
+This fallback is expected behavior and does not block processing.
+
 ## Brute-force benchmark sweeps
 
 When tuning solver heuristics you can exhaustively try several `SolveConfig` profiles on a small

@@ -28,6 +28,7 @@ class BlindSolveResult(TypedDict):
     wrote_wcs: bool
     updated_keywords: dict[str, Any]
     output_path: str
+    stats: dict[str, Any]
 
 
 class BlindSolverRuntimeError(RuntimeError):
@@ -181,6 +182,7 @@ def blind_solve(
                         wrote_wcs=False,
                         updated_keywords={},
                         output_path=fits_path,
+                        stats={},
                     )
         except Exception as exc:
             raise InvalidInputError(f"Unable to read FITS header: {exc}") from exc
@@ -205,6 +207,7 @@ def blind_solve(
         wrote_wcs=solution.success,
         updated_keywords=solution.header_updates,
         output_path=fits_path,
+        stats=dict(solution.stats or {}),
     )
 
 
@@ -239,6 +242,7 @@ def near_solve(
                         wrote_wcs=False,
                         updated_keywords={},
                         output_path=fits_path,
+                        stats={},
                     )
         except Exception as exc:
             raise InvalidInputError(f"Unable to read FITS header: {exc}") from exc
@@ -262,6 +266,7 @@ def near_solve(
         wrote_wcs=solution.success,
         updated_keywords=solution.header_updates,
         output_path=fits_path,
+        stats=dict(solution.stats or {}),
     )
     if solution.success or not fallback_to_blind:
         return result
@@ -275,6 +280,7 @@ def near_solve(
             wrote_wcs=False,
             updated_keywords={},
             output_path=fits_path,
+            stats={},
         )
     logger(f"[ZENEAR] near solve failed ({solution.message}); attempting blind fallback…")
     blind_result = blind_solve(

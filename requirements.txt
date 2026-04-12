@@ -8,3 +8,9 @@ rich>=13.7
 
 # GUI support (install PySide6 only if you need the desktop interface)
 PySide6>=6.7
+
+# Optional GPU runtime for Near star detection (Linux + NVIDIA CUDA 12.x)
+# Safe behavior: if unavailable at runtime, ZeSolver falls back to CPU.
+cupy-cuda12x; platform_system == "Linux"
+nvidia-cuda-runtime-cu12; platform_system == "Linux"
+nvidia-cuda-nvrtc-cu12; platform_system == "Linux"

@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import logging
 import numpy as np
-from scipy.ndimage import center_of_mass, gaussian_filter, label
+from scipy.ndimage import gaussian_filter, label
 
 # Optional CUDA backend via CuPy (NVIDIA). Imported lazily in GPU path.
 _HAVE_CUPY = False
@@ -60,6 +61,8 @@ def detect_stars(
     backend: str = "auto",  # "auto" | "cpu" | "cuda"
     device: int | None = None,
     grid_divisions: int = 8,
+    max_labels: int = 5000,
+    backend_trace: dict[str, str] | None = None,
 ) -> np.ndarray:
     """Detect bright, stellar-like sources.
 
@@ -109,10 +112,14 @@ def detect_stars(
                     threshold = mean + k_sigma * std
                     d_mask = d_blur > threshold
                 if not bool(d_mask.any().get()):
+                    if backend_trace is not None:
+                        backend_trace["used"] = "cuda"
                     return np.zeros(0, dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")])
                 d_labeled, count = _cpx_nd.label(d_mask)
                 count = int(count)
                 if count <= 0:
+                    if backend_trace is not None:
+                        backend_trace["used"] = "cuda"
                     return np.zeros(0, dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")])
                 flat_labels = d_labeled.ravel()
                 flat_input = d_data.ravel()
@@ -138,11 +145,19 @@ def detect_stars(
                     fwhm = min(max_fwhm_px, max(min_fwhm_px, float(np.sqrt(max(1, area)))))
                     out.append((cx, cy, flux, fwhm))
                 if not out:
+                    if backend_trace is not None:
+                        backend_trace["used"] = "cuda"
                     return np.zeros(0, dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")])
                 arr = np.array(out, dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")])
                 order = np.argsort(arr["flux"])[::-1]
+                if backend_trace is not None:
+                    backend_trace["used"] = "cuda"
                 return arr[order]
-        except Exception:  # Fallback to CPU on any GPU error
+        except Exception as exc:  # Fallback to CPU on any GPU error
+            logging.debug("detect_stars CUDA fallback to CPU: %s", exc)
+            if backend_trace is not None:
+                backend_trace["fallback"] = "cuda_to_cpu"
+                backend_trace["error"] = str(exc)
             pass
     # CPU path (default)
     blurred = gaussian_filter(data, sigma=min_fwhm_px)
@@ -161,23 +176,54 @@ def detect_stars(
         threshold = mean + k_sigma * std
     mask = blurred > threshold
     if not mask.any():
+        if backend_trace is not None:
+            backend_trace["used"] = "cpu"
         return np.zeros(0, dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")])
     structure = np.ones((3, 3), dtype=bool)
     labeled, count = label(mask, structure=structure)
     stars = []
-    for label_idx in range(1, int(count) + 1):
-        region = labeled == label_idx
-        area = int(region.sum())
-        if area < min_area:
-            continue
-        flux = float((data * region).sum())
-        cy, cx = center_of_mass(data, labels=labeled, index=label_idx)
-        if not np.isfinite(cx) or not np.isfinite(cy):
-            continue
-        fwhm = min(max_fwhm_px, max(min_fwhm_px, float(np.sqrt(max(1, area)))))
-        stars.append((cx, cy, flux, fwhm))
+    if int(count) > 0:
+        flat_labels = labeled.ravel()
+        areas = np.bincount(flat_labels, minlength=int(count) + 1)
+        candidate_labels = np.flatnonzero(areas >= int(min_area))
+        candidate_labels = candidate_labels[candidate_labels > 0]
+        cap = max(1, int(max_labels))
+        if candidate_labels.size > cap:
+            order = np.argsort(areas[candidate_labels])[::-1]
+            candidate_labels = candidate_labels[order[:cap]]
+        if candidate_labels.size > 0:
+            keep = np.zeros(int(count) + 1, dtype=bool)
+            keep[candidate_labels] = True
+            selected = keep[flat_labels]
+            if np.any(selected):
+                flat_vals = data.ravel().astype(np.float64, copy=False)
+                sel_labels = flat_labels[selected].astype(np.int32, copy=False)
+                sel_vals = flat_vals[selected]
+                # Pixel coordinates for selected entries in flattened layout.
+                flat_idx = np.flatnonzero(selected)
+                ys = (flat_idx // data.shape[1]).astype(np.float64, copy=False)
+                xs = (flat_idx % data.shape[1]).astype(np.float64, copy=False)
+                fluxes = np.bincount(sel_labels, weights=sel_vals, minlength=int(count) + 1)
+                sum_y = np.bincount(sel_labels, weights=(sel_vals * ys), minlength=int(count) + 1)
+                sum_x = np.bincount(sel_labels, weights=(sel_vals * xs), minlength=int(count) + 1)
+                for label_idx in candidate_labels:
+                    area = int(areas[int(label_idx)])
+                    flux = float(fluxes[int(label_idx)])
+                    # Guard against zero/negative total weight.
+                    if not np.isfinite(flux) or flux <= 0.0:
+                        continue
+                    cy = float(sum_y[int(label_idx)] / flux)
+                    cx = float(sum_x[int(label_idx)] / flux)
+                    if not np.isfinite(cx) or not np.isfinite(cy):
+                        continue
+                    fwhm = min(max_fwhm_px, max(min_fwhm_px, float(np.sqrt(max(1, area)))))
+                    stars.append((cx, cy, flux, fwhm))
     if not stars:
+        if backend_trace is not None:
+            backend_trace["used"] = "cpu"
         return np.zeros(0, dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")])
     array = np.array(stars, dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")])
     order = np.argsort(array["flux"])[::-1]
+    if backend_trace is not None:
+        backend_trace["used"] = "cpu"
     return array[order]

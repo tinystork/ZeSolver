@@ -100,6 +100,44 @@ SIDE_CAR_SUFFIX = ".wcs.json"
 FITS_MEMMAP_FORBIDDEN_KEYS = ("BZERO", "BSCALE", "BLANK")
 
 
+
+
+def _project_venv_python() -> Path | None:
+    candidates = [
+        ROOT_DIR / ".venv" / "bin" / "python",
+        ROOT_DIR / ".venv" / "Scripts" / "python.exe",
+    ]
+    for candidate in candidates:
+        if candidate.exists() and candidate.is_file():
+            return candidate
+    return None
+
+
+def _maybe_reexec_into_project_venv(argv: Optional[Sequence[str]] = None) -> None:
+    """Re-exec with the repo venv interpreter when available.
+
+    This ensures optional runtime deps (e.g. CuPy GPU backend) installed in
+    `.venv` are actually visible even when the user starts `zesolver.py` with
+    system Python.
+    """
+    if os.environ.get("ZE_NO_VENV_REEXEC") == "1":
+        return
+    target = _project_venv_python()
+    if target is None:
+        return
+    try:
+        current = Path(sys.executable).resolve()
+        target_resolved = target.resolve()
+    except Exception:
+        return
+    if current == target_resolved:
+        return
+    if os.environ.get("ZE_REEXECED_VENV") == "1":
+        return
+    os.environ["ZE_REEXECED_VENV"] = "1"
+    args = list(argv) if argv is not None else list(sys.argv[1:])
+    os.execv(str(target_resolved), [str(target_resolved), str(Path(__file__).resolve()), *args])
+
 def _parse_formats_value(value: Optional[str]) -> list[str]:
     text = (value or "").replace(";", ",").strip()
     if not text:
@@ -131,6 +169,10 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_level_info": "Info",
         "log_level_debug": "Debug",
         "log_level_warning": "Warning",
+        "interface_menu": "Interface",
+        "interface_mode_expert": "Expert",
+        "interface_mode_easy": "Easy",
+        "interface_mode_wizard": "Wizard",
         "window_title": "ZeSolver – Traitement par lot",
         "browse_button": "Parcourir…",
         "database_label": "Base de données",
@@ -157,6 +199,18 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "families_label": "Catalogue",
         "overwrite_label": "Réécrire les WCS existants",
         "blind_label": "Activer le blind solver",
+        "simple_mode_label": "Mode simple (recommandé)",
+        "simple_wizard_title": "Assistant de démarrage",
+        "simple_wizard_missing_db": "Le dossier de base (database) n'est pas configuré. Voulez-vous le choisir maintenant ?",
+        "simple_wizard_missing_db_invalid": "Dossier base invalide. Configure d'abord le dossier database.",
+        "simple_wizard_missing_index": "Le dossier d'index est manquant ou invalide. Ouvre l'onglet Réglages pour choisir/créer l'index.",
+        "simple_wizard_confirm": "Lancer la résolution ?\n\nDossier: {folder}\nFichiers: {count}\nBackend: {backend}\nRéécriture WCS: {overwrite}\nNettoyage WCS avant run: {clean}",
+        "simple_wizard_yes": "oui",
+        "simple_wizard_no": "non",
+        "simple_clean_wcs_label": "Nettoyer WCS avant run (FITS, via zewcscleaner)",
+        "simple_clean_failed": "Nettoyage WCS impossible: {error}",
+        "simple_clean_done": "Nettoyage WCS: {files} fichier(s) modifié(s), {cards} carte(s) supprimée(s).",
+        "simple_wizard_done": "Assistant terminé. Tu peux lancer un run quand tu veux.",
         "files_header": "Fichier",
         "status_header": "Statut",
         "details_header": "Détails",
@@ -176,7 +230,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "dev_bucket_cap_l_label": "Cap niveau L",
         "dev_workers_label": "Threads (solveur)",
         "dev_workers_auto": "Auto (0 — recommandé)",
-        "dev_workers_hint": "Limité à 75 % des cœurs disponibles. Augmenter davantage peut rendre le système instable.",
+        "dev_workers_hint": "Auto adapte les threads selon la machine (CPU/RAM). Le mode manuel peut être plus rapide mais moins stable.",
         "dev_family_group": "Bases supplémentaires",
         "dev_family_auto": "Auto (toutes les bases disponibles)",
         "dev_family_hint": "Décoche Auto pour choisir quelles bases utiliser quand le solveur est en mode Auto.",
@@ -280,6 +334,8 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_near_cache_label": "Cache tuiles (near)",
         "settings_perf_near_max_tiles_label": "Tuiles candidates max (near)",
         "settings_perf_detect_label": "Dispositif détection (GPU/CPU)",
+        "settings_perf_detect_auto_option": "Auto (GPU si disponible, sinon CPU)",
+        "settings_perf_detect_cpu_option": "CPU",
         "settings_perf_io_label": "Concurrence I/O (Auto=0)",
         "settings_perf_near_warm_label": "Near rapide (séquence)",
         # Fast solver (near) tab
@@ -288,10 +344,14 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "fast_quality_rms_label": "RMS max px (near)",
         "fast_pixel_tol_label": "Tolérance pixel (near)",
         "fast_ransac_trials_label": "Essais RANSAC (near)",
+        "fast_ransac_seed_label": "Seed RANSAC (near, -1=auto)",
         "fast_max_img_stars_label": "Étoiles image max (near)",
         "fast_max_cat_stars_label": "Étoiles catalogue max (near)",
         "fast_try_parity_label": "Autoriser symétrie (flip parité)",
         "fast_search_margin_label": "Marge de recherche (near)",
+        "fast_detect_k_sigma_label": "Seuil détection k-sigma (near)",
+        "fast_detect_min_area_label": "Aire min source (near)",
+        "fast_detect_max_labels_label": "Max labels détection (near)",
         "fast_save_btn": "Sauvegarder",
         "settings_build_start": "Construction de l'index dans {path}… (cela peut prendre plusieurs minutes)",
         "settings_rebuild_title": "Reconstruire l'index ?",
@@ -310,6 +370,10 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_level_info": "Info",
         "log_level_debug": "Debug",
         "log_level_warning": "Warning",
+        "interface_menu": "Interface",
+        "interface_mode_expert": "Expert",
+        "interface_mode_easy": "Easy",
+        "interface_mode_wizard": "Wizard",
         "window_title": "ZeSolver – Batch Solver",
         "browse_button": "Browse…",
         "database_label": "Database",
@@ -336,6 +400,18 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "families_label": "Catalog",
         "overwrite_label": "Overwrite existing WCS",
         "blind_label": "Enable blind solver",
+        "simple_mode_label": "Simple mode (recommended)",
+        "simple_wizard_title": "Startup assistant",
+        "simple_wizard_missing_db": "The catalog folder (database) is not configured. Do you want to choose it now?",
+        "simple_wizard_missing_db_invalid": "Invalid database folder. Configure the database folder first.",
+        "simple_wizard_missing_index": "The index folder is missing or invalid. Open the Settings tab to choose/build the index.",
+        "simple_wizard_confirm": "Start solving?\n\nFolder: {folder}\nFiles: {count}\nBackend: {backend}\nOverwrite WCS: {overwrite}\nWCS cleanup before run: {clean}",
+        "simple_wizard_yes": "yes",
+        "simple_wizard_no": "no",
+        "simple_clean_wcs_label": "Clean WCS before run (FITS, via zewcscleaner)",
+        "simple_clean_failed": "WCS cleanup failed: {error}",
+        "simple_clean_done": "WCS cleanup: {files} file(s) changed, {cards} card(s) removed.",
+        "simple_wizard_done": "Wizard completed. You can start a run whenever you want.",
         "files_header": "File",
         "status_header": "Status",
         "details_header": "Details",
@@ -355,7 +431,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "dev_bucket_cap_l_label": "Bucket cap (L)",
         "dev_workers_label": "Worker threads",
         "dev_workers_auto": "Auto (0 — recommended)",
-        "dev_workers_hint": "Capped to 75% of CPU cores. Pushing higher may destabilize the system.",
+        "dev_workers_hint": "Auto adapts worker threads to the machine (CPU/RAM). Manual mode can be faster but less stable.",
         "dev_family_group": "Additional catalogs",
         "dev_family_auto": "Auto (use every available family)",
         "dev_family_hint": "Uncheck Auto to pick which catalog families are used when the solver stays on Auto.",
@@ -459,6 +535,8 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_near_cache_label": "Near tile cache",
         "settings_perf_near_max_tiles_label": "Max tile candidates (near)",
         "settings_perf_detect_label": "Star detection device",
+        "settings_perf_detect_auto_option": "Auto (GPU if available, else CPU)",
+        "settings_perf_detect_cpu_option": "CPU",
         "settings_perf_io_label": "I/O concurrency (Auto=0)",
         "settings_perf_near_warm_label": "Fast near (sequential warm-start)",
         # Fast solver (near) tab
@@ -467,10 +545,14 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "fast_quality_rms_label": "Max RMS px (near)",
         "fast_pixel_tol_label": "Pixel tolerance (near)",
         "fast_ransac_trials_label": "RANSAC trials (near)",
+        "fast_ransac_seed_label": "RANSAC seed (near, -1=auto)",
         "fast_max_img_stars_label": "Max image stars (near)",
         "fast_max_cat_stars_label": "Max catalog stars (near)",
         "fast_try_parity_label": "Allow parity flip",
         "fast_search_margin_label": "Search margin (near)",
+        "fast_detect_k_sigma_label": "Detection k-sigma (near)",
+        "fast_detect_min_area_label": "Min source area (near)",
+        "fast_detect_max_labels_label": "Max detection labels (near)",
         "fast_save_btn": "Save settings",
         "settings_build_start": "Building index at {path}… (this may take several minutes)",
         "settings_rebuild_title": "Rebuild Index?",
@@ -865,11 +947,17 @@ class SolveConfig:
     near_tile_cache_size: int = 128
     near_detect_backend: Optional[str] = None
     near_detect_device: Optional[int] = None
+    near_detect_k_sigma: float = 4.0
+    near_detect_min_area: int = 8
+    near_detect_max_labels: int = 2500
+    # Hybrid pipeline guard: max concurrent GPU detect sections across workers
+    near_detect_gpu_slots: int = 1
     near_warm_start: bool = True
     near_quality_inliers: int = 60
     near_quality_rms: float = 1.0
     near_pixel_tolerance: float = 3.0
     near_ransac_trials: int = 1200
+    near_ransac_seed: Optional[int] = None
     near_max_img_stars: int = 800
     near_max_cat_stars: int = 2000
     near_try_parity_flip: bool = True
@@ -925,6 +1013,8 @@ class SolveConfig:
         object.__setattr__(self, "dev_bucket_cap_S", cap_s)
         object.__setattr__(self, "dev_bucket_cap_M", cap_m)
         object.__setattr__(self, "dev_bucket_cap_L", cap_l)
+        gpu_slots = max(1, int(getattr(self, "near_detect_gpu_slots", 1) or 1))
+        object.__setattr__(self, "near_detect_gpu_slots", gpu_slots)
         detect_sigma = float(getattr(self, "dev_detect_k_sigma", 3.0) or 3.0)
         if not math.isfinite(detect_sigma) or detect_sigma <= 0.0:
             detect_sigma = 3.0
@@ -972,8 +1062,50 @@ class ImageSolveResult:
 
 
 def _default_worker_count() -> int:
-    cpu_count = os.cpu_count() or 1
-    return max(1, cpu_count // 2)
+    """Adaptive default worker count with cross-platform stability in mind.
+
+    Policy:
+    - keep headroom on small machines,
+    - be less conservative than half-CPU on mid-range hosts,
+    - avoid over-saturation on very large core counts.
+    """
+    cpu_count = int(os.cpu_count() or 1)
+    cap = max(1, math.floor(cpu_count * 0.75))
+    if cpu_count <= 2:
+        recommended = 1
+    elif cpu_count <= 4:
+        recommended = cpu_count - 1
+    elif cpu_count <= 8:
+        recommended = round(cpu_count * 0.75)
+    elif cpu_count <= 16:
+        recommended = round(cpu_count * 0.66)
+    else:
+        recommended = round(cpu_count * 0.50)
+    return max(1, min(cap, int(recommended)))
+
+
+def _system_memory_gb() -> Optional[float]:
+    """Best-effort total RAM detection without extra dependencies."""
+    try:
+        if hasattr(os, "sysconf") and "SC_PAGE_SIZE" in os.sysconf_names and "SC_PHYS_PAGES" in os.sysconf_names:
+            page = int(os.sysconf("SC_PAGE_SIZE"))
+            pages = int(os.sysconf("SC_PHYS_PAGES"))
+            if page > 0 and pages > 0:
+                return (page * pages) / (1024.0 ** 3)
+    except Exception:
+        pass
+    try:
+        meminfo = Path('/proc/meminfo')
+        if meminfo.is_file():
+            for line in meminfo.read_text(errors='ignore').splitlines():
+                if line.startswith('MemTotal:'):
+                    parts = line.split()
+                    if len(parts) >= 2:
+                        kb = float(parts[1])
+                        return kb / (1024.0 ** 2)
+    except Exception:
+        pass
+    return None
 
 
 def _iter_image_files(input_dir: Path, extensions: Sequence[str]) -> Iterator[Path]:
@@ -1162,6 +1294,28 @@ def _peer_fits_metadata(path: Path) -> tuple[Optional[float], Optional[float], O
     return None, None, None
 
 
+
+
+def _cuda_runtime_summary() -> tuple[int, list[str], Optional[str]]:
+    """Return (device_count, device_names, error_text)."""
+    try:
+        import cupy  # type: ignore
+        from cupy.cuda import runtime as _rt  # type: ignore
+    except Exception as exc:
+        return 0, [], f"cupy import failed: {exc}"
+    try:
+        n = int(_rt.getDeviceCount())
+        names: list[str] = []
+        for i in range(n):
+            props = _rt.getDeviceProperties(i)
+            name = props.get('name') if isinstance(props, dict) else None
+            if isinstance(name, (bytes, bytearray)):
+                name = name.decode(errors='ignore')
+            names.append(str(name or f'GPU {i}'))
+        return n, names, None
+    except Exception as exc:
+        return 0, [], f"cuda runtime probe failed: {exc}"
+
 class ImageSolver:
     def __init__(self, config: SolveConfig) -> None:
         self.config = config
@@ -1171,6 +1325,7 @@ class ImageSolver:
         self._family_hint: Optional[str] = None
         # Sequential near-solver warm start: (scale_deg_per_px, rotation_rad, parity)
         self._near_seed: Optional[tuple[float, float, int]] = None
+        self._near_warmstart_parallel_notified: bool = False
         # Cache to avoid repeating expensive blind index preflight checks per file
         self._blind_index_checked: bool = False
         self._blind_index_checked_root: Optional[Path] = None
@@ -1180,7 +1335,8 @@ class ImageSolver:
         workers = int(self.config.workers or _default_worker_count())
         io_limit = int(self.config.io_concurrency or 0)
         if io_limit <= 0:
-            # Auto‑tune I/O concurrency from a quick throughput probe on the input drive
+            # Auto‑tune I/O concurrency from a quick throughput probe on the input drive,
+            # then apply conservative machine guards (RAM / backend) for stability.
             try:
                 img_limit = self._autotune_io_limit(self.config.input_dir, workers)
                 idx_limit = None
@@ -1203,6 +1359,31 @@ class ImageSolver:
                     logging.info("I/O auto-tune: input=%d", img_limit)
             except Exception:
                 io_limit = 5 if workers >= 5 else max(1, (workers + 1) // 2)
+            # Auto guards by machine/resources
+            try:
+                ram_gb = _system_memory_gb()
+                near_backend = str(getattr(self.config, 'near_detect_backend', '') or '').lower()
+                near_device = getattr(self.config, 'near_detect_device', None)
+                io_before = io_limit
+                if ram_gb is not None:
+                    if ram_gb <= 4.0:
+                        io_limit = min(io_limit, 2)
+                    elif ram_gb <= 8.0:
+                        io_limit = min(io_limit, max(1, workers // 2))
+                if near_backend == 'cuda':
+                    # Keep one CPU slot for orchestration when GPU path is active.
+                    io_limit = min(io_limit, max(1, workers - 1))
+                if io_limit != io_before:
+                    logging.info(
+                        "I/O auto-guard adjusted: %d -> %d (ram_gb=%s, near_backend=%s, near_device=%s)",
+                        io_before,
+                        io_limit,
+                        f"{ram_gb:.2f}" if isinstance(ram_gb, float) else "n/a",
+                        near_backend or "n/a",
+                        str(near_device),
+                    )
+            except Exception:
+                pass
         self._io_sema = threading.Semaphore(max(1, io_limit))
         logging.info("I/O concurrency set to %d (workers=%d)", io_limit, workers)
         # Log the run configuration once so zesolver.log captures what the GUI selected
@@ -1237,11 +1418,16 @@ class ImageSolver:
                     "tile_cache_size": int(getattr(self.config, "near_tile_cache_size", 128) or 128),
                     "detect_backend": str(getattr(self.config, "near_detect_backend", "auto") or "auto"),
                     "detect_device": getattr(self.config, "near_detect_device", None),
+                    "detect_k_sigma": float(getattr(self.config, "near_detect_k_sigma", 4.0) or 4.0),
+                    "detect_min_area": int(getattr(self.config, "near_detect_min_area", 8) or 8),
+                    "detect_max_labels": int(getattr(self.config, "near_detect_max_labels", 2500) or 2500),
+                    "detect_gpu_slots": int(getattr(self.config, "near_detect_gpu_slots", 1) or 1),
                     "warm_start": bool(getattr(self.config, "near_warm_start", True)),
                     "quality_inliers": int(getattr(self.config, "near_quality_inliers", 60) or 60),
                     "quality_rms": float(getattr(self.config, "near_quality_rms", 1.0) or 1.0),
                     "pixel_tolerance": float(getattr(self.config, "near_pixel_tolerance", 3.0) or 3.0),
                     "ransac_trials": int(getattr(self.config, "near_ransac_trials", 1200) or 1200),
+                    "ransac_seed": getattr(self.config, "near_ransac_seed", None),
                     "max_img_stars": int(getattr(self.config, "near_max_img_stars", 800) or 800),
                     "max_cat_stars": int(getattr(self.config, "near_max_cat_stars", 2000) or 2000),
                     "try_parity_flip": bool(getattr(self.config, "near_try_parity_flip", True)),
@@ -1258,6 +1444,22 @@ class ImageSolver:
                 },
             }
             logging.info("Run configuration: %s", json.dumps(run_cfg, ensure_ascii=False))
+            try:
+                ndev, gpu_names, gpu_err = _cuda_runtime_summary()
+                near_backend = str(run_cfg.get("near", {}).get("detect_backend", "auto") or "auto").lower()
+                near_device = run_cfg.get("near", {}).get("detect_device", None)
+                if gpu_err:
+                    logging.info("CUDA probe: unavailable (%s)", gpu_err)
+                else:
+                    logging.info("CUDA probe: %d device(s): %s", ndev, ", ".join(gpu_names) if gpu_names else "(none)")
+                if near_backend == "cpu" and ndev > 0:
+                    logging.info("GPU available but disabled by config (near_detect_backend=cpu)")
+                if near_backend == "cuda" and ndev <= 0:
+                    logging.warning("near_detect_backend=cuda but no CUDA device detected; detection will fallback to CPU")
+                if near_backend == "cuda" and ndev > 0 and near_device is not None and int(near_device) >= ndev:
+                    logging.warning("near_detect_device=%s is out of range (devices=%d); detection may fallback to CPU", near_device, ndev)
+            except Exception:
+                pass
             logging.info("Family candidate order: %s", ", ".join(self._family_candidates) if self._family_candidates else "(auto)")
         except Exception:
             # Never fail construction because of logging
@@ -1945,6 +2147,54 @@ class ImageSolver:
                 skip_if_valid=skip_if_valid,
                 cancel_check=(self._cancelled if self._cancel_event else None),
             )
+            # Blind rescue loop for extremely low-support failures (best inliers <= 1)
+            # Keeps retries bounded and only activates on clearly weak blind attempts.
+            rescue_plans = (
+                {"max_candidates": 24, "max_quads": 16000, "pixel_tolerance": 3.0, "quality_rms": 1.6},
+                {"max_candidates": 36, "max_quads": 24000, "pixel_tolerance": 3.4, "quality_rms": 2.0},
+            )
+            for rescue_idx, plan in enumerate(rescue_plans, start=1):
+                if result.get("success"):
+                    break
+                stats = result.get("stats") or {}
+                best_inliers = int(stats.get("inliers", -1) or -1)
+                if best_inliers > 1:
+                    break
+                if self._cancelled():
+                    break
+                rescue_cfg = replace(
+                    blind_cfg,
+                    max_candidates=max(int(blind_cfg.max_candidates), int(plan["max_candidates"])),
+                    max_quads=max(int(blind_cfg.max_quads), int(plan["max_quads"])),
+                    pixel_tolerance=max(float(blind_cfg.pixel_tolerance), float(plan["pixel_tolerance"])),
+                    quality_rms=max(float(blind_cfg.quality_rms), float(plan["quality_rms"])),
+                    fast_mode=False,
+                )
+                logging.info(
+                    "[ZEBLIND] blind_rescue_attempt=%d/2 file=%s prev_inliers=%d max_candidates=%d->%d max_quads=%d->%d pixel_tolerance=%.2f->%.2f quality_rms=%.2f->%.2f",
+                    rescue_idx,
+                    path.name,
+                    best_inliers,
+                    int(blind_cfg.max_candidates),
+                    int(rescue_cfg.max_candidates),
+                    int(blind_cfg.max_quads),
+                    int(rescue_cfg.max_quads),
+                    float(blind_cfg.pixel_tolerance),
+                    float(rescue_cfg.pixel_tolerance),
+                    float(blind_cfg.quality_rms),
+                    float(rescue_cfg.quality_rms),
+                )
+                result = blind_solve(
+                    fits_path=str(path),
+                    index_root=str(index_root),
+                    config=rescue_cfg,
+                    log=logging.info,
+                    skip_if_valid=skip_if_valid,
+                    cancel_check=(self._cancelled if self._cancel_event else None),
+                )
+                if result.get("success"):
+                    logging.info("[ZEBLIND] blind_rescue_attempt=%d succeeded for %s", rescue_idx, path.name)
+                    break
         except BlindSolverRuntimeError as exc:
             logging.warning("Blind solver failed for %s: %s", path.name, exc)
             run_info.append(("run_info_blind_failed", {"message": str(exc)}))
@@ -2091,13 +2341,19 @@ class ImageSolver:
             family: Optional[str] = None
             if self.config.families and len(self.config.families) == 1:
                 family = self.config.families[0]
-            # If we have a previous near solution, reduce trials and pass parity hint
-            seed = getattr(self, "_near_seed", None)
+            # Warm-start can improve speed in strict sequential mode, but shared
+            # cross-worker seeds reduce reproducibility on borderline frames.
+            workers_count = int(getattr(self.config, "workers", 1) or 1)
+            use_seq_warm_start = bool(getattr(self.config, "near_warm_start", True)) and workers_count <= 1
+            if bool(getattr(self.config, "near_warm_start", True)) and workers_count > 1 and not self._near_warmstart_parallel_notified:
+                logging.info("[ZENEAR] warm-start disabled in parallel mode (workers=%d) for reproducibility", workers_count)
+                self._near_warmstart_parallel_notified = True
+            seed = getattr(self, "_near_seed", None) if use_seq_warm_start else None
             ransac_trials = 600 if seed else 1200
             seed_scale = float(seed[0]) if seed else None
             seed_rot = float(seed[1]) if seed else None
             seed_par = int(seed[2]) if seed else 1
-            if seed and self.config.near_warm_start:
+            if seed and use_seq_warm_start:
                 logging.info("[ZENEAR] warm-start used (trials=%d)", ransac_trials)
             # Further tighten search margin when OBJECT is present
             obj_name = None
@@ -2117,7 +2373,12 @@ class ImageSolver:
                 tile_cache_size=int(getattr(self.config, "near_tile_cache_size", 128) or 128),
                 detect_backend=(getattr(self.config, "near_detect_backend", None) or "auto"),
                 detect_device=(getattr(self.config, "near_detect_device", None)),
+                detect_k_sigma=float(getattr(self.config, 'near_detect_k_sigma', 4.0) or 4.0),
+                detect_min_area=int(getattr(self.config, 'near_detect_min_area', 8) or 8),
+                detect_max_labels=int(getattr(self.config, 'near_detect_max_labels', 2500) or 2500),
+                detect_gpu_slots=int(getattr(self.config, 'near_detect_gpu_slots', 1) or 1),
                 ransac_trials=int(getattr(self.config, 'near_ransac_trials', 0) or 0) or ransac_trials,
+                ransac_seed=(int(getattr(self.config, 'near_ransac_seed')) if getattr(self.config, 'near_ransac_seed', None) is not None else None),
                 seed_scale_deg=seed_scale,
                 seed_rotation=seed_rot,
                 seed_parity=seed_par,
@@ -2137,7 +2398,11 @@ class ImageSolver:
                     "tile_cache_size": near_cfg.tile_cache_size,
                     "detect_backend": near_cfg.detect_backend,
                     "detect_device": near_cfg.detect_device,
+                    "detect_k_sigma": near_cfg.detect_k_sigma,
+                    "detect_min_area": near_cfg.detect_min_area,
+                    "detect_max_labels": near_cfg.detect_max_labels,
                     "ransac_trials": near_cfg.ransac_trials,
+                    "ransac_seed": near_cfg.ransac_seed,
                     "seed_scale_deg": near_cfg.seed_scale_deg,
                     "seed_rotation": near_cfg.seed_rotation,
                     "seed_parity": near_cfg.seed_parity,
@@ -2160,6 +2425,57 @@ class ImageSolver:
                 fallback_to_blind=False,
                 cancel_check=(self._cancelled if self._cancel_event else None),
             )
+            if not result["success"] and not (self._cancelled() if self._cancel_event else False):
+                base_margin = float(near_cfg.search_margin)
+                base_tiles = int(near_cfg.max_tile_candidates)
+                base_rms = float(getattr(near_cfg, "quality_rms", 1.0) or 1.0)
+                rescue_plan = (
+                    (max(base_margin * 1.6, base_margin + 0.20), max(base_tiles, 96), max(base_rms, 1.70)),
+                    (max(base_margin * 2.2, base_margin + 0.45), max(base_tiles, 192), max(base_rms, 2.00)),
+                )
+                for rescue_idx, (rescue_margin, rescue_tiles, rescue_rms) in enumerate(rescue_plan, start=1):
+                    if self._cancelled() if self._cancel_event else False:
+                        break
+                    if (
+                        rescue_margin <= near_cfg.search_margin
+                        and rescue_tiles <= near_cfg.max_tile_candidates
+                        and rescue_rms <= float(getattr(near_cfg, "quality_rms", base_rms) or base_rms)
+                    ):
+                        continue
+                    prev_margin = float(near_cfg.search_margin)
+                    prev_tiles = int(near_cfg.max_tile_candidates)
+                    prev_rms = float(getattr(near_cfg, "quality_rms", base_rms) or base_rms)
+                    near_cfg.search_margin = float(max(near_cfg.search_margin, rescue_margin))
+                    near_cfg.max_tile_candidates = int(max(near_cfg.max_tile_candidates, rescue_tiles))
+                    near_cfg.quality_rms = float(max(prev_rms, rescue_rms))
+                    logging.info(
+                        "[ZENEAR] near_rescue_attempt=%d/2 file=%s prev_error=%s search_margin=%.2f->%.2f max_tiles=%d->%d quality_rms=%.2f->%.2f",
+                        rescue_idx,
+                        path.name,
+                        (result.get("message") or "unknown"),
+                        prev_margin,
+                        near_cfg.search_margin,
+                        prev_tiles,
+                        near_cfg.max_tile_candidates,
+                        prev_rms,
+                        near_cfg.quality_rms,
+                    )
+                    result = near_solve(
+                        fits_path=str(path),
+                        index_root=str(index_root),
+                        config=near_cfg,
+                        log=logging.info,
+                        skip_if_valid=False,
+                        fallback_to_blind=False,
+                        cancel_check=(self._cancelled if self._cancel_event else None),
+                    )
+                    if result["success"]:
+                        logging.info(
+                            "[ZENEAR] near_rescue_attempt=%d succeeded for %s",
+                            rescue_idx,
+                            path.name,
+                        )
+                        break
         except BlindSolverRuntimeError as exc:
             logging.info("Near solver (index) failed for %s: %s", path.name, exc)
             return None
@@ -2171,7 +2487,7 @@ class ImageSolver:
                 s = float(kw.get("SEED_SCALE")) if kw.get("SEED_SCALE") is not None else None
                 r = float(kw.get("SEED_ROT")) if kw.get("SEED_ROT") is not None else None
                 p = int(kw.get("SEED_PAR")) if kw.get("SEED_PAR") is not None else 1
-                if s and r is not None:
+                if s and r is not None and use_seq_warm_start:
                     self._near_seed = (s, r, p)
             except Exception:
                 pass
@@ -2260,37 +2576,66 @@ class BatchSolver:
         except Exception:
             pass
         workers = max(1, self.config.workers)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            it = iter(self.files)
-            inflight: dict[concurrent.futures.Future[ImageSolveResult], Path] = {}
+        pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
+        cancelled = False
+        it = iter(self.files)
+        inflight: dict[concurrent.futures.Future[ImageSolveResult], Path] = {}
+
+        def _cancel_requested() -> bool:
+            return bool(cancel_event and cancel_event.is_set())
+
+        try:
             # Prime up to worker count
             try:
                 for _ in range(workers):
-                    if cancel_event and cancel_event.is_set():
+                    if _cancel_requested():
+                        cancelled = True
                         break
                     path = next(it)
                     inflight[pool.submit(self.solver.solve_path, path)] = path
             except StopIteration:
                 pass
-            try:
-                while inflight:
-                    future = next(concurrent.futures.as_completed(inflight))
-                    path = inflight.pop(future)
+
+            while inflight:
+                if _cancel_requested():
+                    cancelled = True
+                    break
+                done, _pending = concurrent.futures.wait(
+                    tuple(inflight.keys()),
+                    timeout=0.2,
+                    return_when=concurrent.futures.FIRST_COMPLETED,
+                )
+                if not done:
+                    continue
+                for future in done:
+                    path = inflight.pop(future, None)
+                    if path is None:
+                        continue
                     try:
                         yield future.result()
                     except Exception as exc:
                         yield ImageSolveResult(path=path, status="failed", message=str(exc))
-                    if cancel_event and cancel_event.is_set():
+                    if _cancel_requested():
+                        cancelled = True
                         break
                     try:
                         path = next(it)
                     except StopIteration:
                         continue
                     inflight[pool.submit(self.solver.solve_path, path)] = path
-            finally:
-                if cancel_event and cancel_event.is_set():
-                    for f in inflight.keys():
-                        f.cancel()
+                if cancelled:
+                    break
+        finally:
+            if cancelled or _cancel_requested():
+                for f in list(inflight.keys()):
+                    f.cancel()
+                # Return control immediately; running tasks must observe cancel_event.
+                try:
+                    pool.shutdown(wait=False, cancel_futures=True)
+                except TypeError:
+                    pool.shutdown(wait=False)
+            else:
+                pool.shutdown(wait=True)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -2353,6 +2698,36 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--near-detect-device",
         type=int,
         help="Near-solver: CUDA device index to use for detection",
+    )
+    parser.add_argument(
+        "--near-detect-k-sigma",
+        type=float,
+        default=4.0,
+        help="Near-solver: star detection threshold in sigma units (default: 4.0)",
+    )
+    parser.add_argument(
+        "--near-detect-min-area",
+        type=int,
+        default=8,
+        help="Near-solver: minimum connected source area in pixels (default: 8)",
+    )
+    parser.add_argument(
+        "--near-detect-max-labels",
+        type=int,
+        default=2500,
+        help="Near-solver: max connected components evaluated during detection (default: 2500)",
+    )
+    parser.add_argument(
+        "--near-detect-gpu-slots",
+        type=int,
+        default=1,
+        help="Near-solver: max concurrent GPU detection sections across workers (default: 1)",
+    )
+    parser.add_argument(
+        "--near-ransac-seed",
+        type=int,
+        default=None,
+        help="Near-solver: explicit RANSAC seed (default: auto/stable per file)",
     )
     parser.add_argument(
         "--near-warm-start",
@@ -2507,9 +2882,14 @@ def run_cli(args: argparse.Namespace) -> int:
         near_tile_cache_size=max(1, int(args.near_tile_cache_size or 128)),
         near_detect_backend=str(args.near_detect_backend or "auto"),
         near_detect_device=(int(args.near_detect_device) if args.near_detect_device is not None else None),
+        near_detect_k_sigma=float(args.near_detect_k_sigma or 4.0),
+        near_detect_min_area=int(args.near_detect_min_area or 8),
+        near_detect_max_labels=int(args.near_detect_max_labels or 2500),
+        near_detect_gpu_slots=max(1, int(args.near_detect_gpu_slots or 1)),
         io_concurrency=int(args.io_concurrency or 0),
         gc_interval=int(args.gc_interval or 0),
         near_warm_start=(True if args.near_warm_start is None else bool(args.near_warm_start)),
+        near_ransac_seed=(int(args.near_ransac_seed) if args.near_ransac_seed is not None else None),
         hint_ra_deg=args.ra_hint,
         hint_dec_deg=args.dec_hint,
         hint_radius_deg=args.radius_hint,
@@ -3033,10 +3413,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             tile_cache: int = 128,
             detect_backend: str = "auto",
             detect_device: int | None = None,
+            detect_k_sigma: float | None = None,
+            detect_min_area: int | None = None,
+            detect_max_labels: int | None = None,
             quality_inliers: int | None = None,
             quality_rms: float | None = None,
             pixel_tolerance: float | None = None,
             ransac_trials: int | None = None,
+            ransac_seed: int | None = None,
             max_img_stars: int | None = None,
             max_cat_stars: int | None = None,
             try_parity_flip: bool | None = None,
@@ -3049,10 +3433,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.tile_cache = int(tile_cache)
             self.detect_backend = str(detect_backend or "auto")
             self.detect_device = detect_device
+            self.detect_k_sigma = detect_k_sigma
+            self.detect_min_area = detect_min_area
+            self.detect_max_labels = detect_max_labels
             self.quality_inliers = quality_inliers
             self.quality_rms = quality_rms
             self.pixel_tolerance = pixel_tolerance
             self.ransac_trials = ransac_trials
+            self.ransac_seed = ransac_seed
             self.max_img_stars = max_img_stars
             self.max_cat_stars = max_cat_stars
             self.try_parity_flip = try_parity_flip
@@ -3065,10 +3453,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                     tile_cache_size=max(1, self.tile_cache),
                     detect_backend=self.detect_backend,
                     detect_device=self.detect_device,
+                    detect_k_sigma=float(self.detect_k_sigma or 4.0),
+                    detect_min_area=int(self.detect_min_area or 8),
+                    detect_max_labels=int(self.detect_max_labels or 2500),
                     quality_inliers=int(self.quality_inliers or 60),
                     quality_rms=float(self.quality_rms or 1.0),
                     pixel_tolerance=float(self.pixel_tolerance or 3.0),
                     ransac_trials=int(self.ransac_trials or 1200),
+                    ransac_seed=(int(self.ransac_seed) if self.ransac_seed is not None else None),
                     max_img_stars=int(self.max_img_stars or 800),
                     max_cat_stars=int(self.max_cat_stars or 2000),
                     try_parity_flip=bool(self.try_parity_flip if self.try_parity_flip is not None else True),
@@ -3173,6 +3565,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._current_input_dir: Optional[Path] = None
             self._results_seen = 0
             self._language_actions: dict[str, QtGui.QAction] = {}
+            self._interface_actions: dict[str, QtGui.QAction] = {}
+            self._interface_mode = "easy"
             self._settings = settings
             self._settings.solver_workers = self._dev_workers_choice
             self._current_log_level = str(getattr(settings, "log_level", "INFO") or "INFO").upper()
@@ -3199,6 +3593,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._populate_settings_ui()
             self._prefill_from_args(args)
             self._apply_language()
+            self._apply_interface_mode()
             self._schedule_db_scan(self._settings.db_root or "", delay_ms=200)
 
         # --- UI building helpers -------------------------------------------------
@@ -3283,6 +3678,25 @@ def launch_gui(args: argparse.Namespace) -> int:
                 )
                 self.language_menu.addAction(action)
                 self._language_actions[code] = action
+
+            self.interface_menu = menu_bar.addMenu("")
+            self._interface_actions.clear()
+            self._interface_group = QtGui.QActionGroup(self)
+            self._interface_group.setExclusive(True)
+            for mode in ("expert", "easy"):
+                action = QtGui.QAction(self)
+                action.setCheckable(True)
+                action.triggered.connect(
+                    lambda checked, m=mode: self._on_interface_mode_selected(m) if checked else None
+                )
+                self.interface_menu.addAction(action)
+                self._interface_group.addAction(action)
+                self._interface_actions[mode] = action
+            self.interface_menu.addSeparator()
+            self.interface_wizard_action = QtGui.QAction(self)
+            self.interface_wizard_action.triggered.connect(self._run_startup_wizard_from_menu)
+            self.interface_menu.addAction(self.interface_wizard_action)
+
             self.log_menu = menu_bar.addMenu("")
             self._log_level_actions.clear()
             for level in ("INFO", "DEBUG", "WARNING"):
@@ -3298,6 +3712,62 @@ def launch_gui(args: argparse.Namespace) -> int:
             if not level:
                 return
             self._set_log_level(level)
+
+        def _on_interface_mode_selected(self, mode: str) -> None:
+            if mode not in ("expert", "easy"):
+                return
+            self._interface_mode = mode
+            self._apply_interface_mode()
+
+        def _set_tab_visible(self, tab_widget: QtWidgets.QWidget, visible: bool) -> None:
+            try:
+                idx = self.tabs.indexOf(tab_widget)
+                if idx >= 0:
+                    self.tabs.setTabVisible(idx, visible)
+            except Exception:
+                pass
+
+        def _apply_interface_mode(self) -> None:
+            if not hasattr(self, "tabs"):
+                return
+            expert = (self._interface_mode == "expert")
+            # Core tabs always visible in easy mode
+            if hasattr(self, "solver_scroll"):
+                self._set_tab_visible(self.solver_scroll, True)
+            if hasattr(self, "database_scroll"):
+                self._set_tab_visible(self.database_scroll, True)
+            if hasattr(self, "settings_scroll"):
+                self._set_tab_visible(self.settings_scroll, True)
+            # Advanced tabs hidden in easy mode
+            for name in ("dev_scroll", "performance_scroll", "benchmark_scroll", "fast_scroll", "astrometry_scroll"):
+                tab = getattr(self, name, None)
+                if tab is not None:
+                    self._set_tab_visible(tab, expert)
+            if not expert and hasattr(self, "solver_scroll"):
+                try:
+                    current = self.tabs.currentWidget()
+                    hidden_tabs = [getattr(self, n, None) for n in ("dev_scroll", "performance_scroll", "benchmark_scroll", "fast_scroll", "astrometry_scroll")]
+                    if current in hidden_tabs:
+                        self._activate_tab(self.solver_scroll)
+                except Exception:
+                    pass
+            if hasattr(self, "simple_mode_check"):
+                self.simple_mode_check.setChecked(not expert)
+            for mode, action in self._interface_actions.items():
+                try:
+                    action.blockSignals(True)
+                    action.setChecked(mode == self._interface_mode)
+                finally:
+                    action.blockSignals(False)
+
+        def _run_startup_wizard_from_menu(self) -> None:
+            ok = self._run_simple_startup_wizard()
+            if ok:
+                QtWidgets.QMessageBox.information(
+                    self,
+                    self._text("simple_wizard_title"),
+                    self._text("simple_wizard_done"),
+                )
 
         def _set_log_level(self, level: str, *, persist: bool = True) -> None:
             normalized = str(level or "INFO").upper()
@@ -4068,7 +4538,7 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _sync_workers_spin_from_dev_choice(self) -> None:
             if not hasattr(self, "workers_spin"):
                 return
-            value = self._effective_workers_for_choice(self._dev_workers_choice)
+            value = self._clamp_worker_choice(self._dev_workers_choice)
             self._syncing_workers_controls = True
             try:
                 self.workers_spin.setValue(value)
@@ -4078,7 +4548,7 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _on_workers_spin_changed(self, value: int) -> None:
             if getattr(self, "_syncing_workers_controls", False):
                 return
-            value = max(1, min(self._max_worker_cap(), int(value)))
+            value = max(0, min(self._max_worker_cap(), int(value)))
             self._dev_workers_choice = value
             self._select_dev_workers_combo_value(value)
             self._settings.solver_workers = self._dev_workers_choice
@@ -4353,8 +4823,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.scale_max_hint_spin.setValue(self._settings.solver_hint_resolution_max_arcsec or 0.0)
             self.workers_spin = QtWidgets.QSpinBox()
             cap_workers = self._max_worker_cap()
-            self.workers_spin.setRange(1, cap_workers)
-            self.workers_spin.setValue(self._effective_workers_for_choice(self._dev_workers_choice))
+            self.workers_spin.setRange(0, cap_workers)
+            self.workers_spin.setSpecialValueText(self._text("dev_workers_auto"))
+            self.workers_spin.setValue(self._clamp_worker_choice(self._dev_workers_choice))
             self.workers_spin.valueChanged.connect(self._on_workers_spin_changed)
             self.max_files_spin = QtWidgets.QSpinBox()
             self.max_files_spin.setRange(0, 10000)
@@ -4369,6 +4840,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.overwrite_check.setChecked(bool(self._settings.solver_overwrite))
             self.blind_check = QtWidgets.QCheckBox()
             self.blind_check.setChecked(bool(self._settings.solver_blind_enabled))
+            self.simple_mode_check = QtWidgets.QCheckBox()
+            self.simple_mode_check.setChecked(True)
+            self.simple_clean_wcs_check = QtWidgets.QCheckBox()
+            self.simple_clean_wcs_check.setChecked(False)
             self.fov_label_widget = QtWidgets.QLabel()
             self.search_scale_label_widget = QtWidgets.QLabel()
             self.search_attempts_label_widget = QtWidgets.QLabel()
@@ -4403,6 +4878,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.families_label_widget, self.families_combo)
             form.addRow(self.blind_check)
             form.addRow(self.overwrite_check)
+            form.addRow(self.simple_mode_check)
+            form.addRow(self.simple_clean_wcs_check)
             return self.options_box
 
         def _populate_families_from_index(self, index_root_text: str) -> None:
@@ -5042,6 +5519,13 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.fast_ransac_trials_spin.setSingleStep(100)
             self.fast_ransac_trials_spin.setValue(int(getattr(self._settings, 'near_ransac_trials', 1200) or 1200))
             form.addRow(self.fast_ransac_trials_label, self.fast_ransac_trials_spin)
+            # RANSAC seed (-1 = auto)
+            self.fast_ransac_seed_label = QtWidgets.QLabel()
+            self.fast_ransac_seed_spin = QtWidgets.QSpinBox()
+            self.fast_ransac_seed_spin.setRange(-1, 2147483647)
+            self.fast_ransac_seed_spin.setSingleStep(1)
+            self.fast_ransac_seed_spin.setValue(int(getattr(self._settings, 'near_ransac_seed', -1) if getattr(self._settings, 'near_ransac_seed', None) is not None else -1))
+            form.addRow(self.fast_ransac_seed_label, self.fast_ransac_seed_spin)
             # Max image stars
             self.fast_max_img_stars_label = QtWidgets.QLabel()
             self.fast_max_img_stars_spin = QtWidgets.QSpinBox()
@@ -5068,6 +5552,28 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.fast_search_margin_spin.setSingleStep(0.05)
             self.fast_search_margin_spin.setValue(float(getattr(self._settings, 'near_search_margin', 1.2) or 1.2))
             form.addRow(self.fast_search_margin_label, self.fast_search_margin_spin)
+            # Detection k-sigma
+            self.fast_detect_k_sigma_label = QtWidgets.QLabel()
+            self.fast_detect_k_sigma_spin = QtWidgets.QDoubleSpinBox()
+            self.fast_detect_k_sigma_spin.setRange(1.5, 8.0)
+            self.fast_detect_k_sigma_spin.setDecimals(2)
+            self.fast_detect_k_sigma_spin.setSingleStep(0.1)
+            self.fast_detect_k_sigma_spin.setValue(float(getattr(self._settings, 'near_detect_k_sigma', 4.0) or 4.0))
+            form.addRow(self.fast_detect_k_sigma_label, self.fast_detect_k_sigma_spin)
+            # Detection min area
+            self.fast_detect_min_area_label = QtWidgets.QLabel()
+            self.fast_detect_min_area_spin = QtWidgets.QSpinBox()
+            self.fast_detect_min_area_spin.setRange(2, 64)
+            self.fast_detect_min_area_spin.setSingleStep(1)
+            self.fast_detect_min_area_spin.setValue(int(getattr(self._settings, 'near_detect_min_area', 8) or 8))
+            form.addRow(self.fast_detect_min_area_label, self.fast_detect_min_area_spin)
+            # Detection max labels
+            self.fast_detect_max_labels_label = QtWidgets.QLabel()
+            self.fast_detect_max_labels_spin = QtWidgets.QSpinBox()
+            self.fast_detect_max_labels_spin.setRange(200, 20000)
+            self.fast_detect_max_labels_spin.setSingleStep(100)
+            self.fast_detect_max_labels_spin.setValue(int(getattr(self._settings, 'near_detect_max_labels', 2500) or 2500))
+            form.addRow(self.fast_detect_max_labels_label, self.fast_detect_max_labels_spin)
             # Assemble
             column.addWidget(self.fast_group)
             # Save button
@@ -5081,8 +5587,9 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _populate_detect_devices(self, combo: 'QtWidgets.QComboBox') -> None:
             combo.clear()
-            # Always offer CPU
-            combo.addItem("CPU", ("cpu", -1))
+            # Offer an explicit Auto mode (best UX): GPU if available, otherwise CPU.
+            combo.addItem(self._text("settings_perf_detect_auto_option"), ("auto", 0))
+            combo.addItem(self._text("settings_perf_detect_cpu_option"), ("cpu", -1))
             # Try CUDA via CuPy
             try:
                 import cupy  # type: ignore
@@ -5097,27 +5604,23 @@ def launch_gui(args: argparse.Namespace) -> int:
                     combo.addItem(label, ("cuda", i))
             except Exception:
                 pass
-            # Restore previous selection if possible, otherwise default to first CUDA if present
+            # Restore previous selection; fall back to Auto.
             backend = (self._settings.near_detect_backend or "auto").lower()
             device = int(self._settings.near_detect_device or 0)
-            target_data = None
             if backend == "cuda":
                 target_data = ("cuda", device)
             elif backend == "cpu":
                 target_data = ("cpu", -1)
-            # Try to match stored selection
-            if target_data is not None:
-                for idx in range(combo.count()):
-                    if combo.itemData(idx) == target_data:
-                        combo.setCurrentIndex(idx)
-                        break
             else:
-                # Auto: prefer first CUDA if available
-                for idx in range(combo.count()):
-                    data = combo.itemData(idx)
-                    if isinstance(data, tuple) and data[0] == "cuda":
-                        combo.setCurrentIndex(idx)
-                        break
+                target_data = ("auto", 0)
+            found = False
+            for idx in range(combo.count()):
+                if combo.itemData(idx) == target_data:
+                    combo.setCurrentIndex(idx)
+                    found = True
+                    break
+            if not found:
+                combo.setCurrentIndex(0)
 
         def _pick_settings_directory(self, target: QtWidgets.QLineEdit) -> None:
             opts = QtWidgets.QFileDialog.Option.ShowDirsOnly | QtWidgets.QFileDialog.Option.DontUseNativeDialog
@@ -5263,6 +5766,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.fast_pixel_tol_spin.setValue(float(getattr(settings, 'near_pixel_tolerance', 3.0) or 3.0))
                 if hasattr(self, 'fast_ransac_trials_spin'):
                     self.fast_ransac_trials_spin.setValue(int(getattr(settings, 'near_ransac_trials', 1200) or 1200))
+                if hasattr(self, 'fast_ransac_seed_spin'):
+                    seed_value = getattr(settings, 'near_ransac_seed', -1)
+                    self.fast_ransac_seed_spin.setValue(int(seed_value if seed_value is not None else -1))
                 if hasattr(self, 'fast_max_img_stars_spin'):
                     self.fast_max_img_stars_spin.setValue(int(getattr(settings, 'near_max_img_stars', 800) or 800))
                 if hasattr(self, 'fast_max_cat_stars_spin'):
@@ -5271,6 +5777,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.fast_try_parity_check.setChecked(bool(getattr(settings, 'near_try_parity_flip', True)))
                 if hasattr(self, 'fast_search_margin_spin'):
                     self.fast_search_margin_spin.setValue(float(getattr(settings, 'near_search_margin', 1.2) or 1.2))
+                if hasattr(self, 'fast_detect_k_sigma_spin'):
+                    self.fast_detect_k_sigma_spin.setValue(float(getattr(settings, 'near_detect_k_sigma', 4.0) or 4.0))
+                if hasattr(self, 'fast_detect_min_area_spin'):
+                    self.fast_detect_min_area_spin.setValue(int(getattr(settings, 'near_detect_min_area', 8) or 8))
+                if hasattr(self, 'fast_detect_max_labels_spin'):
+                    self.fast_detect_max_labels_spin.setValue(int(getattr(settings, 'near_detect_max_labels', 2500) or 2500))
             except Exception:
                 pass
             self._populate_benchmark_tab_from_settings()
@@ -5426,6 +5938,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_tile_cache_size=int(self.perf_near_cache_spin.value()) if hasattr(self, 'perf_near_cache_spin') else 128,
                 near_detect_backend=str(backend_sel),
                 near_detect_device=int(dev_sel if isinstance(dev_sel, int) else 0),
+                near_detect_k_sigma=float(self.fast_detect_k_sigma_spin.value()) if hasattr(self, 'fast_detect_k_sigma_spin') else 4.0,
+                near_detect_min_area=int(self.fast_detect_min_area_spin.value()) if hasattr(self, 'fast_detect_min_area_spin') else 8,
+                near_detect_max_labels=int(self.fast_detect_max_labels_spin.value()) if hasattr(self, 'fast_detect_max_labels_spin') else 2500,
                 io_concurrency=int(self.perf_io_spin.value()) if hasattr(self, 'perf_io_spin') else 0,
                 near_warm_start=bool(self.perf_near_warm_check.isChecked()) if hasattr(self, 'perf_near_warm_check') else True,
                 # Near (fast solver) thresholds and tuning
@@ -5433,6 +5948,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_quality_rms=float(self.fast_quality_rms_spin.value()) if hasattr(self, 'fast_quality_rms_spin') else 1.0,
                 near_pixel_tolerance=float(self.fast_pixel_tol_spin.value()) if hasattr(self, 'fast_pixel_tol_spin') else 3.0,
                 near_ransac_trials=int(self.fast_ransac_trials_spin.value()) if hasattr(self, 'fast_ransac_trials_spin') else 1200,
+                near_ransac_seed=int(self.fast_ransac_seed_spin.value()) if hasattr(self, 'fast_ransac_seed_spin') else -1,
                 near_max_img_stars=int(self.fast_max_img_stars_spin.value()) if hasattr(self, 'fast_max_img_stars_spin') else 800,
                 near_max_cat_stars=int(self.fast_max_cat_stars_spin.value()) if hasattr(self, 'fast_max_cat_stars_spin') else 2000,
                 near_try_parity_flip=bool(self.fast_try_parity_check.isChecked()) if hasattr(self, 'fast_try_parity_check') else True,
@@ -5814,10 +6330,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                 tile_cache=int(self.perf_near_cache_spin.value()) if hasattr(self, 'perf_near_cache_spin') else int(self._settings.near_tile_cache_size or 128),
                 detect_backend=self._settings.near_detect_backend or "auto",
                 detect_device=self._settings.near_detect_device,
+                detect_k_sigma=float(getattr(self._settings, 'near_detect_k_sigma', 4.0) or 4.0),
+                detect_min_area=int(getattr(self._settings, 'near_detect_min_area', 8) or 8),
+                detect_max_labels=int(getattr(self._settings, 'near_detect_max_labels', 2500) or 2500),
                 quality_inliers=int(getattr(self._settings, 'near_quality_inliers', 60) or 60),
                 quality_rms=float(getattr(self._settings, 'near_quality_rms', 1.0) or 1.0),
                 pixel_tolerance=float(getattr(self._settings, 'near_pixel_tolerance', 3.0) or 3.0),
                 ransac_trials=int(getattr(self._settings, 'near_ransac_trials', 1200) or 1200),
+                ransac_seed=(None if int(getattr(self._settings, 'near_ransac_seed', -1) or -1) < 0 else int(getattr(self._settings, 'near_ransac_seed', -1))),
                 max_img_stars=int(getattr(self._settings, 'near_max_img_stars', 800) or 800),
                 max_cat_stars=int(getattr(self._settings, 'near_max_cat_stars', 2000) or 2000),
                 try_parity_flip=bool(getattr(self._settings, 'near_try_parity_flip', True)),
@@ -5947,12 +6467,21 @@ def launch_gui(args: argparse.Namespace) -> int:
                 idx = self.tabs.indexOf(self.dev_scroll)
                 if idx >= 0:
                     self.tabs.setTabText(idx, self._text("dev_tab"))
+            if hasattr(self, "interface_menu"):
+                self.interface_menu.setTitle(self._text("interface_menu"))
+                if "expert" in self._interface_actions:
+                    self._interface_actions["expert"].setText(self._text("interface_mode_expert"))
+                if "easy" in self._interface_actions:
+                    self._interface_actions["easy"].setText(self._text("interface_mode_easy"))
+                if hasattr(self, "interface_wizard_action"):
+                    self.interface_wizard_action.setText(self._text("interface_mode_wizard"))
             if hasattr(self, "log_menu"):
                 self.log_menu.setTitle(self._text("log_menu"))
                 for level, action in self._log_level_actions.items():
                     label_key = f"log_level_{level.lower()}"
                     action.setText(self._text(label_key))
                 self._sync_log_level_actions()
+            self._apply_interface_mode()
             if hasattr(self, "dev_bucket_label"):
                 self.dev_bucket_label.setText(self._text("dev_bucket_label"))
             if hasattr(self, "dev_bucket_spin"):
@@ -6030,6 +6559,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
             self.blind_check.setText(self._text("blind_label"))
             self.overwrite_check.setText(self._text("overwrite_label"))
+            if hasattr(self, "simple_mode_check"):
+                self.simple_mode_check.setText(self._text("simple_mode_label"))
+            if hasattr(self, "simple_clean_wcs_check"):
+                self.simple_clean_wcs_check.setText(self._text("simple_clean_wcs_label"))
             self.files_view.setHeaderLabels(
                 [
                     self._text("files_header"),
@@ -6208,6 +6741,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.fast_pixel_tol_label.setText(self._text("fast_pixel_tol_label"))
             if hasattr(self, "fast_ransac_trials_label"):
                 self.fast_ransac_trials_label.setText(self._text("fast_ransac_trials_label"))
+            if hasattr(self, "fast_ransac_seed_label"):
+                self.fast_ransac_seed_label.setText(self._text("fast_ransac_seed_label"))
             if hasattr(self, "fast_max_img_stars_label"):
                 self.fast_max_img_stars_label.setText(self._text("fast_max_img_stars_label"))
             if hasattr(self, "fast_max_cat_stars_label"):
@@ -6216,6 +6751,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.fast_try_parity_check.setText(self._text("fast_try_parity_label"))
             if hasattr(self, "fast_search_margin_label"):
                 self.fast_search_margin_label.setText(self._text("fast_search_margin_label"))
+            if hasattr(self, "fast_detect_k_sigma_label"):
+                self.fast_detect_k_sigma_label.setText(self._text("fast_detect_k_sigma_label"))
+            if hasattr(self, "fast_detect_min_area_label"):
+                self.fast_detect_min_area_label.setText(self._text("fast_detect_min_area_label"))
+            if hasattr(self, "fast_detect_max_labels_label"):
+                self.fast_detect_max_labels_label.setText(self._text("fast_detect_max_labels_label"))
             if hasattr(self, "fast_save_btn"):
                 self.fast_save_btn.setText(self._text("fast_save_btn"))
             if hasattr(self, "bench_sources_group"):
@@ -6831,12 +7372,16 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_tile_cache_size=int(self._settings.near_tile_cache_size or 128),
                 near_detect_backend=str(self._settings.near_detect_backend or "auto"),
                 near_detect_device=int(self._settings.near_detect_device) if self._settings.near_detect_device is not None else None,
+                near_detect_k_sigma=float(getattr(self._settings, 'near_detect_k_sigma', 4.0) or 4.0),
+                near_detect_min_area=int(getattr(self._settings, 'near_detect_min_area', 8) or 8),
+                near_detect_max_labels=int(getattr(self._settings, 'near_detect_max_labels', 2500) or 2500),
                 io_concurrency=int(self._settings.io_concurrency or 0),
                 near_warm_start=bool(self._settings.near_warm_start),
                 near_quality_inliers=int(self._settings.near_quality_inliers or 60),
                 near_quality_rms=float(self._settings.near_quality_rms or 1.0),
                 near_pixel_tolerance=float(self._settings.near_pixel_tolerance or 3.0),
                 near_ransac_trials=int(self._settings.near_ransac_trials or 1200),
+                near_ransac_seed=(None if int(getattr(self._settings, 'near_ransac_seed', -1) or -1) < 0 else int(getattr(self._settings, 'near_ransac_seed', -1))),
                 near_max_img_stars=int(self._settings.near_max_img_stars or 800),
                 near_max_cat_stars=int(self._settings.near_max_cat_stars or 2000),
                 near_try_parity_flip=bool(self._settings.near_try_parity_flip),
@@ -6859,6 +7404,136 @@ def launch_gui(args: argparse.Namespace) -> int:
                 dev_detect_min_area=int(self._settings.dev_detect_min_area or 5),
             )
 
+        def _activate_tab(self, tab_widget: QtWidgets.QWidget) -> None:
+            try:
+                idx = self.tabs.indexOf(tab_widget)
+                if idx >= 0:
+                    self.tabs.setCurrentIndex(idx)
+            except Exception:
+                pass
+
+        def _run_simple_startup_wizard(self) -> bool:
+            db_text = (self.settings_db_edit.text().strip() if hasattr(self, "settings_db_edit") else "")
+            if not db_text and hasattr(self, "db_tab_edit"):
+                db_text = self.db_tab_edit.text().strip()
+            db_path = Path(db_text).expanduser() if db_text else None
+
+            if (not db_path) or (not db_path.is_dir()):
+                answer = QtWidgets.QMessageBox.question(
+                    self,
+                    self._text("simple_wizard_title"),
+                    self._text("simple_wizard_missing_db"),
+                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                    QtWidgets.QMessageBox.Yes,
+                )
+                if answer != QtWidgets.QMessageBox.Yes:
+                    return False
+                if hasattr(self, "database_scroll"):
+                    self._activate_tab(self.database_scroll)
+                if hasattr(self, "settings_db_edit"):
+                    self._pick_settings_directory(self.settings_db_edit)
+                    db_text = self.settings_db_edit.text().strip()
+                    if hasattr(self, "db_tab_edit") and self.db_tab_edit.text().strip() != db_text:
+                        self.db_tab_edit.setText(db_text)
+                db_path = Path(db_text).expanduser() if db_text else None
+                if (not db_path) or (not db_path.is_dir()):
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        self._text("simple_wizard_title"),
+                        self._text("simple_wizard_missing_db_invalid"),
+                    )
+                    return False
+
+            index_text = self.settings_index_edit.text().strip() if hasattr(self, "settings_index_edit") else ""
+            index_path = Path(index_text).expanduser() if index_text else None
+            if (not index_path) or (not index_path.is_dir()):
+                QtWidgets.QMessageBox.information(
+                    self,
+                    self._text("simple_wizard_title"),
+                    self._text("simple_wizard_missing_index"),
+                )
+                if hasattr(self, "settings_scroll"):
+                    self._activate_tab(self.settings_scroll)
+                return False
+
+            self._settings.db_root = str(db_path)
+            self._settings.index_root = str(index_path)
+            return True
+
+        def _run_simple_mode_assistant(self, file_count: int) -> bool:
+            if not hasattr(self, "simple_mode_check") or not self.simple_mode_check.isChecked():
+                return True
+
+            if not self._run_simple_startup_wizard():
+                return False
+
+            overwrite_txt = self._text("simple_wizard_yes") if self.overwrite_check.isChecked() else self._text("simple_wizard_no")
+            clean_txt = self._text("simple_wizard_yes") if (hasattr(self, "simple_clean_wcs_check") and self.simple_clean_wcs_check.isChecked()) else self._text("simple_wizard_no")
+            backend_text = self.backend_combo.currentText() if hasattr(self, "backend_combo") else "local"
+            folder_text = self.input_edit.text().strip() or "-"
+            confirm = self._text(
+                "simple_wizard_confirm",
+                folder=folder_text,
+                count=max(0, int(file_count)),
+                backend=backend_text,
+                overwrite=overwrite_txt,
+                clean=clean_txt,
+            )
+            answer = QtWidgets.QMessageBox.question(
+                self,
+                self._text("simple_wizard_title"),
+                confirm,
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.Yes,
+            )
+            return answer == QtWidgets.QMessageBox.Yes
+
+        def _run_simple_mode_wcs_cleaning(self, files: Sequence[Path]) -> bool:
+            if not (hasattr(self, "simple_mode_check") and self.simple_mode_check.isChecked()):
+                return True
+            if not (hasattr(self, "simple_clean_wcs_check") and self.simple_clean_wcs_check.isChecked()):
+                return True
+
+            fit_ext = {".fit", ".fits", ".fts"}
+            targets = [p for p in files if str(p.suffix).lower() in fit_ext]
+            if not targets:
+                return True
+
+            try:
+                from zewcscleaner import process_fits
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    self._text("simple_wizard_title"),
+                    self._text("simple_clean_failed", error=str(exc)),
+                )
+                return False
+
+            total_cards = 0
+            changed_files = 0
+            for path in targets:
+                try:
+                    deleted, edited_hdus = process_fits(
+                        str(path),
+                        dry_run=False,
+                        backup=True,
+                        only_if_wcs=True,
+                        all_hdus=False,
+                    )
+                    total_cards += int(deleted)
+                    if int(edited_hdus) > 0:
+                        changed_files += 1
+                except Exception as exc:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        self._text("simple_wizard_title"),
+                        self._text("simple_clean_failed", error=f"{path.name}: {exc}"),
+                    )
+                    return False
+
+            self._log(self._text("simple_clean_done", files=changed_files, cards=total_cards))
+            return True
+
         def _start_solving(self) -> None:
             if self._worker is not None:
                 return
@@ -6871,6 +7546,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self._text("dialog_no_files"),
                     )
                     return
+            if not self._run_simple_mode_assistant(len(self._pending_files)):
+                return
+            if not self._run_simple_mode_wcs_cleaning(self._pending_files):
+                return
             try:
                 config = self._build_config()
             except ValueError as exc:
@@ -7154,6 +7833,7 @@ def launch_gui(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    _maybe_reexec_into_project_venv(argv)
     parser = build_arg_parser()
     args = parser.parse_args(argv)
     if _should_launch_gui(args):

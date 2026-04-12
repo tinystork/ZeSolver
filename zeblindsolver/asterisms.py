@@ -37,6 +37,24 @@ def _quad_diameter(points: np.ndarray) -> float:
     return float(np.nanmax(dists))
 
 
+def _canonical_quad_order(combo: np.ndarray, positions: np.ndarray) -> np.ndarray:
+    """Return a stable cyclic ordering for a quad.
+
+    Sorting by distance-to-centroid can create crossing polygons (bow-ties),
+    which collapses polygon area and rejects valid quads. We instead sort by
+    polar angle around the centroid, then rotate to a deterministic start.
+    """
+    idx = np.asarray(combo, dtype=np.int64)
+    points = positions[idx]
+    center = points.mean(axis=0)
+    angles = np.arctan2(points[:, 1] - center[1], points[:, 0] - center[0])
+    order = np.argsort(angles)
+    ordered = idx[order]
+    start = int(np.argmin(ordered))
+    ordered = np.roll(ordered, -start)
+    return ordered.astype(np.uint16, copy=False)
+
+
 def _legacy_biased_brightness(order: np.ndarray, max_quads: int) -> np.ndarray:
     limit = min(len(order), max(16, int(max_quads ** 0.5) * 3, 64))
     pool = order[:limit]
@@ -77,6 +95,54 @@ def _legacy_local_brightness(order: np.ndarray, stars: np.ndarray, max_quads: in
     return np.array(combos, dtype=np.uint16)
 
 
+def _sparse_triple_quads(order: np.ndarray, stars: np.ndarray, max_quads: int) -> np.ndarray:
+    """Build quads from sparse triangle anchors + one extra star.
+
+    This helps low-density fields where pairwise sampling may produce too few
+    stable hypotheses. We keep generation bounded and deterministic.
+    """
+    if max_quads <= 0 or stars.shape[0] < 4:
+        return np.zeros((0, 4), dtype=np.uint16)
+    xy = np.column_stack((stars["x"], stars["y"])).astype(np.float64, copy=False)
+    if not np.isfinite(xy).all():
+        return np.zeros((0, 4), dtype=np.uint16)
+    # Favor bright seeds, but keep enough breadth for sparse fields.
+    seed_cap = min(len(order), max(8, int(np.sqrt(max_quads)) * 3))
+    seeds = [int(v) for v in order[:seed_cap]]
+    if not seeds:
+        return np.zeros((0, 4), dtype=np.uint16)
+    combos: list[tuple[int, int, int, int]] = []
+    seen: set[tuple[int, int, int, int]] = set()
+    neigh_k = min(max(6, int(np.sqrt(max_quads))), max(6, stars.shape[0] - 1))
+    for seed in seeds:
+        if len(combos) >= max_quads:
+            break
+        d2 = np.sum((xy - xy[seed]) ** 2, axis=1)
+        nn = [int(i) for i in np.argsort(d2) if int(i) != seed][:neigh_k]
+        if len(nn) < 3:
+            continue
+        for a, b in itertools.combinations(nn, 2):
+            tri = (seed, int(a), int(b))
+            cxy = (xy[tri[0]] + xy[tri[1]] + xy[tri[2]]) / 3.0
+            dtri = np.sum((xy - cxy) ** 2, axis=1)
+            # Try a few 4th-star candidates around centroid then farther out.
+            near = [int(i) for i in np.argsort(dtri) if int(i) not in tri][:4]
+            far = [int(i) for i in np.argsort(dtri)[::-1] if int(i) not in tri][:2]
+            for d in near + far:
+                q = tuple(sorted((tri[0], tri[1], tri[2], int(d))))
+                if q in seen:
+                    continue
+                seen.add(q)
+                combos.append(q)
+                if len(combos) >= max_quads:
+                    break
+            if len(combos) >= max_quads:
+                break
+    if not combos:
+        return np.zeros((0, 4), dtype=np.uint16)
+    return np.array(combos, dtype=np.uint16)
+
+
 def _hash_from_indexes(
     order: np.ndarray,
     positions: np.ndarray,
@@ -98,8 +164,10 @@ def _hash_from_indexes(
         if spec.max_diameter is not None and diameter > spec.max_diameter:
             return None
     a, b, c, d = points
+
     def dist(u: np.ndarray, v: np.ndarray) -> float:
         return float(np.hypot(*(u - v)))
+
     d12 = dist(a, b)
     d34 = dist(c, d)
     d13 = dist(a, c)
@@ -113,10 +181,30 @@ def _hash_from_indexes(
     q1 = _quantize_ratio(r12)
     q2 = _quantize_ratio(r13)
     q3 = _quantize_ratio(r14)
-    parity = 1 if np.cross(b - a, c - a) >= 0 else 0
+    cross_z = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+    parity = 1 if cross_z >= 0 else 0
     hash_value = (q1 << 48) | (q2 << 32) | (q3 << 16) | parity
     return hash_value, order
 
+
+
+
+def _dedup_quads_preserve_order(quads: np.ndarray, max_quads: int) -> np.ndarray:
+    if quads.size == 0:
+        return np.zeros((0, 4), dtype=np.uint16)
+    seen: set[tuple[int, int, int, int]] = set()
+    kept: list[np.ndarray] = []
+    for row in quads:
+        key = tuple(int(v) for v in row)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(np.asarray(row, dtype=np.uint16))
+        if len(kept) >= max_quads:
+            break
+    if not kept:
+        return np.zeros((0, 4), dtype=np.uint16)
+    return np.vstack(kept).astype(np.uint16, copy=False)
 
 def _priority_order_indices(stars: np.ndarray) -> np.ndarray:
     names = stars.dtype.names or ()
@@ -149,6 +237,10 @@ def sample_quads(stars: np.ndarray, max_quads: int, strategy: str = "log_spaced"
     if method == "legacy_local":
         return _legacy_local_brightness(priority_order, stars, max_quads)
 
+    sparse_preferred = method == "sparse_triples"
+    sparse_auto = method in {"local_brightness", "log_spaced"} and stars.shape[0] <= 96
+    sparse_quads = _sparse_triple_quads(priority_order, stars, max_quads) if (sparse_preferred or sparse_auto) else np.zeros((0, 4), dtype=np.uint16)
+
     positions = np.column_stack(
         (stars["x"].astype(np.float64), stars["y"].astype(np.float64))
     )
@@ -168,9 +260,29 @@ def sample_quads(stars: np.ndarray, max_quads: int, strategy: str = "log_spaced"
         seed_order=seed_order,
         max_quads=max_quads,
     )
-    if quads.size == 0:
+    pairwise = index_map[quads] if quads.size else np.zeros((0, 4), dtype=np.uint16)
+
+    if sparse_quads.size:
+        if pairwise.size:
+            pairwise = _dedup_quads_preserve_order(np.vstack((sparse_quads, pairwise)), max_quads)
+        else:
+            pairwise = _dedup_quads_preserve_order(sparse_quads, max_quads)
+
+    # Robustness fallback: when pairwise sampling is too sparse (or empty),
+    # blend with legacy local-neighborhood quads to keep enough hypotheses.
+    min_target = max(64, min(max_quads, max_quads // 6 if max_quads >= 6 else max_quads))
+    if pairwise.shape[0] < min_target:
+        legacy = _legacy_local_brightness(priority_order, stars, max_quads)
+        if legacy.size:
+            if pairwise.size:
+                merged = np.vstack((pairwise, legacy))
+            else:
+                merged = legacy
+            return _dedup_quads_preserve_order(merged, max_quads)
+
+    if pairwise.size == 0:
         return np.zeros((0, 4), dtype=np.uint16)
-    return index_map[quads]
+    return _dedup_quads_preserve_order(pairwise, max_quads)
 
 
 def hash_quads(quads: np.ndarray, positions: np.ndarray, *, spec: QuadLevelSpec | None = None) -> QuadHash:
@@ -180,12 +292,12 @@ def hash_quads(quads: np.ndarray, positions: np.ndarray, *, spec: QuadLevelSpec 
     for combo in quads:
         if len(set(combo)) < 4:
             continue
-        order = np.argsort(np.linalg.norm(positions[combo] - positions[combo].mean(axis=0), axis=1))
-        result = _hash_from_indexes(combo[order], positions, spec=spec)
+        ordered = _canonical_quad_order(combo, positions)
+        result = _hash_from_indexes(ordered, positions, spec=spec)
         if result is None:
             continue
-        hash_value, ordered = result
-        valid.append(combo[order])
+        hash_value, canonical = result
+        valid.append(canonical)
         hashes.append(hash_value)
     if not hashes:
         return QuadHash(np.zeros((0, 4), dtype=np.uint16), np.zeros(0, dtype=np.uint64))

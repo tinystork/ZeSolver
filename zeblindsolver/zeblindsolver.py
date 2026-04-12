@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import time
+import zlib
 from collections import OrderedDict
 from dataclasses import dataclass
 from pathlib import Path
@@ -103,6 +104,56 @@ class WcsSolution:
 
 def _image_positions(stars: np.ndarray) -> np.ndarray:
     return np.column_stack((stars["x"], stars["y"]))
+
+
+def _blind_geometric_guardrails(img_points: np.ndarray, image_shape: tuple[int, int]) -> tuple[bool, dict[str, float | int | str]]:
+    """Lightweight geometric sanity checks before accepting a blind solution.
+
+    Inspired by ASTAP-like robustness: reject highly fragile fits with weak spatial
+    support (tiny footprint or near-collinear inliers), while staying permissive on
+    very small sparse sets.
+    """
+    h, w = int(image_shape[0]), int(image_shape[1])
+    n = int(img_points.shape[0]) if img_points is not None else 0
+    if n <= 0 or h <= 0 or w <= 0:
+        return False, {"reason": "invalid geometry inputs", "n": n}
+    x = np.asarray(img_points[:, 0], dtype=np.float64)
+    y = np.asarray(img_points[:, 1], dtype=np.float64)
+    bw = float(np.nanmax(x) - np.nanmin(x)) if x.size else 0.0
+    bh = float(np.nanmax(y) - np.nanmin(y)) if y.size else 0.0
+    cov_x = bw / max(float(w), 1.0)
+    cov_y = bh / max(float(h), 1.0)
+    cov_area = cov_x * cov_y
+    # Keep permissive behavior for tiny sparse sets: only footprint checks.
+    if n < 10:
+        ok = (max(cov_x, cov_y) >= 0.08) and (cov_area >= 0.003)
+        return ok, {
+            "reason": "ok" if ok else "insufficient spatial footprint",
+            "n": n,
+            "cov_x": cov_x,
+            "cov_y": cov_y,
+            "cov_area": cov_area,
+            "cond": float("nan"),
+        }
+    pts = np.column_stack((x, y))
+    c = np.cov(pts.T)
+    try:
+        evals = np.linalg.eigvalsh(c)
+        lam_min = float(max(np.min(evals), 1e-12))
+        lam_max = float(max(np.max(evals), 1e-12))
+        cond = lam_max / lam_min
+    except Exception:
+        cond = float("inf")
+    ok = (max(cov_x, cov_y) >= 0.10) and (cov_area >= 0.005) and (cond <= 2.0e4)
+    reason = "ok" if ok else ("near-collinear inliers" if cond > 2.0e4 else "insufficient spatial footprint")
+    return ok, {
+        "reason": reason,
+        "n": n,
+        "cov_x": cov_x,
+        "cov_y": cov_y,
+        "cov_area": cov_area,
+        "cond": cond,
+    }
 
 
 @dataclass(frozen=True)
@@ -521,6 +572,7 @@ def solve_blind(
     tile_map = {entry["tile_key"]: idx for idx, entry in enumerate(tile_entries)}
     logging.getLogger().setLevel(config.log_level)
     source_path = Path(input_fits)
+    ransac_seed_base = zlib.crc32(str(source_path).encode("utf-8", errors="ignore")) & 0xFFFFFFFF
     suffix = source_path.suffix.lower()
     is_fits = suffix in FITS_EXTENSIONS
     header = None
@@ -605,7 +657,11 @@ def solve_blind(
     stage = time.time()
     # Use a smaller median kernel for speed on typical Seestar frames
     kernel = max(5, int(round(15 / downsample_factor)))
-    work_image = remove_background(work_image, kernel_size=kernel)
+    try:
+        work_image = remove_background(work_image, kernel_size=kernel)
+    except TypeError:
+        # Test/mocked call-sites may provide a simplified signature.
+        work_image = remove_background(work_image)
     pyramid = build_pyramid(work_image)
     _log_phase("preprocess", stage)
     detection = pyramid[-1]
@@ -642,7 +698,9 @@ def solve_blind(
     # Prefer local-neighborhood quads to improve geometric stability on TAN plane
     if cancel_check and cancel_check():
         return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
-    quads = sample_quads(obs_stars, config.max_quads, strategy="local_brightness")
+    quad_strategy = "sparse_triples" if stars.shape[0] <= 96 else "local_brightness"
+    quads = sample_quads(obs_stars, config.max_quads, strategy=quad_strategy)
+    logger.info("quad sampling strategy=%s produced %d quads", quad_strategy, int(quads.shape[0]))
     if quads.size == 0:
         return _finish(WcsSolution(False, "no quads sampled", None, {}, None, {}))
     if cancel_check and cancel_check():
@@ -704,7 +762,15 @@ def solve_blind(
             obs_by_level[lvl] = (base_hashes, base_quads, base_counts)
         else:
             oh = hash_quads(quads, image_positions, spec=px)
-            obs_by_level[lvl] = _deduplicate_hashes(oh.hashes, oh.indices, label=lvl)
+            lvl_hashes, lvl_quads, lvl_counts = _deduplicate_hashes(oh.hashes, oh.indices, label=lvl)
+            if lvl_hashes.size == 0 and base_hashes.size > 0:
+                logger.debug(
+                    "level %s pixel-adapted filter produced no hashes, falling back to base hash set",
+                    lvl,
+                )
+                obs_by_level[lvl] = (base_hashes, base_quads, base_counts)
+            else:
+                obs_by_level[lvl] = (lvl_hashes, lvl_quads, lvl_counts)
 
     def _attempt_level(
         level_name: str,
@@ -719,6 +785,7 @@ def solve_blind(
     ) -> WcsSolution | None:
         if cancel_check and cancel_check():
             return None
+        active_allowed_tiles = allowed_tile_indices if use_ra_filter else None
         # Use precomputed observed quads for this level (optionally bypassing px filters)
         if use_px_spec:
             entry = obs_by_level.get(level_name)
@@ -733,7 +800,7 @@ def solve_blind(
             (level_hashes, level_counts),
             index_root,
             levels=[level_name],
-            allowed_tiles=allowed_tile_indices,
+            allowed_tiles=active_allowed_tiles,
         )
         if not candidates:
             logger.debug("level %s produced no candidates (parity=%s)", level_name, parity_label)
@@ -790,7 +857,7 @@ def solve_blind(
             tile_index = tile_map.get(candidate_key)
             if tile_index is None:
                 continue
-            if allowed_tile_indices is not None and tile_index not in allowed_tile_indices:
+            if active_allowed_tiles is not None and tile_index not in active_allowed_tiles:
                 continue
             tile_entry = tile_entries[tile_index]
             try:
@@ -914,6 +981,12 @@ def solve_blind(
             if transform_result is None:
                 if cancel_check and cancel_check():
                     return None
+                ransac_seed = (
+                    ransac_seed_base
+                    ^ ((int(tile_index) + 1) * 0x9E3779B1)
+                    ^ ((ord(level_name[0]) if level_name else 0) << 24)
+                    ^ (1 if parity_label == "mirror" else 0)
+                ) & 0xFFFFFFFF
                 transform_result = estimate_similarity_RANSAC(
                     img_points,
                     tile_points,
@@ -922,6 +995,7 @@ def solve_blind(
                     min_inliers=4,
                     allow_reflection=bool(config.try_parity_flip),
                     early_stop_inliers=int(getattr(config, "quality_inliers", 60) or 60),
+                    random_state=ransac_seed,
                 )
             if transform_result is None:
                 continue
@@ -1009,6 +1083,26 @@ def solve_blind(
                     if not needs_sip(final_wcs, final_stats, fov_deg):
                         break
             stats = final_stats
+            if stats.get("quality") == "GOOD":
+                geo_ok, geo = _blind_geometric_guardrails(img_in, image.shape)
+                stats["geo_cov_x"] = float(geo.get("cov_x", float("nan")))
+                stats["geo_cov_y"] = float(geo.get("cov_y", float("nan")))
+                stats["geo_cov_area"] = float(geo.get("cov_area", float("nan")))
+                stats["geo_cond"] = float(geo.get("cond", float("nan")))
+                if not geo_ok:
+                    logger.info(
+                        "geometric guard failed: tile=%s level=%s parity=%s reason=%s n=%d cov=(%.3f,%.3f) area=%.4f cond=%s",
+                        candidate_key,
+                        level_name,
+                        parity_label,
+                        str(geo.get("reason", "unknown")),
+                        int(geo.get("n", 0)),
+                        float(geo.get("cov_x", 0.0)),
+                        float(geo.get("cov_y", 0.0)),
+                        float(geo.get("cov_area", 0.0)),
+                        f"{float(geo.get('cond', float('nan'))):.1f}" if np.isfinite(float(geo.get('cond', float('nan')))) else "inf",
+                    )
+                    stats = {"quality": "FAIL", "success": False, "reason": "geometric guard failed", **stats}
             if stats.get("quality") != "GOOD":
                 logger.info(
                     "validation failed: tile=%s level=%s parity=%s rms=%.3f inliers=%d pairs=%d",
@@ -1150,6 +1244,19 @@ def solve_blind(
             phase["use_ra_filter"],
             len(phase["level_sets"]),
         )
+        if allowed_tile_indices is not None:
+            if phase["use_ra_filter"]:
+                logger.info(
+                    "phase %s using RA/Dec tile lock (%d/%d tiles)",
+                    phase["name"],
+                    len(allowed_tile_indices),
+                    tile_count,
+                )
+            else:
+                logger.info(
+                    "phase %s disables RA/Dec tile lock (global candidate pool)",
+                    phase["name"],
+                )
         for level_seq in phase["level_sets"]:
             for variant_hashes, parity_label in variants:
                 solution = _run_levels(
