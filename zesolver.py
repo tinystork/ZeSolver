@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -1195,6 +1196,140 @@ def _system_memory_gb() -> Optional[float]:
     return None
 
 
+def _format_bytes(value: Optional[int]) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        num = float(value)
+    except Exception:
+        return "n/a"
+    if not math.isfinite(num) or num < 0:
+        return "n/a"
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    idx = 0
+    while num >= 1024.0 and idx < len(units) - 1:
+        num /= 1024.0
+        idx += 1
+    return f"{num:.1f}{units[idx]}"
+
+
+def _process_memory_snapshot() -> dict[str, Optional[int]]:
+    snapshot: dict[str, Optional[int]] = {
+        "rss_bytes": None,
+        "working_set_bytes": None,
+        "vms_bytes": None,
+    }
+    try:
+        import psutil  # type: ignore
+
+        proc = psutil.Process(os.getpid())
+        mem = proc.memory_info()
+        rss = getattr(mem, "rss", None)
+        wset = getattr(mem, "wset", None)
+        vms = getattr(mem, "vms", None)
+        snapshot["rss_bytes"] = int(rss) if rss is not None else None
+        snapshot["working_set_bytes"] = int(wset) if wset is not None else snapshot["rss_bytes"]
+        snapshot["vms_bytes"] = int(vms) if vms is not None else None
+        return snapshot
+    except Exception:
+        pass
+    try:
+        import resource  # Unix fallback
+
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        rss = int(getattr(ru, "ru_maxrss", 0) or 0)
+        if rss > 0:
+            # Linux reports KiB, macOS reports bytes.
+            rss_bytes = rss if sys.platform == "darwin" else rss * 1024
+            snapshot["rss_bytes"] = rss_bytes
+            snapshot["working_set_bytes"] = rss_bytes
+    except Exception:
+        pass
+    return snapshot
+
+
+def _gpu_memory_snapshot(device: Optional[int], *, allow_cupy: bool = False) -> dict[str, Optional[int] | str]:
+    out: dict[str, Optional[int] | str] = {
+        "backend": "none",
+        "device": int(device) if isinstance(device, int) else None,
+        "used_bytes": None,
+        "total_bytes": None,
+        "free_bytes": None,
+        "process_used_bytes": None,
+        "pool_used_bytes": None,
+        "pool_reserved_bytes": None,
+    }
+
+    dev = out["device"] if isinstance(out["device"], int) else 0
+
+    # Prefer nvidia-smi first, no CUDA context side effects.
+    try:
+        cmd = [
+            "nvidia-smi",
+            "--query-gpu=memory.used,memory.total",
+            "--format=csv,noheader,nounits",
+            "-i",
+            str(dev),
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1.5)
+        if proc.returncode == 0 and proc.stdout.strip():
+            first = proc.stdout.strip().splitlines()[0]
+            parts = [x.strip() for x in first.split(",")]
+            if len(parts) >= 2:
+                used_mb = float(parts[0])
+                total_mb = float(parts[1])
+                used_b = int(max(0.0, used_mb) * 1024.0 * 1024.0)
+                total_b = int(max(0.0, total_mb) * 1024.0 * 1024.0)
+                out["backend"] = "nvidia-smi"
+                out["used_bytes"] = used_b
+                out["total_bytes"] = total_b
+                out["free_bytes"] = max(0, total_b - used_b)
+        # Optional per-process VRAM, may be unavailable on some drivers/modes.
+        cmd_apps = [
+            "nvidia-smi",
+            "--query-compute-apps=pid,used_memory",
+            "--format=csv,noheader,nounits",
+        ]
+        proc_apps = subprocess.run(cmd_apps, capture_output=True, text=True, timeout=1.5)
+        if proc_apps.returncode == 0 and proc_apps.stdout.strip():
+            pid = int(os.getpid())
+            proc_used_mb = 0.0
+            for line in proc_apps.stdout.strip().splitlines():
+                cols = [x.strip() for x in line.split(",")]
+                if len(cols) < 2:
+                    continue
+                try:
+                    if int(cols[0]) == pid:
+                        proc_used_mb += float(cols[1])
+                except Exception:
+                    continue
+            if proc_used_mb > 0.0:
+                out["process_used_bytes"] = int(proc_used_mb * 1024.0 * 1024.0)
+    except Exception:
+        pass
+
+    if allow_cupy:
+        try:
+            import cupy  # type: ignore
+            from cupy.cuda import runtime as _rt  # type: ignore
+
+            with cupy.cuda.Device(int(dev)):
+                free_b, total_b = _rt.memGetInfo()
+                used_b = int(total_b) - int(free_b)
+                pool = cupy.get_default_memory_pool()
+                out["pool_used_bytes"] = int(pool.used_bytes())
+                out["pool_reserved_bytes"] = int(pool.total_bytes())
+                if out.get("used_bytes") is None:
+                    out["backend"] = "cupy"
+                    out["used_bytes"] = int(used_b)
+                    out["total_bytes"] = int(total_b)
+                    out["free_bytes"] = int(free_b)
+        except Exception:
+            pass
+
+    return out
+
+
 def _iter_image_files(input_dir: Path, extensions: Sequence[str]) -> Iterator[Path]:
     allowed = {ext.lower() for ext in extensions}
     for path in sorted(input_dir.rglob("*")):
@@ -1670,6 +1805,26 @@ class ImageSolver:
         label: Optional[str],
         catalog_family: Optional[str],
     ) -> ImageSolveResult:
+        def _sanitize_points(points: np.ndarray, label_name: str) -> np.ndarray:
+            pts = np.asarray(points, dtype=np.float64)
+            if pts.ndim != 2 or pts.shape[1] < 2:
+                raise SolveError(f"invalid {label_name} point array")
+            pts = pts[:, :2]
+            finite = np.isfinite(pts).all(axis=1)
+            pts = pts[finite]
+            if pts.shape[0] < 3:
+                raise SolveError(f"not enough finite {label_name} stars")
+            try:
+                key = np.round(pts, decimals=9)
+                _, keep = np.unique(key, axis=0, return_index=True)
+                if keep.size < pts.shape[0]:
+                    pts = pts[np.sort(keep)]
+            except Exception:
+                pass
+            if pts.shape[0] < 3:
+                raise SolveError(f"not enough distinct {label_name} stars")
+            return pts
+
         catalog = self.db.query_cone(
             ra_deg=metadata.ra_deg,
             dec_deg=metadata.dec_deg,
@@ -1691,20 +1846,30 @@ class ImageSolver:
             raise SolveError(
                 self._family_error(catalog_family, error) if catalog_family else error
             )
-        image_points = peaks[:, :2].astype(np.float64, copy=False)
+        plane = _sanitize_points(plane, "catalogue")
+        image_points = _sanitize_points(peaks[:, :2], "image")
         max_points = min(self.config.max_alignment_stars, plane.shape[0], image_points.shape[0])
         if max_points < 3:
             error = "not enough overlap between catalogue and detected stars"
             raise SolveError(
                 self._family_error(catalog_family, error) if catalog_family else error
             )
-        transform, (used_src, used_dst) = astroalign.find_transform(
-            plane,
-            image_points,
-            max_control_points=max_points,
-        )
+        try:
+            transform, (used_src, used_dst) = astroalign.find_transform(
+                plane,
+                image_points,
+                max_control_points=max_points,
+            )
+        except Exception as exc:
+            msg = str(exc)
+            error = f"alignment failed: {msg}" if msg else "alignment failed"
+            raise SolveError(self._family_error(catalog_family, error) if catalog_family else error) from exc
         projected = astroalign.matrix_transform(used_src, transform.params)
-        residuals = np.linalg.norm(projected - used_dst, axis=1)
+        valid = np.isfinite(projected).all(axis=1) & np.isfinite(used_dst).all(axis=1)
+        if not np.any(valid):
+            error = "alignment produced non-finite residuals"
+            raise SolveError(self._family_error(catalog_family, error) if catalog_family else error)
+        residuals = np.linalg.norm(projected[valid] - used_dst[valid], axis=1)
         rms_px = float(np.sqrt(np.mean(residuals**2))) if residuals.size else None
         solution = self._build_solution(transform, metadata, matches=used_src.shape[0], rms=rms_px)
         pixel_scale_arcsec = self._pixel_scale_arcsec(solution.cd)
@@ -2717,6 +2882,46 @@ class BatchSolver:
         astrometry_fallback_ready = bool(
             getattr(self.config, "astrometry_fallback_after_blind", True) and astrometry_api_key
         )
+        near_mode = "n/a"
+        requested_detect_backend = str(getattr(self.config, "near_detect_backend", "auto") or "auto").strip().lower()
+        configured_detect_device = getattr(self.config, "near_detect_device", None)
+        try:
+            configured_detect_device = int(configured_detect_device) if configured_detect_device is not None else None
+        except Exception:
+            configured_detect_device = None
+        try:
+            mem_interval = float(os.environ.get("ZE_MEM_SNAPSHOT_INTERVAL_S", "2") or "2")
+        except Exception:
+            mem_interval = 2.0
+        mem_interval = max(0.5, mem_interval) if mem_interval > 0 else 0.0
+        _next_mem_log_ts = 0.0
+
+        def _log_runtime_memory(stage: str, *, force: bool = False) -> None:
+            nonlocal _next_mem_log_ts
+            if mem_interval <= 0:
+                return
+            now = time.perf_counter()
+            if (not force) and now < _next_mem_log_ts:
+                return
+            _next_mem_log_ts = now + mem_interval
+            proc_mem = _process_memory_snapshot()
+            allow_cupy = requested_detect_backend == "cuda" or str(near_mode).lower() == "hybrid"
+            gpu_mem = _gpu_memory_snapshot(configured_detect_device, allow_cupy=allow_cupy)
+            logging.info(
+                "Runtime memory [%s]: rss=%s working_set=%s vms=%s | vram backend=%s dev=%s used=%s total=%s free=%s process=%s pool=%s/%s",
+                stage,
+                _format_bytes(proc_mem.get("rss_bytes")),
+                _format_bytes(proc_mem.get("working_set_bytes")),
+                _format_bytes(proc_mem.get("vms_bytes")),
+                str(gpu_mem.get("backend") or "n/a"),
+                str(gpu_mem.get("device") if gpu_mem.get("device") is not None else "n/a"),
+                _format_bytes(gpu_mem.get("used_bytes") if isinstance(gpu_mem.get("used_bytes"), int) else None),
+                _format_bytes(gpu_mem.get("total_bytes") if isinstance(gpu_mem.get("total_bytes"), int) else None),
+                _format_bytes(gpu_mem.get("free_bytes") if isinstance(gpu_mem.get("free_bytes"), int) else None),
+                _format_bytes(gpu_mem.get("process_used_bytes") if isinstance(gpu_mem.get("process_used_bytes"), int) else None),
+                _format_bytes(gpu_mem.get("pool_used_bytes") if isinstance(gpu_mem.get("pool_used_bytes"), int) else None),
+                _format_bytes(gpu_mem.get("pool_reserved_bytes") if isinstance(gpu_mem.get("pool_reserved_bytes"), int) else None),
+            )
 
         def _queue_result(result: ImageSolveResult) -> None:
             yield_queue.append(result)
@@ -2734,6 +2939,7 @@ class BatchSolver:
             task: Callable[[Path], ImageSolveResult],
             emit: Callable[[Path, ImageSolveResult], None],
             phase_workers: Optional[int] = None,
+            phase_name: str = "phase-thread",
         ) -> bool:
             if not phase_paths:
                 return False
@@ -2754,6 +2960,7 @@ class BatchSolver:
                     pass
 
                 while inflight:
+                    _log_runtime_memory(stage=phase_name)
                     if _cancel_requested():
                         cancelled = True
                         break
@@ -2832,6 +3039,7 @@ class BatchSolver:
                     pass
 
                 while inflight:
+                    _log_runtime_memory(stage="phase-near-process")
                     if _cancel_requested():
                         cancelled = True
                         break
@@ -2924,6 +3132,7 @@ class BatchSolver:
                     pass
 
                 while inflight:
+                    _log_runtime_memory(stage="phase-near-hybrid")
                     if _cancel_requested():
                         cancelled = True
                         break
@@ -3092,6 +3301,13 @@ class BatchSolver:
             f"{ram_gb:.2f}" if isinstance(ram_gb, float) else "n/a",
             f"{sample_mb:.1f}" if isinstance(sample_mb, float) else "n/a",
         )
+        logging.info(
+            "Runtime memory telemetry enabled: interval=%.1fs detect_backend=%s detect_device=%s",
+            mem_interval,
+            requested_detect_backend,
+            str(configured_detect_device) if configured_detect_device is not None else "auto",
+        )
+        _log_runtime_memory(stage="run-start", force=True)
 
         cancelled = False
         if near_mode == "hybrid":
@@ -3108,6 +3324,7 @@ class BatchSolver:
                             lambda p: self.solver.solve_path(p, allow_blind_fallback=False),
                             _emit_phase1,
                             phase_workers=near_workers,
+                            phase_name="phase-near-thread",
                         )
                 else:
                     cancelled = _run_phase(
@@ -3115,6 +3332,7 @@ class BatchSolver:
                         lambda p: self.solver.solve_path(p, allow_blind_fallback=False),
                         _emit_phase1,
                         phase_workers=near_workers,
+                        phase_name="phase-near-thread",
                     )
         elif near_mode == "process":
             try:
@@ -3126,6 +3344,7 @@ class BatchSolver:
                     lambda p: self.solver.solve_path(p, allow_blind_fallback=False),
                     _emit_phase1,
                     phase_workers=near_workers,
+                    phase_name="phase-near-thread",
                 )
         else:
             cancelled = _run_phase(
@@ -3133,6 +3352,7 @@ class BatchSolver:
                 lambda p: self.solver.solve_path(p, allow_blind_fallback=False),
                 _emit_phase1,
                 phase_workers=near_workers,
+                phase_name="phase-near-thread",
             )
 
         for item in yield_queue:
@@ -3164,6 +3384,7 @@ class BatchSolver:
                 lambda p: self.solver.solve_path_blind_only(p, near_failure=final_unresolved.get(p)),
                 _emit_phase2,
                 phase_workers=workers_base,
+                phase_name="phase-blind-thread",
             )
             for item in yield_queue:
                 yield item
@@ -3189,6 +3410,7 @@ class BatchSolver:
                 ast_paths = [p for p in self.files if p in final_unresolved]
                 logging.info("[FALLBACK] Astrometry last-resort enabled, trying %d files", len(ast_paths))
                 for job in astrometry_solve_batch(ast_paths, ast_cfg, log=logging.info):
+                    _log_runtime_memory(stage="phase-astrometry")
                     if _cancel_requested():
                         break
                     path = Path(job.path)
@@ -3229,6 +3451,8 @@ class BatchSolver:
             for item in yield_queue:
                 yield item
             yield_queue.clear()
+
+        _log_runtime_memory(stage="run-end", force=True)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
