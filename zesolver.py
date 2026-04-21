@@ -955,7 +955,7 @@ class SolveConfig:
     near_astap_hint_fastpath: bool = False
     near_astap_hint_radius_deg: Optional[float] = None
     near_second_pass_refine_in_fastpath: bool = False
-    near_astap_iso_strict: bool = False
+    near_astap_iso_strict: bool = True
     # Blind solver (Python) tunables (mirrors settings panel). These were
     # previously only used by the settings tester; we surface them here so the
     # batch run uses and logs the same values as the GUI:
@@ -2736,7 +2736,7 @@ class ImageSolver:
                     else (getattr(self.config, 'hint_radius_deg', None) or 3.0)
                 ),
                 second_pass_refine_in_fastpath=bool(getattr(self.config, 'near_second_pass_refine_in_fastpath', False)),
-                astap_iso_strict=bool(getattr(self.config, 'near_astap_iso_strict', False)),
+                astap_iso_strict=bool(getattr(self.config, 'near_astap_iso_strict', True)),
             )
             try:
                 log_near = {
@@ -3589,8 +3589,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--near-astap-iso-strict",
         dest="near_astap_iso_strict",
         action="store_true",
-        default=False,
+        default=True,
         help="Near-solver: enable strict ASTAP-ISO path (diagnostic parity mode)",
+    )
+    parser.add_argument(
+        "--no-near-astap-iso-strict",
+        dest="near_astap_iso_strict",
+        action="store_false",
+        help="Near-solver: disable strict ASTAP-ISO path",
     )
     parser.add_argument(
         "--near-warm-start",
@@ -3764,7 +3770,7 @@ def run_cli(args: argparse.Namespace) -> int:
         near_astap_hint_fastpath=False,
         near_astap_hint_radius_deg=args.radius_hint,
         near_second_pass_refine_in_fastpath=False,
-        near_astap_iso_strict=bool(getattr(args, 'near_astap_iso_strict', False)),
+        near_astap_iso_strict=bool(getattr(args, 'near_astap_iso_strict', True)),
         log_level=(args.log_level or "INFO").upper(),
         dev_bucket_limit_override=max(0, int(args.dev_bucket_limit or 0)),
         dev_vote_percentile=min(95, max(5, int(args.dev_vote_percentile or 40))),
@@ -6262,7 +6268,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.fast_try_parity_check)
             # Strict ASTAP-ISO mode
             self.fast_astap_iso_strict_check = QtWidgets.QCheckBox()
-            self.fast_astap_iso_strict_check.setChecked(bool(getattr(self._settings, 'near_astap_iso_strict', False)))
+            self.fast_astap_iso_strict_check.setChecked(bool(getattr(self._settings, 'near_astap_iso_strict', True)))
             form.addRow(self.fast_astap_iso_strict_check)
             # Search margin
             self.fast_search_margin_label = QtWidgets.QLabel()
@@ -6495,7 +6501,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 if hasattr(self, 'fast_try_parity_check'):
                     self.fast_try_parity_check.setChecked(bool(getattr(settings, 'near_try_parity_flip', True)))
                 if hasattr(self, 'fast_astap_iso_strict_check'):
-                    self.fast_astap_iso_strict_check.setChecked(bool(getattr(settings, 'near_astap_iso_strict', False)))
+                    self.fast_astap_iso_strict_check.setChecked(bool(getattr(settings, 'near_astap_iso_strict', True)))
                 if hasattr(self, 'fast_search_margin_spin'):
                     self.fast_search_margin_spin.setValue(float(getattr(settings, 'near_search_margin', 1.2) or 1.2))
                 if hasattr(self, 'fast_detect_k_sigma_spin'):
@@ -6673,7 +6679,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_max_img_stars=int(self.fast_max_img_stars_spin.value()) if hasattr(self, 'fast_max_img_stars_spin') else 800,
                 near_max_cat_stars=int(self.fast_max_cat_stars_spin.value()) if hasattr(self, 'fast_max_cat_stars_spin') else 2000,
                 near_try_parity_flip=bool(self.fast_try_parity_check.isChecked()) if hasattr(self, 'fast_try_parity_check') else True,
-                near_astap_iso_strict=bool(self.fast_astap_iso_strict_check.isChecked()) if hasattr(self, 'fast_astap_iso_strict_check') else bool(getattr(self._settings, 'near_astap_iso_strict', False)),
+                near_astap_iso_strict=bool(self.fast_astap_iso_strict_check.isChecked()) if hasattr(self, 'fast_astap_iso_strict_check') else bool(getattr(self._settings, 'near_astap_iso_strict', True)),
                 near_search_margin=float(self.fast_search_margin_spin.value()) if hasattr(self, 'fast_search_margin_spin') else 1.2,
                 # Backend + astrometry
                 solver_backend=(self.backend_combo.currentData() if hasattr(self, 'backend_combo') else "local"),
@@ -8081,7 +8087,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_astap_hint_fastpath=False,
                 near_astap_hint_radius_deg=radius_hint,
                 near_second_pass_refine_in_fastpath=False,
-                near_astap_iso_strict=bool(getattr(self._settings, 'near_astap_iso_strict', False)),
+                near_astap_iso_strict=bool(getattr(self._settings, 'near_astap_iso_strict', True)),
                 near_max_tile_candidates=int(self._settings.near_max_tile_candidates or 48),
                 near_tile_cache_size=int(self._settings.near_tile_cache_size or 128),
                 near_detect_backend=str(self._settings.near_detect_backend or "auto"),

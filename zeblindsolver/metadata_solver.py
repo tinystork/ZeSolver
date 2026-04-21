@@ -2393,7 +2393,15 @@ def solve_near(
     if stars.size == 0:
         return _failure("no stars detected in the frame")
     logger.info("near detected stars: %d", int(stars.size))
-    if cfg.max_img_stars and stars.size > cfg.max_img_stars:
+    # Mirror ASTAP behavior more closely by working on brightest image stars.
+    # In strict ASTAP-ISO mode, do not apply the ZeNear hard cap here.
+    if stars.size > 1:
+        try:
+            order = np.argsort(stars["flux"], kind="stable")[::-1]
+            stars = stars[order]
+        except Exception:
+            pass
+    if (not strict_astap_iso) and cfg.max_img_stars and stars.size > cfg.max_img_stars:
         stars = stars[: cfg.max_img_stars]
 
     if strict_astap_iso and cat_positions.shape[0] > 0:
@@ -2632,7 +2640,11 @@ def solve_near(
     cat_ranks = _compute_ranks(cat_mags, descending=False)
 
     # ASTAP ISO hypothesis path first (quad hash on-the-fly), before legacy pair pipeline.
-    minimum_quads = max(3, min(12, 3 + int(image_positions.shape[0]) // 140))
+    if strict_astap_iso:
+        # ASTAP plate-solve rule: minimum_quads := 3 + nrstars_image div 140
+        minimum_quads = max(3, 3 + int(image_positions.shape[0]) // 140)
+    else:
+        minimum_quads = max(3, min(12, 3 + int(image_positions.shape[0]) // 140))
     iso_diag_initial: dict = {}
     iso_diag_best: dict | None = None
     iso_diag_second: dict | None = None
@@ -3581,8 +3593,38 @@ def solve_near(
             logger.info("near pair-build pass=%d neighbors=%d rank_tol=%.2f -> %d pairs", pass_idx, int(pass_neighbors), float(pass_rank_tol), int(img_try.shape[0]))
             if img_pairs.shape[0] >= 24:
                 break
+        if img_pairs.shape[0] < 6:
+            sparse_neighbors = max(
+                int(_MAX_NEIGHBORS),
+                min(int(cat_positions_iso.shape[0]), 24),
+            )
+            img_try, cat_try, world_try = _build_candidate_pairs(
+                image_positions,
+                cat_positions_iso,
+                cat_world,
+                img_ranks,
+                cat_ranks,
+                center_xy,
+                approx_scale_for_pairs,
+                cfg.pixel_tolerance,
+                max_neighbors=int(sparse_neighbors),
+                rank_tolerance=1.0,
+                cancel_check=cancel_check,
+            )
+            if img_try.shape[0] > img_pairs.shape[0]:
+                img_pairs, cat_pairs, cat_world_pairs = img_try, cat_try, world_try
+            logger.info(
+                "near pair-build sparse fallback neighbors=%d rank_tol=%.2f -> %d pairs",
+                int(sparse_neighbors),
+                1.0,
+                int(img_try.shape[0]),
+            )
     t_pair_s = time.perf_counter() - t_pair0
     logger.info("near pair-build done: %d pairs", int(img_pairs.shape[0]))
+    ransac_min_inliers = 4
+    quality_target = int(getattr(cfg, "quality_inliers", 60) or 60)
+    if img_pairs.shape[0] <= 8 or cat_pairs.shape[0] <= 8 or quality_target <= 3:
+        ransac_min_inliers = 3
     ransac_min_scale = float(scale_min_deg) * 3600.0
     ransac_max_scale = float(scale_max_deg) * 3600.0
     if not (math.isfinite(ransac_min_scale) and math.isfinite(ransac_max_scale) and ransac_min_scale > 0 and ransac_max_scale > ransac_min_scale):
@@ -3659,7 +3701,7 @@ def solve_near(
                 cat_pairs,
                 trials=1,
                 tol_px=cfg.pixel_tolerance,
-                min_inliers=4,
+                min_inliers=ransac_min_inliers,
                 allow_reflection=cfg.try_parity_flip,
                 early_stop_inliers=int(getattr(cfg, "quality_inliers", 60) or 60),
                 min_scale=ransac_min_scale,
@@ -3700,7 +3742,7 @@ def solve_near(
         cat_pairs,
         trials=int(getattr(cfg, "ransac_trials", 1200) or 1200),
         tol_px=cfg.pixel_tolerance,
-        min_inliers=4,
+        min_inliers=ransac_min_inliers,
         allow_reflection=cfg.try_parity_flip,
         early_stop_inliers=int(getattr(cfg, "quality_inliers", 60) or 60),
         min_scale=ransac_min_scale,
@@ -3803,7 +3845,12 @@ def solve_near(
             })
             return _failure("no geometric consensus found for metadata solve")
     t_fit0 = time.perf_counter()
-    tile_center = (float(ra0), float(dec0))
+    tile_center_hint = (float(ra0), float(dec0))
+    tile_center_iso = (float(iso_center_ra), float(iso_center_dec))
+    # When the working hypothesis comes from ASTAP-ISO center stepping,
+    # keep that solved center for TAN reconstruction. Falling back to the
+    # original metadata hint center can inject large WCS residuals.
+    tile_center = tile_center_iso if iso_transform is not None else tile_center_hint
     if strict_astap_iso and iso_transform is not None:
         try:
             iso_deg = SimilarityTransform(
@@ -3815,7 +3862,7 @@ def solve_near(
                 ),
                 parity=int(getattr(iso_transform, "parity", 1)),
             )
-            wcs = tan_from_similarity(iso_deg, image.shape, tile_center=(float(iso_center_ra), float(iso_center_dec)))
+            wcs = tan_from_similarity(iso_deg, image.shape, tile_center=tile_center_iso)
         except Exception:
             if iso_matrix is not None and iso_offset is not None:
                 try:
