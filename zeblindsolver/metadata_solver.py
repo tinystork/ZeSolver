@@ -119,6 +119,13 @@ class NearSolveConfig:
     strict_auto_fov_retry_max_attempts: int = 0
     # Break retries when repeated attempts keep returning zero refs.
     strict_auto_fov_retry_zero_ref_patience: int = 3
+    # Non-strict ASTAP-ISO scale gate and adaptive retry.
+    # Useful when hinted focal/pixel metadata is imperfect (binning/crop mismatch).
+    astap_iso_scale_ratio_min: float = 0.55
+    astap_iso_scale_ratio_max: float = 1.80
+    astap_iso_auto_scale_retry: bool = True
+    astap_iso_auto_scale_factors: tuple[float, ...] = (0.50, 2.00, 0.75, 1.33, 1.60)
+    astap_iso_auto_scale_last_chance_no_gate: bool = True
     # Reliability-first conformance gates (used for final near acceptance)
     conformance_scale_min_ratio: float = 0.60
     conformance_scale_max_ratio: float = 1.80
@@ -1296,6 +1303,8 @@ def _astap_iso_hypothesis(
     img_ranks: np.ndarray | None = None,
     cat_ranks: np.ndarray | None = None,
     expected_scale_arcsec: float | None = None,
+    expected_scale_ratio_min: float = 0.55,
+    expected_scale_ratio_max: float = 1.80,
     minimum_count: int = 3,
     strict_astap_iso: bool = False,
     quad_tolerance: float = 0.007,
@@ -1336,6 +1345,10 @@ def _astap_iso_hypothesis(
             "quads_img": int(q_img.shape[1]) if q_img.ndim == 2 else 0,
             "quads_cat": int(q_cat.shape[1]) if q_cat.ndim == 2 else 0,
             "minimum_count": int(minimum_count),
+            "scale_ratio_gate": {
+                "min": float(expected_scale_ratio_min),
+                "max": float(expected_scale_ratio_max),
+            },
             "tolerances": [],
         })
 
@@ -1388,6 +1401,14 @@ def _astap_iso_hypothesis(
     best_quick_inliers = -1
     best_quick_med = float('inf')
     best_scale_score = float('inf')
+    ratio_min = float(expected_scale_ratio_min)
+    ratio_max = float(expected_scale_ratio_max)
+    if not math.isfinite(ratio_min):
+        ratio_min = 0.55
+    if not math.isfinite(ratio_max):
+        ratio_max = 1.80
+    ratio_min = max(0.05, ratio_min)
+    ratio_max = max(ratio_min + 1.0e-6, ratio_max)
     for tol in (0.007, 0.010, 0.015, 0.020, 0.030, 0.040, 0.050, 0.060):
         ok, M, t, nr, nr_raw = fit_fn(q_cat, q_img, minimum_count=minimum_count, quad_tolerance=tol)
         if ok and M is not None and t is not None:
@@ -1399,8 +1420,26 @@ def _astap_iso_hypothesis(
             ratio = float('nan')
             if expected_scale_arcsec is not None and expected_scale_arcsec > 0:
                 ratio = scale_px / float(expected_scale_arcsec)
-                if not (0.55 <= ratio <= 1.80):
-                    logger.info("near astap-iso tol=%.4f rejected on scale ratio=%.3f (nr=%d)", float(tol), float(ratio), int(nr))
+                if not (ratio_min <= ratio <= ratio_max):
+                    logger.info(
+                        "near astap-iso tol=%.4f rejected on scale ratio=%.3f not in [%.3f, %.3f] (nr=%d)",
+                        float(tol),
+                        float(ratio),
+                        float(ratio_min),
+                        float(ratio_max),
+                        int(nr),
+                    )
+                    if diag is not None:
+                        diag["tolerances"].append({
+                            "tol": float(tol),
+                            "matches_raw": int(nr_raw),
+                            "matches_kept": int(nr),
+                            "ok": False,
+                            "reason": "scale_ratio_rejected",
+                            "scale_ratio": float(ratio) if math.isfinite(ratio) else None,
+                            "scale_ratio_min": float(ratio_min),
+                            "scale_ratio_max": float(ratio_max),
+                        })
                     continue
                 scale_score = abs(math.log(max(scale_px, 1e-9) / float(expected_scale_arcsec)))
             else:
@@ -2597,7 +2636,16 @@ def solve_near(
     iso_diag_initial: dict = {}
     iso_diag_best: dict | None = None
     iso_diag_second: dict | None = None
+    iso_diag_autoscale: list[dict] = []
     iso_diag_autofov: list[dict] = []
+    iso_ratio_min = float(getattr(cfg, "astap_iso_scale_ratio_min", 0.55) or 0.55)
+    iso_ratio_max = float(getattr(cfg, "astap_iso_scale_ratio_max", 1.80) or 1.80)
+    if not math.isfinite(iso_ratio_min):
+        iso_ratio_min = 0.55
+    if not math.isfinite(iso_ratio_max):
+        iso_ratio_max = 1.80
+    iso_ratio_min = max(0.05, float(iso_ratio_min))
+    iso_ratio_max = max(float(iso_ratio_min) + 1.0e-6, float(iso_ratio_max))
     iso_diag_agg: dict = {
         "calls": 0,
         "ok_calls": 0,
@@ -2635,6 +2683,8 @@ def solve_near(
         img_ranks=img_ranks,
         cat_ranks=cat_ranks,
         expected_scale_arcsec=scale_arcsec,
+        expected_scale_ratio_min=iso_ratio_min,
+        expected_scale_ratio_max=iso_ratio_max,
         minimum_count=int(minimum_quads),
         strict_astap_iso=bool(strict_astap_iso),
         quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
@@ -2663,6 +2713,141 @@ def solve_near(
         initial_quads_img = int(iso_diag_initial.get("quads_img", 0) or 0)
     except Exception:
         initial_quads_img = 0
+
+    # Non-strict auto-scale retry: if hinted scale appears wrong, retry with
+    # alternate scale hypotheses before falling back to blind astrometry.
+    if (
+        (not strict_astap_iso)
+        and bool(getattr(cfg, "astap_iso_auto_scale_retry", True))
+        and (iso_transform is None or iso_matrix is None or iso_offset is None)
+        and (scale_arcsec is not None and float(scale_arcsec) > 0)
+        and (initial_stars_img >= 16)
+        and (initial_quads_img >= 3)
+    ):
+        try:
+            retry_factors_cfg = getattr(cfg, "astap_iso_auto_scale_factors", (0.50, 2.00, 0.75, 1.33, 1.60))
+            retry_factors: list[float] = []
+            if isinstance(retry_factors_cfg, str):
+                for part in retry_factors_cfg.split(','):
+                    part = part.strip()
+                    if not part:
+                        continue
+                    try:
+                        fv = float(part)
+                    except Exception:
+                        continue
+                    if math.isfinite(fv) and fv > 0:
+                        retry_factors.append(fv)
+            else:
+                try:
+                    for item in retry_factors_cfg:
+                        try:
+                            fv = float(item)
+                        except Exception:
+                            continue
+                        if math.isfinite(fv) and fv > 0:
+                            retry_factors.append(fv)
+                except Exception:
+                    retry_factors = []
+
+            if not retry_factors:
+                retry_factors = [0.50, 2.00, 0.75, 1.33, 1.60]
+
+            seen_factors: set[int] = set()
+            for fac in retry_factors:
+                if abs(float(fac) - 1.0) <= 1.0e-6:
+                    continue
+                key = int(round(float(fac) * 1000.0))
+                if key in seen_factors:
+                    continue
+                seen_factors.add(key)
+
+                expected_retry = float(scale_arcsec) * float(fac)
+                if not math.isfinite(expected_retry) or expected_retry <= 0:
+                    continue
+
+                logger.info(
+                    "near auto-scale retry: trying expected_scale=%.3f\"/px (factor=%.3f)",
+                    float(expected_retry),
+                    float(fac),
+                )
+                diag_retry: dict = {}
+                t_retry, m_retry, o_retry, r_retry = _astap_iso_hypothesis(
+                    image_positions,
+                    cat_positions_iso,
+                    img_ranks=img_ranks,
+                    cat_ranks=cat_ranks,
+                    expected_scale_arcsec=expected_retry,
+                    expected_scale_ratio_min=iso_ratio_min,
+                    expected_scale_ratio_max=iso_ratio_max,
+                    minimum_count=int(minimum_quads),
+                    strict_astap_iso=False,
+                    quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
+                    diag=diag_retry,
+                )
+                _acc_iso_diag(diag_retry)
+                iso_diag_autoscale.append(
+                    {
+                        "mode": "scaled_expected",
+                        "factor": float(fac),
+                        "expected_scale_arcsec": float(expected_retry),
+                        "refs": int(r_retry),
+                        "ok": bool(t_retry is not None and m_retry is not None and o_retry is not None),
+                    }
+                )
+                if t_retry is not None and m_retry is not None and o_retry is not None:
+                    iso_transform = t_retry
+                    iso_matrix = m_retry
+                    iso_offset = o_retry
+                    iso_refs = int(r_retry)
+                    iso_diag_best = {
+                        "stage": "auto_scale_retry",
+                        "factor": float(fac),
+                        "expected_scale_arcsec": float(expected_retry),
+                        **dict(diag_retry),
+                    }
+                    break
+
+            if (
+                (iso_transform is None or iso_matrix is None or iso_offset is None)
+                and bool(getattr(cfg, "astap_iso_auto_scale_last_chance_no_gate", True))
+            ):
+                logger.info("near auto-scale retry: last chance without expected-scale gate")
+                diag_retry: dict = {}
+                t_retry, m_retry, o_retry, r_retry = _astap_iso_hypothesis(
+                    image_positions,
+                    cat_positions_iso,
+                    img_ranks=img_ranks,
+                    cat_ranks=cat_ranks,
+                    expected_scale_arcsec=None,
+                    expected_scale_ratio_min=iso_ratio_min,
+                    expected_scale_ratio_max=iso_ratio_max,
+                    minimum_count=int(minimum_quads),
+                    strict_astap_iso=False,
+                    quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
+                    diag=diag_retry,
+                )
+                _acc_iso_diag(diag_retry)
+                iso_diag_autoscale.append(
+                    {
+                        "mode": "no_scale_gate",
+                        "factor": None,
+                        "expected_scale_arcsec": None,
+                        "refs": int(r_retry),
+                        "ok": bool(t_retry is not None and m_retry is not None and o_retry is not None),
+                    }
+                )
+                if t_retry is not None and m_retry is not None and o_retry is not None:
+                    iso_transform = t_retry
+                    iso_matrix = m_retry
+                    iso_offset = o_retry
+                    iso_refs = int(r_retry)
+                    iso_diag_best = {
+                        "stage": "auto_scale_retry_no_gate",
+                        **dict(diag_retry),
+                    }
+        except Exception:
+            pass
 
     # Strict auto-FOV retry (no external oracle): only when no explicit FOV hint
     # was provided and the first strict attempt failed.
@@ -2775,6 +2960,8 @@ def solve_near(
                     img_ranks=img_ranks,
                     cat_ranks=cr,
                     expected_scale_arcsec=scale_arcsec,
+                    expected_scale_ratio_min=iso_ratio_min,
+                    expected_scale_ratio_max=iso_ratio_max,
                     minimum_count=int(minimum_quads),
                     strict_astap_iso=bool(strict_astap_iso),
                     quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
@@ -3062,6 +3249,8 @@ def solve_near(
                 img_ranks=img_ranks,
                 cat_ranks=cat_r_tmp,
                 expected_scale_arcsec=scale_arcsec,
+                expected_scale_ratio_min=iso_ratio_min,
+                expected_scale_ratio_max=iso_ratio_max,
                 minimum_count=int(minimum_quads),
                 strict_astap_iso=bool(strict_astap_iso),
                 quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
@@ -3278,6 +3467,8 @@ def solve_near(
                         img_ranks=img_ranks,
                         cat_ranks=cat_r_tmp,
                         expected_scale_arcsec=scale_arcsec,
+                        expected_scale_ratio_min=iso_ratio_min,
+                        expected_scale_ratio_max=iso_ratio_max,
                         minimum_count=int(minimum_quads),
                         strict_astap_iso=bool(strict_astap_iso),
                         quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
@@ -3328,6 +3519,9 @@ def solve_near(
         "initial": iso_diag_initial if iso_diag_initial else None,
         "best_center": iso_diag_best,
         "second_pass": iso_diag_second,
+        "scale_ratio_gate": {"min": float(iso_ratio_min), "max": float(iso_ratio_max)},
+        "auto_scale_retries": iso_diag_autoscale if iso_diag_autoscale else None,
+        "auto_scale_retry_factors": getattr(cfg, "astap_iso_auto_scale_factors", (0.50, 2.00, 0.75, 1.33, 1.60)),
         "auto_fov_retries": iso_diag_autofov if iso_diag_autofov else None,
         "auto_fov_retry_scales": getattr(cfg, "strict_auto_fov_retry_scales", (1.25, 0.82, 1.6, 0.65, 2.4, 4.0)),
         "aggregate": iso_diag_agg,
@@ -3436,7 +3630,7 @@ def solve_near(
             iso_ok = bool(
                 int(iso_refs) >= iso_refs_min
                 and math.isfinite(scale_ratio)
-                and 0.55 <= scale_ratio <= 1.85
+                and float(iso_ratio_min) <= scale_ratio <= float(iso_ratio_max)
             )
 
             if iso_ok:
@@ -3450,10 +3644,12 @@ def solve_near(
                 hypothesis = (iso_transform, None)
             else:
                 logger.info(
-                    "near astap-iso hypothesis rejected (refs=%d<%d or scale_ratio=%.3f)",
+                    "near astap-iso hypothesis rejected (refs=%d<%d or scale_ratio=%.3f not in [%.3f, %.3f])",
                     int(iso_refs),
                     int(iso_refs_min),
                     float(scale_ratio) if math.isfinite(scale_ratio) else float('nan'),
+                    float(iso_ratio_min),
+                    float(iso_ratio_max),
                 )
     if (not strict_astap_iso) and img_pairs.shape[0] >= 6 and cat_pairs.shape[0] >= 6 and cfg.seed_rotation is not None and cfg.seed_scale_deg is not None:
         try:

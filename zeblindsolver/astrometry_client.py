@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import random
@@ -204,18 +205,63 @@ class AstrometryClient:
 
 
 def parse_wcs_bytes(raw: bytes) -> dict[str, Any]:
-    text = raw.decode("utf-8", errors="ignore").splitlines()
+    """Parse astrometry.net WCS payload.
+
+    The service returns a FITS header file (binary), not a plain text card list.
+    We parse it through astropy first, then keep WCS/SIP related cards only.
+    A small text fallback is kept for compatibility with older/custom payloads.
+    """
     cards: dict[str, Any] = {}
+
+    # Preferred path: FITS payload from /wcs_file/<jobid>
+    try:
+        from astropy.io import fits  # local import to avoid hard dependency at module import time
+
+        with fits.open(io.BytesIO(raw), memmap=False) as hdul:
+            hdr = None
+            for hdu in hdul:
+                h = hdu.header
+                if ("CRVAL1" in h and "CRVAL2" in h) and (
+                    any(k in h for k in ("CD1_1", "CD1_2", "CD2_1", "CD2_2"))
+                    or ("CDELT1" in h and "CDELT2" in h)
+                    or any(k in h for k in ("PC1_1", "PC1_2", "PC2_1", "PC2_2"))
+                ):
+                    hdr = h
+                    break
+            if hdr is None and len(hdul) > 0:
+                hdr = hdul[0].header
+
+            if hdr is not None:
+                for key, value in hdr.items():
+                    ku = str(key).upper()
+                    if ku in {
+                        "WCSAXES", "CTYPE1", "CTYPE2", "CRVAL1", "CRVAL2", "CRPIX1", "CRPIX2",
+                        "CUNIT1", "CUNIT2", "CD1_1", "CD1_2", "CD2_1", "CD2_2",
+                        "PC1_1", "PC1_2", "PC2_1", "PC2_2", "CDELT1", "CDELT2",
+                        "CROTA1", "CROTA2", "RADESYS", "EQUINOX", "LONPOLE", "LATPOLE",
+                    } or ku.startswith("A_") or ku.startswith("B_") or ku.startswith("AP_") or ku.startswith("BP_"):
+                        cards[str(key)] = value
+        if cards:
+            return cards
+    except Exception:
+        pass
+
+    # Fallback path: plain text KEY=VALUE style payload
+    text = raw.decode("utf-8", errors="ignore").splitlines()
     for line in text:
         line = line.strip()
         if not line or "=" not in line:
             continue
         key, rest = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
         value = rest.strip().split("/", 1)[0].strip().strip("'\"")
         try:
-            if value.lower() in {"t", "true"}:
+            low = value.lower()
+            if low in {"t", "true"}:
                 cards[key] = True
-            elif value.lower() in {"f", "false"}:
+            elif low in {"f", "false"}:
                 cards[key] = False
             elif any(ch in value for ch in (".", "e", "E")):
                 cards[key] = float(value)

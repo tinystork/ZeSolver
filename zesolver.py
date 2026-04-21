@@ -1359,9 +1359,20 @@ def _quick_scan_initial_status(path: Path) -> tuple[str, str]:
     suffix = path.suffix.lower()
     if suffix in FITS_EXTENSIONS:
         try:
-            header = fits.getheader(path, ext=0)
-            if _header_has_wcs(header):
-                return "wcs", ""
+            with fits.open(path, mode="readonly", memmap=False) as hdul:
+                for hdu in hdul:
+                    try:
+                        if _header_has_wcs(hdu.header):
+                            return "wcs", ""
+                    except Exception:
+                        continue
+                # Diagnostic hint: file stamped solved but no usable WCS cards.
+                try:
+                    h0 = hdul[0].header
+                    if bool(h0.get("SOLVED", False)) and not _header_has_wcs(h0):
+                        return "failed", "SOLVED present but WCS cards missing"
+                except Exception:
+                    pass
         except Exception as exc:
             return "failed", f"scan error: {exc}"
         return "waiting", ""
