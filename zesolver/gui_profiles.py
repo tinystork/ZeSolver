@@ -10,12 +10,7 @@ _SOLVER_ADVANCED_PAIRS: tuple[tuple[str, str], ...] = (
     ("max_radius_label_widget", "max_radius_spin"),
     ("ra_hint_label_widget", "ra_hint_spin"),
     ("dec_hint_label_widget", "dec_hint_spin"),
-    ("radius_hint_label_widget", "radius_hint_spin"),
-    ("focal_hint_label_widget", "focal_hint_spin"),
-    ("pixel_hint_label_widget", "pixel_hint_spin"),
-    ("scale_hint_label_widget", "scale_hint_spin"),
-    ("scale_min_hint_label_widget", "scale_min_hint_spin"),
-    ("scale_max_hint_label_widget", "scale_max_hint_spin"),
+    # Keep instrument/scale hints visible in Simple mode for practical tuning.
     ("formats_label_widget", "formats_edit"),
     ("families_label_widget", "families_combo"),
 )
