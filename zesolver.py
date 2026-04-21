@@ -604,9 +604,9 @@ for _lang, _mapping in _GUI_DOWNLOADS_I18N.items():
 _GUI_ASTROMETRY_I18N = {
     "fr": {
         "solver.backend.label": "Solveur",
-        "solver.backend.local": "Local (ZeBlind)",
+        "solver.backend.local": "Local (ZeNear → ZeBlind → Astrometry*)",
         "solver.backend.astrometry": "Astrometry.net (web)",
-        "solver.backend.note": "Choisissez le solveur à utiliser pour cette exécution.",
+        "solver.backend.note": "Par défaut: ZeNear, puis ZeBlind, puis Astrometry si clé API renseignée.",
         "solver.status.blind_disabled": "Mode ZeNear seul (blind solver désactivé).",
         "solver.status.using_backend": "Solveur utilisé : {backend}",
         "astrometry.tab.title": "Astrometry.net",
@@ -625,9 +625,9 @@ _GUI_ASTROMETRY_I18N = {
     },
     "en": {
         "solver.backend.label": "Solver backend",
-        "solver.backend.local": "Local (ZeBlind)",
+        "solver.backend.local": "Local (ZeNear → ZeBlind → Astrometry*)",
         "solver.backend.astrometry": "Astrometry.net (web)",
-        "solver.backend.note": "Choose the solver to use for this run.",
+        "solver.backend.note": "Default: ZeNear, then ZeBlind, then Astrometry if an API key is configured.",
         "solver.status.blind_disabled": "ZeNear-only mode (blind solver disabled).",
         "solver.status.using_backend": "Using backend: {backend}",
         "astrometry.tab.title": "Astrometry.net",
@@ -963,6 +963,13 @@ class SolveConfig:
     blind_quality_inliers: int = 40
     blind_quality_rms: float = 1.2
     blind_fast_mode: bool = True
+    # Optional last-resort fallback after ZeNear + ZeBlind (GUI local backend)
+    astrometry_api_url: str = "https://nova.astrometry.net/api"
+    astrometry_api_key: Optional[str] = None
+    astrometry_timeout_s: int = 600
+    astrometry_parallel_jobs: int = 2
+    astrometry_use_hints: bool = True
+    astrometry_fallback_after_blind: bool = True
     log_level: str = "INFO"
     dev_bucket_limit_override: int = 0
     dev_vote_percentile: int = 40
@@ -1013,6 +1020,16 @@ class SolveConfig:
         detect_area = int(getattr(self, "dev_detect_min_area", 5) or 5)
         detect_area = max(1, detect_area)
         object.__setattr__(self, "dev_detect_min_area", detect_area)
+        api_url = str(getattr(self, "astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api").strip()
+        if not api_url:
+            api_url = "https://nova.astrometry.net/api"
+        object.__setattr__(self, "astrometry_api_url", api_url)
+        api_key = getattr(self, "astrometry_api_key", None)
+        if isinstance(api_key, str):
+            api_key = api_key.strip() or None
+        else:
+            api_key = None
+        object.__setattr__(self, "astrometry_api_key", api_key)
 
 
 @dataclass(slots=True)
@@ -2675,7 +2692,11 @@ class BatchSolver:
             files = files[: self.config.max_files]
         return files
 
-    def run(self, cancel_event: Optional[threading.Event] = None) -> Iterator[ImageSolveResult]:
+    def run(
+        self,
+        cancel_event: Optional[threading.Event] = None,
+        on_result: Optional[Callable[[ImageSolveResult], None]] = None,
+    ) -> Iterator[ImageSolveResult]:
         if not self.files:
             yield ImageSolveResult(
                 path=self.config.input_dir,
@@ -2691,6 +2712,19 @@ class BatchSolver:
 
         workers_base = max(1, self.config.workers)
         unresolved: dict[Path, ImageSolveResult] = {}
+        yield_queue: list[ImageSolveResult] = []
+        astrometry_api_key = str(getattr(self.config, "astrometry_api_key", "") or "").strip()
+        astrometry_fallback_ready = bool(
+            getattr(self.config, "astrometry_fallback_after_blind", True) and astrometry_api_key
+        )
+
+        def _queue_result(result: ImageSolveResult) -> None:
+            yield_queue.append(result)
+            if on_result is not None:
+                try:
+                    on_result(result)
+                except Exception:
+                    pass
 
         def _cancel_requested() -> bool:
             return bool(cancel_event and cancel_event.is_set())
@@ -2764,9 +2798,12 @@ class BatchSolver:
         # Phase 1: run ZeNear on all files (no per-file blind fallback)
         def _emit_phase1(path: Path, result: ImageSolveResult) -> None:
             if result.status == "solved" or (result.status == "skipped" and "WCS already present" in (result.message or "")):
-                yield_queue.append(result)
-            else:
+                _queue_result(result)
+                return
+            if (self.config.blind_enabled and self.config.overwrite) or astrometry_fallback_ready:
                 unresolved[path] = result
+            else:
+                _queue_result(result)
 
         def _run_phase_near_process(
             phase_paths: Sequence[Path],
@@ -3042,7 +3079,6 @@ class BatchSolver:
                 mode = "thread"
             return mode, eff, ram_gb, sample_mb, source, int(cuda_devices)
 
-        yield_queue: list[ImageSolveResult] = []
         near_mode, near_workers, ram_gb, sample_mb, near_strategy_source, near_cuda_devices = _auto_near_strategy()
         if str(os.environ.get("ZE_NEAR_PROCESS_POOL", "1")).strip().lower() in {"0", "false", "no", "off"}:
             near_mode = "thread"
@@ -3105,16 +3141,27 @@ class BatchSolver:
         if cancelled:
             return
 
-        # Phase 2: only after phase 1 is complete, run Zeblind on unresolved files
-        if self.config.blind_enabled and self.config.overwrite and unresolved:
-            unresolved_paths = [p for p in self.files if p in unresolved]
+        # Phase 2: run Zeblind on unresolved files when enabled.
+        final_unresolved: dict[Path, ImageSolveResult] = dict(unresolved)
+        if self.config.blind_enabled and self.config.overwrite and final_unresolved:
+            unresolved_paths = [p for p in self.files if p in final_unresolved]
+            phase2_unresolved: dict[Path, ImageSolveResult] = {}
 
             def _emit_phase2(path: Path, result: ImageSolveResult) -> None:
-                yield_queue.append(result)
+                solved = (result.status == "solved") or (
+                    result.status == "skipped" and "WCS already present" in (result.message or "")
+                )
+                if solved:
+                    _queue_result(result)
+                    return
+                if astrometry_fallback_ready:
+                    phase2_unresolved[path] = result
+                else:
+                    _queue_result(result)
 
             cancelled = _run_phase(
                 unresolved_paths,
-                lambda p: self.solver.solve_path_blind_only(p, near_failure=unresolved.get(p)),
+                lambda p: self.solver.solve_path_blind_only(p, near_failure=final_unresolved.get(p)),
                 _emit_phase2,
                 phase_workers=workers_base,
             )
@@ -3123,11 +3170,65 @@ class BatchSolver:
             yield_queue.clear()
             if cancelled:
                 return
-        else:
-            # Blind disabled or no unresolved entries: emit near failures as final results.
+            final_unresolved = phase2_unresolved
+
+        # Phase 3: optional Astrometry fallback (last resort) when API key is configured.
+        if astrometry_fallback_ready and final_unresolved:
+            try:
+                from zeblindsolver.astrometry_backend import AstrometryConfig, solve_batch as astrometry_solve_batch
+
+                ast_cfg = AstrometryConfig(
+                    api_url=str(getattr(self.config, "astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api"),
+                    api_key=astrometry_api_key,
+                    parallel_jobs=max(1, int(getattr(self.config, "astrometry_parallel_jobs", 2) or 2)),
+                    timeout_s=max(30, int(getattr(self.config, "astrometry_timeout_s", 600) or 600)),
+                    use_hints=bool(getattr(self.config, "astrometry_use_hints", True)),
+                    fallback_local=False,
+                    index_root=(str(self.config.blind_index_path) if self.config.blind_index_path else None),
+                )
+                ast_paths = [p for p in self.files if p in final_unresolved]
+                logging.info("[FALLBACK] Astrometry last-resort enabled, trying %d files", len(ast_paths))
+                for job in astrometry_solve_batch(ast_paths, ast_cfg, log=logging.info):
+                    if _cancel_requested():
+                        break
+                    path = Path(job.path)
+                    if job.success:
+                        result = ImageSolveResult(
+                            path=path,
+                            status="solved",
+                            message=job.message,
+                            metadata_source="astrometry",
+                        )
+                    else:
+                        prev = final_unresolved.get(path)
+                        if prev and prev.message:
+                            msg = f"{prev.message} | astrometry: {job.message}"
+                        else:
+                            msg = str(job.message)
+                        result = ImageSolveResult(
+                            path=path,
+                            status="failed",
+                            message=msg,
+                            metadata_source="astrometry",
+                        )
+                    final_unresolved.pop(path, None)
+                    _queue_result(result)
+                for item in yield_queue:
+                    yield item
+                yield_queue.clear()
+                if _cancel_requested():
+                    return
+            except Exception as exc:
+                logging.warning("[FALLBACK] Astrometry fallback unavailable: %s", exc)
+
+        # Emit remaining unresolved failures (if any).
+        if final_unresolved:
             for p in self.files:
-                if p in unresolved:
-                    yield unresolved[p]
+                if p in final_unresolved:
+                    _queue_result(final_unresolved[p])
+            for item in yield_queue:
+                yield item
+            yield_queue.clear()
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -3504,7 +3605,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             try:
                 import gc as _gc
                 processed = 0
-                for result in batch.run(cancel_event=self._cancel_event):
+
+                def _on_result(result: ImageSolveResult) -> None:
+                    nonlocal processed
                     self.progress.emit(result)
                     processed += 1
                     # Optional periodic GC if requested
@@ -3517,6 +3620,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                             _gc.collect()
                         except Exception:
                             pass
+
+                for _ in batch.run(cancel_event=self._cancel_event, on_result=_on_result):
                     if self._cancel_event.is_set():
                         self.info.emit(self._translate("runner_stop_wait"))
                         break
@@ -4067,6 +4172,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._pending_hash_level: Optional[str] = None
             self._current_input_dir: Optional[Path] = None
             self._results_seen = 0
+            self._run_started_ts: Optional[float] = None
+            self._last_result_ts: Optional[float] = None
             self._language_actions: dict[str, QtGui.QAction] = {}
             self._interface_actions: dict[str, QtGui.QAction] = {}
             self._interface_mode = "easy"
@@ -4085,6 +4192,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._db_scan_timer = QtCore.QTimer(self)
             self._db_scan_timer.setSingleShot(True)
             self._db_scan_timer.timeout.connect(self._run_db_family_scan)
+            self._progress_timer = QtCore.QTimer(self)
+            self._progress_timer.setInterval(400)
+            self._progress_timer.timeout.connect(self._on_progress_tick)
             self._pending_db_scan_path: str = (self._settings.db_root or "").strip()
             self._active_db_scan_root: Optional[str] = None
             self._db_family_latest: set[str] = set((self._settings.db_family_cache or []) or [])
@@ -5255,10 +5365,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.backend_combo.addItem(self._text("solver.backend.local"), "local")
             self.backend_combo.addItem(self._text("solver.backend.astrometry"), "astrometry")
             try:
-                backend_saved = (self._settings.solver_backend or "local").lower()
-                idx = self.backend_combo.findData(backend_saved)
-                if idx >= 0:
-                    self.backend_combo.setCurrentIndex(idx)
+                # Always default to local ZeNear flow for safer/faster offline behavior.
+                self.backend_combo.setCurrentIndex(self.backend_combo.findData("local"))
             except Exception:
                 pass
             form.addRow(self.backend_label_widget, self.backend_combo)
@@ -6031,11 +6139,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_blind_quality_rms_spin.setValue(settings.blind_quality_rms)
             if hasattr(self, 'settings_blind_fast_check'):
                 self.settings_blind_fast_check.setChecked(settings.blind_fast_mode)
-            # Solver backend selector
+            # Solver backend selector: default to local ZeNear workflow.
             try:
                 if hasattr(self, 'backend_combo'):
-                    backend_saved = (settings.solver_backend or "local").lower()
-                    idx = self.backend_combo.findData(backend_saved)
+                    idx = self.backend_combo.findData("local")
                     if idx >= 0:
                         self.backend_combo.setCurrentIndex(idx)
             except Exception:
@@ -7721,6 +7828,15 @@ def launch_gui(args: argparse.Namespace) -> int:
                 blind_quality_inliers=int(self._settings.blind_quality_inliers or 40),
                 blind_quality_rms=float(self._settings.blind_quality_rms or 1.2),
                 blind_fast_mode=bool(self._settings.blind_fast_mode),
+                astrometry_api_url=str(getattr(self._settings, "astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api"),
+                astrometry_api_key=(
+                    (str(getattr(self._settings, "astrometry_api_key", "") or "").strip() or None)
+                    or (str(os.environ.get("ASTROMETRY_API_KEY", "") or "").strip() or None)
+                ),
+                astrometry_timeout_s=int(getattr(self._settings, "astrometry_timeout_s", 600) or 600),
+                astrometry_parallel_jobs=int(getattr(self._settings, "astrometry_parallel_jobs", 2) or 2),
+                astrometry_use_hints=bool(getattr(self._settings, "astrometry_use_hints", True)),
+                astrometry_fallback_after_blind=True,
                 log_level=self._current_log_level,
                 dev_bucket_limit_override=int(self._settings.dev_bucket_limit_override or 0),
                 dev_vote_percentile=int(self._settings.dev_vote_percentile or 40),
@@ -7888,21 +8004,18 @@ def launch_gui(args: argparse.Namespace) -> int:
             if limit > 0:
                 target_total = min(target_total, limit)
             target_total = max(1, target_total)
-            self.progress_bar.setMaximum(target_total)
+            self.progress_bar.setMaximum(target_total * 100)
             self.progress_bar.setValue(0)
             self.status_label.setText(f"0 / {target_total}")
+            self._run_started_ts = time.perf_counter()
+            self._last_result_ts = self._run_started_ts
+            self._progress_timer.start()
             self._set_running(True)
             backend = (self.backend_combo.currentData() if hasattr(self, 'backend_combo') else 'local')
             self._log(self._text("solver.status.using_backend", backend=self.backend_combo.currentText() if hasattr(self, 'backend_combo') else 'Local'))
             if not config.blind_enabled:
                 self._log(self._text("solver.status.blind_disabled"))
             if backend == 'astrometry':
-                # Use finer-grained progress (100 steps per file) so we can reflect upload/queue stages
-                try:
-                    self.progress_bar.setMaximum(target_total * 100)
-                    self.progress_bar.setValue(0)
-                except Exception:
-                    pass
                 api_url = self.ast_api_url_edit.text().strip() if hasattr(self, 'ast_api_url_edit') else ''
                 api_key = self.ast_api_key_edit.text().strip() if hasattr(self, 'ast_api_key_edit') else ''
                 if not api_key:
@@ -7911,6 +8024,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                 if not api_key:
                     QtWidgets.QMessageBox.warning(self, self._text("astrometry.tab.title"), self._text("astrometry.login.fail"))
                     self._set_running(False)
+                    try:
+                        self._progress_timer.stop()
+                    except Exception:
+                        pass
+                    self._run_started_ts = None
+                    self._last_result_ts = None
                     return
                 parallel = int(self.ast_parallel_spin.value()) if hasattr(self, 'ast_parallel_spin') else 2
                 timeout_s = int(self.ast_timeout_spin.value()) if hasattr(self, 'ast_timeout_spin') else 600
@@ -7967,6 +8086,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self._log(self._text(key, **payload))
             if not result.path.is_dir():
                 self._results_seen += 1
+                self._last_result_ts = time.perf_counter()
                 # If we are in fine-grained mode (100 per file), advance to end of current file bucket
                 try:
                     maxv = int(self.progress_bar.maximum())
@@ -8078,10 +8198,66 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _on_worker_finished(self) -> None:
             self._log(self._text("log_processing_done"))
             self._set_running(False)
+            try:
+                self._progress_timer.stop()
+            except Exception:
+                pass
+            self._run_started_ts = None
+            self._last_result_ts = None
+            self._copy_runtime_log_to_output()
             if self._worker:
                 self._worker.deleteLater()
             self._worker = None
             self.status_label.setText(self._text("status_ready"))
+
+        def _on_progress_tick(self) -> None:
+            if self._worker is None:
+                return
+            total_files = max(1, len(self._pending_files))
+            if self._results_seen >= total_files:
+                return
+            maxv = max(1, int(self.progress_bar.maximum()))
+            if maxv <= total_files:
+                return
+            now = time.perf_counter()
+            run_start = self._run_started_ts or now
+            last_result = self._last_result_ts or run_start
+            elapsed = max(0.0, now - run_start)
+            if self._results_seen > 0:
+                avg_per_file = max(0.001, elapsed / float(self._results_seen))
+                since_last = max(0.0, now - last_result)
+                extra_pct = int(min(95.0, 100.0 * min(0.95, since_last / avg_per_file)))
+            else:
+                warm = max(0.0, now - run_start)
+                extra_pct = int(min(15.0, warm * 3.0))
+            base = int(self._results_seen * 100)
+            target = min(maxv - 1, base + max(0, extra_pct))
+            if target > int(self.progress_bar.value()):
+                self.progress_bar.setValue(target)
+
+        def _copy_runtime_log_to_output(self) -> None:
+            try:
+                src = Path(LOG_FILE)
+            except Exception:
+                return
+            if not src.exists():
+                return
+            out_dir = self._current_input_dir
+            if out_dir is None:
+                try:
+                    raw = self.input_edit.text().strip() if hasattr(self, "input_edit") else ""
+                    out_dir = Path(raw).expanduser() if raw else None
+                except Exception:
+                    out_dir = None
+            if out_dir is None or (not out_dir.exists()) or (not out_dir.is_dir()):
+                return
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            dst = out_dir / f"zesolver_run_{stamp}.log"
+            try:
+                shutil.copy2(src, dst)
+                self._log(f"Log copied to output folder: {dst}")
+            except Exception as exc:
+                self._log(f"Log copy skipped: {exc}")
 
         def _on_worker_stage(self, index: int, message: str) -> None:
             try:
@@ -8141,6 +8317,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._near_worker = None
             self._shutdown_thread(self._benchmark_worker, cancel_method="cancel")
             self._benchmark_worker = None
+            try:
+                self._progress_timer.stop()
+            except Exception:
+                pass
             try:
                 self._db_scan_timer.stop()
             except Exception:

@@ -466,3 +466,7 @@
 - Nettoyage code mort étendu au core solveur: suppression de `ImageSolver._try_blind_shortcut` (non référencée), plus aucune occurrence des méthodes mortes retirées (`_try_blind_shortcut`, `_gather_candidate_files`, `_refresh_file_list`), compile check OK.
 
 - Passe i18n ultra-safe réalisée: retrait de 10 clés de traduction orphelines (database_label, settings.cancel, solver.run.batch, astrometry submit/polling/job status) avec validation compile OK; les clés restantes à faible fréquence sont toutes utilisées via patterns dynamiques.
+
+- Amélioration UX GUI validée: rétablissement des updates progressives en local via callback `on_result` (émission au fil de l’eau), ajout d’un lissage temps réel de la progress bar (timer 400ms), et copie automatique du log de run dans le dossier de sortie.
+
+- Ajustement logique backend GUI: local devient le défaut effectif, et le pipeline local applique désormais un fallback en 3 étages (ZeNear, puis ZeBlind, puis Astrometry uniquement si clé API disponible), avec progression GUI sans double comptage des fichiers.

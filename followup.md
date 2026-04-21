@@ -884,3 +884,17 @@ Il est désormais **partiellement exécuté** avec un état code mesurable.
 - Nettoyage i18n (ultra-safe): suppression de 10 clés FR/EN réellement orphelines (`database_label`, `settings.cancel`, `solver.run.batch`, et 7 clés `astrometry.submit/job/polling` non référencées).
 
 - Vérification post-nettoyage: compile OK et audit des clés restantes à faible fréquence, il ne reste que des clés utilisées via construction dynamique (`status_*`, `language_action_*`, `benchmark_dialog_filter_*`, `settings_*_option_*`).
+
+- UX GUI (temps réel): le backend local envoie désormais les résultats au fil de l’eau au GUI (`BatchSolver.run(..., on_result=...)` + `SolveRunner` callback), ce qui réactive la progression progressive de la liste des fichiers traités.
+
+- UX GUI (progress bar): ajout d’un timer de lissage (`_on_progress_tick`, 400 ms) pour afficher une progression intermédiaire pendant le traitement d’un fichier (progress bar en base 100 pas/fichier).
+
+- Journalisation sortie: ajout d’une copie automatique du log runtime en fin de run dans le dossier de traitement (`zesolver_run_YYYYmmdd_HHMMSS.log`).
+
+- Backend GUI: forçage du backend par défaut sur `local` (ZeNear flow) au chargement UI, sans réutiliser automatiquement la valeur persistée `astrometry`.
+
+- Chaîne fallback locale implémentée dans `BatchSolver.run`: ZeNear → ZeBlind → Astrometry (dernier recours) si et seulement si une clé API Astrometry est présente.
+
+- Émission GUI conservée sans doublons de comptage: en cas de fallback Astrometry, les échecs intermédiaires sont retenus puis remplacés par le résultat final (évite de dépasser le compteur de fichiers).
+
+- Libellés UI mis à jour pour refléter la nouvelle logique (`Local (ZeNear → ZeBlind → Astrometry*)`).
