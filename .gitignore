@@ -14,4 +14,11 @@ ASTAP-main/
 dataset_set/
 testrunlog/
 *.swp
+astrometry-net-main/
 
+
+# Local work / benchmark artifacts (not for end users)
+reports/
+test/
+tools/
+tests/

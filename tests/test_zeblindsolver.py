@@ -6,9 +6,11 @@ from pathlib import Path
 import numpy as np
 import pytest
 from astropy.io import fits
+from astropy.wcs import WCS
 
 from zesolver import zeblindsolver
 from zeblindsolver import zeblindsolver as core_solver
+from zeblindsolver import metadata_solver as near_solver
 from zeblindsolver.image_io import load_raster_image
 from zeblindsolver.image_prep import downsample_image
 from zeblindsolver.quad_index_builder import select_tiles_in_cone
@@ -30,12 +32,11 @@ def _populate_valid_wcs(header: fits.Header) -> None:
     header["RADESYS"] = "ICRS"
 
 
-def test_has_valid_wcs_rejects_cdelt1_1deg() -> None:
+def test_has_valid_wcs_accepts_cd_matrix_even_with_cdelt_cards() -> None:
     header = fits.Header()
     _populate_valid_wcs(header)
     header["CDELT1"] = 1.0
-    assert not zeblindsolver.has_valid_wcs(header)
-    del header["CDELT1"]
+    header["CDELT2"] = 1.0
     assert zeblindsolver.has_valid_wcs(header)
 
 
@@ -85,6 +86,7 @@ def test_blind_solve_delegates_to_internal(monkeypatch, tmp_path) -> None:
             message="ok",
             tile_key="tile42",
             header_updates={"SOLVED": 1},
+            stats={},
         )
 
     monkeypatch.setattr(zeblindsolver, "_internal_solve_blind", fake_internal)
@@ -174,3 +176,48 @@ def test_detection_params_forwarded(monkeypatch, tmp_path):
         core_solver.solve_blind(str(fits_path), str(tmp_path), config=cfg)
     assert recorded["k_sigma"] == pytest.approx(1.7)
     assert recorded["min_area"] == 7
+
+
+def _build_simple_tan_wcs(*, crval1: float, crval2: float, scale_arcsec: float = 2.37) -> WCS:
+    w = WCS(naxis=2)
+    w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    w.wcs.crval = [float(crval1), float(crval2)]
+    w.wcs.crpix = [540.5, 960.5]
+    sdeg = float(scale_arcsec) / 3600.0
+    w.wcs.cd = np.array([[-sdeg, 0.0], [0.0, sdeg]], dtype=float)
+    w.wcs.radesys = "ICRS"
+    return w
+
+
+def test_near_conformance_rejects_large_center_offset() -> None:
+    w = _build_simple_tan_wcs(crval1=260.0, crval2=-10.0)
+    ok, reason, diag = near_solver._near_conformance_check(
+        w,
+        width=1080,
+        height=1920,
+        ra_hint_deg=184.9,
+        dec_hint_deg=47.3,
+        search_radius_deg=2.0,
+        approx_fov_deg=1.2,
+        approx_scale_arcsec=2.37,
+    )
+    assert not ok
+    assert "center_offset_too_large" in reason
+    assert isinstance(diag, dict)
+
+
+def test_near_conformance_accepts_consistent_solution() -> None:
+    w = _build_simple_tan_wcs(crval1=184.62, crval2=47.30)
+    ok, reason, diag = near_solver._near_conformance_check(
+        w,
+        width=1080,
+        height=1920,
+        ra_hint_deg=184.9,
+        dec_hint_deg=47.3,
+        search_radius_deg=2.0,
+        approx_fov_deg=1.2,
+        approx_scale_arcsec=2.37,
+    )
+    assert ok
+    assert reason == "ok"
+    assert isinstance(diag, dict)

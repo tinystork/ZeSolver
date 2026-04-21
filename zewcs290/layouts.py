@@ -41,9 +41,11 @@ class LayoutDefinition:
         if not self.rings:
             raise ValueError(f"layout {self.name} has no rings defined")
         mapping: Dict[int, RingDef] = {}
-        for idx, ring in enumerate(self.rings):
+        for idx, ring in enumerate(self.rings, start=1):
             try:
-                start = int(ring.ring_label.split("-", 1)[0])
+                # Ring labels are typically "0-1", "1-2", ... while catalog
+                # tile codes are 1-based (0101 = first ring). Shift by +1.
+                start = int(ring.ring_label.split("-", 1)[0]) + 1
             except (ValueError, IndexError):
                 start = idx
             mapping[start] = ring

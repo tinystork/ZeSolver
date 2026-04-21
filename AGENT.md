@@ -184,3 +184,141 @@ The primary bottleneck is now end-to-end throughput for the 10k+ images objectiv
 - Do not trade away solve stability for raw speed.
 - Keep deterministic behavior auditable (seeded RANSAC paths).
 - Measure before/after every tuning step on the same dataset slice.
+
+
+## Audit précis ASTAP-main (2026-04-14)
+
+### 1) État des lieux du code source ASTAP utilisé pour la résolution
+
+Fichiers cœur (lus et tracés):
+
+- `ASTAP-main/unit_astrometric_solving.pas`
+  - `solve_image(...)` (ligne ~746): orchestration complète de la résolution.
+  - `bin_and_find_stars(...)` (ligne ~473): binning/crop + fond + détection étoiles.
+  - `read_stars(...)` (ligne ~238): lecture catalogue autour d’un centre RA/Dec.
+- `ASTAP-main/unit_star_align.pas`
+  - `find_quads(...)` (ligne ~505), `find_many_quads(...)` (ligne ~228): génération des quads.
+  - `find_fit(...)` (ligne ~972), `find_fit_using_hash(...)` (ligne ~1083): matching quads.
+  - `find_offset_and_rotation(...)` (ligne ~1651): choix brute-force/hash + fit affine LSQ.
+- `ASTAP-main/command-line_version/unit_command_line_solving.pas`
+  - version CLI avec la même logique de base (constantes/formules cohérentes avec les deux unités ci-dessus).
+
+### 2) Méthode ASTAP de résolution (factuelle, avec constantes)
+
+1. **Initialisation FOV / base de données**
+   - `max_fov := 5.142857143` pour DB `.1476` (unit_astrometric_solving.pas:821).
+   - `max_fov := 9.53` pour DB `.290` (ligne 824).
+   - Auto-FOV:
+     - départ à `9.5°` (ou `90°` pour wide DB), puis division par `1.5` à chaque boucle (`fov_org := fov_org / 1.5`, lignes 847, 857).
+     - borne basse `fov_min := 0.38` (ou `12` en wide, ligne 848).
+
+2. **Détection étoiles image**
+   - Binning auto: `Result := max(Result, round(1.5 / arcsec_per_px))` (ligne 563).
+   - `hfd_min := max(0.8, min_star_size_arcsec / (binning * arcsec_per_px))` (dans `solve_image`).
+   - Pipeline concret: `get_background(...)` puis `find_stars(...)` (lignes 500-501, 545).
+
+3. **Génération quads image**
+   - Si `nrstars_image < 30` -> `find_many_quads(..., mode=6)` (unit_star_align.pas:525-527).
+   - Si `< 60` -> `mode=5` (lignes 531-533).
+   - Sinon `find_quads` standard.
+   - `minimum_quads := 3 + nrstars_image div 140` (unit_astrometric_solving.pas:968).
+
+4. **Balayage du ciel (spirale carrée)**
+   - `STEP_SIZE := search_field` (ligne 983), donc pas = FOV courant.
+   - `max_distance := round(radius / (fov2 + 0.00001))` (ligne 991) en DB standard.
+   - Filtre géométrique: séparation angulaire `<= radius + step_size/2` (ligne 1055).
+
+5. **Lecture catalogue à chaque centre testé**
+   - `read_stars(...)` fait un split sur 1..4 zones via `find_areas(...)` (ligne 254).
+   - Quotas par zone proportionnels `frac1..frac4` (ex. ligne 260).
+
+6. **Matching quads et fit**
+   - `find_offset_and_rotation(...)`:
+     - si `nrquads < 180` -> `find_fit` brute force (unit_star_align.pas:1664-1666),
+     - sinon `find_fit_using_hash` (ligne 1674).
+   - `find_fit`: test de 5 ratios normalisés (indices 1..5) sous `quad_tolerance` (ligne 994).
+   - Filtrage ratio médian:
+     - `median_ratio := smedian(...)` (ligne 1034),
+     - garde si `abs(median_ratio-ratio)<=quad_tolerance*median_ratio` (ligne 1046).
+   - Fit affine LSQ sur centres de quads (`A_XYpositions`, `b_Xrefpositions`, `b_Yrefpositions`).
+   - Garde-fou final: `xy_sqr_ratio` doit rester dans `[0.9, 1.1]` (lignes 1692-1693).
+
+7. **Double passe précision**
+   - boucle `match_nr` jusqu’à `match_nr >= 2` (unit_astrometric_solving.pas:1218),
+   - 2e passe avec recadrage sur la solution 1 pour améliorer la précision.
+
+8. **Écriture WCS + SIP**
+   - WCS TAN via `CRPIX/CRVAL/CD/CROTA`.
+   - SIP seulement si activé et assez de correspondances (`if len < 20 then` abandon SIP, lignes 625-627; appel ligne 1298).
+
+### 3) Comparaison précise avec notre ZeSolver actuel
+
+Référence code ZeSolver: `zeblindsolver/metadata_solver.py`.
+
+1. **Entrée et préfiltrage spatial**
+   - **ZeSolver**: échec immédiat si RA/DEC absents (`metadata RA/DEC missing`, lignes 1533-1534).
+   - **ASTAP**: pas de garde équivalente dans `solve_image`; il travaille avec la position de départ courante.
+   - **ZeSolver**: préfiltrage manifeste tuiles (`_select_tiles`, lignes 220, 1563) avec cap `max_tile_candidates=48` (ligne 71).
+   - **ASTAP**: lecture DB directement au fil de la spirale, sans manifeste indexé intermédiaire.
+
+2. **Détection étoiles**
+   - **ZeSolver**: `detect_stars` NumPy/SciPy/CUDA (ou ASTAP extract optionnel), seuils `k_sigma/min_area/max_labels` (NearSolveConfig lignes 87-89).
+   - **ASTAP**: `get_background + find_stars` avec logique HFD/SNR interne Pascal.
+
+3. **Noyau quads**
+   - **ZeSolver**: port ISO ASTAP (`_astap_iso_find_quads`, `_astap_iso_find_fit_using_hash`) avec sweep tolérances `0.007..0.060` (ligne 1092).
+   - **ASTAP**: matching quads + LSQ via `find_fit` / `find_fit_using_hash`.
+   - Point important: le comportement mode-6 de la source ASTAP actuelle est atypique (combinaisons dupliquées et 4e index non exploité dans ce bloc: `x4 := ... quad_indices[2]`, unit_star_align.pas:409). Le port Python reproduit volontairement ce comportement (`combos6`, lignes 756+).
+
+4. **Chemins supplémentaires non-ASTAP**
+   - **ZeSolver** ajoute des couches absentes d’ASTAP:
+     - `_build_candidate_pairs` (ligne 1339),
+     - hypothèse quad additionnelle `_find_quad_hypothesis` (ligne 584),
+     - RANSAC global `estimate_similarity_RANSAC(...)` (lignes 2230, 2271).
+   - **ASTAP** n’utilise pas ce mix pair-votes + RANSAC dans ce flux near.
+
+5. **Gates d’acceptation solution**
+   - **ZeSolver** applique 3 niveaux de rejet:
+     1) `validate_solution` RMS/inliers (lignes 2403+),
+     2) `validate_wcs_for_zemosaic` (ligne 2471),
+     3) `_near_conformance_check` (ligne 1435, appelé après).
+   - **ASTAP**: après fit géométrique valide, écrit WCS; il log des warnings d’échelle mais n’empile pas ces mêmes gates.
+
+6. **Profil actuel des écarts qui comptent pour la parité**
+   - Nous ne sommes pas en “ASTAP pur”: notre flux ajoute des branches de matching (pairs/RANSAC) et des critères de rejet supplémentaires.
+   - Notre near est plus contraint en post-validation, ce qui peut transformer des hypothèses “acceptables ASTAP” en échecs ZeSolver.
+   - Le préfiltrage par manifeste + fenêtre locale peut changer le set d’étoiles comparé au `read_stars` ASTAP en spirale.
+
+### 4) Conclusion opérationnelle (non conceptuelle)
+
+Pour comparer à iso-comportement ASTAP, il faut exécuter un mode diagnostic qui:
+
+1. garde uniquement la chaîne `ASTAP-ISO quads -> find_fit_using_hash -> LSQ`,
+2. désactive les branches `candidate_pairs/quad_hypothesis/RANSAC`,
+3. désactive temporairement les gates additionnels non-ASTAP (`zemosaic` + `near_conformance`).
+
+Sinon, on compare ASTAP à un pipeline différent, et le diagnostic reste mécaniquement biaisé.
+
+
+## Current Focus (2026-04-21, post-parity strict)
+
+### Mission ASTAP-gap: statut
+- La mission "écart ZeNear vs ASTAP" est considérée **accomplie pour le scope actuel** (mode strict ASTAP-ISO).
+- Validation side-by-side exécutée ASTAP CLI vs ZeNear strict sur lot NGC6888 co-résolu:
+  - séparation centre médiane ~3.14",
+  - écart scale médian ~0.0034%,
+  - écart rotation médian ~0.291°.
+- Test mixte opérationnel préparé pour ZeMosaic sur M106 (50% ASTAP / 50% ZeNear) dans:
+  - `/home/tristan/zemosaic/example/testzenear/`.
+
+### Criticité restante (ZeSolver)
+- **Aucun P0 bloquant immédiat** identifié sur la parité stricte ASTAP pour ce scope.
+- Backlog technique (P1):
+  1. benchmark C (ASTAP CLI) multi-champs complet, pour clôture statistique large,
+  2. stratégie non-strict en mode rescue (profils safe/balanced/aggressive).
+
+### Nouveau cap prioritaire (P0 produit)
+- Passer en mode **scale-up/throughput** pour lots massifs (1k -> 10k images):
+  1. stabilité long run (aucun faux échec de fin de run),
+  2. saturation CPU/GPU contrôlée et reproductible,
+  3. instrumentation débit/latence/mémoire robuste pour tuning itératif.

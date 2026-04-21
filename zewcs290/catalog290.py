@@ -525,7 +525,9 @@ def _parse_catalog_file(path: Path, spec: CatalogFamilySpec) -> Tuple[np.ndarray
     dec9_bytes = header_rows[:, 3]
     mag_bytes = header_rows[:, 4].astype(np.int16)
     magnitudes = (mag_bytes - 16) / 10.0
-    dec9 = dec9_bytes[owner]
+    # ASTAP/HNSKY 1476 header stores DEC9 as unsigned byte with +128 offset.
+    # Convert back to signed first (dec9_storage := dec7 - 128 in ASTAP source).
+    dec9 = dec9_bytes[owner].astype(np.int32) - 128
     mags = magnitudes[owner].astype(np.float32)
 
     ra = star_rows[:, 0].astype(np.uint32) | (star_rows[:, 1].astype(np.uint32) << 8) | (
@@ -536,12 +538,8 @@ def _parse_catalog_file(path: Path, spec: CatalogFamilySpec) -> Tuple[np.ndarray
     dec = (
         star_rows[:, 3].astype(np.int32)
         | (star_rows[:, 4].astype(np.int32) << 8)
-        | (dec9.astype(np.int32) << 16)
+        | (dec9 << 16)
     )
-    negative = dec9 >= 128
-    if negative.any():
-        dec = dec.astype(np.int64)
-        dec[negative] -= 1 << 24
     dec_deg = dec.astype(np.float64) * DEC_SCALE
 
     bp_rp = np.full(star_rows.shape[0], np.nan, dtype=np.float32)

@@ -65,6 +65,8 @@ def estimate_similarity_RANSAC(
     min_inliers: int = 3,
     allow_reflection: bool = False,
     early_stop_inliers: int = 0,
+    min_scale: float | None = None,
+    max_scale: float | None = None,
     random_state: int | np.random.Generator | None = None,
 ) -> tuple[SimilarityTransform, SimilarityStats] | None:
     if len(image_points) < 2 or len(catalog_points) < 2:
@@ -95,6 +97,10 @@ def estimate_similarity_RANSAC(
             predictions = rot_scale * src_c + translation
             err_deg = np.abs(predictions - dst_c)
             scale = abs(rot_scale)
+            if min_scale is not None and scale < float(min_scale):
+                continue
+            if max_scale is not None and scale > float(max_scale):
+                continue
             err_px = err_deg / max(scale, 1e-8)
             mask = err_px <= tol_px
             score = int(mask.sum())
