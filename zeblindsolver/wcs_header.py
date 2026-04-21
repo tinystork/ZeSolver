@@ -116,3 +116,45 @@ def apply_wcs_solution_to_header(
         for key, value in header_updates.items():
             if value is not None:
                 header[key] = value
+
+
+def validate_wcs_for_zemosaic(
+    wcs_obj: WCS,
+    *,
+    scale_min_arcsec: float = 0.3,
+    scale_max_arcsec: float = 15.0,
+) -> tuple[bool, str, float | None]:
+    """Check whether *wcs_obj* matches ZeMosaic acceptance constraints."""
+
+    if wcs_obj is None:
+        return False, "missing_wcs", None
+    if not bool(getattr(wcs_obj, "is_celestial", False)):
+        return False, "wcs_not_celestial", None
+
+    cd = _extract_cd_matrix(wcs_obj)
+    if cd is None:
+        return False, "missing_cd_matrix", None
+    if not np.all(np.isfinite(cd)):
+        return False, "nonfinite_cd_matrix", None
+
+    try:
+        det = float(np.linalg.det(cd))
+    except Exception as exc:
+        return False, f"cd_determinant_failure:{exc}", None
+
+    if not np.isfinite(det):
+        return False, "nonfinite_cd_determinant", None
+    if abs(det) < 1e-16:
+        return False, "singular_cd_matrix", None
+
+    scales_deg = np.sqrt(np.sum(cd[:2, :2] ** 2, axis=0))
+    scales_arcsec = np.abs(scales_deg) * 3600.0
+    finite_scales = scales_arcsec[np.isfinite(scales_arcsec)]
+    if finite_scales.size == 0:
+        return False, "pixel_scale_missing", None
+    min_scale = float(np.nanmin(finite_scales))
+    max_scale = float(np.nanmax(finite_scales))
+    if min_scale < float(scale_min_arcsec) or max_scale > float(scale_max_arcsec):
+        return False, f"pixel_scale_out_of_range[{min_scale:.3f},{max_scale:.3f}]", float(np.nanmean(finite_scales))
+
+    return True, "ok", float(np.nanmean(finite_scales))

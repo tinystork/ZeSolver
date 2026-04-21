@@ -58,9 +58,9 @@ class PersistentSettings:
     near_tile_cache_size: int = 128
     near_detect_backend: str = "auto"  # auto|cpu|cuda
     near_detect_device: int = 0
-    near_detect_k_sigma: float = 4.0
+    near_detect_k_sigma: float = 4.5
     near_detect_min_area: int = 8
-    near_detect_max_labels: int = 2500
+    near_detect_max_labels: int = 1200
     near_detect_gpu_slots: int = 1
     io_concurrency: int = 0
     near_warm_start: bool = True
@@ -75,6 +75,7 @@ class PersistentSettings:
     near_max_cat_stars: int = 2000
     near_try_parity_flip: bool = True
     near_search_margin: float = 1.2
+    near_astap_iso_strict: bool = False
     dev_bucket_limit_override: int = 0
     dev_vote_percentile: int = 40
     dev_detect_k_sigma: float = 3.0
@@ -218,9 +219,9 @@ def load_persistent_settings() -> PersistentSettings:
         near_tile_cache_size=int(payload.get("near_tile_cache_size", 128)),
         near_detect_backend=str(payload.get("near_detect_backend", "auto")),
         near_detect_device=int(payload.get("near_detect_device", 0)),
-        near_detect_k_sigma=float(payload.get("near_detect_k_sigma", 4.0)),
+        near_detect_k_sigma=float(payload.get("near_detect_k_sigma", 4.5)),
         near_detect_min_area=int(payload.get("near_detect_min_area", 8)),
-        near_detect_max_labels=int(payload.get("near_detect_max_labels", 2500)),
+        near_detect_max_labels=int(payload.get("near_detect_max_labels", 1200)),
         near_detect_gpu_slots=max(1, int(payload.get("near_detect_gpu_slots", 1) or 1)),
         io_concurrency=int(payload.get("io_concurrency", 0)),
         near_warm_start=bool(payload.get("near_warm_start", True)),
@@ -233,6 +234,7 @@ def load_persistent_settings() -> PersistentSettings:
         near_max_cat_stars=int(payload.get("near_max_cat_stars", 2000)),
         near_try_parity_flip=bool(payload.get("near_try_parity_flip", True)),
         near_search_margin=float(payload.get("near_search_margin", 1.2)),
+        near_astap_iso_strict=bool(payload.get("near_astap_iso_strict", False)),
         dev_bucket_limit_override=int(payload.get("dev_bucket_limit_override", 0)),
         dev_vote_percentile=int(payload.get("dev_vote_percentile", 40)),
         dev_detect_k_sigma=float(payload.get("dev_detect_k_sigma", 3.0)),

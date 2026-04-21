@@ -29,7 +29,7 @@ from .levels import LEVEL_MAP, QuadLevelSpec, set_bucket_cap_overrides
 from .star_detect import detect_stars
 from .verify import validate_solution
 from .wcs_fit import fit_wcs_sip, fit_wcs_tan, needs_sip, tan_from_similarity
-from .wcs_header import apply_wcs_solution_to_header
+from .wcs_header import apply_wcs_solution_to_header, validate_wcs_for_zemosaic
 
 try:
     from importlib.metadata import PackageNotFoundError, version as pkg_version
@@ -1058,7 +1058,7 @@ def solve_blind(
             n_pairs = int(matches_array.shape[0])
             adaptive_inliers = min(
                 int(config.quality_inliers),
-                max(2, int(0.4 * max(0, n_pairs))),
+                max(4, int(0.4 * max(0, n_pairs))),
             )
             th_local = {"rms_px": float(config.quality_rms), "inliers": adaptive_inliers}
             stats = validate_solution(wcs, matches_array, th_local)
@@ -1115,12 +1115,25 @@ def solve_blind(
                     int(matches_array.shape[0]),
                 )
                 continue
+
+            zemo_ok, zemo_reason, pix_scale_arcsec = validate_wcs_for_zemosaic(final_wcs)
+            if not zemo_ok:
+                logger.info(
+                    "zemosaic-compat failed: tile=%s level=%s parity=%s reason=%s",
+                    candidate_key,
+                    level_name,
+                    parity_label,
+                    zemo_reason,
+                )
+                continue
+
             header_updates = {
                 "SOLVED": 1,
                 "DBSET": tile_entry.get("family"),
                 "TILE_ID": tile_entry.get("tile_key"),
                 "RMSPX": stats["rms_px"],
                 "INLIERS": stats["inliers"],
+                "PIXSCAL": pix_scale_arcsec,
                 "SIPORD": sip_used,
                 "QUALITY": stats["quality"],
                 "USED_DB": tile_entry.get("family"),

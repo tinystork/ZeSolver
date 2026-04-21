@@ -96,7 +96,10 @@ def parse_angle(value: object, *, is_ra: bool) -> Optional[float]:
     if value is None:
         return None
     if isinstance(value, (int, float, np.floating)):
-        return float(value)
+        val = float(value)
+        if is_ra and math.isfinite(val) and abs(val) <= 24.0:
+            return val * 15.0
+        return val
     text = str(value).strip()
     if not text:
         return None
