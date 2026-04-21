@@ -267,6 +267,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "runner_start": "Démarrage: {files} fichier(s), {workers} thread(s).",
         "runner_stop_wait": "Arrêt demandé, attente de la fin des tâches…",
         "status_waiting": "en attente",
+        "status_wcs": "WCS présent",
         "status_solved": "résolu",
         "status_failed": "échec",
         "status_skipped": "ignoré",
@@ -467,6 +468,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "runner_start": "Starting: {files} file(s), {workers} thread(s).",
         "runner_stop_wait": "Stop requested, waiting for tasks…",
         "status_waiting": "waiting",
+        "status_wcs": "WCS present",
         "status_solved": "solved",
         "status_failed": "failed",
         "status_skipped": "skipped",
@@ -1350,6 +1352,32 @@ def _header_has_wcs(header: fits.Header) -> bool:
 def _fits_requires_memmap_off(header: fits.Header) -> bool:
     """Astropy cannot memmap scaled data (BZERO/BSCALE/BLANK)."""
     return any(key in header for key in FITS_MEMMAP_FORBIDDEN_KEYS)
+
+
+def _quick_scan_initial_status(path: Path) -> tuple[str, str]:
+    """Best-effort pre-scan status for the file list (WCS present vs waiting)."""
+    suffix = path.suffix.lower()
+    if suffix in FITS_EXTENSIONS:
+        try:
+            header = fits.getheader(path, ext=0)
+            if _header_has_wcs(header):
+                return "wcs", ""
+        except Exception as exc:
+            return "failed", f"scan error: {exc}"
+        return "waiting", ""
+
+    if suffix in RASTER_EXTENSIONS:
+        sidecar = path.with_suffix(path.suffix + SIDE_CAR_SUFFIX)
+        if sidecar.is_file():
+            try:
+                payload = json.loads(sidecar.read_text(errors='ignore'))
+                if isinstance(payload, dict) and all(k in payload for k in ("crpix", "crval", "cd")):
+                    return "wcs", ""
+            except Exception:
+                pass
+        return "waiting", ""
+
+    return "waiting", ""
 
 
 def _sexagesimal_to_deg(value: str, is_ra: bool) -> Optional[float]:
@@ -3855,7 +3883,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.finished.emit()
 
     class FileScanner(QtCore.QThread):
-        file_found = QtCore.Signal(str)
+        file_found = QtCore.Signal(str, str, str)
         finished = QtCore.Signal(int)
 
         def __init__(self, root: Path, exts: list[str], limit: Optional[int]) -> None:
@@ -3875,9 +3903,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                     if self._cancel.is_set():
                         break
                     try:
-                        self.file_found.emit(str(path))
+                        status, detail = _quick_scan_initial_status(path)
+                        self.file_found.emit(str(path), status, detail)
                     except Exception:
-                        pass
+                        try:
+                            self.file_found.emit(str(path), "waiting", "")
+                        except Exception:
+                            pass
                     count += 1
                     if self._limit and count >= self._limit:
                         break
@@ -4409,7 +4441,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._near_worker: Optional[NearRunner] = None
             self._benchmark_worker: Optional[BenchmarkRunner] = None
             self._scanner: Optional[FileScanner] = None
-            self._scan_buffer: list[Path] = []
+            self._scan_buffer: list[tuple[Path, str, str]] = []
             self._scan_flush_threshold = 250
             self._log_level_actions: dict[str, QtGui.QAction] = {}
             self._db_family_scan_thread: Optional[DbFamilyScanner] = None
@@ -7831,11 +7863,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             # Give immediate feedback
             self._log(self._text("info_files_detected", count=0))
 
-        def _on_scan_file_found(self, path_text: str) -> None:
+        def _on_scan_file_found(self, path_text: str, status: str, detail: str) -> None:
             try:
                 p = Path(path_text).resolve()
+                status_norm = str(status or "waiting").strip().lower()
+                if status_norm not in {"waiting", "wcs", "failed", "solved", "skipped"}:
+                    status_norm = "waiting"
                 self._pending_files.append(p)
-                self._scan_buffer.append(p)
+                self._scan_buffer.append((p, status_norm, str(detail or "")))
             except Exception:
                 return
             # Flush in chunks to keep UI responsive
@@ -7856,11 +7891,21 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.files_view.setUpdatesEnabled(False)
             try:
                 entries: list[tuple[Path, QtWidgets.QTreeWidgetItem]] = []
-                for path in self._scan_buffer:
+                color_map = {
+                    "wcs": QtGui.QColor("#2b8a3e"),
+                    "failed": QtGui.QColor("#c92a2a"),
+                    "waiting": QtGui.QColor("#ffffff"),
+                }
+                for path, status, detail in self._scan_buffer:
+                    status_key = status if status in {"waiting", "wcs", "failed", "solved", "skipped"} else "waiting"
                     item = QtWidgets.QTreeWidgetItem(
-                        [self._format_path(path), self._status_label_for("waiting"), ""]
+                        [self._format_path(path), self._status_label_for(status_key), detail or ""]
                     )
-                    item.setData(1, QtCore.Qt.UserRole, "waiting")
+                    item.setData(1, QtCore.Qt.UserRole, status_key)
+                    color = color_map.get(status_key)
+                    if color is not None:
+                        for idx in range(3):
+                            item.setForeground(idx, color)
                     entries.append((path, item))
                 if entries:
                     self.files_view.addTopLevelItems([item for _, item in entries])
@@ -8223,6 +8268,18 @@ def launch_gui(args: argparse.Namespace) -> int:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
             self._results_seen = 0
+            try:
+                self._log(
+                    "Hints run: FOV={:.2f}° | radius={} | focal={}mm | pixel={}µm | scale={}\"/px".format(
+                        float(config.fov_deg),
+                        (f"{float(config.hint_radius_deg):.2f}°" if config.hint_radius_deg is not None else "auto"),
+                        (f"{float(config.hint_focal_mm):.1f}" if config.hint_focal_mm is not None else "auto"),
+                        (f"{float(config.hint_pixel_um):.2f}" if config.hint_pixel_um is not None else "auto"),
+                        (f"{float(config.hint_resolution_arcsec):.2f}" if config.hint_resolution_arcsec is not None else "auto"),
+                    )
+                )
+            except Exception:
+                pass
             target_total = len(self._pending_files)
             limit = self.max_files_spin.value()
             if limit > 0:
@@ -8349,15 +8406,19 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.files_view.addTopLevelItem(item)
                 resolved = self._store_item_path(item, result.path)
                 self._item_by_path[resolved] = item
-            item.setText(1, self._status_label_for(result.status))
-            item.setData(1, QtCore.Qt.UserRole, result.status)
+            status_key = result.status
+            if status_key == "skipped" and "WCS already present" in (result.message or ""):
+                status_key = "wcs"
+            item.setText(1, self._status_label_for(status_key))
+            item.setData(1, QtCore.Qt.UserRole, status_key)
             item.setText(2, result.message or "")
             color_map = {
                 "solved": QtGui.QColor("#2b8a3e"),
+                "wcs": QtGui.QColor("#2b8a3e"),
                 "failed": QtGui.QColor("#c92a2a"),
                 "skipped": QtGui.QColor("#5f3dc4"),
             }
-            color = color_map.get(result.status)
+            color = color_map.get(status_key)
             if color:
                 for idx in range(3):
                     item.setForeground(idx, color)
