@@ -2666,6 +2666,7 @@ class ImageSolver:
                 logging.info("Blind config: %s", json.dumps(log_cfg, ensure_ascii=False))
             except Exception:
                 pass
+            blind_prep_cache: dict[str, Any] = {}
             result = blind_solve(
                 fits_path=str(path),
                 index_root=str(index_root),
@@ -2673,6 +2674,7 @@ class ImageSolver:
                 log=logging.info,
                 skip_if_valid=skip_if_valid,
                 cancel_check=(self._cancelled if self._cancel_event else None),
+                prep_cache=blind_prep_cache,
             )
             # Blind rescue loop for extremely low-support failures (best inliers <= 1)
             # Keeps retries bounded and only activates on clearly weak blind attempts.
@@ -2687,8 +2689,38 @@ class ImageSolver:
                 best_inliers = int(stats.get("inliers", -1) or -1)
                 if best_inliers > 1:
                     break
+                if rescue_idx >= 2 and isinstance(stats, Mapping) and (
+                    "best_fail_inliers" in stats or "fail_validation_count" in stats
+                ):
+                    fail_best_inliers = int(stats.get("best_fail_inliers", -1) or -1)
+                    fail_validation_count = int(stats.get("fail_validation_count", 0) or 0)
+                    prev_elapsed = float(result.get("elapsed_sec", 0.0) or 0.0)
+                    low_potential = (
+                        fail_validation_count > 0
+                        and fail_best_inliers >= 0
+                        and fail_best_inliers < 4
+                        and fail_validation_count < 6
+                    )
+                    if low_potential:
+                        logging.info(
+                            "[ZEBLIND] skipping blind_rescue_attempt=%d for %s (low potential: best_fail_inliers=%d fail_validations=%d prev_elapsed=%.1fs)",
+                            rescue_idx,
+                            path.name,
+                            fail_best_inliers,
+                            fail_validation_count,
+                            prev_elapsed,
+                        )
+                        break
                 if self._cancelled():
                     break
+                try:
+                    if isinstance(blind_prep_cache, dict):
+                        remaining = rescue_plans[rescue_idx - 1 :]
+                        target_max_quads = max(int(x.get("max_quads", 0) or 0) for x in remaining)
+                        if target_max_quads > 0:
+                            blind_prep_cache["__target_max_quads__"] = int(target_max_quads)
+                except Exception:
+                    pass
                 rescue_cfg = replace(
                     blind_cfg,
                     max_candidates=max(int(blind_cfg.max_candidates), int(plan["max_candidates"])),
@@ -2718,6 +2750,7 @@ class ImageSolver:
                     log=logging.info,
                     skip_if_valid=skip_if_valid,
                     cancel_check=(self._cancelled if self._cancel_event else None),
+                    prep_cache=blind_prep_cache,
                 )
                 if result.get("success"):
                     logging.info("[ZEBLIND] blind_rescue_attempt=%d succeeded for %s", rescue_idx, path.name)

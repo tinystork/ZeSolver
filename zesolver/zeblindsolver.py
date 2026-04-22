@@ -179,6 +179,7 @@ def blind_solve(
     log: Optional[Callable[[str], None]] = None,
     skip_if_valid: bool = True,
     cancel_check: Optional[Callable[[], bool]] = None,
+    prep_cache: Optional[dict[str, Any]] = None,
 ) -> BlindSolveResult:
     logger = log or _default_log
     start = time.perf_counter()
@@ -208,7 +209,13 @@ def blind_solve(
     try:
         if cancel_check and cancel_check():
             raise BlindSolverRuntimeError("cancelled")
-        solution = _internal_solve_blind(fits_path, index_root, config=config, cancel_check=cancel_check)
+        solution = _internal_solve_blind(
+            fits_path,
+            index_root,
+            config=config,
+            cancel_check=cancel_check,
+            prep_cache=prep_cache,
+        )
     except InvalidInputError:
         raise
     except Exception as exc:

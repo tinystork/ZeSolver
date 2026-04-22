@@ -17,6 +17,7 @@ MIN_AREA = 1e-7
 class QuadHash:
     indices: np.ndarray  # shape (n, 4)
     hashes: np.ndarray  # dtype=uint64
+    source_indices: np.ndarray | None = None  # shape (n,), index in input quads
 
 
 def _quad_area(points: np.ndarray) -> float:
@@ -285,11 +286,18 @@ def sample_quads(stars: np.ndarray, max_quads: int, strategy: str = "log_spaced"
     return _dedup_quads_preserve_order(pairwise, max_quads)
 
 
-def hash_quads(quads: np.ndarray, positions: np.ndarray, *, spec: QuadLevelSpec | None = None) -> QuadHash:
+def hash_quads(
+    quads: np.ndarray,
+    positions: np.ndarray,
+    *,
+    spec: QuadLevelSpec | None = None,
+    return_source_indices: bool = False,
+) -> QuadHash:
     """Hash the provided quads using the 3-ratio encoding and parity bit."""
     valid = []
     hashes = []
-    for combo in quads:
+    source_idx: list[int] | None = [] if return_source_indices else None
+    for idx, combo in enumerate(quads):
         if len(set(combo)) < 4:
             continue
         ordered = _canonical_quad_order(combo, positions)
@@ -299,6 +307,16 @@ def hash_quads(quads: np.ndarray, positions: np.ndarray, *, spec: QuadLevelSpec 
         hash_value, canonical = result
         valid.append(canonical)
         hashes.append(hash_value)
+        if source_idx is not None:
+            source_idx.append(int(idx))
     if not hashes:
-        return QuadHash(np.zeros((0, 4), dtype=np.uint16), np.zeros(0, dtype=np.uint64))
-    return QuadHash(np.stack(valid), np.array(hashes, dtype=np.uint64))
+        return QuadHash(
+            np.zeros((0, 4), dtype=np.uint16),
+            np.zeros(0, dtype=np.uint64),
+            np.zeros(0, dtype=np.int32) if return_source_indices else None,
+        )
+    return QuadHash(
+        np.stack(valid),
+        np.array(hashes, dtype=np.uint64),
+        (np.array(source_idx, dtype=np.int32) if source_idx is not None else None),
+    )
