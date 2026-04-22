@@ -493,6 +493,7 @@ def solve_blind(
     *,
     config: SolveConfig | None = None,
     cancel_check: Optional[Callable[[], bool]] = None,
+    prep_cache: dict[str, Any] | None = None,
 ) -> WcsSolution:
     config = config or SolveConfig()
     _configure_tile_cache(getattr(config, "tile_cache_size", _TILE_CACHE_DEFAULT_CAPACITY))
@@ -697,37 +698,96 @@ def solve_blind(
                 tile_count,
                 float(expanded_radius or 0.0),
             )
-    _log_phase("read image", stage)
-    stage = time.time()
-    # Use a smaller median kernel for speed on typical Seestar frames
-    kernel = max(5, int(round(15 / downsample_factor)))
-    try:
-        work_image = remove_background(work_image, kernel_size=kernel)
-    except TypeError:
-        # Test/mocked call-sites may provide a simplified signature.
-        work_image = remove_background(work_image)
-    pyramid = build_pyramid(work_image)
-    _log_phase("preprocess", stage)
-    detection = pyramid[-1]
-    stage = time.time()
-    min_fwhm = max(1.0, 1.5 / downsample_factor)
-    max_fwhm = max(2.5, 8.0 / downsample_factor)
     detect_k_sigma = max(0.5, float(getattr(config, "detect_k_sigma", 3.0)))
     detect_min_area = max(1, int(getattr(config, "detect_min_area", 5)))
-    stars = detect_stars(
-        detection,
-        min_fwhm_px=min_fwhm,
-        max_fwhm_px=max_fwhm,
-        k_sigma=detect_k_sigma,
-        min_area=detect_min_area,
-    )
-    if stars.size == 0:
-        return _finish(WcsSolution(False, "no stars found", None, {}, None, {}))
-    if config.max_stars and stars.size > config.max_stars:
-        stars = stars[: config.max_stars]
-    if downsample_factor > 1:
-        stars["x"] *= downsample_factor
-        stars["y"] *= downsample_factor
+    cache_key: str | None = None
+    cache_sig: tuple[int, int] | None = None
+    cached_stars: np.ndarray | None = None
+    cache_entry: dict[str, Any] | None = None
+    if prep_cache is not None:
+        try:
+            resolved_source = source_path.resolve()
+        except Exception:
+            resolved_source = source_path
+        cache_key = str(resolved_source)
+        try:
+            stat = resolved_source.stat()
+            cache_sig = (int(getattr(stat, "st_mtime_ns", int(stat.st_mtime * 1e9))), int(stat.st_size))
+        except Exception:
+            cache_sig = None
+        entry = prep_cache.get(cache_key)
+        if isinstance(entry, dict):
+            try:
+                if (
+                    entry.get("sig") == cache_sig
+                    and int(entry.get("downsample", -1)) == int(downsample_factor)
+                    and float(entry.get("detect_k_sigma", -1.0)) == float(detect_k_sigma)
+                    and int(entry.get("detect_min_area", -1)) == int(detect_min_area)
+                ):
+                    cache_entry = entry
+                    stars_cached = entry.get("stars")
+                    if isinstance(stars_cached, np.ndarray) and stars_cached.size > 0:
+                        cached_stars = stars_cached
+                        logger.info("reusing blind star detections from prep cache (%d stars)", int(stars_cached.shape[0]))
+            except Exception:
+                cached_stars = None
+                cache_entry = None
+
+    _log_phase("read image", stage)
+    if cached_stars is None:
+        stage = time.time()
+        # Use a smaller median kernel for speed on typical Seestar frames
+        kernel = max(5, int(round(15 / downsample_factor)))
+        try:
+            work_image = remove_background(work_image, kernel_size=kernel)
+        except TypeError:
+            # Test/mocked call-sites may provide a simplified signature.
+            work_image = remove_background(work_image)
+        pyramid = build_pyramid(work_image)
+        _log_phase("preprocess", stage)
+        detection = pyramid[-1]
+        stage = time.time()
+        min_fwhm = max(1.0, 1.5 / downsample_factor)
+        max_fwhm = max(2.5, 8.0 / downsample_factor)
+        stars = detect_stars(
+            detection,
+            min_fwhm_px=min_fwhm,
+            max_fwhm_px=max_fwhm,
+            k_sigma=detect_k_sigma,
+            min_area=detect_min_area,
+        )
+        if stars.size == 0:
+            return _finish(WcsSolution(False, "no stars found", None, {}, None, {}))
+        if config.max_stars and stars.size > config.max_stars:
+            stars = stars[: config.max_stars]
+        if downsample_factor > 1:
+            stars["x"] *= downsample_factor
+            stars["y"] *= downsample_factor
+    else:
+        stage = time.time()
+        _log_phase("preprocess", stage)
+        stage = time.time()
+        stars = cached_stars
+        if config.max_stars and stars.size > config.max_stars:
+            stars = stars[: config.max_stars]
+
+    if prep_cache is not None and cache_key is not None:
+        if cache_entry is None:
+            cache_entry = {}
+        try:
+            cache_entry.update(
+                {
+                    "sig": cache_sig,
+                    "downsample": int(downsample_factor),
+                    "detect_k_sigma": float(detect_k_sigma),
+                    "detect_min_area": int(detect_min_area),
+                    "stars": stars.copy(),
+                }
+            )
+            prep_cache[cache_key] = cache_entry
+        except Exception:
+            pass
+
     logger.info(
         "detected %d stars (using top %d, downsample=%d)",
         stars.shape[0],
@@ -739,26 +799,161 @@ def solve_blind(
     obs_stars["x"] = stars["x"]
     obs_stars["y"] = stars["y"]
     obs_stars["mag"] = -stars["flux"]
+
     # Prefer local-neighborhood quads to improve geometric stability on TAN plane
     if cancel_check and cancel_check():
         return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
     quad_strategy = "sparse_triples" if stars.shape[0] <= 96 else "local_brightness"
-    quads = sample_quads(obs_stars, config.max_quads, strategy=quad_strategy)
-    logger.info("quad sampling strategy=%s produced %d quads", quad_strategy, int(quads.shape[0]))
+    requested_max_quads = max(1, int(config.max_quads))
+    target_max_quads = requested_max_quads
+    if prep_cache is not None:
+        try:
+            hinted_target = int(prep_cache.get("__target_max_quads__", requested_max_quads) or requested_max_quads)
+            target_max_quads = max(requested_max_quads, hinted_target)
+        except Exception:
+            target_max_quads = requested_max_quads
+
+    quads_cache: dict[str, Any] | None = None
+    quads_full: np.ndarray | None = None
+    if isinstance(cache_entry, dict):
+        qc = cache_entry.get("quads_cache")
+        if isinstance(qc, dict):
+            try:
+                if (
+                    str(qc.get("strategy", "")) == quad_strategy
+                    and int(qc.get("star_count", -1)) == int(stars.shape[0])
+                    and isinstance(qc.get("quads"), np.ndarray)
+                ):
+                    quads_cache = qc
+            except Exception:
+                quads_cache = None
+
+    if quads_cache is not None:
+        try:
+            q_cached = quads_cache.get("quads")
+            q_cached_n = int(quads_cache.get("max_quads", 0) or 0)
+            if isinstance(q_cached, np.ndarray) and q_cached_n >= target_max_quads and q_cached.shape[0] >= target_max_quads:
+                quads_full = q_cached[:target_max_quads]
+                logger.info(
+                    "reusing blind quads from prep cache (strategy=%s, cached=%d, using=%d)",
+                    quad_strategy,
+                    int(q_cached_n),
+                    int(target_max_quads),
+                )
+        except Exception:
+            quads_full = None
+
+    if quads_full is None:
+        quads_full = sample_quads(obs_stars, target_max_quads, strategy=quad_strategy)
+        logger.info(
+            "quad sampling strategy=%s produced %d quads (requested=%d)",
+            quad_strategy,
+            int(quads_full.shape[0]),
+            int(target_max_quads),
+        )
+        if isinstance(cache_entry, dict):
+            try:
+                cache_entry["quads_cache"] = {
+                    "strategy": quad_strategy,
+                    "star_count": int(stars.shape[0]),
+                    "max_quads": int(quads_full.shape[0]),
+                    "quads": quads_full.copy(),
+                }
+                cache_entry.pop("base_hash_full", None)
+                cache_entry["level_hash_full"] = {}
+            except Exception:
+                pass
+    else:
+        logger.info(
+            "quad sampling strategy=%s reused %d cached quads (requested=%d)",
+            quad_strategy,
+            int(quads_full.shape[0]),
+            int(target_max_quads),
+        )
+
+    active_quads_n = min(int(requested_max_quads), int(quads_full.shape[0]))
+    quads = quads_full[:active_quads_n]
     if quads.size == 0:
         return _finish(WcsSolution(False, "no quads sampled", None, {}, None, {}))
     if cancel_check and cancel_check():
         return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
-    obs_hash = hash_quads(quads, image_positions)
-    base_hashes, base_quads, base_counts = _deduplicate_hashes(obs_hash.hashes, obs_hash.indices, label="base")
+
+    def _bundle_subset_and_dedup(
+        bundle: dict[str, Any] | None,
+        *,
+        subset_quads: int,
+        label: str,
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+        if not isinstance(bundle, dict):
+            return np.zeros(0, dtype=np.uint64), np.zeros((0, 4), dtype=np.uint16), np.zeros(0, dtype=np.uint32), 0
+        h_all = bundle.get("hashes")
+        q_all = bundle.get("indices")
+        s_all = bundle.get("source_indices")
+        if not isinstance(h_all, np.ndarray) or not isinstance(q_all, np.ndarray):
+            return np.zeros(0, dtype=np.uint64), np.zeros((0, 4), dtype=np.uint16), np.zeros(0, dtype=np.uint32), 0
+        if isinstance(s_all, np.ndarray) and s_all.shape[0] == h_all.shape[0]:
+            mask = s_all < int(subset_quads)
+            raw_hashes = h_all[mask]
+            raw_quads = q_all[mask]
+            raw_count = int(np.count_nonzero(mask))
+        else:
+            raw_hashes = h_all
+            raw_quads = q_all
+            raw_count = int(h_all.shape[0])
+        dedup_h, dedup_q, dedup_c = _deduplicate_hashes(raw_hashes, raw_quads, label=label)
+        return dedup_h, dedup_q, dedup_c, raw_count
+
+    base_bundle: dict[str, Any] | None = None
+    if isinstance(cache_entry, dict):
+        bb = cache_entry.get("base_hash_full")
+        if isinstance(bb, dict):
+            try:
+                if (
+                    str(bb.get("strategy", "")) == quad_strategy
+                    and int(bb.get("star_count", -1)) == int(stars.shape[0])
+                    and int(bb.get("max_quads", -1)) == int(quads_full.shape[0])
+                ):
+                    base_bundle = bb
+            except Exception:
+                base_bundle = None
+
+    if base_bundle is None:
+        obs_hash_full = hash_quads(quads_full, image_positions, return_source_indices=True)
+        base_bundle = {
+            "strategy": quad_strategy,
+            "star_count": int(stars.shape[0]),
+            "max_quads": int(quads_full.shape[0]),
+            "hashes": obs_hash_full.hashes,
+            "indices": obs_hash_full.indices,
+            "source_indices": obs_hash_full.source_indices,
+        }
+        if isinstance(cache_entry, dict):
+            try:
+                cache_entry["base_hash_full"] = base_bundle
+            except Exception:
+                pass
+    else:
+        logger.info(
+            "reusing blind base hashes from prep cache (max_quads=%d)",
+            int(quads_full.shape[0]),
+        )
+
+    base_hashes, base_quads, base_counts, base_raw_hash_count = _bundle_subset_and_dedup(
+        base_bundle,
+        subset_quads=active_quads_n,
+        label="base",
+    )
     logger.info(
         "sampled %d quads producing %d hashes (%d unique)",
-        quads.shape[0],
-        obs_hash.hashes.size,
-        base_hashes.size,
+        int(active_quads_n),
+        int(base_raw_hash_count),
+        int(base_hashes.size),
     )
-    _log_phase("detect/quads", stage)
+
     thresholds = {"rms_px": config.quality_rms, "inliers": config.quality_inliers}
+    fail_best_inliers_seen = -1
+    fail_validation_count = 0
+    phases_attempted: list[str] = []
 
     def _prioritize_candidates(
         candidates: list[tuple[str, int]],
@@ -796,7 +991,26 @@ def solve_blind(
             bucket_cap=spec.bucket_cap,
         )
 
+    def _spec_signature(spec: QuadLevelSpec | None) -> tuple[Any, ...]:
+        if spec is None:
+            return ("none",)
+        return (
+            str(spec.name),
+            round(float(spec.min_area), 8),
+            round(float(spec.max_area), 8),
+            None if spec.min_diameter is None else round(float(spec.min_diameter), 8),
+            None if spec.max_diameter is None else round(float(spec.max_diameter), 8),
+        )
+
     # Precompute observed hashes per level with pixel-adapted specs when possible
+    level_hash_cache: dict[str, Any]
+    if isinstance(cache_entry, dict) and isinstance(cache_entry.get("level_hash_full"), dict):
+        level_hash_cache = cache_entry.get("level_hash_full")
+    else:
+        level_hash_cache = {}
+        if isinstance(cache_entry, dict):
+            cache_entry["level_hash_full"] = level_hash_cache
+
     obs_by_level: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     for lvl in levels:
         if cancel_check and cancel_check():
@@ -804,18 +1018,53 @@ def solve_blind(
         px = _spec_pixels(lvl)
         if px is None:
             obs_by_level[lvl] = (base_hashes, base_quads, base_counts)
-        else:
-            oh = hash_quads(quads, image_positions, spec=px)
-            lvl_hashes, lvl_quads, lvl_counts = _deduplicate_hashes(oh.hashes, oh.indices, label=lvl)
-            if lvl_hashes.size == 0 and base_hashes.size > 0:
-                logger.debug(
-                    "level %s pixel-adapted filter produced no hashes, falling back to base hash set",
-                    lvl,
-                )
-                obs_by_level[lvl] = (base_hashes, base_quads, base_counts)
-            else:
-                obs_by_level[lvl] = (lvl_hashes, lvl_quads, lvl_counts)
+            continue
 
+        spec_sig = _spec_signature(px)
+        lvl_bundle: dict[str, Any] | None = None
+        cached_lvl = level_hash_cache.get(lvl)
+        if isinstance(cached_lvl, dict):
+            try:
+                if (
+                    str(cached_lvl.get("strategy", "")) == quad_strategy
+                    and int(cached_lvl.get("star_count", -1)) == int(stars.shape[0])
+                    and int(cached_lvl.get("max_quads", -1)) == int(quads_full.shape[0])
+                    and tuple(cached_lvl.get("spec_sig", ())) == spec_sig
+                ):
+                    lvl_bundle = cached_lvl
+            except Exception:
+                lvl_bundle = None
+
+        if lvl_bundle is None:
+            oh_full = hash_quads(quads_full, image_positions, spec=px, return_source_indices=True)
+            lvl_bundle = {
+                "strategy": quad_strategy,
+                "star_count": int(stars.shape[0]),
+                "max_quads": int(quads_full.shape[0]),
+                "spec_sig": spec_sig,
+                "hashes": oh_full.hashes,
+                "indices": oh_full.indices,
+                "source_indices": oh_full.source_indices,
+            }
+            level_hash_cache[lvl] = lvl_bundle
+        else:
+            logger.info("reusing blind level hashes from prep cache (level=%s, max_quads=%d)", lvl, int(quads_full.shape[0]))
+
+        lvl_hashes, lvl_quads, lvl_counts, _ = _bundle_subset_and_dedup(
+            lvl_bundle,
+            subset_quads=active_quads_n,
+            label=lvl,
+        )
+        if lvl_hashes.size == 0 and base_hashes.size > 0:
+            logger.debug(
+                "level %s pixel-adapted filter produced no hashes, falling back to base hash set",
+                lvl,
+            )
+            obs_by_level[lvl] = (base_hashes, base_quads, base_counts)
+        else:
+            obs_by_level[lvl] = (lvl_hashes, lvl_quads, lvl_counts)
+
+    _log_phase("detect/quads", stage)
     def _attempt_level(
         level_name: str,
         hashes: np.ndarray,
@@ -828,6 +1077,7 @@ def solve_blind(
         agg_levels: Iterable[str] | None = None,
         early_exit_ratio: float | None = None,
     ) -> WcsSolution | None:
+        nonlocal fail_best_inliers_seen, fail_validation_count
         if cancel_check and cancel_check():
             return None
         active_allowed_tiles = allowed_tiles if use_ra_filter else None
@@ -1244,6 +1494,9 @@ def solve_blind(
                     int(stats.get("inliers", 0)),
                     int(matches_array.shape[0]),
                 )
+                inl = int(stats.get("inliers", 0) or 0)
+                fail_best_inliers_seen = max(fail_best_inliers_seen, inl)
+                fail_validation_count += 1
                 if global_mode:
                     inl = int(stats.get("inliers", 0) or 0)
                     best_support = max(best_support, inl)
@@ -1274,6 +1527,9 @@ def solve_blind(
                     parity_label,
                     zemo_reason,
                 )
+                inl = int(stats.get("inliers", 0) or 0)
+                fail_best_inliers_seen = max(fail_best_inliers_seen, inl)
+                fail_validation_count += 1
                 if global_mode:
                     inl = int(stats.get("inliers", 0) or 0)
                     best_support = max(best_support, inl)
@@ -1441,6 +1697,7 @@ def solve_blind(
             continue
         if phase["require_scale"] and not scale_available:
             continue
+        phases_attempted.append(str(phase.get("name", "unknown")))
         phase_start = time.time()
         logger.info(
             "phase %s starting (ra_filter=%s, level_sets=%d)",
@@ -1500,7 +1757,13 @@ def solve_blind(
             break
     _log_phase("candidate search", stage)
     if not best_solution:
-        return _finish(WcsSolution(False, "no valid solution", None, {}, None, {}))
+        fail_stats = {
+            "best_fail_inliers": int(fail_best_inliers_seen),
+            "fail_validation_count": int(fail_validation_count),
+            "phases_attempted": list(phases_attempted),
+            "has_hints": bool(ra_available and scale_available),
+        }
+        return _finish(WcsSolution(False, "no valid solution", None, fail_stats, None, {}))
     header_updates = {
         **best_solution.header_updates,
         "BLINDVER": ZEBLIND_VERSION,
