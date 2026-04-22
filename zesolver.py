@@ -41,10 +41,23 @@ try:
 except ImportError:  # pragma: no cover
     PackageNotFoundError = Exception  # type: ignore
 
+
+def _load_source_version(default: str = "0.0.dev") -> str:
+    pyproject = ROOT_DIR / "pyproject.toml"
+    try:
+        import tomllib
+
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        version = str((data.get("project") or {}).get("version") or "").strip()
+        return version or default
+    except Exception:
+        return default
+
+
 try:
     APP_VERSION = pkg_version("zewcs290")
 except PackageNotFoundError:  # pragma: no cover - running from source tree
-    APP_VERSION = "0.0.dev"
+    APP_VERSION = _load_source_version()
 
 try:
     from zewcs290 import CatalogDB
@@ -957,6 +970,10 @@ class SolveConfig:
     near_astap_hint_radius_deg: Optional[float] = None
     near_second_pass_refine_in_fastpath: bool = False
     near_astap_iso_strict: bool = True
+    # Batch mode option: hold ZeNear failures for phase-2 blind instead of
+    # triggering immediate blind fallback inside near_solve.
+    near_defer_blind_fallback: bool = False
+    near_allow_second_rescue: bool = False
     # Blind solver (Python) tunables (mirrors settings panel). These were
     # previously only used by the settings tester; we surface them here so the
     # batch run uses and logs the same values as the GUI:
@@ -977,6 +994,7 @@ class SolveConfig:
     log_level: str = "INFO"
     dev_bucket_limit_override: int = 0
     dev_vote_percentile: int = 40
+    dev_collect_matches_vectorized_experimental: bool = False
     dev_bucket_cap_S: int = 0
     dev_bucket_cap_M: int = 0
     dev_bucket_cap_L: int = 0
@@ -1700,6 +1718,7 @@ class ImageSolver:
                     "max_cat_stars": int(getattr(self.config, "near_max_cat_stars", 2000) or 2000),
                     "try_parity_flip": bool(getattr(self.config, "near_try_parity_flip", True)),
                     "search_margin": float(getattr(self.config, "near_search_margin", 1.2) or 1.2),
+                    "defer_blind_fallback": bool(getattr(self.config, "near_defer_blind_fallback", False)),
                 },
                 "blind": {
                     "max_stars": int(getattr(self.config, "blind_max_stars", 500) or 500),
@@ -2131,7 +2150,11 @@ class ImageSolver:
             ):
                 if self._cancelled():
                     return ImageSolveResult(path=path, status="skipped", message="cancelled")
-                near_first = self._run_index_near_solver(path, metadata)
+                near_first = self._run_index_near_solver(
+                    path,
+                    metadata,
+                    allow_blind_fallback=allow_blind_fallback,
+                )
                 if near_first is not None:
                     near_first.duration_s = time.perf_counter() - start
                     near_first.run_info.extend(run_info)
@@ -2272,6 +2295,7 @@ class ImageSolver:
                     dec_hint=metadata.dec_deg if metadata else None,
                     metadata=metadata,
                     peaks=peaks,
+                    frame_data=data,
                 )
                 if blind_result is not None:
                     blind_result.duration_s = time.perf_counter() - start
@@ -2318,6 +2342,8 @@ class ImageSolver:
                 skip_if_valid=False,
                 ra_hint=metadata.ra_deg if metadata else None,
                 dec_hint=metadata.dec_deg if metadata else None,
+                metadata=metadata,
+                frame_data=data,
             )
             if result and result.get("success"):
                 out = self._build_blind_result(path, result, run_info)
@@ -2516,6 +2542,136 @@ class ImageSolver:
             path.suffix.lower() in FITS_EXTENSIONS or path.suffix.lower() in RASTER_EXTENSIONS
         )
 
+
+    def _compute_blind_quality_metrics(
+        self,
+        *,
+        metadata: Optional[ImageMetadata],
+        peaks: Optional[np.ndarray],
+        frame_data: Optional[np.ndarray],
+    ) -> dict[str, Any]:
+        metrics: dict[str, Any] = {}
+        arr2d: Optional[np.ndarray] = None
+        width: Optional[int] = None
+        height: Optional[int] = None
+
+        if frame_data is not None:
+            try:
+                arr = np.asarray(frame_data, dtype=np.float32)
+                if arr.ndim == 3:
+                    if arr.shape[-1] in (3, 4):
+                        arr = np.mean(arr[..., :3], axis=-1)
+                    elif arr.shape[0] in (3, 4):
+                        arr = np.mean(arr[:3, ...], axis=0)
+                    else:
+                        arr = arr[0]
+                if arr.ndim == 2 and arr.size > 0:
+                    arr2d = arr
+                    height = int(arr.shape[0])
+                    width = int(arr.shape[1]) if arr.ndim >= 2 else None
+                    finite = np.isfinite(arr)
+                    if np.any(finite):
+                        v = arr[finite]
+                        p5, p95 = np.percentile(v, [5, 95])
+                        dyn = max(1e-6, float(p95 - p5))
+                        norm = np.clip((arr - float(p5)) / dyn, 0.0, 5.0)
+                        gx = np.abs(np.diff(norm, axis=1))
+                        gy = np.abs(np.diff(norm, axis=0))
+                        metrics["texture_grad"] = float(0.5 * (float(gx.mean()) + float(gy.mean())))
+                        metrics["sat_ratio"] = float(np.mean(norm >= 2.2))
+                        metrics["dyn_span"] = float(dyn)
+            except Exception:
+                arr2d = None
+
+        use_peaks = peaks
+        if use_peaks is None and arr2d is not None:
+            try:
+                use_peaks = _detect_stars(
+                    arr2d,
+                    downsample=max(1, int(self.config.downsample or 1)),
+                    max_stars=min(200, int(getattr(self.config, "max_image_stars", 200) or 200)),
+                )
+                metrics["star_count_source"] = "estimated"
+            except Exception:
+                use_peaks = None
+
+        try:
+            if use_peaks is not None:
+                star_count = int(use_peaks.shape[0])
+                metrics["star_count"] = star_count
+                if metadata is not None and metadata.width > 0 and metadata.height > 0:
+                    width = int(metadata.width)
+                    height = int(metadata.height)
+                if width and height and star_count > 0:
+                    w = float(width)
+                    h = float(height)
+                    x = use_peaks[:, 0]
+                    y = use_peaks[:, 1]
+                    edge_mask = (
+                        (x <= (0.08 * w))
+                        | (x >= (0.92 * w))
+                        | (y <= (0.08 * h))
+                        | (y >= (0.92 * h))
+                    )
+                    metrics["edge_star_fraction"] = float(np.mean(edge_mask))
+                    metrics["star_density_mpix"] = float(star_count) / max(1.0, (w * h) / 1_000_000.0)
+        except Exception:
+            pass
+        return metrics
+
+    def _select_blind_quality_profile(
+        self,
+        *,
+        metadata: Optional[ImageMetadata],
+        peaks: Optional[np.ndarray],
+        frame_data: Optional[np.ndarray],
+    ) -> tuple[str, dict[str, Any]]:
+        metrics = self._compute_blind_quality_metrics(metadata=metadata, peaks=peaks, frame_data=frame_data)
+        profile = "normal"
+        reasons: list[str] = []
+
+        star_count = metrics.get("star_count")
+        edge_frac = metrics.get("edge_star_fraction")
+        texture = metrics.get("texture_grad")
+        sat_ratio = metrics.get("sat_ratio")
+
+        try:
+            if star_count is not None and int(star_count) <= 32:
+                profile = "degraded"
+                reasons.append("low_star_count")
+            if (
+                star_count is not None
+                and texture is not None
+                and int(star_count) <= 42
+                and float(texture) >= 0.46
+            ):
+                profile = "degraded"
+                reasons.append("low_star_high_texture")
+            if (
+                star_count is not None
+                and edge_frac is not None
+                and texture is not None
+                and int(star_count) <= 52
+                and float(edge_frac) >= 0.30
+                and float(texture) >= 0.47
+            ):
+                profile = "degraded"
+                reasons.append("edge_biased_texture")
+            if (
+                sat_ratio is not None
+                and star_count is not None
+                and float(sat_ratio) >= 0.018
+                and int(star_count) <= 60
+            ):
+                profile = "degraded"
+                reasons.append("high_saturation")
+        except Exception:
+            pass
+
+        metrics["quality_profile"] = profile
+        metrics["quality_reasons"] = reasons
+        return profile, metrics
+
     def _run_blind_solver(
         self,
         path: Path,
@@ -2525,6 +2681,9 @@ class ImageSolver:
         skip_if_valid: bool,
         ra_hint: Optional[float] = None,
         dec_hint: Optional[float] = None,
+        metadata: Optional[ImageMetadata] = None,
+        peaks: Optional[np.ndarray] = None,
+        frame_data: Optional[np.ndarray] = None,
     ) -> Optional[BlindSolveResult]:
         if self._cancelled():
             return None
@@ -2630,6 +2789,7 @@ class ImageSolver:
                 log_level=getattr(self.config, "log_level", "INFO"),
                 bucket_limit_override=int(getattr(self.config, "dev_bucket_limit_override", 0) or 0),
                 vote_percentile=int(getattr(self.config, "dev_vote_percentile", 40) or 40),
+                collect_matches_vectorized_experimental=bool(getattr(self.config, "dev_collect_matches_vectorized_experimental", False)),
                 # Hints / optics
                 ra_hint_deg=final_ra,
                 dec_hint_deg=final_dec,
@@ -2641,6 +2801,31 @@ class ImageSolver:
                 pixel_scale_max_arcsec=self.config.hint_resolution_max_arcsec,
                 downsample=max(1, int(self.config.downsample or 1)),
             )
+
+            quality_profile, quality_metrics = self._select_blind_quality_profile(
+                metadata=metadata,
+                peaks=peaks,
+                frame_data=frame_data,
+            )
+            if quality_profile == "degraded":
+                blind_cfg = replace(
+                    blind_cfg,
+                    max_candidates=min(int(blind_cfg.max_candidates), 8),
+                    max_quads=min(int(blind_cfg.max_quads), 6000),
+                    fail_attempt_budget_s=min(float(getattr(blind_cfg, "fail_attempt_budget_s", 70.0) or 70.0), 48.0),
+                    fail_attempt_min_validations=min(int(getattr(blind_cfg, "fail_attempt_min_validations", 18) or 18), 12),
+                    fail_attempt_max_best_inliers=max(int(getattr(blind_cfg, "fail_attempt_max_best_inliers", 4) or 4), 7),
+                    fail_attempt_min_candidates=min(int(getattr(blind_cfg, "fail_attempt_min_candidates", 20) or 20), 16),
+                    global_budget_fast_s=min(float(getattr(blind_cfg, "global_budget_fast_s", 8.0) or 8.0), 6.0),
+                    global_budget_slow_s=min(float(getattr(blind_cfg, "global_budget_slow_s", 18.0) or 18.0), 12.0),
+                )
+            logging.info(
+                "[ZEBLIND] quality profile for %s: %s metrics=%s",
+                path.name,
+                quality_profile,
+                json.dumps(quality_metrics, ensure_ascii=False),
+            )
+
             try:
                 # Log the effective blind config used
                 log_cfg = {
@@ -2653,6 +2838,15 @@ class ImageSolver:
                     "fast_mode": blind_cfg.fast_mode,
                     "bucket_limit_override": getattr(blind_cfg, "bucket_limit_override", 0),
                     "vote_percentile": getattr(blind_cfg, "vote_percentile", 40),
+                    "collect_matches_vectorized_experimental": getattr(blind_cfg, "collect_matches_vectorized_experimental", False),
+                    "quality_profile": quality_profile,
+                    "quality_metrics": quality_metrics,
+                    "fail_attempt_budget_s": getattr(blind_cfg, "fail_attempt_budget_s", None),
+                    "fail_attempt_min_validations": getattr(blind_cfg, "fail_attempt_min_validations", None),
+                    "fail_attempt_max_best_inliers": getattr(blind_cfg, "fail_attempt_max_best_inliers", None),
+                    "fail_attempt_min_candidates": getattr(blind_cfg, "fail_attempt_min_candidates", None),
+                    "global_budget_fast_s": getattr(blind_cfg, "global_budget_fast_s", None),
+                    "global_budget_slow_s": getattr(blind_cfg, "global_budget_slow_s", None),
                     "ra_hint": blind_cfg.ra_hint_deg,
                     "dec_hint": blind_cfg.dec_hint_deg,
                     "radius_hint": blind_cfg.radius_hint_deg,
@@ -2679,8 +2873,15 @@ class ImageSolver:
             # Blind rescue loop for extremely low-support failures (best inliers <= 1)
             # Keeps retries bounded and only activates on clearly weak blind attempts.
             rescue_plans = (
-                {"max_candidates": 24, "max_quads": 16000, "pixel_tolerance": 3.0, "quality_rms": 1.6},
-                {"max_candidates": 36, "max_quads": 24000, "pixel_tolerance": 3.4, "quality_rms": 2.0},
+                (
+                    {"max_candidates": 20, "max_quads": 12000, "pixel_tolerance": 3.0, "quality_rms": 1.65},
+                    {"max_candidates": 24, "max_quads": 15000, "pixel_tolerance": 3.2, "quality_rms": 1.9},
+                )
+                if quality_profile == "degraded"
+                else (
+                    {"max_candidates": 24, "max_quads": 16000, "pixel_tolerance": 3.0, "quality_rms": 1.6},
+                    {"max_candidates": 36, "max_quads": 24000, "pixel_tolerance": 3.4, "quality_rms": 2.0},
+                )
             )
             for rescue_idx, plan in enumerate(rescue_plans, start=1):
                 if result.get("success"):
@@ -2689,48 +2890,111 @@ class ImageSolver:
                 best_inliers = int(stats.get("inliers", -1) or -1)
                 if best_inliers > 1:
                     break
+                effective_plan = dict(plan)
                 if rescue_idx >= 2 and isinstance(stats, Mapping) and (
                     "best_fail_inliers" in stats or "fail_validation_count" in stats
                 ):
                     fail_best_inliers = int(stats.get("best_fail_inliers", -1) or -1)
                     fail_validation_count = int(stats.get("fail_validation_count", 0) or 0)
                     prev_elapsed = float(result.get("elapsed_sec", 0.0) or 0.0)
+                    fail_early_abort = bool(stats.get("fail_early_abort", False))
+                    fail_early_phase = str(stats.get("fail_early_abort_phase", "-"))
                     low_potential = (
                         fail_validation_count > 0
                         and fail_best_inliers >= 0
                         and fail_best_inliers < 4
                         and fail_validation_count < 6
                     )
+                    if fail_early_abort:
+                        low_potential = True
                     if low_potential:
                         logging.info(
-                            "[ZEBLIND] skipping blind_rescue_attempt=%d for %s (low potential: best_fail_inliers=%d fail_validations=%d prev_elapsed=%.1fs)",
+                            "[ZEBLIND] skipping blind_rescue_attempt=%d for %s (low potential: best_fail_inliers=%d fail_validations=%d fail_early_abort=%s phase=%s prev_elapsed=%.1fs)",
                             rescue_idx,
                             path.name,
                             fail_best_inliers,
                             fail_validation_count,
+                            str(fail_early_abort),
+                            fail_early_phase,
                             prev_elapsed,
                         )
                         break
+                    no_validation = fail_validation_count <= 0
+                    stalled_high_churn = (
+                        fail_validation_count >= 12
+                        and fail_best_inliers >= 0
+                        and fail_best_inliers <= 8
+                    )
+                    costly_attempt = prev_elapsed >= 35.0
+                    if no_validation and prev_elapsed >= 25.0:
+                        logging.info(
+                            "[ZEBLIND] skipping blind_rescue_attempt=%d for %s (no-validation stall: prev_elapsed=%.1fs)",
+                            rescue_idx,
+                            path.name,
+                            prev_elapsed,
+                        )
+                        break
+                    plateau_mid_support = (
+                        prev_elapsed >= 60.0
+                        and fail_best_inliers >= 6
+                        and fail_best_inliers <= 8
+                        and fail_validation_count >= 10
+                        and fail_validation_count <= 30
+                    )
+                    if plateau_mid_support:
+                        logging.info(
+                            "[ZEBLIND] skipping blind_rescue_attempt=%d for %s (mid-support plateau: prev_elapsed=%.1fs best_fail_inliers=%d fail_validations=%d)",
+                            rescue_idx,
+                            path.name,
+                            prev_elapsed,
+                            fail_best_inliers,
+                            fail_validation_count,
+                        )
+                        break
+                    if costly_attempt and stalled_high_churn:
+                        effective_plan = {
+                            "max_candidates": 26,
+                            "max_quads": 17000,
+                            "pixel_tolerance": 3.1,
+                            "quality_rms": 1.75,
+                        }
+                        logging.info(
+                            "[ZEBLIND] soft-capping blind_rescue_attempt=%d for %s (prev_elapsed=%.1fs best_fail_inliers=%d fail_validations=%d)",
+                            rescue_idx,
+                            path.name,
+                            prev_elapsed,
+                            fail_best_inliers,
+                            fail_validation_count,
+                        )
                 if self._cancelled():
                     break
                 try:
                     if isinstance(blind_prep_cache, dict):
                         remaining = rescue_plans[rescue_idx - 1 :]
                         target_max_quads = max(int(x.get("max_quads", 0) or 0) for x in remaining)
+                        target_max_quads = min(target_max_quads, int(effective_plan.get("max_quads", target_max_quads) or target_max_quads))
                         if target_max_quads > 0:
                             blind_prep_cache["__target_max_quads__"] = int(target_max_quads)
                 except Exception:
                     pass
                 rescue_cfg = replace(
                     blind_cfg,
-                    max_candidates=max(int(blind_cfg.max_candidates), int(plan["max_candidates"])),
-                    max_quads=max(int(blind_cfg.max_quads), int(plan["max_quads"])),
-                    pixel_tolerance=max(float(blind_cfg.pixel_tolerance), float(plan["pixel_tolerance"])),
-                    quality_rms=max(float(blind_cfg.quality_rms), float(plan["quality_rms"])),
+                    max_candidates=max(int(blind_cfg.max_candidates), int(effective_plan["max_candidates"])),
+                    max_quads=max(int(blind_cfg.max_quads), int(effective_plan["max_quads"])),
+                    pixel_tolerance=max(float(blind_cfg.pixel_tolerance), float(effective_plan["pixel_tolerance"])),
+                    quality_rms=max(float(blind_cfg.quality_rms), float(effective_plan["quality_rms"])),
                     fast_mode=False,
                 )
+                if rescue_idx >= 2:
+                    rescue_cfg = replace(
+                        rescue_cfg,
+                        fail_attempt_budget_s=min(float(getattr(rescue_cfg, "fail_attempt_budget_s", 70.0) or 70.0), 42.0),
+                        fail_attempt_min_validations=min(int(getattr(rescue_cfg, "fail_attempt_min_validations", 18) or 18), 12),
+                        fail_attempt_max_best_inliers=max(int(getattr(rescue_cfg, "fail_attempt_max_best_inliers", 4) or 4), 8),
+                        fail_attempt_min_candidates=min(int(getattr(rescue_cfg, "fail_attempt_min_candidates", 20) or 20), 18),
+                    )
                 logging.info(
-                    "[ZEBLIND] blind_rescue_attempt=%d/2 file=%s prev_inliers=%d max_candidates=%d->%d max_quads=%d->%d pixel_tolerance=%.2f->%.2f quality_rms=%.2f->%.2f",
+                    "[ZEBLIND] blind_rescue_attempt=%d/2 file=%s prev_inliers=%d max_candidates=%d->%d max_quads=%d->%d pixel_tolerance=%.2f->%.2f quality_rms=%.2f->%.2f fail_budget=%.1fs fail_min_val=%d fail_max_inliers=%d",
                     rescue_idx,
                     path.name,
                     best_inliers,
@@ -2742,6 +3006,9 @@ class ImageSolver:
                     float(rescue_cfg.pixel_tolerance),
                     float(blind_cfg.quality_rms),
                     float(rescue_cfg.quality_rms),
+                    float(getattr(rescue_cfg, "fail_attempt_budget_s", 0.0) or 0.0),
+                    int(getattr(rescue_cfg, "fail_attempt_min_validations", 0) or 0),
+                    int(getattr(rescue_cfg, "fail_attempt_max_best_inliers", 0) or 0),
                 )
                 result = blind_solve(
                     fits_path=str(path),
@@ -2784,6 +3051,37 @@ class ImageSolver:
             logging.info("Blind solver success for %s via %s (%s)", path.name, db_name, result["message"])
         else:
             run_info.append(("run_info_blind_failed", {"message": result["message"]}))
+            stats = result.get("stats") or {}
+            if isinstance(stats, Mapping):
+                try:
+                    logging.info(
+                        "[ZEBLIND] fail metrics for %s: elapsed=%.2fs best_fail_inliers=%s fail_validations=%s candidates_tried=%s fail_early_abort=%s phase=%s",
+                        path.name,
+                        float(stats.get("attempt_elapsed_s", result.get("elapsed_sec", 0.0)) or 0.0),
+                        str(stats.get("best_fail_inliers", "-")),
+                        str(stats.get("fail_validation_count", "-")),
+                        str(stats.get("total_candidates_tried", "-")),
+                        str(bool(stats.get("fail_early_abort", False))),
+                        str(stats.get("fail_early_abort_phase", "-")),
+                    )
+                    cmet = stats.get("collect_metrics") or {}
+                    if isinstance(cmet, Mapping):
+                        calls = int(cmet.get("calls", 0) or 0)
+                        hits = int(cmet.get("cache_hits", 0) or 0)
+                        misses = int(cmet.get("cache_misses", 0) or 0)
+                        compute_s = float(cmet.get("compute_s", 0.0) or 0.0)
+                        hit_rate = (100.0 * hits / calls) if calls > 0 else 0.0
+                        logging.info(
+                            "[ZEBLIND] collect metrics for %s: calls=%d hits=%d misses=%d hit_rate=%.1f%% compute=%.2fs",
+                            path.name,
+                            calls,
+                            hits,
+                            misses,
+                            hit_rate,
+                            compute_s,
+                        )
+                except Exception:
+                    pass
             logging.info("Blind solver failed for %s: %s", path.name, result["message"])
         return result
 
@@ -2824,6 +3122,7 @@ class ImageSolver:
                 run_info,
                 skip_if_header_has_wcs=False,
                 skip_if_valid=False,
+                frame_data=raster_data,
             )
             if not result or not result["success"]:
                 return None
@@ -2897,7 +3196,13 @@ class ImageSolver:
             run_info=list(run_info),
         )
 
-    def _run_index_near_solver(self, path: Path, metadata: ImageMetadata) -> Optional[ImageSolveResult]:
+    def _run_index_near_solver(
+        self,
+        path: Path,
+        metadata: ImageMetadata,
+        *,
+        allow_blind_fallback: bool = True,
+    ) -> Optional[ImageSolveResult]:
         """Attempt a metadata-assisted near solve using the Zeblind index.
 
         Uses the same internal routine as the Settings tab tester (no quads).
@@ -2993,6 +3298,7 @@ class ImageSolver:
                     "astap_hint_radius_deg": near_cfg.astap_hint_radius_deg,
                     "second_pass_refine_in_fastpath": near_cfg.second_pass_refine_in_fastpath,
                     "astap_iso_strict": near_cfg.astap_iso_strict,
+                    "allow_second_rescue": bool(getattr(self.config, "near_allow_second_rescue", False)),
                 }
                 logging.info("[ZENEAR] config: %s", json.dumps(log_near, ensure_ascii=False))
             except Exception:
@@ -3011,12 +3317,30 @@ class ImageSolver:
                 base_margin = float(near_cfg.search_margin)
                 base_tiles = int(near_cfg.max_tile_candidates)
                 base_rms = float(getattr(near_cfg, "quality_rms", 1.0) or 1.0)
-                rescue_plan = (
+                rescue_plan: list[tuple[float, int, float]] = [
                     (max(base_margin * 1.6, base_margin + 0.20), max(base_tiles, 96), max(base_rms, 1.70)),
-                    (max(base_margin * 2.2, base_margin + 0.45), max(base_tiles, 192), max(base_rms, 2.00)),
-                )
+                ]
+                allow_second_near_rescue = bool(getattr(self.config, "near_allow_second_rescue", False))
+                if allow_second_near_rescue:
+                    rescue_plan.append(
+                        (max(base_margin * 2.2, base_margin + 0.45), max(base_tiles, 192), max(base_rms, 2.00))
+                    )
+                total_rescues = len(rescue_plan)
                 for rescue_idx, (rescue_margin, rescue_tiles, rescue_rms) in enumerate(rescue_plan, start=1):
                     if self._cancelled() if self._cancel_event else False:
+                        break
+                    prev_error = str(result.get("message") or "unknown")
+                    if (
+                        rescue_idx >= 2
+                        and "could not estimate a similarity transform" in prev_error.lower()
+                    ):
+                        logging.info(
+                            "[ZENEAR] skipping near_rescue_attempt=%d/%d for %s (persistent low-potential error: %s)",
+                            rescue_idx,
+                            total_rescues,
+                            path.name,
+                            prev_error,
+                        )
                         break
                     if (
                         rescue_margin <= near_cfg.search_margin
@@ -3031,10 +3355,11 @@ class ImageSolver:
                     near_cfg.max_tile_candidates = int(max(near_cfg.max_tile_candidates, rescue_tiles))
                     near_cfg.quality_rms = float(max(prev_rms, rescue_rms))
                     logging.info(
-                        "[ZENEAR] near_rescue_attempt=%d/2 file=%s prev_error=%s search_margin=%.2f->%.2f max_tiles=%d->%d quality_rms=%.2f->%.2f",
+                        "[ZENEAR] near_rescue_attempt=%d/%d file=%s prev_error=%s search_margin=%.2f->%.2f max_tiles=%d->%d quality_rms=%.2f->%.2f",
                         rescue_idx,
+                        total_rescues,
                         path.name,
-                        (result.get("message") or "unknown"),
+                        prev_error,
                         prev_margin,
                         near_cfg.search_margin,
                         prev_tiles,
@@ -3064,19 +3389,26 @@ class ImageSolver:
                     and bool(self.config.blind_enabled)
                     and not (self._cancelled() if self._cancel_event else False)
                 ):
-                    logging.info(
-                        "[ZENEAR] near attempts exhausted for %s; running a single blind fallback",
-                        path.name,
-                    )
-                    result = near_solve(
-                        fits_path=str(path),
-                        index_root=str(index_root),
-                        config=near_cfg,
-                        log=logging.info,
-                        skip_if_valid=False,
-                        fallback_to_blind=True,
-                        cancel_check=(self._cancelled if self._cancel_event else None),
-                    )
+                    defer_blind = bool(getattr(self.config, "near_defer_blind_fallback", False)) and (not allow_blind_fallback)
+                    if defer_blind:
+                        logging.info(
+                            "[ZENEAR] near attempts exhausted for %s; deferring blind fallback to batch blind phase",
+                            path.name,
+                        )
+                    else:
+                        logging.info(
+                            "[ZENEAR] near attempts exhausted for %s; running a single blind fallback",
+                            path.name,
+                        )
+                        result = near_solve(
+                            fits_path=str(path),
+                            index_root=str(index_root),
+                            config=near_cfg,
+                            log=logging.info,
+                            skip_if_valid=False,
+                            fallback_to_blind=True,
+                            cancel_check=(self._cancelled if self._cancel_event else None),
+                        )
         except BlindSolverRuntimeError as exc:
             logging.info("Near solver (index) failed for %s: %s", path.name, exc)
             return None
@@ -3122,6 +3454,7 @@ class ImageSolver:
         dec_hint: Optional[float],
         metadata: Optional[ImageMetadata],
         peaks: Optional[np.ndarray],
+        frame_data: Optional[np.ndarray],
     ) -> Optional[ImageSolveResult]:
         if not self.config.blind_enabled or not self.config.overwrite:
             return None
@@ -3135,6 +3468,9 @@ class ImageSolver:
             skip_if_valid=False,
             ra_hint=ra_hint,
             dec_hint=dec_hint,
+            metadata=metadata,
+            peaks=peaks,
+            frame_data=frame_data,
         )
         if result and result["success"]:
             return self._build_blind_result(path, result, run_info)
@@ -3869,6 +4205,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Disable sequential warm-start for near solver",
     )
     parser.add_argument(
+        "--near-defer-blind-fallback",
+        dest="near_defer_blind_fallback",
+        action="store_true",
+        help="Batch mode: keep near failures for phase-2 blind instead of immediate near blind fallback",
+    )
+    parser.add_argument(
+        "--no-near-defer-blind-fallback",
+        dest="near_defer_blind_fallback",
+        action="store_false",
+        help="Batch mode: keep immediate near blind fallback (default)",
+    )
+    parser.add_argument(
+        "--near-allow-second-rescue",
+        dest="near_allow_second_rescue",
+        action="store_true",
+        help="Near-solver: allow a second rescue attempt after the first retry",
+    )
+    parser.add_argument(
+        "--no-near-allow-second-rescue",
+        dest="near_allow_second_rescue",
+        action="store_false",
+        help="Near-solver: keep single-retry mode (default)",
+    )
+    parser.add_argument(
         "--io-concurrency",
         type=int,
         default=0,
@@ -3934,9 +4294,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=5,
         help="Developer: minimum blob area (pixels) for detections (default: 5)",
     )
+    parser.add_argument(
+        "--dev-collect-matches-vectorized",
+        dest="dev_collect_matches_vectorized_experimental",
+        action="store_true",
+        help="Developer: enable experimental vectorized vote/pair filtering in _collect_tile_matches",
+    )
+    parser.add_argument(
+        "--no-dev-collect-matches-vectorized",
+        dest="dev_collect_matches_vectorized_experimental",
+        action="store_false",
+        help="Developer: disable experimental vectorized vote/pair filtering (default)",
+    )
     parser.add_argument("--headless", action="store_true", help="Force CLI mode even if arguments are missing")
     parser.add_argument("--gui", action="store_true", help="Force GUI mode even if CLI arguments are provided")
-    parser.set_defaults(blind_enabled=True)
+    parser.set_defaults(blind_enabled=True, near_defer_blind_fallback=False, near_allow_second_rescue=False, dev_collect_matches_vectorized_experimental=False)
     return parser
 
 
@@ -4017,6 +4389,8 @@ def run_cli(args: argparse.Namespace) -> int:
         io_concurrency=int(args.io_concurrency or 0),
         gc_interval=int(args.gc_interval or 0),
         near_warm_start=(True if args.near_warm_start is None else bool(args.near_warm_start)),
+        near_defer_blind_fallback=bool(getattr(args, "near_defer_blind_fallback", False)),
+        near_allow_second_rescue=bool(getattr(args, "near_allow_second_rescue", False)),
         near_ransac_seed=(int(args.near_ransac_seed) if args.near_ransac_seed is not None else None),
         hint_ra_deg=args.ra_hint,
         hint_dec_deg=args.dec_hint,
@@ -4033,6 +4407,7 @@ def run_cli(args: argparse.Namespace) -> int:
         log_level=(args.log_level or "INFO").upper(),
         dev_bucket_limit_override=max(0, int(args.dev_bucket_limit or 0)),
         dev_vote_percentile=min(95, max(5, int(args.dev_vote_percentile or 40))),
+        dev_collect_matches_vectorized_experimental=bool(getattr(args, "dev_collect_matches_vectorized_experimental", False)),
         dev_bucket_cap_S=max(0, int(args.bucket_cap_s or 0)),
         dev_bucket_cap_M=max(0, int(args.bucket_cap_m or 0)),
         dev_bucket_cap_L=max(0, int(args.bucket_cap_l or 0)),
@@ -6940,6 +7315,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_max_cat_stars=int(self.fast_max_cat_stars_spin.value()) if hasattr(self, 'fast_max_cat_stars_spin') else 2000,
                 near_try_parity_flip=bool(self.fast_try_parity_check.isChecked()) if hasattr(self, 'fast_try_parity_check') else True,
                 near_astap_iso_strict=True,
+                near_defer_blind_fallback=bool(getattr(self._settings, 'near_defer_blind_fallback', False)),
+                near_allow_second_rescue=bool(getattr(self._settings, 'near_allow_second_rescue', False)),
                 near_search_margin=float(self.fast_search_margin_spin.value()) if hasattr(self, 'fast_search_margin_spin') else 1.2,
                 # Backend + astrometry
                 solver_backend=(self.backend_combo.currentData() if hasattr(self, 'backend_combo') else "local"),
@@ -8365,6 +8742,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_max_img_stars=int(self._settings.near_max_img_stars or 800),
                 near_max_cat_stars=int(self._settings.near_max_cat_stars or 2000),
                 near_try_parity_flip=bool(self._settings.near_try_parity_flip),
+                near_defer_blind_fallback=bool(getattr(self._settings, 'near_defer_blind_fallback', False)),
+                near_allow_second_rescue=bool(getattr(self._settings, 'near_allow_second_rescue', False)),
                 near_search_margin=float(self._settings.near_search_margin or 1.2),
                 # Blind solver tunables from the Settings panel
                 blind_max_stars=int(self._settings.blind_max_stars or 500),
