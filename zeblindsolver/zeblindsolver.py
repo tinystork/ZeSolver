@@ -91,6 +91,13 @@ class SolveConfig:
     tile_cache_size: int = _TILE_CACHE_DEFAULT_CAPACITY
     bucket_limit_override: int | None = None
     vote_percentile: int = 40
+    collect_matches_vectorized_experimental: bool = False
+    fail_attempt_budget_s: float = 70.0
+    fail_attempt_min_validations: int = 18
+    fail_attempt_max_best_inliers: int = 4
+    fail_attempt_min_candidates: int = 20
+    global_budget_fast_s: float = 8.0
+    global_budget_slow_s: float = 18.0
 
 
 @dataclass
@@ -399,6 +406,8 @@ def _nearest_tile_key(tile_entries: Iterable[dict[str, Any]], ra_deg: float, dec
     return best_key
 
 
+
+
 def _collect_tile_matches(
     index_root: Path,
     levels: Iterable[str],
@@ -410,6 +419,7 @@ def _collect_tile_matches(
     tile_world: np.ndarray,
     bucket_limit: int,
     vote_percentile: int,
+    use_vectorized: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     # Accumulate votes for (image_star, tile_star) pairs across matching quads,
     # then keep only pairs with sufficient support to reduce spurious matches.
@@ -438,6 +448,52 @@ def _collect_tile_matches(
     if not votes:
         empty = np.empty((0, 2), dtype=np.float32)
         return empty, empty, empty
+    if use_vectorized:
+        # Experimental vectorized path (same semantics, lower Python overhead in pair filtering).
+        vote_items = list(votes.items())
+        pair_idx = np.asarray([k for k, _ in vote_items], dtype=np.int64)
+        counts = np.asarray([int(c) for _, c in vote_items], dtype=np.int64)
+        percentile = min(95, max(5, vote_percentile))
+        thr = max(1, int(np.percentile(counts, percentile)))
+        keep = counts >= thr
+        if np.any(keep):
+            sel = np.flatnonzero(keep)
+            sel = sel[np.argsort(counts[sel])[::-1]]
+        else:
+            top_n = max(200, int(len(counts) * 0.1))
+            top_n = min(top_n, len(counts))
+            sel = np.argsort(counts)[-top_n:][::-1]
+
+        pair_idx = pair_idx[sel]
+        img_cap = int(image_positions.shape[0])
+        tile_cap = int(tile_positions.shape[0])
+        if img_cap == 0 or tile_cap == 0:
+            empty = np.empty((0, 2), dtype=np.float32)
+            return empty, empty, empty
+
+        valid = (pair_idx[:, 0] >= 0) & (pair_idx[:, 0] < img_cap) & (pair_idx[:, 1] >= 0) & (pair_idx[:, 1] < tile_cap)
+        dropped = int(valid.size - np.count_nonzero(valid))
+        if not np.any(valid):
+            empty = np.empty((0, 2), dtype=np.float32)
+            if dropped:
+                logger.warning("discarded %d invalid vote pairs (image=%d, tile=%d)", dropped, img_cap, tile_cap)
+            return empty, empty, empty
+        if dropped:
+            logger.debug("discarded %d vote pairs outside valid ranges (image=%d, tile=%d)", dropped, img_cap, tile_cap)
+
+        pair_idx = pair_idx[valid]
+        cap = min(int(pair_idx.shape[0]), max(800, int(img_cap * 12)))
+        if cap <= 0:
+            empty = np.empty((0, 2), dtype=np.float32)
+            return empty, empty, empty
+        pair_idx = pair_idx[:cap]
+        img_ids = pair_idx[:, 0].astype(np.intp, copy=False)
+        tile_ids = pair_idx[:, 1].astype(np.intp, copy=False)
+        img_pts = np.asarray(image_positions[img_ids], dtype=np.float32)
+        tile_pts = np.asarray(tile_positions[tile_ids], dtype=np.float32)
+        world_pts = np.asarray(tile_world[tile_ids], dtype=np.float32)
+        return img_pts, tile_pts, world_pts
+
     # Determine a minimal vote threshold adaptively; allow 1 to seed hypotheses.
     counts = np.array(list(votes.values()), dtype=int)
     # Use a moderate percentile to keep plausible pairs; too high discards signal.
@@ -1068,7 +1124,77 @@ def solve_blind(
 
     candidate_search_cache: dict[tuple[Any, ...], list[tuple[str, int]]] = {}
     level_lookup_cache: dict[tuple[str, bool], tuple[QuadIndex | None, list[slice] | None]] = {}
+    collect_matches_cache: dict[tuple[Any, ...], tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
     allowed_tiles_sig_cache: dict[int, tuple[int, ...]] = {}
+    phase_perf: dict[str, dict[str, Any]] = {}
+    collect_metrics: dict[str, Any] = {
+        "calls": 0,
+        "cache_hits": 0,
+        "cache_misses": 0,
+        "compute_s": 0.0,
+    }
+    attempt_started = time.time()
+    total_candidates_tried = 0
+    fail_early_abort = False
+    fail_early_abort_reason: str | None = None
+    fail_early_abort_phase: str | None = None
+    fail_budget_s = max(0.0, float(getattr(config, "fail_attempt_budget_s", 70.0) or 0.0))
+    fail_budget_min_validations = max(0, int(getattr(config, "fail_attempt_min_validations", 18) or 0))
+    fail_budget_max_inliers = max(0, int(getattr(config, "fail_attempt_max_best_inliers", 4) or 0))
+    fail_budget_min_candidates = max(0, int(getattr(config, "fail_attempt_min_candidates", 20) or 0))
+
+    def _phase_slot(name: str) -> dict[str, Any]:
+        slot = phase_perf.get(name)
+        if slot is None:
+            slot = {
+                "elapsed_s": 0.0,
+                "level_calls": 0,
+                "candidates_seen": 0,
+                "candidates_considered": 0,
+                "candidates_tried": 0,
+                "solutions": 0,
+                "failed_validations": 0,
+                "early_abort": False,
+                "early_abort_reason": None,
+            }
+            phase_perf[name] = slot
+        return slot
+
+    def _maybe_fail_early_abort(phase_name: str) -> bool:
+        nonlocal fail_early_abort, fail_early_abort_reason, fail_early_abort_phase
+        if fail_early_abort:
+            return True
+        if fail_budget_s <= 0.0:
+            return False
+        if phase_name not in {"scale_only", "blind"}:
+            return False
+        elapsed = time.time() - attempt_started
+        if elapsed < fail_budget_s:
+            return False
+        if fail_validation_count < fail_budget_min_validations:
+            return False
+        if fail_best_inliers_seen > fail_budget_max_inliers:
+            return False
+        if total_candidates_tried < fail_budget_min_candidates:
+            return False
+        fail_early_abort = True
+        fail_early_abort_phase = phase_name
+        fail_early_abort_reason = (
+            f"elapsed>{fail_budget_s:.1f}s and weak_support"
+            f" (best_inliers={fail_best_inliers_seen}, validations={fail_validation_count}, candidates={total_candidates_tried})"
+        )
+        try:
+            slot = _phase_slot(phase_name)
+            slot["early_abort"] = True
+            slot["early_abort_reason"] = str(fail_early_abort_reason)
+        except Exception:
+            pass
+        logger.info(
+            "blind fail-early abort triggered in phase %s: %s",
+            phase_name,
+            fail_early_abort_reason,
+        )
+        return True
 
     def _allowed_tiles_key(tiles: set[int] | None) -> tuple[Any, ...]:
         if tiles is None:
@@ -1080,11 +1206,29 @@ def solve_blind(
             allowed_tiles_sig_cache[key_id] = sig
         return ("tiles", sig)
 
+    def _collect_cache_key(
+        lvl: str,
+        tile_idx: int,
+        use_px: bool,
+        ohashes: np.ndarray,
+        oquads: np.ndarray,
+    ) -> tuple[Any, ...]:
+        return (
+            lvl,
+            int(tile_idx),
+            bool(use_px),
+            int(id(ohashes)),
+            int(id(oquads)),
+            int(bucket_limit),
+            int(vote_percentile),
+        )
+
     def _attempt_level(
         level_name: str,
         hashes: np.ndarray,
         preferred_tile: str | None,
         parity_label: str,
+        phase_name: str,
         *,
         use_px_spec: bool = True,
         use_ra_filter: bool = True,
@@ -1092,8 +1236,13 @@ def solve_blind(
         agg_levels: Iterable[str] | None = None,
         early_exit_ratio: float | None = None,
     ) -> WcsSolution | None:
-        nonlocal fail_best_inliers_seen, fail_validation_count
+        nonlocal fail_best_inliers_seen, fail_validation_count, total_candidates_tried
+        phase_slot = _phase_slot(phase_name)
+        phase_slot["level_calls"] += 1
         if cancel_check and cancel_check():
+            return None
+        if _maybe_fail_early_abort(phase_name):
+            phase_slot["early_abort"] = True
             return None
         active_allowed_tiles = allowed_tiles if use_ra_filter else None
         # Use precomputed observed quads for this level (optionally bypassing px filters)
@@ -1126,6 +1275,7 @@ def solve_blind(
         if not candidates:
             logger.debug("level %s produced no candidates (parity=%s)", level_name, parity_label)
             return None
+        phase_slot["candidates_seen"] += int(len(candidates))
         ordered = _prioritize_candidates(candidates, preferred_tile)
         if early_exit_ratio and len(ordered) >= 2:
             top_score = max(1, ordered[0][1])
@@ -1163,6 +1313,7 @@ def solve_blind(
         candidate_limit = max(1, int(config.max_candidates))
         low_support_streak = 0
         weak_validation_streak = 0
+        medium_validation_streak = 0
         best_support = 0
         level_started = time.time()
         global_budget_s = 0.0
@@ -1186,7 +1337,19 @@ def solve_blind(
                     ordered_pruned2 = [(k, sc) for (k, sc) in ordered if int(sc) >= score_floor2]
                     if len(ordered_pruned2) >= max(6, min(candidate_limit, 12)):
                         ordered = ordered_pruned2
-            global_budget_s = 8.0 if fast_global else 0.0
+                dominance = float(top_score) / float(max(1, runner_up))
+                if fast_global:
+                    if dominance >= 3.0:
+                        candidate_limit = min(candidate_limit, 10)
+                    elif dominance >= 2.0:
+                        candidate_limit = min(candidate_limit, 12)
+                    elif dominance >= 1.4:
+                        candidate_limit = min(candidate_limit, 14)
+            global_budget_s = float(
+                getattr(config, "global_budget_fast_s", 8.0)
+                if fast_global
+                else getattr(config, "global_budget_slow_s", 18.0)
+            )
             if global_budget_s > 0.0:
                 if level_name == "M":
                     global_budget_s *= 1.35
@@ -1199,8 +1362,13 @@ def solve_blind(
             if best_support >= 4:
                 return False
             if global_budget_s > 0.0 and (time.time() - level_started) >= global_budget_s:
+                phase_slot["early_abort"] = True
+                phase_slot["early_abort_reason"] = f"time_budget>{global_budget_s:.1f}s"
                 return True
-            if low_support_streak >= (12 if bool(getattr(config, "fast_mode", True)) else 28):
+            streak_limit = 12 if bool(getattr(config, "fast_mode", True)) else 28
+            if low_support_streak >= streak_limit:
+                phase_slot["early_abort"] = True
+                phase_slot["early_abort_reason"] = f"low_support_streak>={streak_limit}"
                 return True
             return False
 
@@ -1226,9 +1394,13 @@ def solve_blind(
             parity_label,
             len(candidates),
         )
+        phase_slot["candidates_considered"] += int(min(len(ordered), candidate_limit))
         for candidate_key, score in ordered[: candidate_limit]:
             if cancel_check and cancel_check():
                 return None
+            if _maybe_fail_early_abort(phase_name):
+                phase_slot["early_abort"] = True
+                break
             logger.debug(
                 "trying tile %s (score=%d) at level %s (parity=%s)",
                 candidate_key,
@@ -1241,6 +1413,8 @@ def solve_blind(
                 continue
             if active_allowed_tiles is not None and tile_index not in active_allowed_tiles:
                 continue
+            total_candidates_tried += 1
+            phase_slot["candidates_tried"] += 1
             tile_entry = tile_entries[tile_index]
             try:
                 tile_positions, tile_world = _load_tile_positions(index_root, tile_entry)
@@ -1261,18 +1435,30 @@ def solve_blind(
                 else:
                     lvl_entry = (base_hashes, base_quads, base_counts)
                 ohashes, oquads, _ = lvl_entry
-                ip, tp, wp = _collect_tile_matches(
-                    index_root,
-                    (lvl,),
-                    tile_index,
-                    ohashes,
-                    oquads,
-                    image_positions,
-                    tile_positions,
-                    tile_world,
-                    bucket_limit,
-                    vote_percentile,
-                )
+                collect_metrics["calls"] += 1
+                ckey = _collect_cache_key(lvl, tile_index, use_px_spec, ohashes, oquads)
+                cached_triplet = collect_matches_cache.get(ckey)
+                if cached_triplet is None:
+                    collect_metrics["cache_misses"] += 1
+                    _t0 = time.time()
+                    ip, tp, wp = _collect_tile_matches(
+                        index_root,
+                        (lvl,),
+                        tile_index,
+                        ohashes,
+                        oquads,
+                        image_positions,
+                        tile_positions,
+                        tile_world,
+                        bucket_limit,
+                        vote_percentile,
+                        use_vectorized=bool(getattr(config, "collect_matches_vectorized_experimental", False)),
+                    )
+                    collect_metrics["compute_s"] += float(time.time() - _t0)
+                    collect_matches_cache[ckey] = (ip, tp, wp)
+                else:
+                    collect_metrics["cache_hits"] += 1
+                    ip, tp, wp = cached_triplet
                 if ip.size:
                     img_list.append(ip)
                     tile_list.append(tp)
@@ -1528,11 +1714,13 @@ def solve_blind(
                 inl = int(stats.get("inliers", 0) or 0)
                 fail_best_inliers_seen = max(fail_best_inliers_seen, inl)
                 fail_validation_count += 1
+                phase_slot["failed_validations"] += 1
                 if global_mode:
                     inl = int(stats.get("inliers", 0) or 0)
                     best_support = max(best_support, inl)
                     low_support_streak = (low_support_streak + 1) if inl <= 2 else 0
                     weak_validation_streak = (weak_validation_streak + 1) if inl <= 4 else 0
+                    medium_validation_streak = (medium_validation_streak + 1) if inl <= 8 else 0
                     score_rel = float(max(1, int(score))) / float(max(1, top_candidate_score))
                     weak_break_streak = 8 if bool(getattr(config, "fast_mode", True)) else 16
                     if weak_validation_streak >= weak_break_streak and score_rel <= 0.35:
@@ -1540,6 +1728,19 @@ def solve_blind(
                             "global early-stop: prolonged weak validations in tail (streak=%d, rel=%.2f, level=%s, parity=%s)",
                             weak_validation_streak,
                             score_rel,
+                            level_name,
+                            parity_label,
+                        )
+                        break
+                    medium_break_streak = 14 if bool(getattr(config, "fast_mode", True)) else 28
+                    elapsed_level = time.time() - level_started
+                    medium_elapsed_gate = max(6.0, (0.75 * global_budget_s) if global_budget_s > 0.0 else 10.0)
+                    if medium_validation_streak >= medium_break_streak and score_rel <= 0.45 and elapsed_level >= medium_elapsed_gate:
+                        logger.debug(
+                            "global early-stop: medium-quality validation stall (streak=%d, rel=%.2f, elapsed=%.1fs, level=%s, parity=%s)",
+                            medium_validation_streak,
+                            score_rel,
+                            elapsed_level,
                             level_name,
                             parity_label,
                         )
@@ -1561,11 +1762,13 @@ def solve_blind(
                 inl = int(stats.get("inliers", 0) or 0)
                 fail_best_inliers_seen = max(fail_best_inliers_seen, inl)
                 fail_validation_count += 1
+                phase_slot["failed_validations"] += 1
                 if global_mode:
                     inl = int(stats.get("inliers", 0) or 0)
                     best_support = max(best_support, inl)
                     low_support_streak = (low_support_streak + 1) if inl <= 2 else 0
                     weak_validation_streak = (weak_validation_streak + 1) if inl <= 4 else 0
+                    medium_validation_streak = (medium_validation_streak + 1) if inl <= 8 else 0
                     score_rel = float(max(1, int(score))) / float(max(1, top_candidate_score))
                     weak_break_streak = 8 if bool(getattr(config, "fast_mode", True)) else 16
                     if weak_validation_streak >= weak_break_streak and score_rel <= 0.35:
@@ -1573,6 +1776,19 @@ def solve_blind(
                             "global early-stop: prolonged weak zemosaic rejects in tail (streak=%d, rel=%.2f, level=%s, parity=%s)",
                             weak_validation_streak,
                             score_rel,
+                            level_name,
+                            parity_label,
+                        )
+                        break
+                    medium_break_streak = 14 if bool(getattr(config, "fast_mode", True)) else 28
+                    elapsed_level = time.time() - level_started
+                    medium_elapsed_gate = max(6.0, (0.75 * global_budget_s) if global_budget_s > 0.0 else 10.0)
+                    if medium_validation_streak >= medium_break_streak and score_rel <= 0.45 and elapsed_level >= medium_elapsed_gate:
+                        logger.debug(
+                            "global early-stop: medium-quality zemosaic stall (streak=%d, rel=%.2f, elapsed=%.1fs, level=%s, parity=%s)",
+                            medium_validation_streak,
+                            score_rel,
+                            elapsed_level,
                             level_name,
                             parity_label,
                         )
@@ -1595,6 +1811,7 @@ def solve_blind(
                 "SOLVER": "ZeSolver",
                 "SOLVMODE": "BLIND",
             }
+            phase_slot["solutions"] += 1
             return WcsSolution(
                 True,
                 f"solution found (level={level_name}, parity={parity_label})",
@@ -1608,6 +1825,7 @@ def solve_blind(
     def _run_levels(
         hashes: np.ndarray,
         parity_label: str,
+        phase_name: str,
         *,
         use_px_spec: bool = True,
         use_ra_filter: bool = True,
@@ -1636,6 +1854,7 @@ def solve_blind(
                 hashes,
                 preferred_tile,
                 parity_label,
+                phase_name,
                 use_px_spec=use_px_spec,
                 use_ra_filter=use_ra_filter,
                 allowed_tiles=allowed_tiles,
@@ -1730,6 +1949,7 @@ def solve_blind(
             continue
         phases_attempted.append(str(phase.get("name", "unknown")))
         phase_start = time.time()
+        phase_slot = _phase_slot(str(phase["name"]))
         logger.info(
             "phase %s starting (ra_filter=%s, level_sets=%d)",
             phase["name"],
@@ -1764,9 +1984,13 @@ def solve_blind(
             )
         for level_seq in phase["level_sets"]:
             for variant_hashes, parity_label in variants:
+                if _maybe_fail_early_abort(str(phase["name"])):
+                    phase_slot["early_abort"] = True
+                    break
                 solution = _run_levels(
                     variant_hashes,
                     parity_label,
+                    phase_name=str(phase["name"]),
                     use_px_spec=True,
                     use_ra_filter=phase["use_ra_filter"],
                     allowed_tiles=phase.get("allowed_tiles"),
@@ -1782,19 +2006,42 @@ def solve_blind(
                 solution.stats["phase_level_count"] = len(level_seq)
                 best_solution = solution
                 break
+            if fail_early_abort:
+                break
             if best_solution:
                 break
+        phase_slot["elapsed_s"] = float(time.time() - phase_start)
+        if fail_early_abort:
+            logger.info(
+                "phase %s ended by fail-early abort after %.2fs",
+                phase["name"],
+                phase_slot["elapsed_s"],
+            )
+            break
         if best_solution:
             break
     _log_phase("candidate search", stage)
     if not best_solution:
+        attempt_elapsed_s = float(time.time() - attempt_started)
         fail_stats = {
             "best_fail_inliers": int(fail_best_inliers_seen),
             "fail_validation_count": int(fail_validation_count),
             "phases_attempted": list(phases_attempted),
             "has_hints": bool(ra_available and scale_available),
+            "attempt_elapsed_s": attempt_elapsed_s,
+            "fail_early_abort": bool(fail_early_abort),
+            "fail_early_abort_phase": fail_early_abort_phase,
+            "fail_early_abort_reason": fail_early_abort_reason,
+            "fail_budget_s": float(fail_budget_s),
+            "total_candidates_tried": int(total_candidates_tried),
+            "phase_perf": {k: dict(v) for k, v in phase_perf.items()},
+            "collect_metrics": dict(collect_metrics),
         }
         return _finish(WcsSolution(False, "no valid solution", None, fail_stats, None, {}))
+    best_solution.stats["attempt_elapsed_s"] = float(time.time() - attempt_started)
+    best_solution.stats["total_candidates_tried"] = int(total_candidates_tried)
+    best_solution.stats["phase_perf"] = {k: dict(v) for k, v in phase_perf.items()}
+    best_solution.stats["collect_metrics"] = dict(collect_metrics)
     header_updates = {
         **best_solution.header_updates,
         "BLINDVER": ZEBLIND_VERSION,
@@ -1888,6 +2135,10 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Tile position cache capacity (overrides ZE_TILE_CACHE_SIZE, default=128)",
     )
+    parser.add_argument("--fail-attempt-budget-s", type=float, default=70.0, help="Fail-fast budget (s) for weak blind attempts; <=0 disables")
+    parser.add_argument("--fail-attempt-min-validations", type=int, default=18, help="Minimum failed validations before fail-fast abort")
+    parser.add_argument("--fail-attempt-max-best-inliers", type=int, default=4, help="Maximum best inliers considered weak for fail-fast abort")
+    parser.add_argument("--fail-attempt-min-candidates", type=int, default=20, help="Minimum tried candidates before fail-fast abort")
     parser.add_argument("--log-level", default="INFO")
     # Backend selection
     parser.add_argument("--solver-backend", choices=("local", "astrometry"), default=None)
@@ -1975,6 +2226,10 @@ def main(argv: list[str] | None = None) -> int:
         pixel_scale_min_arcsec=args.pixel_scale_min,
         pixel_scale_max_arcsec=args.pixel_scale_max,
         tile_cache_size=tile_cache_size,
+        fail_attempt_budget_s=max(0.0, float(args.fail_attempt_budget_s or 0.0)),
+        fail_attempt_min_validations=max(0, int(args.fail_attempt_min_validations or 0)),
+        fail_attempt_max_best_inliers=max(0, int(args.fail_attempt_max_best_inliers or 0)),
+        fail_attempt_min_candidates=max(0, int(args.fail_attempt_min_candidates or 0)),
     )
     solution = solve_blind(args.input, args.index_root, config=config)
     if solution.success:
