@@ -15,6 +15,7 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -354,7 +355,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "fast_max_img_stars_label": "Étoiles image max (near)",
         "fast_max_cat_stars_label": "Étoiles catalogue max (near)",
         "fast_try_parity_label": "Autoriser symétrie (flip parité)",
-        "fast_astap_iso_strict_label": "Mode strict ASTAP-ISO (diagnostic)",
+        "fast_astap_iso_strict_label": "Mode strict ASTAP-ISO (toujours actif)",
         "fast_search_margin_label": "Marge de recherche (near)",
         "fast_detect_k_sigma_label": "Seuil détection k-sigma (near)",
         "fast_detect_min_area_label": "Aire min source (near)",
@@ -555,7 +556,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "fast_max_img_stars_label": "Max image stars (near)",
         "fast_max_cat_stars_label": "Max catalog stars (near)",
         "fast_try_parity_label": "Allow parity flip",
-        "fast_astap_iso_strict_label": "Strict ASTAP-ISO mode (diagnostic)",
+        "fast_astap_iso_strict_label": "Strict ASTAP-ISO mode (always on)",
         "fast_search_margin_label": "Search margin (near)",
         "fast_detect_k_sigma_label": "Detection k-sigma (near)",
         "fast_detect_min_area_label": "Min source area (near)",
@@ -1023,6 +1024,8 @@ class SolveConfig:
         detect_area = int(getattr(self, "dev_detect_min_area", 5) or 5)
         detect_area = max(1, detect_area)
         object.__setattr__(self, "dev_detect_min_area", detect_area)
+        # Legacy non-strict mode is retired.
+        object.__setattr__(self, "near_astap_iso_strict", True)
         api_url = str(getattr(self, "astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api").strip()
         if not api_url:
             api_url = "https://nova.astrometry.net/api"
@@ -1587,6 +1590,10 @@ class ImageSolver:
         # Sequential near-solver warm start: (scale_deg_per_px, rotation_rad, parity)
         self._near_seed: Optional[tuple[float, float, int]] = None
         self._near_warmstart_parallel_notified: bool = False
+        # Recent solved sky positions used to sanity-check/replace bad header hints.
+        self._blind_hint_lock = threading.Lock()
+        self._recent_sky_hints: list[dict[str, Any]] = []
+        self._recent_sky_hints_max: int = 128
         # Cache to avoid repeating expensive blind index preflight checks per file
         self._blind_index_checked: bool = False
         self._blind_index_checked_root: Optional[Path] = None
@@ -1826,6 +1833,157 @@ class ImageSolver:
         return unique or [base]
 
     @staticmethod
+    def _series_key(path: Path) -> str:
+        stem = path.stem.lower()
+        stem = re.sub(r"20\d{6}[-_ ]?\d{6}", " ", stem)
+        stem = re.sub(r"\d{6,}", " ", stem)
+        stem = re.sub(r"[_\-\s]+", " ", stem).strip()
+        parent = path.parent.name.lower().strip()
+        return f"{parent}|{stem}"
+
+    @staticmethod
+    def _frame_order_key(path: Path) -> Optional[int]:
+        stem = path.stem
+        m = re.search(r"(20\d{6})[-_ ]?(\d{6})", stem)
+        if m:
+            try:
+                return int(f"{m.group(1)}{m.group(2)}")
+            except Exception:
+                return None
+        nums = re.findall(r"\d{6,}", stem)
+        if not nums:
+            return None
+        try:
+            return int(nums[-1])
+        except Exception:
+            return None
+
+    @staticmethod
+    def _angular_separation_deg(ra1_deg: float, dec1_deg: float, ra2_deg: float, dec2_deg: float) -> float:
+        ra1 = math.radians(float(ra1_deg) % 360.0)
+        dec1 = math.radians(float(dec1_deg))
+        ra2 = math.radians(float(ra2_deg) % 360.0)
+        dec2 = math.radians(float(dec2_deg))
+        cos_sep = (
+            math.sin(dec1) * math.sin(dec2)
+            + math.cos(dec1) * math.cos(dec2) * math.cos(ra1 - ra2)
+        )
+        cos_sep = max(-1.0, min(1.0, cos_sep))
+        return math.degrees(math.acos(cos_sep))
+
+    def _remember_recent_sky_hint(
+        self,
+        *,
+        path: Path,
+        ra_deg: Optional[float],
+        dec_deg: Optional[float],
+        origin: str,
+        tile_key: Optional[str] = None,
+    ) -> None:
+        if ra_deg is None or dec_deg is None:
+            return
+        try:
+            ra = float(ra_deg)
+            dec = float(dec_deg)
+        except Exception:
+            return
+        if not (math.isfinite(ra) and math.isfinite(dec)):
+            return
+        entry = {
+            "path_name": path.name,
+            "series_key": self._series_key(path),
+            "order_key": self._frame_order_key(path),
+            "ra_deg": ra,
+            "dec_deg": dec,
+            "origin": str(origin),
+            "tile_key": str(tile_key) if tile_key else None,
+            "ts": time.time(),
+        }
+        with self._blind_hint_lock:
+            self._recent_sky_hints.append(entry)
+            if len(self._recent_sky_hints) > self._recent_sky_hints_max:
+                self._recent_sky_hints = self._recent_sky_hints[-self._recent_sky_hints_max :]
+
+    def _remember_keywords_hint(
+        self,
+        *,
+        path: Path,
+        keywords: Optional[Mapping[str, Any]],
+        origin: str,
+        tile_key: Optional[str] = None,
+    ) -> None:
+        if not keywords:
+            return
+        ra = _parse_angle((keywords.get("CRVAL1") if isinstance(keywords, Mapping) else None), is_ra=True)
+        dec = _parse_angle((keywords.get("CRVAL2") if isinstance(keywords, Mapping) else None), is_ra=False)
+        self._remember_recent_sky_hint(path=path, ra_deg=ra, dec_deg=dec, origin=origin, tile_key=tile_key)
+
+    def _remember_file_wcs_hint(
+        self,
+        *,
+        path: Path,
+        origin: str,
+        tile_key: Optional[str] = None,
+    ) -> None:
+        try:
+            with fits.open(path, mode="readonly", memmap=False) as hdul:
+                header = hdul[0].header
+            ra = _parse_angle(header.get("CRVAL1"), is_ra=True)
+            dec = _parse_angle(header.get("CRVAL2"), is_ra=False)
+            self._remember_recent_sky_hint(path=path, ra_deg=ra, dec_deg=dec, origin=origin, tile_key=tile_key)
+        except Exception:
+            return
+
+    def _select_adaptive_blind_hint(
+        self,
+        *,
+        path: Path,
+        ra_hint: Optional[float],
+        dec_hint: Optional[float],
+    ) -> tuple[Optional[float], Optional[float], Optional[str]]:
+        with self._blind_hint_lock:
+            history = list(self._recent_sky_hints)
+        if not history:
+            return ra_hint, dec_hint, None
+
+        series = self._series_key(path)
+        candidates = [h for h in reversed(history) if str(h.get("series_key") or "") == series]
+        if not candidates:
+            return ra_hint, dec_hint, None
+
+        target_order = self._frame_order_key(path)
+        ref: dict[str, Any]
+        if target_order is not None:
+            with_order = [h for h in candidates if isinstance(h.get("order_key"), int)]
+            if with_order:
+                ref = min(with_order, key=lambda h: abs(int(h.get("order_key", 0)) - target_order))
+            else:
+                ref = candidates[0]
+        else:
+            ref = candidates[0]
+
+        try:
+            ref_ra = float(ref.get("ra_deg"))
+            ref_dec = float(ref.get("dec_deg"))
+        except Exception:
+            return ra_hint, dec_hint, None
+
+        source_tag = f"from={ref.get('path_name','?')} origin={ref.get('origin','?')}"
+        if ra_hint is None or dec_hint is None:
+            return ref_ra, ref_dec, f"missing RA/DEC hint, using neighbor ({source_tag})"
+
+        sep = self._angular_separation_deg(float(ra_hint), float(dec_hint), ref_ra, ref_dec)
+        threshold = 12.0
+        if self.config.hint_radius_deg is not None:
+            try:
+                threshold = max(8.0, min(30.0, float(self.config.hint_radius_deg) * 6.0))
+            except Exception:
+                threshold = 12.0
+        if sep >= threshold:
+            return ref_ra, ref_dec, f"header hint incoherent (sep={sep:.1f}° >= {threshold:.1f}°), using neighbor ({source_tag})"
+        return ra_hint, dec_hint, None
+
+    @staticmethod
     def _family_label(family: str) -> str:
         return family.upper()
 
@@ -1914,6 +2072,15 @@ class ImageSolver:
         pixel_scale_arcsec = self._pixel_scale_arcsec(solution.cd)
         rms_arcsec = rms_px * pixel_scale_arcsec if rms_px is not None else None
         self._write_solution(metadata, solution)
+        try:
+            self._remember_recent_sky_hint(
+                path=path,
+                ra_deg=float(solution.crval[0]),
+                dec_deg=float(solution.crval[1]),
+                origin=(f"catalog:{catalog_family}" if catalog_family else "catalog"),
+            )
+        except Exception:
+            pass
         scale_str = f'{pixel_scale_arcsec:.2f}' + '"/px'
         if label:
             message = f"Solved via {label} ({solution.matches} matches, ~{scale_str})"
@@ -2428,6 +2595,24 @@ class ImageSolver:
                 return None
             final_ra = self.config.hint_ra_deg if self.config.hint_ra_deg is not None else ra_hint
             final_dec = self.config.hint_dec_deg if self.config.hint_dec_deg is not None else dec_hint
+            explicit_user_hint = self.config.hint_ra_deg is not None and self.config.hint_dec_deg is not None
+            if not explicit_user_hint:
+                prev_ra, prev_dec = final_ra, final_dec
+                final_ra, final_dec, adaptive_reason = self._select_adaptive_blind_hint(
+                    path=path,
+                    ra_hint=final_ra,
+                    dec_hint=final_dec,
+                )
+                if adaptive_reason:
+                    logging.info(
+                        "[ZEBLIND] adaptive hint for %s: %s (ra=%s->%s, dec=%s->%s)",
+                        path.name,
+                        adaptive_reason,
+                        "-" if prev_ra is None else f"{float(prev_ra):.6f}",
+                        "-" if final_ra is None else f"{float(final_ra):.6f}",
+                        "-" if prev_dec is None else f"{float(prev_dec):.6f}",
+                        "-" if final_dec is None else f"{float(final_dec):.6f}",
+                    )
             blind_cfg = BlindSolveConfig(
                 # Tunables from GUI / persistent settings
                 max_candidates=int(getattr(self.config, "blind_max_candidates", 10) or 10),
@@ -2545,6 +2730,17 @@ class ImageSolver:
             label = Path(db).name or db
             run_info.append(("run_info_blind_db", {"db": label}))
         if result["success"]:
+            try:
+                tile_key = (str(result.get("used_db")) if isinstance(result, Mapping) and result.get("used_db") is not None else None)
+                self._remember_keywords_hint(
+                    path=path,
+                    keywords=result.get("updated_keywords") if isinstance(result, Mapping) else None,
+                    origin="blind",
+                    tile_key=tile_key,
+                )
+                self._remember_file_wcs_hint(path=path, origin="blind", tile_key=tile_key)
+            except Exception:
+                pass
             db_name = result["used_db"] or (Path(result["tried_dbs"][-1]).name if result["tried_dbs"] else "unknown")
             run_info.append(
                 (
@@ -2774,7 +2970,8 @@ class ImageSolver:
                 config=near_cfg,
                 log=logging.info,
                 skip_if_valid=False,
-                fallback_to_blind=bool(self.config.blind_enabled),
+                # Avoid repeated blind fallbacks on each near retry; run blind once after near attempts are exhausted.
+                fallback_to_blind=False,
                 cancel_check=(self._cancelled if self._cancel_event else None),
             )
             if not result["success"] and not (self._cancelled() if self._cancel_event else False):
@@ -2818,7 +3015,8 @@ class ImageSolver:
                         config=near_cfg,
                         log=logging.info,
                         skip_if_valid=False,
-                        fallback_to_blind=bool(self.config.blind_enabled),
+                        # Avoid repeated blind fallbacks on each near retry; run blind once after near attempts are exhausted.
+                        fallback_to_blind=False,
                         cancel_check=(self._cancelled if self._cancel_event else None),
                     )
                     if result["success"]:
@@ -2828,6 +3026,24 @@ class ImageSolver:
                             path.name,
                         )
                         break
+                if (
+                    not result["success"]
+                    and bool(self.config.blind_enabled)
+                    and not (self._cancelled() if self._cancel_event else False)
+                ):
+                    logging.info(
+                        "[ZENEAR] near attempts exhausted for %s; running a single blind fallback",
+                        path.name,
+                    )
+                    result = near_solve(
+                        fits_path=str(path),
+                        index_root=str(index_root),
+                        config=near_cfg,
+                        log=logging.info,
+                        skip_if_valid=False,
+                        fallback_to_blind=True,
+                        cancel_check=(self._cancelled if self._cancel_event else None),
+                    )
         except BlindSolverRuntimeError as exc:
             logging.info("Near solver (index) failed for %s: %s", path.name, exc)
             return None
@@ -2841,6 +3057,14 @@ class ImageSolver:
                 p = int(kw.get("SEED_PAR")) if kw.get("SEED_PAR") is not None else 1
                 if s and r is not None and use_seq_warm_start:
                     self._near_seed = (s, r, p)
+                tile_key = (str(result.get("used_db")) if result.get("used_db") is not None else None)
+                self._remember_keywords_hint(
+                    path=path,
+                    keywords=kw,
+                    origin="near-index",
+                    tile_key=tile_key,
+                )
+                self._remember_file_wcs_hint(path=path, origin="near-index", tile_key=tile_key)
             except Exception:
                 pass
             return ImageSolveResult(
@@ -3590,13 +3814,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="near_astap_iso_strict",
         action="store_true",
         default=True,
-        help="Near-solver: enable strict ASTAP-ISO path (diagnostic parity mode)",
+        help="Near-solver: strict ASTAP-ISO path (always enabled; compatibility flag)",
     )
     parser.add_argument(
         "--no-near-astap-iso-strict",
         dest="near_astap_iso_strict",
         action="store_false",
-        help="Near-solver: disable strict ASTAP-ISO path",
+        help="Near-solver: deprecated, ignored (strict ASTAP-ISO is always enabled)",
     )
     parser.add_argument(
         "--near-warm-start",
@@ -3730,6 +3954,8 @@ def run_cli(args: argparse.Namespace) -> int:
     if not args.db_root or not args.input_dir:
         raise SystemExit("--db-root and --input-dir are required in CLI mode (use --gui to launch the GUI)")
     families = _normalize_family_args(args.family)
+    if bool(getattr(args, "near_astap_iso_strict", True)) is False:
+        logging.warning("--no-near-astap-iso-strict is deprecated and ignored; strict mode is always enabled")
     config = SolveConfig(
         db_root=args.db_root.expanduser().resolve(),
         input_dir=args.input_dir.expanduser().resolve(),
@@ -3770,7 +3996,7 @@ def run_cli(args: argparse.Namespace) -> int:
         near_astap_hint_fastpath=False,
         near_astap_hint_radius_deg=args.radius_hint,
         near_second_pass_refine_in_fastpath=False,
-        near_astap_iso_strict=bool(getattr(args, 'near_astap_iso_strict', True)),
+        near_astap_iso_strict=True,
         log_level=(args.log_level or "INFO").upper(),
         dev_bucket_limit_override=max(0, int(args.dev_bucket_limit or 0)),
         dev_vote_percentile=min(95, max(5, int(args.dev_vote_percentile or 40))),
@@ -6268,7 +6494,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.fast_try_parity_check)
             # Strict ASTAP-ISO mode
             self.fast_astap_iso_strict_check = QtWidgets.QCheckBox()
-            self.fast_astap_iso_strict_check.setChecked(bool(getattr(self._settings, 'near_astap_iso_strict', True)))
+            self.fast_astap_iso_strict_check.setChecked(True)
+            self.fast_astap_iso_strict_check.setEnabled(False)
             form.addRow(self.fast_astap_iso_strict_check)
             # Search margin
             self.fast_search_margin_label = QtWidgets.QLabel()
@@ -6501,7 +6728,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 if hasattr(self, 'fast_try_parity_check'):
                     self.fast_try_parity_check.setChecked(bool(getattr(settings, 'near_try_parity_flip', True)))
                 if hasattr(self, 'fast_astap_iso_strict_check'):
-                    self.fast_astap_iso_strict_check.setChecked(bool(getattr(settings, 'near_astap_iso_strict', True)))
+                    self.fast_astap_iso_strict_check.setChecked(True)
                 if hasattr(self, 'fast_search_margin_spin'):
                     self.fast_search_margin_spin.setValue(float(getattr(settings, 'near_search_margin', 1.2) or 1.2))
                 if hasattr(self, 'fast_detect_k_sigma_spin'):
@@ -6679,7 +6906,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_max_img_stars=int(self.fast_max_img_stars_spin.value()) if hasattr(self, 'fast_max_img_stars_spin') else 800,
                 near_max_cat_stars=int(self.fast_max_cat_stars_spin.value()) if hasattr(self, 'fast_max_cat_stars_spin') else 2000,
                 near_try_parity_flip=bool(self.fast_try_parity_check.isChecked()) if hasattr(self, 'fast_try_parity_check') else True,
-                near_astap_iso_strict=bool(self.fast_astap_iso_strict_check.isChecked()) if hasattr(self, 'fast_astap_iso_strict_check') else bool(getattr(self._settings, 'near_astap_iso_strict', True)),
+                near_astap_iso_strict=True,
                 near_search_margin=float(self.fast_search_margin_spin.value()) if hasattr(self, 'fast_search_margin_spin') else 1.2,
                 # Backend + astrometry
                 solver_backend=(self.backend_combo.currentData() if hasattr(self, 'backend_combo') else "local"),
@@ -8087,7 +8314,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_astap_hint_fastpath=False,
                 near_astap_hint_radius_deg=radius_hint,
                 near_second_pass_refine_in_fastpath=False,
-                near_astap_iso_strict=bool(getattr(self._settings, 'near_astap_iso_strict', True)),
+                near_astap_iso_strict=True,
                 near_max_tile_candidates=int(self._settings.near_max_tile_candidates or 48),
                 near_tile_cache_size=int(self._settings.near_tile_cache_size or 128),
                 near_detect_backend=str(self._settings.near_detect_backend or "auto"),

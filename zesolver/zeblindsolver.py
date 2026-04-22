@@ -244,7 +244,7 @@ def near_solve(
     start = time.perf_counter()
     fits_path = str(Path(fits_path).expanduser())
     index_root = str(Path(index_root).expanduser())
-    strict_flag = bool(getattr(config, "astap_iso_strict", False)) if config is not None else False
+    strict_flag = bool(getattr(config, "astap_iso_strict", True)) if config is not None else True
     logger(f"[ZENEAR] starting (index_root={index_root}, astap_iso_strict={str(strict_flag).lower()})")
     if skip_if_valid:
         try:
