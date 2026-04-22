@@ -608,6 +608,7 @@ def solve_blind(
     if cancel_check and cancel_check():
         return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
     allowed_tile_indices: set[int] | None = None
+    expanded_tile_indices: set[int] | None = None
     height, width = image.shape
     work_image = image
     if downsample_factor > 1:
@@ -653,6 +654,48 @@ def solve_blind(
             logger.warning(
                 "RA/Dec hint radius %.2f° excluded all manifest tiles; ignoring cone filter",
                 radius_for_filter,
+            )
+
+    # Build a widened RA/Dec cone for a second hinted pass before global blind.
+    # This keeps ASTAP-like progressive expansion while preserving global fallback safety.
+    if ra_hint is not None and dec_hint is not None and tile_count > 0:
+        base_radius = radius_for_filter
+        if base_radius is None:
+            fallback_fov = approx_fov_deg or 1.5
+            base_radius = min(8.0, max(0.8, fallback_fov * 1.2))
+        base_count = len(allowed_tile_indices) if allowed_tile_indices is not None else tile_count
+        expanded_candidate: set[int] | None = None
+        expanded_radius: float | None = None
+        expansion_radii = [
+            min(20.0, max(base_radius * 1.8, base_radius + 0.40)),
+            min(20.0, max(base_radius * 3.0, base_radius + 1.20)),
+            min(20.0, max(base_radius * 5.0, base_radius + 2.40)),
+        ]
+        seen_r = set()
+        for radius_try in expansion_radii:
+            rr = round(float(radius_try), 3)
+            if rr in seen_r or rr <= float(base_radius):
+                continue
+            seen_r.add(rr)
+            sel = select_tiles_in_cone(manifest, ra_hint, dec_hint, float(radius_try))
+            if not sel:
+                continue
+            if len(sel) >= tile_count:
+                continue
+            if len(sel) <= base_count:
+                continue
+            expanded_candidate = set(sel)
+            expanded_radius = float(radius_try)
+            # Good enough neighborhood, keep bounded and avoid drifting back to near-global.
+            if len(sel) >= max(4, 2 * max(1, base_count)):
+                break
+        if expanded_candidate is not None:
+            expanded_tile_indices = expanded_candidate
+            logger.info(
+                "RA/Dec widened cone prepared: %d/%d tiles (radius=%.2f°)",
+                len(expanded_tile_indices),
+                tile_count,
+                float(expanded_radius or 0.0),
             )
     _log_phase("read image", stage)
     stage = time.time()
@@ -781,12 +824,13 @@ def solve_blind(
         *,
         use_px_spec: bool = True,
         use_ra_filter: bool = True,
+        allowed_tiles: set[int] | None = None,
         agg_levels: Iterable[str] | None = None,
         early_exit_ratio: float | None = None,
     ) -> WcsSolution | None:
         if cancel_check and cancel_check():
             return None
-        active_allowed_tiles = allowed_tile_indices if use_ra_filter else None
+        active_allowed_tiles = allowed_tiles if use_ra_filter else None
         # Use precomputed observed quads for this level (optionally bypassing px filters)
         if use_px_spec:
             entry = obs_by_level.get(level_name)
@@ -819,7 +863,7 @@ def solve_blind(
                 )
                 ordered = ordered[:1]
         # If we have RA/DEC hint, ignore far tiles to speed up and reduce false tries
-        if use_ra_filter and allowed_tile_indices is None and ra_hint is not None and dec_hint is not None:
+        if use_ra_filter and active_allowed_tiles is None and ra_hint is not None and dec_hint is not None:
             # derive a radius from explicit hint when available; otherwise approximate from FOV
             radius_limit = radius_for_filter
             if radius_limit is None:
@@ -839,13 +883,69 @@ def solve_blind(
                     filtered.append((key, score))
             if filtered:
                 ordered = filtered
+        global_mode = not bool(use_ra_filter)
+        candidate_limit = max(1, int(config.max_candidates))
+        low_support_streak = 0
+        weak_validation_streak = 0
+        best_support = 0
+        level_started = time.time()
+        global_budget_s = 0.0
+        if global_mode:
+            fast_global = bool(getattr(config, "fast_mode", True))
+            # Keep rescue breadth, tighten only fast/global probing.
+            if fast_global:
+                candidate_limit = min(candidate_limit, 18)
+            top_score = max(1, int(ordered[0][1])) if ordered else 1
+            score_floor = max(2, int(top_score * (0.06 if fast_global else 0.04)))
+            ordered_pruned = [(k, sc) for (k, sc) in ordered if int(sc) >= score_floor]
+            if len(ordered_pruned) >= max(8, candidate_limit):
+                ordered = ordered_pruned
+            # Additional gentle tail pruning when there is a clear front-runner.
+            # Keep this conservative to avoid dropping valid rescue candidates.
+            if len(ordered) >= 2:
+                runner_up = max(1, int(ordered[1][1]))
+                if top_score >= int(1.25 * runner_up):
+                    rel_floor = 0.10 if fast_global else 0.08
+                    score_floor2 = max(2, int(top_score * rel_floor))
+                    ordered_pruned2 = [(k, sc) for (k, sc) in ordered if int(sc) >= score_floor2]
+                    if len(ordered_pruned2) >= max(6, min(candidate_limit, 12)):
+                        ordered = ordered_pruned2
+            global_budget_s = 8.0 if fast_global else 0.0
+            if global_budget_s > 0.0:
+                if level_name == "M":
+                    global_budget_s *= 1.35
+                elif level_name == "L":
+                    global_budget_s *= 1.80
+
+        def _global_abort_now() -> bool:
+            if not global_mode:
+                return False
+            if best_support >= 4:
+                return False
+            if global_budget_s > 0.0 and (time.time() - level_started) >= global_budget_s:
+                return True
+            if low_support_streak >= (12 if bool(getattr(config, "fast_mode", True)) else 28):
+                return True
+            return False
+
+        level_index: QuadIndex | None = None
+        level_slices: list[slice] | None = None
+        if level_hashes.size:
+            try:
+                level_index = QuadIndex.load(index_root, level_name)
+                level_slices = lookup_hashes(index_root, level_name, level_hashes)
+            except FileNotFoundError:
+                level_index = None
+                level_slices = None
+        top_candidate_score = max(1, int(ordered[0][1])) if ordered else 1
+
         logger.info(
             "level %s (parity=%s) candidate search returned %d candidate(s)",
             level_name,
             parity_label,
             len(candidates),
         )
-        for candidate_key, score in ordered[: config.max_candidates]:
+        for candidate_key, score in ordered[: candidate_limit]:
             if cancel_check and cancel_check():
                 return None
             logger.debug(
@@ -905,23 +1005,35 @@ def solve_blind(
                 tile_points = np.empty((0, 2), dtype=np.float32)
                 tile_world_matches = np.empty((0, 2), dtype=np.float32)
             if img_points.shape[0] < 4:
+                if global_mode:
+                    low_support_streak += 1
+                    if _global_abort_now():
+                        logger.debug("global early-stop: weak candidate support (tile=%s, level=%s, parity=%s)", candidate_key, level_name, parity_label)
+                        break
                 continue
             # Try quad-based hypotheses first (local, stable scale) then fall back to RANSAC
             transform_result: tuple[SimilarityTransform, SimilarityStats] | None = None
-            try:
-                index = QuadIndex.load(index_root, level_name)
-            except FileNotFoundError:
-                index = None
-            if index is not None:
-                slices = lookup_hashes(index_root, level_name, level_hashes)
+            if level_index is not None and level_slices is not None:
                 best = None
                 best_inliers = -1
                 tested = 0
-                # Cap buckets per candidate tile to keep runtime reasonable
-                max_buckets = 800
+                # Cap buckets per candidate tile to keep runtime reasonable.
+                # Give more budget to top-ranked candidates and less to tail candidates.
+                fast_mode = bool(getattr(config, "fast_mode", True))
+                rel_score = float(max(1, int(score))) / float(top_candidate_score)
+                max_buckets_f = 420.0 if fast_mode else 650.0
+                if level_name == "M":
+                    max_buckets_f *= 1.20
+                elif level_name == "L":
+                    max_buckets_f *= 1.45
+                if rel_score >= 0.80:
+                    max_buckets_f *= 1.40
+                elif rel_score <= 0.30:
+                    max_buckets_f *= 0.70
+                max_buckets = int(max(160, min(1200, round(max_buckets_f))))
                 src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
                 dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
-                for idx2, slc in enumerate(slices):
+                for idx2, slc in enumerate(level_slices):
                     if cancel_check and cancel_check():
                         return None
                     if slc.start == slc.stop:
@@ -932,12 +1044,12 @@ def solve_blind(
                     for b in range(slc.start, slc.stop):
                         if cancel_check and cancel_check():
                             return None
-                        if int(index.tile_indices[b]) != tile_index:
+                        if int(level_index.tile_indices[b]) != tile_index:
                             continue
                         tested += 1
                         if tested >= max_buckets:
                             break
-                        tile_combo = index.quad_indices[b]
+                        tile_combo = level_index.quad_indices[b]
                         if np.any(obs_combo < 0) or np.any(obs_combo >= image_positions.shape[0]):
                             logger.debug("skipping quad with invalid image indices (level=%s)", level_name)
                             continue
@@ -999,6 +1111,11 @@ def solve_blind(
                     random_state=ransac_seed,
                 )
             if transform_result is None:
+                if global_mode:
+                    low_support_streak += 1
+                    if _global_abort_now():
+                        logger.debug("global early-stop: no transform after repeated attempts (level=%s, parity=%s)", level_name, parity_label)
+                        break
                 continue
             # Build localized inliers and refit similarity on that subset
             transform, _stats0 = transform_result
@@ -1014,6 +1131,19 @@ def solve_blind(
             tol_deg = max(1e-6, float(config.pixel_tolerance) * max(scale, 1e-12))
             inliers_mask = err_deg <= tol_deg
             if not inliers_mask.any():
+                if global_mode:
+                    low_support_streak += 1
+                    if _global_abort_now():
+                        logger.debug("global early-stop: empty inlier masks (level=%s, parity=%s)", level_name, parity_label)
+                        break
+                continue
+            inlier_count = int(np.count_nonzero(inliers_mask))
+            if inlier_count < 4:
+                if global_mode:
+                    low_support_streak += 1
+                    if _global_abort_now():
+                        logger.debug("global early-stop: too few preliminary inliers (%d) (level=%s, parity=%s)", inlier_count, level_name, parity_label)
+                        break
                 continue
             img_in = img_points[inliers_mask]
             tile_in = tile_points[inliers_mask]
@@ -1114,6 +1244,25 @@ def solve_blind(
                     int(stats.get("inliers", 0)),
                     int(matches_array.shape[0]),
                 )
+                if global_mode:
+                    inl = int(stats.get("inliers", 0) or 0)
+                    best_support = max(best_support, inl)
+                    low_support_streak = (low_support_streak + 1) if inl <= 2 else 0
+                    weak_validation_streak = (weak_validation_streak + 1) if inl <= 4 else 0
+                    score_rel = float(max(1, int(score))) / float(max(1, top_candidate_score))
+                    weak_break_streak = 8 if bool(getattr(config, "fast_mode", True)) else 16
+                    if weak_validation_streak >= weak_break_streak and score_rel <= 0.35:
+                        logger.debug(
+                            "global early-stop: prolonged weak validations in tail (streak=%d, rel=%.2f, level=%s, parity=%s)",
+                            weak_validation_streak,
+                            score_rel,
+                            level_name,
+                            parity_label,
+                        )
+                        break
+                    if _global_abort_now():
+                        logger.debug("global early-stop: repeated low-support validations (level=%s, parity=%s)", level_name, parity_label)
+                        break
                 continue
 
             zemo_ok, zemo_reason, pix_scale_arcsec = validate_wcs_for_zemosaic(final_wcs)
@@ -1125,6 +1274,25 @@ def solve_blind(
                     parity_label,
                     zemo_reason,
                 )
+                if global_mode:
+                    inl = int(stats.get("inliers", 0) or 0)
+                    best_support = max(best_support, inl)
+                    low_support_streak = (low_support_streak + 1) if inl <= 2 else 0
+                    weak_validation_streak = (weak_validation_streak + 1) if inl <= 4 else 0
+                    score_rel = float(max(1, int(score))) / float(max(1, top_candidate_score))
+                    weak_break_streak = 8 if bool(getattr(config, "fast_mode", True)) else 16
+                    if weak_validation_streak >= weak_break_streak and score_rel <= 0.35:
+                        logger.debug(
+                            "global early-stop: prolonged weak zemosaic rejects in tail (streak=%d, rel=%.2f, level=%s, parity=%s)",
+                            weak_validation_streak,
+                            score_rel,
+                            level_name,
+                            parity_label,
+                        )
+                        break
+                    if _global_abort_now():
+                        logger.debug("global early-stop: zemosaic-compat rejects at low support (level=%s, parity=%s)", level_name, parity_label)
+                        break
                 continue
 
             header_updates = {
@@ -1156,6 +1324,7 @@ def solve_blind(
         *,
         use_px_spec: bool = True,
         use_ra_filter: bool = True,
+        allowed_tiles: set[int] | None = None,
         levels_seq: list[str] | None = None,
         early_exit_ratio: float | None = None,
     ) -> WcsSolution | None:
@@ -1182,6 +1351,7 @@ def solve_blind(
                 parity_label,
                 use_px_spec=use_px_spec,
                 use_ra_filter=use_ra_filter,
+                allowed_tiles=allowed_tiles,
                 agg_levels=cur_levels,
                 early_exit_ratio=early_exit_ratio,
             )
@@ -1215,6 +1385,7 @@ def solve_blind(
     scale_available = (approx_scale_deg is not None) or (radius_for_filter is not None)
     phase_specs: list[dict[str, Any]] = []
     if ra_available and scale_available:
+        base_locked_count = len(allowed_tile_indices) if allowed_tile_indices is not None else 0
         phase_specs.append(
             {
                 "name": "hinted",
@@ -1222,9 +1393,26 @@ def solve_blind(
                 "require_scale": True,
                 "level_sets": _build_level_sets(levels_scale_focus),
                 "use_ra_filter": True,
+                "allowed_tiles": allowed_tile_indices,
                 "early_exit": 4.0,
             }
         )
+        if (
+            expanded_tile_indices is not None
+            and len(expanded_tile_indices) > max(1, base_locked_count)
+            and len(expanded_tile_indices) <= 96
+        ):
+            phase_specs.append(
+                {
+                    "name": "hinted_wide",
+                    "require_ra": True,
+                    "require_scale": True,
+                    "level_sets": _build_level_sets(levels_fast or levels_scale_focus),
+                    "use_ra_filter": True,
+                    "allowed_tiles": expanded_tile_indices,
+                    "early_exit": 4.0,
+                }
+            )
     if scale_available:
         phase_specs.append(
             {
@@ -1233,6 +1421,7 @@ def solve_blind(
                 "require_scale": True,
                 "level_sets": _build_level_sets(levels_scale_focus),
                 "use_ra_filter": False,
+                "allowed_tiles": None,
                 "early_exit": 2.5,
             }
         )
@@ -1243,6 +1432,7 @@ def solve_blind(
             "require_scale": False,
             "level_sets": _build_level_sets(levels_all),
             "use_ra_filter": False,
+            "allowed_tiles": None,
             "early_exit": None,
         }
     )
@@ -1258,8 +1448,16 @@ def solve_blind(
             phase["use_ra_filter"],
             len(phase["level_sets"]),
         )
-        if allowed_tile_indices is not None:
-            if phase["use_ra_filter"]:
+        phase_allowed = phase.get("allowed_tiles")
+        if phase["use_ra_filter"]:
+            if phase_allowed is not None:
+                logger.info(
+                    "phase %s using RA/Dec tile lock (%d/%d tiles)",
+                    phase["name"],
+                    len(phase_allowed),
+                    tile_count,
+                )
+            elif allowed_tile_indices is not None:
                 logger.info(
                     "phase %s using RA/Dec tile lock (%d/%d tiles)",
                     phase["name"],
@@ -1268,9 +1466,14 @@ def solve_blind(
                 )
             else:
                 logger.info(
-                    "phase %s disables RA/Dec tile lock (global candidate pool)",
+                    "phase %s using dynamic RA/Dec cone filtering",
                     phase["name"],
                 )
+        elif allowed_tile_indices is not None:
+            logger.info(
+                "phase %s disables RA/Dec tile lock (global candidate pool)",
+                phase["name"],
+            )
         for level_seq in phase["level_sets"]:
             for variant_hashes, parity_label in variants:
                 solution = _run_levels(
@@ -1278,6 +1481,7 @@ def solve_blind(
                     parity_label,
                     use_px_spec=True,
                     use_ra_filter=phase["use_ra_filter"],
+                    allowed_tiles=phase.get("allowed_tiles"),
                     levels_seq=level_seq,
                     early_exit_ratio=phase["early_exit"],
                 )

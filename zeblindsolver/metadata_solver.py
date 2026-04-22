@@ -108,7 +108,7 @@ class NearSolveConfig:
     # Strict ASTAP-ISO execution path (diagnostic/parity mode).
     # When enabled, solve_near follows the ASTAP-ISO core path and bypasses
     # non-ISO branches/gates guarded by `strict_astap_iso` checks.
-    astap_iso_strict: bool = False
+    astap_iso_strict: bool = True
     # Mirror ASTAP quad matching tolerance in strict mode.
     astap_iso_quad_tolerance: float = 0.007
     # Strict auto-FOV retry (used only when FOV comes from scale inference).
@@ -2022,7 +2022,7 @@ def solve_near(
     radius = min(radius, _MAX_SEARCH_RADIUS)
     hint_fastpath = bool(getattr(cfg, "astap_hint_fastpath", True))
     hint_radius_deg = float(getattr(cfg, "astap_hint_radius_deg", 3.0) or 0.0)
-    strict_astap_iso = bool(getattr(cfg, "astap_iso_strict", False))
+    strict_astap_iso = bool(getattr(cfg, "astap_iso_strict", True))
     if hint_fastpath and hint_radius_deg > 0:
         # Throughput-first hinted solve (ASTAP-like -r behavior).
         radius = max(_MIN_SEARCH_RADIUS, min(radius, float(hint_radius_deg)))

@@ -19,7 +19,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 7
+SETTINGS_SCHEMA_VERSION = 8
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -234,6 +234,8 @@ def load_persistent_settings() -> PersistentSettings:
         near_max_cat_stars=int(payload.get("near_max_cat_stars", 2000)),
         near_try_parity_flip=bool(payload.get("near_try_parity_flip", True)),
         near_search_margin=float(payload.get("near_search_margin", 1.2)),
+        # Legacy non-strict mode is retired. Keep key for backward compatibility,
+        # then migrate/save back to strict mode immediately.
         near_astap_iso_strict=bool(payload.get("near_astap_iso_strict", True)),
         dev_bucket_limit_override=int(payload.get("dev_bucket_limit_override", 0)),
         dev_vote_percentile=int(payload.get("dev_vote_percentile", 40)),
@@ -301,6 +303,8 @@ def load_persistent_settings() -> PersistentSettings:
 
 def save_persistent_settings(settings: PersistentSettings) -> None:
     path = _resolve_settings_path()
+    # Legacy non-strict mode is retired.
+    settings.near_astap_iso_strict = True
     data = asdict(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -334,6 +338,11 @@ def _migrate_settings_if_needed(settings: PersistentSettings) -> tuple[Persisten
         "quality_rms": 1.2,
         "fast_mode": True,
     }
+
+    # v8: retire legacy non-strict Near mode.
+    if settings.near_astap_iso_strict is not True:
+        settings.near_astap_iso_strict = True
+        changed = True
 
     if current_version < SETTINGS_SCHEMA_VERSION:
         legacy_match = (

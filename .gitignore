@@ -15,6 +15,7 @@ dataset_set/
 testrunlog/
 *.swp
 astrometry-net-main/
+astrometry-main/
 
 
 # Local work / benchmark artifacts (not for end users)
