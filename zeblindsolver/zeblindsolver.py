@@ -1065,6 +1065,21 @@ def solve_blind(
             obs_by_level[lvl] = (lvl_hashes, lvl_quads, lvl_counts)
 
     _log_phase("detect/quads", stage)
+
+    candidate_search_cache: dict[tuple[Any, ...], list[tuple[str, int]]] = {}
+    level_lookup_cache: dict[tuple[str, bool], tuple[QuadIndex | None, list[slice] | None]] = {}
+    allowed_tiles_sig_cache: dict[int, tuple[int, ...]] = {}
+
+    def _allowed_tiles_key(tiles: set[int] | None) -> tuple[Any, ...]:
+        if tiles is None:
+            return ("all",)
+        key_id = id(tiles)
+        sig = allowed_tiles_sig_cache.get(key_id)
+        if sig is None:
+            sig = tuple(sorted(int(v) for v in tiles))
+            allowed_tiles_sig_cache[key_id] = sig
+        return ("tiles", sig)
+
     def _attempt_level(
         level_name: str,
         hashes: np.ndarray,
@@ -1091,12 +1106,23 @@ def solve_blind(
         level_hashes, level_quads, level_counts = entry
         if cancel_check and cancel_check():
             return None
-        candidates = tally_candidates(
-            (level_hashes, level_counts),
-            index_root,
-            levels=[level_name],
-            allowed_tiles=active_allowed_tiles,
+        cand_key = (
+            level_name,
+            bool(use_px_spec),
+            _allowed_tiles_key(active_allowed_tiles),
+            int(level_hashes.size),
         )
+        cached_candidates = candidate_search_cache.get(cand_key)
+        if cached_candidates is None:
+            candidates = tally_candidates(
+                (level_hashes, level_counts),
+                index_root,
+                levels=[level_name],
+                allowed_tiles=active_allowed_tiles,
+            )
+            candidate_search_cache[cand_key] = list(candidates)
+        else:
+            candidates = list(cached_candidates)
         if not candidates:
             logger.debug("level %s produced no candidates (parity=%s)", level_name, parity_label)
             return None
@@ -1180,13 +1206,18 @@ def solve_blind(
 
         level_index: QuadIndex | None = None
         level_slices: list[slice] | None = None
-        if level_hashes.size:
+        lookup_key = (level_name, bool(use_px_spec))
+        cached_lookup = level_lookup_cache.get(lookup_key)
+        if cached_lookup is not None:
+            level_index, level_slices = cached_lookup
+        elif level_hashes.size:
             try:
                 level_index = QuadIndex.load(index_root, level_name)
                 level_slices = lookup_hashes(index_root, level_name, level_hashes)
             except FileNotFoundError:
                 level_index = None
                 level_slices = None
+            level_lookup_cache[lookup_key] = (level_index, level_slices)
         top_candidate_score = max(1, int(ordered[0][1])) if ordered else 1
 
         logger.info(
