@@ -16,7 +16,7 @@ testrunlog/
 *.swp
 astrometry-net-main/
 astrometry-main/
-
+dist/
 
 # Local work / benchmark artifacts (not for end users)
 reports/
