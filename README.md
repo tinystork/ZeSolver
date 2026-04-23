@@ -28,7 +28,8 @@ pyproject.toml     # Build + dependency metadata
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # macOS / Linux
+# .venv\Scripts\activate  # Windows PowerShell
 pip install -r requirements.txt
 python zesolver.py
 
@@ -36,6 +37,76 @@ python zesolver.py
 # Inspect a Gaia G05 catalogue directory
 python tools/inspect_290.py --db ./database --family g05 --limit 3 --json report.json
 ```
+
+## macOS readiness preflight
+
+Before first production run on macOS, execute:
+
+```bash
+.venv/bin/python -m zesolver.macos_preflight
+```
+
+This validates imports, multiprocessing behavior, and a real `zesolver.py --help` launch.
+If it ends with `0 failure(s)`, the environment is ready.
+
+## Packaging (Windows / macOS / Linux)
+
+PyInstaller helpers are provided here:
+
+- `packaging/pyinstaller/build.py`
+- `packaging/pyinstaller/convert_icon.py`
+- `packaging/pyinstaller/README.md`
+
+### Icon assets used by GUI and packaged app
+
+Place icon files in `icon/` with these names:
+
+- `ZSicon.ico` (Windows)
+- `ZSicon.icns` (macOS)
+- `ZSicon.png` (Linux fallback)
+
+From a source image (example `icon/ZSicon.jpeg`), regenerate all icon formats:
+
+```bash
+.venv/bin/python packaging/pyinstaller/convert_icon.py --source icon/ZSicon.jpeg
+```
+
+At runtime, ZeSolver applies this icon in the GUI (window top-left + app icon) with OS-specific priority.
+
+### Build command
+
+```bash
+.venv/bin/python -m pip install pyinstaller
+.venv/bin/python packaging/pyinstaller/build.py --clean
+```
+
+Windows PowerShell equivalent:
+
+```powershell
+.venv\Scripts\python.exe -m pip install pyinstaller
+.venv\Scripts\python.exe packaging\pyinstaller\build.py --clean
+```
+
+Optional onefile build:
+
+```bash
+.venv/bin/python packaging/pyinstaller/build.py --clean --onefile
+```
+
+The build script automatically embeds the icon resources inside the bundle.
+
+## Release checklist (v1.0.0)
+
+For readers preparing a release build:
+
+- [ ] Version updated in `pyproject.toml` (`project.version`)
+- [ ] GUI title shows the expected version (`ZeSolver ... Vx.y.z`)
+- [ ] Icons regenerated from source image (`convert_icon.py`)
+- [ ] macOS preflight passes (`python -m zesolver.macos_preflight`)
+- [ ] Full M106 validation run completed and archived
+- [ ] PyInstaller build generated on target OS (`build.py --clean`)
+- [ ] App launch test OK on Windows, macOS, Linux
+- [ ] README packaging commands verified on a clean environment
 
 ## Optional GPU acceleration (Near star detection)
 

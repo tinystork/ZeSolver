@@ -1,3 +1,29 @@
+# """
+# STANDARDIZED_PROJECT_HEADER_V1
+# ╔═══════════════════════════════════════════════════════════════════════════════════╗
+# ║ ZeSolver Project (ZeMosaic / ZeSeestarStacker ecosystem)                         ║
+# ║                                                                                   ║
+# ║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
+# ║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
+# ║                                                                                   ║
+# ║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+# ║                                                                                   ║
+# ║ Remerciements amont :                                                             ║
+# ║ - ASTAP, par Han Kleijn                                                           ║
+# ║ - Astrometry.net, par Dustin Lang, David W. Hogg, Keir Mierle, et al.            ║
+# ║                                                                                   ║
+# ║ Description FR :                                                                  ║
+# ║ Ce code sert à transformer des nuages de photons en solutions WCS et en images   ║
+# ║ astronomiques exploitables. Merci de créditer les auteurs et projets amont lors   ║
+# ║ de toute réutilisation.                                                           ║
+# ║                                                                                   ║
+# ║ EN Description:                                                                    ║
+# ║ This code helps turn clouds of photons into usable WCS solutions and astronomical ║
+# ║ imagery outputs. Please credit both project authors and upstream references when  ║
+# ║ reusing this work.                                                                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════╝
+# """
+
 "\"\"\"High level access to ASTAP/HNSKY ``.1476`` and ``.290`` catalogues.\"\"\""
 
 from __future__ import annotations
@@ -525,7 +551,9 @@ def _parse_catalog_file(path: Path, spec: CatalogFamilySpec) -> Tuple[np.ndarray
     dec9_bytes = header_rows[:, 3]
     mag_bytes = header_rows[:, 4].astype(np.int16)
     magnitudes = (mag_bytes - 16) / 10.0
-    dec9 = dec9_bytes[owner]
+    # ASTAP/HNSKY 1476 header stores DEC9 as unsigned byte with +128 offset.
+    # Convert back to signed first (dec9_storage := dec7 - 128 in ASTAP source).
+    dec9 = dec9_bytes[owner].astype(np.int32) - 128
     mags = magnitudes[owner].astype(np.float32)
 
     ra = star_rows[:, 0].astype(np.uint32) | (star_rows[:, 1].astype(np.uint32) << 8) | (
@@ -536,12 +564,8 @@ def _parse_catalog_file(path: Path, spec: CatalogFamilySpec) -> Tuple[np.ndarray
     dec = (
         star_rows[:, 3].astype(np.int32)
         | (star_rows[:, 4].astype(np.int32) << 8)
-        | (dec9.astype(np.int32) << 16)
+        | (dec9 << 16)
     )
-    negative = dec9 >= 128
-    if negative.any():
-        dec = dec.astype(np.int64)
-        dec[negative] -= 1 << 24
     dec_deg = dec.astype(np.float64) * DEC_SCALE
 
     bp_rp = np.full(star_rows.shape[0], np.nan, dtype=np.float32)

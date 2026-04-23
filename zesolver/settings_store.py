@@ -1,3 +1,29 @@
+# """
+# STANDARDIZED_PROJECT_HEADER_V1
+# ╔═══════════════════════════════════════════════════════════════════════════════════╗
+# ║ ZeSolver Project (ZeMosaic / ZeSeestarStacker ecosystem)                         ║
+# ║                                                                                   ║
+# ║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
+# ║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
+# ║                                                                                   ║
+# ║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+# ║                                                                                   ║
+# ║ Remerciements amont :                                                             ║
+# ║ - ASTAP, par Han Kleijn                                                           ║
+# ║ - Astrometry.net, par Dustin Lang, David W. Hogg, Keir Mierle, et al.            ║
+# ║                                                                                   ║
+# ║ Description FR :                                                                  ║
+# ║ Ce code sert à transformer des nuages de photons en solutions WCS et en images   ║
+# ║ astronomiques exploitables. Merci de créditer les auteurs et projets amont lors   ║
+# ║ de toute réutilisation.                                                           ║
+# ║                                                                                   ║
+# ║ EN Description:                                                                    ║
+# ║ This code helps turn clouds of photons into usable WCS solutions and astronomical ║
+# ║ imagery outputs. Please credit both project authors and upstream references when  ║
+# ║ reusing this work.                                                                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════╝
+# """
+
 from __future__ import annotations
 
 import json
@@ -19,7 +45,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 7
+SETTINGS_SCHEMA_VERSION = 8
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -58,9 +84,9 @@ class PersistentSettings:
     near_tile_cache_size: int = 128
     near_detect_backend: str = "auto"  # auto|cpu|cuda
     near_detect_device: int = 0
-    near_detect_k_sigma: float = 4.0
+    near_detect_k_sigma: float = 4.5
     near_detect_min_area: int = 8
-    near_detect_max_labels: int = 2500
+    near_detect_max_labels: int = 1200
     near_detect_gpu_slots: int = 1
     io_concurrency: int = 0
     near_warm_start: bool = True
@@ -75,6 +101,10 @@ class PersistentSettings:
     near_max_cat_stars: int = 2000
     near_try_parity_flip: bool = True
     near_search_margin: float = 1.2
+    near_astap_iso_strict: bool = True
+    # Optional batch behavior: when True, failed ZeNear files are held for phase-2 blind
+    near_defer_blind_fallback: bool = False
+    near_allow_second_rescue: bool = False
     dev_bucket_limit_override: int = 0
     dev_vote_percentile: int = 40
     dev_detect_k_sigma: float = 3.0
@@ -218,9 +248,9 @@ def load_persistent_settings() -> PersistentSettings:
         near_tile_cache_size=int(payload.get("near_tile_cache_size", 128)),
         near_detect_backend=str(payload.get("near_detect_backend", "auto")),
         near_detect_device=int(payload.get("near_detect_device", 0)),
-        near_detect_k_sigma=float(payload.get("near_detect_k_sigma", 4.0)),
+        near_detect_k_sigma=float(payload.get("near_detect_k_sigma", 4.5)),
         near_detect_min_area=int(payload.get("near_detect_min_area", 8)),
-        near_detect_max_labels=int(payload.get("near_detect_max_labels", 2500)),
+        near_detect_max_labels=int(payload.get("near_detect_max_labels", 1200)),
         near_detect_gpu_slots=max(1, int(payload.get("near_detect_gpu_slots", 1) or 1)),
         io_concurrency=int(payload.get("io_concurrency", 0)),
         near_warm_start=bool(payload.get("near_warm_start", True)),
@@ -233,6 +263,11 @@ def load_persistent_settings() -> PersistentSettings:
         near_max_cat_stars=int(payload.get("near_max_cat_stars", 2000)),
         near_try_parity_flip=bool(payload.get("near_try_parity_flip", True)),
         near_search_margin=float(payload.get("near_search_margin", 1.2)),
+        # Legacy non-strict mode is retired. Keep key for backward compatibility,
+        # then migrate/save back to strict mode immediately.
+        near_astap_iso_strict=bool(payload.get("near_astap_iso_strict", True)),
+        near_defer_blind_fallback=bool(payload.get("near_defer_blind_fallback", False)),
+        near_allow_second_rescue=bool(payload.get("near_allow_second_rescue", False)),
         dev_bucket_limit_override=int(payload.get("dev_bucket_limit_override", 0)),
         dev_vote_percentile=int(payload.get("dev_vote_percentile", 40)),
         dev_detect_k_sigma=float(payload.get("dev_detect_k_sigma", 3.0)),
@@ -299,6 +334,8 @@ def load_persistent_settings() -> PersistentSettings:
 
 def save_persistent_settings(settings: PersistentSettings) -> None:
     path = _resolve_settings_path()
+    # Legacy non-strict mode is retired.
+    settings.near_astap_iso_strict = True
     data = asdict(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -332,6 +369,11 @@ def _migrate_settings_if_needed(settings: PersistentSettings) -> tuple[Persisten
         "quality_rms": 1.2,
         "fast_mode": True,
     }
+
+    # v8: retire legacy non-strict Near mode.
+    if settings.near_astap_iso_strict is not True:
+        settings.near_astap_iso_strict = True
+        changed = True
 
     if current_version < SETTINGS_SCHEMA_VERSION:
         legacy_match = (
