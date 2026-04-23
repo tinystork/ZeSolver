@@ -2800,6 +2800,18 @@ class ImageSolver:
                 pixel_scale_min_arcsec=self.config.hint_resolution_min_arcsec,
                 pixel_scale_max_arcsec=self.config.hint_resolution_max_arcsec,
                 downsample=max(1, int(self.config.downsample or 1)),
+                verify_logodds_enabled=bool(getattr(self.config, "dev_verify_logodds_enabled", False)),
+                verify_logodds_bail=float(getattr(self.config, "dev_verify_logodds_bail", -24.0) or -24.0),
+                verify_logodds_stoplooking=float(getattr(self.config, "dev_verify_logodds_stoplooking", 24.0) or 24.0),
+                verify_logodds_min_validations=int(getattr(self.config, "dev_verify_logodds_min_validations", 8) or 8),
+                hard_max_candidates_tried=int(getattr(self.config, "dev_hard_max_candidates_tried", 0) or 0),
+                hard_max_validations=int(getattr(self.config, "dev_hard_max_validations", 0) or 0),
+                depth_ladder_enabled=bool(getattr(self.config, "dev_depth_ladder_enabled", False)),
+                depth_ladder_caps=tuple(
+                    int(v)
+                    for v in getattr(self.config, "dev_depth_ladder_caps", (80, 160, 500))
+                    if isinstance(v, (int, float)) and int(v) > 0
+                ) or (80, 160, 500),
             )
 
             quality_profile, quality_metrics = self._select_blind_quality_profile(
@@ -2807,6 +2819,8 @@ class ImageSolver:
                 peaks=peaks,
                 frame_data=frame_data,
             )
+            if bool(getattr(blind_cfg, "depth_ladder_enabled", False)) and quality_profile != "degraded":
+                blind_cfg = replace(blind_cfg, depth_ladder_enabled=False)
             if quality_profile == "degraded":
                 blind_cfg = replace(
                     blind_cfg,
@@ -2845,6 +2859,14 @@ class ImageSolver:
                     "fail_attempt_min_validations": getattr(blind_cfg, "fail_attempt_min_validations", None),
                     "fail_attempt_max_best_inliers": getattr(blind_cfg, "fail_attempt_max_best_inliers", None),
                     "fail_attempt_min_candidates": getattr(blind_cfg, "fail_attempt_min_candidates", None),
+                    "verify_logodds_enabled": getattr(blind_cfg, "verify_logodds_enabled", None),
+                    "verify_logodds_bail": getattr(blind_cfg, "verify_logodds_bail", None),
+                    "verify_logodds_stoplooking": getattr(blind_cfg, "verify_logodds_stoplooking", None),
+                    "verify_logodds_min_validations": getattr(blind_cfg, "verify_logodds_min_validations", None),
+                    "hard_max_candidates_tried": getattr(blind_cfg, "hard_max_candidates_tried", None),
+                    "hard_max_validations": getattr(blind_cfg, "hard_max_validations", None),
+                    "depth_ladder_enabled": getattr(blind_cfg, "depth_ladder_enabled", None),
+                    "depth_ladder_caps": list(getattr(blind_cfg, "depth_ladder_caps", ()) or ()),
                     "global_budget_fast_s": getattr(blind_cfg, "global_budget_fast_s", None),
                     "global_budget_slow_s": getattr(blind_cfg, "global_budget_slow_s", None),
                     "ra_hint": blind_cfg.ra_hint_deg,
@@ -2984,6 +3006,7 @@ class ImageSolver:
                     pixel_tolerance=max(float(blind_cfg.pixel_tolerance), float(effective_plan["pixel_tolerance"])),
                     quality_rms=max(float(blind_cfg.quality_rms), float(effective_plan["quality_rms"])),
                     fast_mode=False,
+                    depth_ladder_enabled=False,
                 )
                 if rescue_idx >= 2:
                     rescue_cfg = replace(
@@ -7649,6 +7672,18 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pixel_scale_min_arcsec=settings.solver_hint_resolution_min_arcsec,
                 pixel_scale_max_arcsec=settings.solver_hint_resolution_max_arcsec,
                 downsample=max(1, int(settings.solver_downsample or 1)),
+                verify_logodds_enabled=bool(getattr(settings, "dev_verify_logodds_enabled", False)),
+                verify_logodds_bail=float(getattr(settings, "dev_verify_logodds_bail", -24.0) or -24.0),
+                verify_logodds_stoplooking=float(getattr(settings, "dev_verify_logodds_stoplooking", 24.0) or 24.0),
+                verify_logodds_min_validations=int(getattr(settings, "dev_verify_logodds_min_validations", 8) or 8),
+                hard_max_candidates_tried=int(getattr(settings, "dev_hard_max_candidates_tried", 0) or 0),
+                hard_max_validations=int(getattr(settings, "dev_hard_max_validations", 0) or 0),
+                depth_ladder_enabled=bool(getattr(settings, "dev_depth_ladder_enabled", False)),
+                depth_ladder_caps=tuple(
+                    int(v)
+                    for v in getattr(settings, "dev_depth_ladder_caps", (80, 160, 500))
+                    if isinstance(v, (int, float)) and int(v) > 0
+                ) or (80, 160, 500),
             )
             self._blind_worker = BlindRunner(
                 fits_path=sample_path,

@@ -209,3 +209,124 @@ Objectif: détecter tôt les frames “arbres/feuilles/pollution forte” et pas
 - [x] Lancer un run lot complet post-patch (même dossier `testzenear`, mêmes réglages GUI) et mesurer l’impact global.
 - [x] Produire le comparatif A/B signé (temps total, near median, blind success median, blind fail median) en notant l’exception temporaire sur les 3 frames obstruées. *(fait: `reports/zeblind_ab_signed_20260422_200733.md`)*
 - [~] Démarrer P1 vectorisation ciblée de `_collect_tile_matches` (au moins la phase de vote/pairs), derrière un flag expérimental. *(flag dev ajouté, gain non confirmé sur premier bench, à retester x3)*
+
+### Update run complet post-patch (2026-04-23)
+
+- Run lot complet exécuté: `/home/tristan/zemosaic/example/testzenear/zesolver_run_20260423_091723_patch30s.log`
+- Résultat: **29/30** en **718.2s** (1 échec: `233232`).
+- Comparatif A/B signé généré:
+  - `reports/zeblind_ab_signed_20260423_093823.json`
+  - `reports/zeblind_ab_signed_20260423_093823.md`
+- Delta vs baseline followup (`170404`, 842.4s):
+  - Temps total: **-124.2s**
+  - Solve count: **+1** (29/30 vs 28/30)
+  - Blind fail médiane: **110.58s -> 26.96s** (**-75.6%**)
+
+Statut mission:
+- P0 (réduction coût des échecs blind sans régression solve rate): **atteint sur ce run**.
+- Gate strict no-regression solve rate: **OK**.
+
+## 8) Extension plan perf ZeBlind (Astrometry-inspired, blind-only)
+
+Contrainte validée avec Tristan:
+- **Ne plus toucher ZeNear** (protection stricte).
+- Les optimisations ci-dessous s’appliquent **uniquement à ZeBlind**.
+
+### P4 — Depth ladder (étoiles brillantes d’abord)
+
+Référence Astrometry:
+- `--depth`, `--objs` (man/readme)
+
+TODO:
+- [x] Ajouter un ladder progressif des étoiles côté ZeBlind. *(v1 sous flag, défaut: `80 -> 160 -> 500`)*
+- [~] Ne monter de palier qu’en cas d’échec ou d’évidence de support insuffisant. *(v1: montée séquentielle, tuning adaptatif restant)*
+- [x] Logger le palier utilisé et le coût par palier. *(stats `depth_ladder_rows` + message de stage)*
+
+Critère de sortie:
+- [ ] Réduction mesurable du temps médian blind sur succès, sans baisse du solve rate.
+
+Notes exécution P4 (2026-04-23):
+- Implémentation blind-only dans `zeblindsolver.py` (orchestration multi-stages via `max_stars`), avec métriques agrégées `depth_ladder_*`.
+- Guardrail vitesse ajouté: stage 1 borné (`hard_max_candidates_tried=96`) pour limiter le coût des faux-départs.
+- Rescue path: depth ladder désactivé sur les rescues (`depth_ladder_enabled=False`) pour éviter la multiplication des coûts.
+- Orchestrateur: depth ladder activé uniquement sur `quality_profile=degraded` (désactivé sur profil normal pour protéger le débit).
+- Smoke focus4 (pipeline-like, hinted, repeat=1):
+  - OFF: `reports/zeblind_depthladder_off_20260423_focus4.json`
+  - ON (v4): `reports/zeblind_depthladder_on_20260423_focus4_v4.json`
+  - Comparatif: `reports/zeblind_depthladder_compare_20260423_141842.{json,md}`
+- Résultat smoke: ON améliore le solve-rate (3/4 vs 2/4) mais reste plus coûteux en temps global; décision prudente maintenue: **OFF par défaut** tant que tuning vitesse non finalisé.
+
+### P5 — Vérification log-odds avec arrêt anticipé
+
+Référence Astrometry:
+- `logodds_bail` + `logodds_stoplooking` (`solver/verify.c`, `solver/solver.c`)
+
+TODO:
+- [x] Introduire un score log-odds cumulatif par hypothèse. *(implémentation v1 côté ZeBlind sous flag)*
+- [x] Ajouter un seuil de rejet anticipé (bail) sur trajectoire défavorable. *(v1 branchée sur validations échouées)*
+- [x] Ajouter un seuil d’acceptation anticipée (stoplooking) quand la preuve est suffisante. *(v1: neutralise les aborts "weak support" quand score cumulé positif)*
+- [x] Instrumenter les raisons d’arrêt (bail/stoplooking/fin naturelle). *(stats + logs enrichis)*
+
+Critère de sortie:
+- [ ] Baisse nette du coût de vérification sur cas difficiles, solve rate non régressif.
+
+Notes exécution P5 (2026-04-23):
+- `SolveConfig` étendu: `verify_logodds_enabled`, `verify_logodds_bail`, `verify_logodds_stoplooking`, `verify_logodds_min_validations`.
+- Intégration dans le fail-fast ZeBlind (`_maybe_fail_early_abort`) + télémétrie (`verify_logodds_cum`, `verify_logodds_last`).
+- Smoke A/B focus4 hinted (repeat=1):
+  - ON: `reports/zeblind_logodds_on_20260423_focus4.json`
+  - OFF(default): `reports/zeblind_default_after_patch_20260423_focus4.json`
+  - Comparatif: `reports/zeblind_logodds_smoke_compare_20260423_103542.{json,md}`
+- Résultat smoke: gain temps global ON, mais risque solve-rate (1/4 ON vs 2/4 OFF). Décision prudente: **flag OFF par défaut**.
+
+### P6 — Budgets durs de recherche
+
+Référence Astrometry:
+- `maxquads`, `maxmatches` (`solver/solver.c`)
+
+TODO:
+- [x] Ajouter des caps explicites par tentative (quads générés / matches testés). *(v1: caps durs sur candidats/validations, désactivés par défaut)*
+- [ ] Rendre ces caps adaptatifs selon profil qualité image (normal/degraded).
+- [x] Exposer les caps en config + logs de hit budget.
+
+Critère de sortie:
+- [ ] Limitation des queues longues blind, pas de régression robuste sur lot de référence.
+
+Notes exécution P6 (2026-04-23):
+- Nouveaux knobs ZeBlind: `hard_max_candidates_tried`, `hard_max_validations` (CLI + config runtime).
+- Raisons d’arrêt hard-budget remontées dans `fail_early_abort_reason` et `phase_perf`.
+
+### P7 — Verrou parité (quand l’info est fiable)
+
+Référence Astrometry:
+- `--parity pos/neg` (man + `solver.h`)
+
+TODO:
+- [ ] Permettre un mode ZeBlind parity-locked (nominal uniquement ou mirror uniquement).
+- [ ] Utiliser ce lock seulement quand l’information de parité est considérée fiable.
+- [ ] Fallback automatique vers dual-parity si confiance insuffisante.
+
+Critère de sortie:
+- [ ] Gain CPU sur recherche candidats, solve rate préservé.
+
+### P8 — Uniformisation / dédup en vérification
+
+Référence Astrometry:
+- `verify_uniformize`, `verify_dedup` (`solver/verify.c`)
+
+TODO:
+- [ ] Uniformiser spatialement les étoiles de vérification (downsample intelligent, non aléatoire).
+- [ ] Dédupliquer les paires et correspondances redondantes avant scoring lourd.
+- [ ] Mesurer impact direct sur coût de verify et sur robustesse.
+
+Critère de sortie:
+- [ ] Temps verify réduit à précision équivalente.
+
+### Ordre d’exécution recommandé (blind-only)
+
+1. P5 log-odds bail/stoplooking
+2. P4 depth ladder
+3. P6 budgets durs
+4. P8 uniformisation/dédup verify
+5. P7 verrou parité (garde-fous stricts)
+

@@ -8,7 +8,7 @@ import os
 import time
 import zlib
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
 import threading
@@ -98,6 +98,14 @@ class SolveConfig:
     fail_attempt_min_candidates: int = 20
     global_budget_fast_s: float = 8.0
     global_budget_slow_s: float = 18.0
+    verify_logodds_enabled: bool = False
+    verify_logodds_bail: float = -24.0
+    verify_logodds_stoplooking: float = 24.0
+    verify_logodds_min_validations: int = 8
+    hard_max_candidates_tried: int = 0
+    hard_max_validations: int = 0
+    depth_ladder_enabled: bool = False
+    depth_ladder_caps: tuple[int, ...] = (80, 160, 500)
 
 
 @dataclass
@@ -543,6 +551,34 @@ def _log_phase(stage: str, start: float) -> None:
     logger.debug("%s completed in %.2fs", stage, time.time() - start)
 
 
+def _coerce_depth_ladder_caps(raw_caps: Any) -> list[int]:
+    items: list[Any]
+    if isinstance(raw_caps, str):
+        items = [part.strip() for part in raw_caps.replace(';', ',').split(',') if part.strip()]
+    elif isinstance(raw_caps, Iterable) and not isinstance(raw_caps, (bytes, bytearray)):
+        items = list(raw_caps)
+    else:
+        items = [raw_caps]
+
+    caps: list[int] = []
+    for item in items:
+        try:
+            value = int(item)
+        except Exception:
+            continue
+        if value > 0:
+            caps.append(value)
+
+    dedup: list[int] = []
+    seen: set[int] = set()
+    for value in sorted(caps):
+        if value in seen:
+            continue
+        seen.add(value)
+        dedup.append(value)
+    return dedup
+
+
 def solve_blind(
     input_fits: Path | str,
     index_root: Path | str,
@@ -550,6 +586,10 @@ def solve_blind(
     config: SolveConfig | None = None,
     cancel_check: Optional[Callable[[], bool]] = None,
     prep_cache: dict[str, Any] | None = None,
+    _depth_ladder_internal: bool = False,
+    _depth_ladder_stage: int = 0,
+    _depth_ladder_total: int = 0,
+    _depth_ladder_caps: tuple[int, ...] | None = None,
 ) -> WcsSolution:
     config = config or SolveConfig()
     _configure_tile_cache(getattr(config, "tile_cache_size", _TILE_CACHE_DEFAULT_CAPACITY))
@@ -577,6 +617,110 @@ def solve_blind(
             else:
                 logger.debug("tile cache stats: 0 hits / 0 misses (capacity=%d)", capacity)
         return result
+
+    if not _depth_ladder_internal and bool(getattr(config, "depth_ladder_enabled", False)):
+        raw_caps = _coerce_depth_ladder_caps(getattr(config, "depth_ladder_caps", (80, 160, 500)))
+        max_stars_cfg = max(0, int(getattr(config, "max_stars", 0) or 0))
+        if max_stars_cfg > 0:
+            capped = [v for v in raw_caps if v < max_stars_cfg]
+            capped.append(max_stars_cfg)
+            raw_caps = capped
+        if not raw_caps:
+            raw_caps = [max_stars_cfg] if max_stars_cfg > 0 else [80, 160, 500]
+        ladder_caps = [int(v) for v in raw_caps if int(v) > 0]
+        if len(ladder_caps) > 1:
+            logger.info(
+                "depth ladder enabled: stages=%s",
+                " -> ".join(str(v) for v in ladder_caps),
+            )
+            ladder_rows: list[dict[str, Any]] = []
+            last_fail: WcsSolution | None = None
+            total_stages = len(ladder_caps)
+            for stage_idx, stage_max_stars in enumerate(ladder_caps, start=1):
+                if cancel_check and cancel_check():
+                    return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
+                stage_cfg = replace(
+                    config,
+                    max_stars=int(stage_max_stars),
+                    depth_ladder_enabled=False,
+                )
+                if stage_idx == 1 and total_stages > 1:
+                    stage_cfg = replace(
+                        stage_cfg,
+                        hard_max_candidates_tried=(
+                            min(int(stage_cfg.hard_max_candidates_tried), 96)
+                            if int(stage_cfg.hard_max_candidates_tried or 0) > 0
+                            else 96
+                        ),
+                    )
+                stage_started = time.time()
+                logger.info(
+                    "depth ladder stage %d/%d: max_stars=%d",
+                    stage_idx,
+                    total_stages,
+                    int(stage_max_stars),
+                )
+                stage_solution = solve_blind(
+                    input_fits,
+                    index_root,
+                    config=stage_cfg,
+                    cancel_check=cancel_check,
+                    prep_cache=prep_cache,
+                    _depth_ladder_internal=True,
+                    _depth_ladder_stage=stage_idx,
+                    _depth_ladder_total=total_stages,
+                    _depth_ladder_caps=tuple(ladder_caps),
+                )
+                stage_elapsed = float(time.time() - stage_started)
+                stage_stats = dict(stage_solution.stats or {})
+                ladder_rows.append(
+                    {
+                        "stage": int(stage_idx),
+                        "total_stages": int(total_stages),
+                        "max_stars": int(stage_max_stars),
+                        "success": bool(stage_solution.success),
+                        "elapsed_s": stage_elapsed,
+                        "attempt_elapsed_s": float(stage_stats.get("attempt_elapsed_s", stage_elapsed) or stage_elapsed),
+                        "total_candidates_tried": int(stage_stats.get("total_candidates_tried", 0) or 0),
+                        "best_fail_inliers": int(stage_stats.get("best_fail_inliers", -1) or -1),
+                        "fail_validation_count": int(stage_stats.get("fail_validation_count", 0) or 0),
+                    }
+                )
+                if stage_solution.success:
+                    merged_stats = dict(stage_stats)
+                    merged_stats["depth_ladder_enabled"] = True
+                    merged_stats["depth_ladder_used"] = True
+                    merged_stats["depth_ladder_stage"] = int(stage_idx)
+                    merged_stats["depth_ladder_total"] = int(total_stages)
+                    merged_stats["depth_ladder_caps"] = [int(v) for v in ladder_caps]
+                    merged_stats["depth_ladder_rows"] = list(ladder_rows)
+                    stage_solution.stats = merged_stats
+                    if stage_solution.message:
+                        stage_solution.message += f" [depth_ladder {stage_idx}/{total_stages}, max_stars={int(stage_max_stars)}]"
+                    else:
+                        stage_solution.message = f"depth ladder success (stage {stage_idx}/{total_stages}, max_stars={int(stage_max_stars)})"
+                    return _finish(stage_solution)
+                last_fail = stage_solution
+            if last_fail is None:
+                return _finish(WcsSolution(False, "no valid solution", None, {}, None, {}))
+            fail_stats = dict(last_fail.stats or {})
+            fail_stats["depth_ladder_enabled"] = True
+            fail_stats["depth_ladder_used"] = True
+            fail_stats["depth_ladder_stage"] = int(total_stages)
+            fail_stats["depth_ladder_total"] = int(total_stages)
+            fail_stats["depth_ladder_caps"] = [int(v) for v in ladder_caps]
+            fail_stats["depth_ladder_rows"] = list(ladder_rows)
+            return _finish(
+                WcsSolution(
+                    False,
+                    last_fail.message or "no valid solution",
+                    last_fail.wcs,
+                    fail_stats,
+                    last_fail.tile_key,
+                    last_fail.header_updates,
+                )
+            )
+
     index_root = Path(index_root).expanduser().resolve()
     downsample_factor = max(1, min(4, int(getattr(config, "downsample", 1) or 1)))
     bucket_override = int(getattr(config, "bucket_limit_override", 0) or 0)
@@ -1142,6 +1286,14 @@ def solve_blind(
     fail_budget_min_validations = max(0, int(getattr(config, "fail_attempt_min_validations", 18) or 0))
     fail_budget_max_inliers = max(0, int(getattr(config, "fail_attempt_max_best_inliers", 4) or 0))
     fail_budget_min_candidates = max(0, int(getattr(config, "fail_attempt_min_candidates", 20) or 0))
+    verify_logodds_enabled = bool(getattr(config, "verify_logodds_enabled", False))
+    verify_logodds_bail = float(getattr(config, "verify_logodds_bail", -24.0) or -24.0)
+    verify_logodds_stoplooking = float(getattr(config, "verify_logodds_stoplooking", 24.0) or 24.0)
+    verify_logodds_min_validations = max(0, int(getattr(config, "verify_logodds_min_validations", 8) or 0))
+    verify_logodds_cum = 0.0
+    verify_logodds_last = 0.0
+    hard_max_candidates_tried = max(0, int(getattr(config, "hard_max_candidates_tried", 0) or 0))
+    hard_max_validations = max(0, int(getattr(config, "hard_max_validations", 0) or 0))
 
     def _phase_slot(name: str) -> dict[str, Any]:
         slot = phase_perf.get(name)
@@ -1156,17 +1308,70 @@ def solve_blind(
                 "failed_validations": 0,
                 "early_abort": False,
                 "early_abort_reason": None,
+                "verify_logodds_cum": 0.0,
+                "verify_logodds_last": 0.0,
             }
             phase_perf[name] = slot
         return slot
 
     def _maybe_fail_early_abort(phase_name: str) -> bool:
-        nonlocal fail_early_abort, fail_early_abort_reason, fail_early_abort_phase
+        nonlocal fail_early_abort, fail_early_abort_reason, fail_early_abort_phase, verify_logodds_cum
         if fail_early_abort:
             return True
-        if fail_budget_s <= 0.0:
-            return False
         if phase_name not in {"scale_only", "blind"}:
+            return False
+
+        if (
+            verify_logodds_enabled
+            and verify_logodds_min_validations > 0
+            and fail_validation_count >= verify_logodds_min_validations
+            and verify_logodds_cum >= verify_logodds_stoplooking
+        ):
+            return False
+
+        def _set_abort(reason: str) -> bool:
+            nonlocal fail_early_abort, fail_early_abort_reason, fail_early_abort_phase
+            fail_early_abort = True
+            fail_early_abort_phase = phase_name
+            fail_early_abort_reason = reason
+            try:
+                slot = _phase_slot(phase_name)
+                slot["early_abort"] = True
+                slot["early_abort_reason"] = str(fail_early_abort_reason)
+                slot["verify_logodds_cum"] = float(verify_logodds_cum)
+            except Exception:
+                pass
+            logger.info(
+                "blind fail-early abort triggered in phase %s: %s",
+                phase_name,
+                fail_early_abort_reason,
+            )
+            return True
+
+        if hard_max_candidates_tried > 0 and total_candidates_tried >= hard_max_candidates_tried:
+            return _set_abort(
+                f"hard_budget candidates_tried>={hard_max_candidates_tried}"
+                f" (validations={fail_validation_count}, best_inliers={fail_best_inliers_seen})"
+            )
+
+        if hard_max_validations > 0 and fail_validation_count >= hard_max_validations:
+            return _set_abort(
+                f"hard_budget validations>={hard_max_validations}"
+                f" (candidates={total_candidates_tried}, best_inliers={fail_best_inliers_seen})"
+            )
+
+        if (
+            verify_logodds_enabled
+            and fail_validation_count >= verify_logodds_min_validations
+            and fail_best_inliers_seen <= max(fail_budget_max_inliers, 8)
+            and verify_logodds_cum <= verify_logodds_bail
+        ):
+            return _set_abort(
+                f"logodds_bail reached ({verify_logodds_cum:.2f}<={verify_logodds_bail:.2f})"
+                f" after validations={fail_validation_count}, candidates={total_candidates_tried}, best_inliers={fail_best_inliers_seen}"
+            )
+
+        if fail_budget_s <= 0.0:
             return False
         elapsed = time.time() - attempt_started
         if elapsed < fail_budget_s:
@@ -1177,24 +1382,28 @@ def solve_blind(
             return False
         if total_candidates_tried < fail_budget_min_candidates:
             return False
-        fail_early_abort = True
-        fail_early_abort_phase = phase_name
-        fail_early_abort_reason = (
+        return _set_abort(
             f"elapsed>{fail_budget_s:.1f}s and weak_support"
             f" (best_inliers={fail_best_inliers_seen}, validations={fail_validation_count}, candidates={total_candidates_tried})"
         )
-        try:
-            slot = _phase_slot(phase_name)
-            slot["early_abort"] = True
-            slot["early_abort_reason"] = str(fail_early_abort_reason)
-        except Exception:
-            pass
-        logger.info(
-            "blind fail-early abort triggered in phase %s: %s",
-            phase_name,
-            fail_early_abort_reason,
-        )
-        return True
+
+    def _update_verify_logodds(*, phase_slot: dict[str, Any], inliers: int, rms_px: float) -> None:
+        nonlocal verify_logodds_cum, verify_logodds_last
+        if not verify_logodds_enabled:
+            return
+        safe_inliers = max(0, int(inliers))
+        safe_rms = float(rms_px)
+        if not np.isfinite(safe_rms) or safe_rms <= 0.0:
+            safe_rms = max(float(getattr(config, "quality_rms", 1.2) or 1.2), 1.0) * 4.0
+        cand = math.log1p(float(safe_inliers)) - (1.35 * math.log(max(1e-6, safe_rms))) - 1.4
+        if safe_inliers <= 2:
+            cand -= 0.9
+        elif safe_inliers >= max(8, int(0.5 * int(getattr(config, "quality_inliers", 40) or 40))):
+            cand += 0.5
+        verify_logodds_last = float(cand)
+        verify_logodds_cum = float(verify_logodds_cum + cand)
+        phase_slot["verify_logodds_last"] = float(verify_logodds_last)
+        phase_slot["verify_logodds_cum"] = float(verify_logodds_cum)
 
     def _allowed_tiles_key(tiles: set[int] | None) -> tuple[Any, ...]:
         if tiles is None:
@@ -1715,6 +1924,11 @@ def solve_blind(
                 fail_best_inliers_seen = max(fail_best_inliers_seen, inl)
                 fail_validation_count += 1
                 phase_slot["failed_validations"] += 1
+                _update_verify_logodds(
+                    phase_slot=phase_slot,
+                    inliers=inl,
+                    rms_px=float(stats.get("rms_px", float("inf"))),
+                )
                 if global_mode:
                     inl = int(stats.get("inliers", 0) or 0)
                     best_support = max(best_support, inl)
@@ -1763,6 +1977,11 @@ def solve_blind(
                 fail_best_inliers_seen = max(fail_best_inliers_seen, inl)
                 fail_validation_count += 1
                 phase_slot["failed_validations"] += 1
+                _update_verify_logodds(
+                    phase_slot=phase_slot,
+                    inliers=inl,
+                    rms_px=float(stats.get("rms_px", float("inf"))),
+                )
                 if global_mode:
                     inl = int(stats.get("inliers", 0) or 0)
                     best_support = max(best_support, inl)
@@ -2033,15 +2252,43 @@ def solve_blind(
             "fail_early_abort_phase": fail_early_abort_phase,
             "fail_early_abort_reason": fail_early_abort_reason,
             "fail_budget_s": float(fail_budget_s),
+            "verify_logodds_enabled": bool(verify_logodds_enabled),
+            "verify_logodds_bail": float(verify_logodds_bail),
+            "verify_logodds_stoplooking": float(verify_logodds_stoplooking),
+            "verify_logodds_min_validations": int(verify_logodds_min_validations),
+            "verify_logodds_cum": float(verify_logodds_cum),
+            "verify_logodds_last": float(verify_logodds_last),
+            "hard_max_candidates_tried": int(hard_max_candidates_tried),
+            "hard_max_validations": int(hard_max_validations),
             "total_candidates_tried": int(total_candidates_tried),
             "phase_perf": {k: dict(v) for k, v in phase_perf.items()},
             "collect_metrics": dict(collect_metrics),
         }
+        if _depth_ladder_internal:
+            fail_stats["depth_ladder_internal"] = True
+            fail_stats["depth_ladder_stage"] = int(_depth_ladder_stage)
+            fail_stats["depth_ladder_total"] = int(_depth_ladder_total)
+            if _depth_ladder_caps is not None:
+                fail_stats["depth_ladder_caps"] = [int(v) for v in _depth_ladder_caps]
         return _finish(WcsSolution(False, "no valid solution", None, fail_stats, None, {}))
     best_solution.stats["attempt_elapsed_s"] = float(time.time() - attempt_started)
     best_solution.stats["total_candidates_tried"] = int(total_candidates_tried)
+    best_solution.stats["verify_logodds_enabled"] = bool(verify_logodds_enabled)
+    best_solution.stats["verify_logodds_bail"] = float(verify_logodds_bail)
+    best_solution.stats["verify_logodds_stoplooking"] = float(verify_logodds_stoplooking)
+    best_solution.stats["verify_logodds_min_validations"] = int(verify_logodds_min_validations)
+    best_solution.stats["verify_logodds_cum"] = float(verify_logodds_cum)
+    best_solution.stats["verify_logodds_last"] = float(verify_logodds_last)
+    best_solution.stats["hard_max_candidates_tried"] = int(hard_max_candidates_tried)
+    best_solution.stats["hard_max_validations"] = int(hard_max_validations)
     best_solution.stats["phase_perf"] = {k: dict(v) for k, v in phase_perf.items()}
     best_solution.stats["collect_metrics"] = dict(collect_metrics)
+    if _depth_ladder_internal:
+        best_solution.stats["depth_ladder_internal"] = True
+        best_solution.stats["depth_ladder_stage"] = int(_depth_ladder_stage)
+        best_solution.stats["depth_ladder_total"] = int(_depth_ladder_total)
+        if _depth_ladder_caps is not None:
+            best_solution.stats["depth_ladder_caps"] = [int(v) for v in _depth_ladder_caps]
     header_updates = {
         **best_solution.header_updates,
         "BLINDVER": ZEBLIND_VERSION,
@@ -2139,6 +2386,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fail-attempt-min-validations", type=int, default=18, help="Minimum failed validations before fail-fast abort")
     parser.add_argument("--fail-attempt-max-best-inliers", type=int, default=4, help="Maximum best inliers considered weak for fail-fast abort")
     parser.add_argument("--fail-attempt-min-candidates", type=int, default=20, help="Minimum tried candidates before fail-fast abort")
+    parser.add_argument("--verify-logodds-enabled", type=int, choices=(0, 1), default=0, help="Enable verification log-odds early bail/stoplooking policy")
+    parser.add_argument("--verify-logodds-bail", type=float, default=-24.0, help="Cumulative log-odds threshold to bail out weak attempts")
+    parser.add_argument("--verify-logodds-stoplooking", type=float, default=24.0, help="Cumulative log-odds threshold that suppresses weak-attempt abort")
+    parser.add_argument("--verify-logodds-min-validations", type=int, default=8, help="Minimum failed validations before applying log-odds policy")
+    parser.add_argument("--hard-max-candidates-tried", type=int, default=0, help="Hard cap on total candidates tried (0 disables)")
+    parser.add_argument("--hard-max-validations", type=int, default=0, help="Hard cap on failed validations (0 disables)")
+    parser.add_argument("--depth-ladder-enabled", type=int, choices=(0, 1), default=0, help="Enable depth ladder (progressive max_stars)")
+    parser.add_argument("--depth-ladder-caps", default="80,160,500", help="Comma-separated max_stars caps for depth ladder")
     parser.add_argument("--log-level", default="INFO")
     # Backend selection
     parser.add_argument("--solver-backend", choices=("local", "astrometry"), default=None)
@@ -2202,6 +2457,9 @@ def main(argv: list[str] | None = None) -> int:
     if not args.index_root:
         logger.error("--index-root is required for local backend")
         return 2
+    depth_ladder_caps = tuple(_coerce_depth_ladder_caps(args.depth_ladder_caps))
+    if not depth_ladder_caps:
+        depth_ladder_caps = (max(1, int(args.max_stars or 1)),)
     config = SolveConfig(
         max_candidates=args.max_candidates,
         max_stars=args.max_stars,
@@ -2230,6 +2488,14 @@ def main(argv: list[str] | None = None) -> int:
         fail_attempt_min_validations=max(0, int(args.fail_attempt_min_validations or 0)),
         fail_attempt_max_best_inliers=max(0, int(args.fail_attempt_max_best_inliers or 0)),
         fail_attempt_min_candidates=max(0, int(args.fail_attempt_min_candidates or 0)),
+        verify_logodds_enabled=bool(int(args.verify_logodds_enabled)),
+        verify_logodds_bail=float(args.verify_logodds_bail),
+        verify_logodds_stoplooking=float(args.verify_logodds_stoplooking),
+        verify_logodds_min_validations=max(0, int(args.verify_logodds_min_validations or 0)),
+        hard_max_candidates_tried=max(0, int(args.hard_max_candidates_tried or 0)),
+        hard_max_validations=max(0, int(args.hard_max_validations or 0)),
+        depth_ladder_enabled=bool(int(args.depth_ladder_enabled)),
+        depth_ladder_caps=tuple(int(v) for v in depth_ladder_caps),
     )
     solution = solve_blind(args.input, args.index_root, config=config)
     if solution.success:
