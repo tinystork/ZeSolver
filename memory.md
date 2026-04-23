@@ -470,3 +470,37 @@
 - Amélioration UX GUI validée: rétablissement des updates progressives en local via callback `on_result` (émission au fil de l’eau), ajout d’un lissage temps réel de la progress bar (timer 400ms), et copie automatique du log de run dans le dossier de sortie.
 
 - Ajustement logique backend GUI: local devient le défaut effectif, et le pipeline local applique désormais un fallback en 3 étages (ZeNear, puis ZeBlind, puis Astrometry uniquement si clé API disponible), avec progression GUI sans double comptage des fichiers.
+
+
+## 2026-04-22 -> 2026-04-23 (consolidation followup + AGENT)
+
+### Décisions produit confirmées
+- Cap validé avec Tristan: **protéger ZeNear** et concentrer les optimisations en **blind-only ZeBlind**.
+- Mission parité ASTAP-ISO (scope précédent) confirmée clôturée; nouveau cap prioritaire = throughput/robustesse lot massif.
+
+### Avancement ZeBlind confirmé
+- P0/P0bis/P1/P2/P3/P4/P5/P6 implémentés avec instrumentation et garde-fous (feature flags + logs causaux).
+- P4 depth ladder livré sous contraintes (caps 80/160/500, cap stage1, OFF en rescue, activation `degraded` uniquement).
+- P5 log-odds livré sous flag, conservé **OFF par défaut** (gain temps smoke mais risque solve-rate).
+- P6 budgets durs + tuning low-signal rescue2 livrés, puis seuils rendus plus conservateurs (`best_fail_inliers<=3`).
+
+### Résultats de validation (référence lot M106)
+- Baseline complète: `zesolver_run_20260423_091723_patch30s.cli.log` -> **29/30**, **718.2s**.
+- Candidate blind-only validée: `zesolver_run_20260423_163025_cand_lowsignal_full30_overwrite_REALPATH.cli.log` -> **29/30**, **693.3s**.
+- Échec inchangé: `...233232.fit`.
+- Delta validé: **-24.9s** à solve-rate identique (rapport `reports/zeblind_fullrun_compare_20260423_164257.md`).
+- Position utilisateur confirmée: run complet satisfaisant, candidat crédible pour **v1.0.0**.
+
+### Versioning + UX + cross-platform
+- Titre GUI versionné centralement via `APP_VERSION` (`pyproject.toml`) avec suffixe automatique `Vx.y.z` dans toutes les langues.
+- Icônes ZeSolver intégrées:
+  - assets générés: `icon/ZSicon.ico`, `icon/ZSicon.png`, `icon/ZSicon.icns` depuis `ZSicon.jpeg`,
+  - application icône au niveau `QApplication` + fenêtre GUI,
+  - sélection d’icône par OS (win/mac/linux) + compat runtime packagé (`sys._MEIPASS`).
+- Préflight macOS ajouté: `zesolver/macos_preflight.py` (imports, process pool, `zesolver.py --help`).
+- Packaging PyInstaller ajouté: `packaging/pyinstaller/build.py`, `packaging/pyinstaller/convert_icon.py`, docs associées.
+- README mis à jour (preflight macOS, packaging multi-OS, workflow icônes, checklist release v1.0.0).
+
+### État actif pour prochaine itération
+- Backlog blind-only restant prioritaire: P7 (parity lock fiable) et P8 (uniformisation/dédup verify).
+- Garder ZeNear stable/non-régressé pendant toute suite d’optimisation ZeBlind.
