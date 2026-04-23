@@ -1,3 +1,29 @@
+# """
+# STANDARDIZED_PROJECT_HEADER_V1
+# ╔═══════════════════════════════════════════════════════════════════════════════════╗
+# ║ ZeSolver Project (ZeMosaic / ZeSeestarStacker ecosystem)                         ║
+# ║                                                                                   ║
+# ║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
+# ║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
+# ║                                                                                   ║
+# ║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+# ║                                                                                   ║
+# ║ Remerciements amont :                                                             ║
+# ║ - ASTAP, par Han Kleijn                                                           ║
+# ║ - Astrometry.net, par Dustin Lang, David W. Hogg, Keir Mierle, et al.            ║
+# ║                                                                                   ║
+# ║ Description FR :                                                                  ║
+# ║ Ce code sert à transformer des nuages de photons en solutions WCS et en images   ║
+# ║ astronomiques exploitables. Merci de créditer les auteurs et projets amont lors   ║
+# ║ de toute réutilisation.                                                           ║
+# ║                                                                                   ║
+# ║ EN Description:                                                                    ║
+# ║ This code helps turn clouds of photons into usable WCS solutions and astronomical ║
+# ║ imagery outputs. Please credit both project authors and upstream references when  ║
+# ║ reusing this work.                                                                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════╝
+# """
+
 """Helper utilities around the internal zeblind solver (no ASTAP executable is invoked)."""
 from __future__ import annotations
 
@@ -47,7 +73,10 @@ def _normalize_header_angle(value: object, *, is_ra: bool) -> Optional[float]:
     if value is None:
         return None
     if isinstance(value, (int, float, np.floating)):
-        return float(value)
+        val = float(value)
+        if is_ra and math.isfinite(val) and abs(val) <= 24.0:
+            return val * 15.0
+        return val
     text = str(value).strip()
     if not text:
         return None
@@ -62,49 +91,65 @@ def _normalize_header_angle(value: object, *, is_ra: bool) -> Optional[float]:
 
 
 def has_valid_wcs(header: fits.Header) -> bool:
+    """Return True when header contains a ZeMosaic-compatible celestial WCS."""
+
     required = ("CRVAL1", "CRVAL2", "CRPIX1", "CRPIX2", "CTYPE1", "CTYPE2")
     if any(key not in header for key in required):
         return False
-    radesys = str(header.get("RADESYS", "")).strip()
-    if not radesys:
-        return False
+
     ctype1 = str(header.get("CTYPE1", "")).upper()
     ctype2 = str(header.get("CTYPE2", "")).upper()
-    if not any(token in ctype1 for token in ("RA", "GLON")):
+    if not any(token in ctype1 for token in ("RA", "LON", "GLON")):
         return False
-    if not any(token in ctype2 for token in ("DEC", "GLAT")):
+    if not any(token in ctype2 for token in ("DEC", "LAT", "GLAT")):
         return False
+
+    def _f(key: str) -> float | None:
+        try:
+            return float(header[key])
+        except Exception:
+            return None
+
+    cd = None
     cd_keys = ("CD1_1", "CD1_2", "CD2_1", "CD2_2")
-    if any(key not in header for key in cd_keys):
+    if all(k in header for k in cd_keys):
+        vals = [_f(k) for k in cd_keys]
+        if any(v is None for v in vals):
+            return False
+        cd = np.array([[vals[0], vals[1]], [vals[2], vals[3]]], dtype=float)
+    elif all(k in header for k in ("PC1_1", "PC1_2", "PC2_1", "PC2_2", "CDELT1", "CDELT2")):
+        vals = [_f(k) for k in ("PC1_1", "PC1_2", "PC2_1", "PC2_2", "CDELT1", "CDELT2")]
+        if any(v is None for v in vals):
+            return False
+        pc = np.array([[vals[0], vals[1]], [vals[2], vals[3]]], dtype=float)
+        cd = pc @ np.diag([vals[4], vals[5]])
+    else:
         return False
-    try:
-        cd = np.array(
-            [
-                [float(header["CD1_1"]), float(header["CD1_2"])],
-                [float(header["CD2_1"]), float(header["CD2_2"])],
-            ],
-            dtype=float,
-        )
-    except (TypeError, ValueError):
-        return False
+
     if not np.all(np.isfinite(cd)):
         return False
-    if abs(np.linalg.det(cd)) < 1e-12:
+    try:
+        det = float(np.linalg.det(cd))
+    except Exception:
         return False
-    for key in ("CDELT1", "CDELT2"):
-        if key in header:
-            try:
-                if math.isclose(float(header[key]), 1.0, rel_tol=0, abs_tol=1e-9):
-                    return False
-            except (TypeError, ValueError):
-                return False
+    if (not math.isfinite(det)) or abs(det) < 1e-16:
+        return False
+
+    scales_arcsec = np.abs(np.sqrt(np.sum(cd ** 2, axis=0))) * 3600.0
+    finite = scales_arcsec[np.isfinite(scales_arcsec)]
+    if finite.size == 0:
+        return False
+    if float(np.nanmin(finite)) < 0.3 or float(np.nanmax(finite)) > 15.0:
+        return False
+
     for key in ("CRPIX1", "CRPIX2", "CRVAL1", "CRVAL2"):
         try:
             value = float(header[key])
-        except (TypeError, ValueError):
+        except Exception:
             return False
         if not math.isfinite(value):
             return False
+
     return True
 
 
@@ -160,6 +205,7 @@ def blind_solve(
     log: Optional[Callable[[str], None]] = None,
     skip_if_valid: bool = True,
     cancel_check: Optional[Callable[[], bool]] = None,
+    prep_cache: Optional[dict[str, Any]] = None,
 ) -> BlindSolveResult:
     logger = log or _default_log
     start = time.perf_counter()
@@ -189,7 +235,13 @@ def blind_solve(
     try:
         if cancel_check and cancel_check():
             raise BlindSolverRuntimeError("cancelled")
-        solution = _internal_solve_blind(fits_path, index_root, config=config, cancel_check=cancel_check)
+        solution = _internal_solve_blind(
+            fits_path,
+            index_root,
+            config=config,
+            cancel_check=cancel_check,
+            prep_cache=prep_cache,
+        )
     except InvalidInputError:
         raise
     except Exception as exc:
@@ -225,7 +277,8 @@ def near_solve(
     start = time.perf_counter()
     fits_path = str(Path(fits_path).expanduser())
     index_root = str(Path(index_root).expanduser())
-    logger(f"[ZENEAR] starting (index_root={index_root})")
+    strict_flag = bool(getattr(config, "astap_iso_strict", True)) if config is not None else True
+    logger(f"[ZENEAR] starting (index_root={index_root}, astap_iso_strict={str(strict_flag).lower()})")
     if skip_if_valid:
         try:
             with fits.open(fits_path, mode="readonly", memmap=False) as hdul:
@@ -283,10 +336,44 @@ def near_solve(
             stats={},
         )
     logger(f"[ZENEAR] near solve failed ({solution.message}); attempting blind fallback…")
+
+    blind_cfg = InternalBlindConfig()
+    try:
+        with fits.open(fits_path, mode="readonly", memmap=False) as hdul:
+            h = hdul[0].header
+            data = hdul[0].data
+            hgt = int(getattr(data, "shape", [0, 0])[0]) if data is not None else 0
+            wdt = int(getattr(data, "shape", [0, 0])[1]) if data is not None and len(getattr(data, "shape", [])) >= 2 else 0
+            ra_hint = (
+                _normalize_header_angle(h.get("RA"), is_ra=True)
+                or _normalize_header_angle(h.get("OBJCTRA"), is_ra=True)
+                or _normalize_header_angle(h.get("CRVAL1"), is_ra=True)
+            )
+            dec_hint = (
+                _normalize_header_angle(h.get("DEC"), is_ra=False)
+                or _normalize_header_angle(h.get("OBJCTDEC"), is_ra=False)
+                or _normalize_header_angle(h.get("CRVAL2"), is_ra=False)
+            )
+            blind_cfg.ra_hint_deg = ra_hint
+            blind_cfg.dec_hint_deg = dec_hint
+            if wdt > 0 and hgt > 0:
+                scale_arcsec, (fov_x, fov_y) = _core_estimate_scale_and_fov(h, wdt, hgt)
+                if scale_arcsec is not None:
+                    blind_cfg.pixel_scale_arcsec = float(scale_arcsec)
+                fovs = [v for v in (fov_x, fov_y) if v is not None]
+                if fovs:
+                    blind_cfg.radius_hint_deg = max(0.5, 0.8 * float(max(fovs)))
+    except Exception:
+        pass
+
+    # Relax inlier threshold for fallback from near path while keeping geometric guards.
+    blind_cfg.quality_inliers = max(12, int(getattr(blind_cfg, "quality_inliers", 40) or 40) // 2)
+    blind_cfg.quality_rms = min(1.5, float(getattr(blind_cfg, "quality_rms", 1.2) or 1.2))
+
     blind_result = blind_solve(
         fits_path,
         index_root,
-        config=None,
+        config=blind_cfg,
         log=log,
         skip_if_valid=False,
         cancel_check=cancel_check,

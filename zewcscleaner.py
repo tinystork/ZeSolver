@@ -1,5 +1,31 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# """
+# STANDARDIZED_PROJECT_HEADER_V1
+# ╔═══════════════════════════════════════════════════════════════════════════════════╗
+# ║ ZeSolver Project (ZeMosaic / ZeSeestarStacker ecosystem)                         ║
+# ║                                                                                   ║
+# ║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
+# ║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
+# ║                                                                                   ║
+# ║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+# ║                                                                                   ║
+# ║ Remerciements amont :                                                             ║
+# ║ - ASTAP, par Han Kleijn                                                           ║
+# ║ - Astrometry.net, par Dustin Lang, David W. Hogg, Keir Mierle, et al.            ║
+# ║                                                                                   ║
+# ║ Description FR :                                                                  ║
+# ║ Ce code sert à transformer des nuages de photons en solutions WCS et en images   ║
+# ║ astronomiques exploitables. Merci de créditer les auteurs et projets amont lors   ║
+# ║ de toute réutilisation.                                                           ║
+# ║                                                                                   ║
+# ║ EN Description:                                                                    ║
+# ║ This code helps turn clouds of photons into usable WCS solutions and astronomical ║
+# ║ imagery outputs. Please credit both project authors and upstream references when  ║
+# ║ reusing this work.                                                                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════╝
+# """
+
 
 import os
 import sys
@@ -24,7 +50,67 @@ WCS_SINGLE_KEYS = {
     "A_ORDER", "B_ORDER", "AP_ORDER", "BP_ORDER",  # SIP orders
     "A_DMAX", "B_DMAX", "AP_DMAX", "BP_DMAX",
 }
-# Some stacks/cameras also set ALT/AZ WCS in CTYPE3/4 — we drop CTYPE* anyway.
+
+
+REFERENCE_TOKENS = ("ASTAP", "ZEMOSAIC")
+
+
+def _normalize_comment_text(value) -> str:
+    text = "" if value is None else str(value)
+    return " ".join(text.strip().split()).lower()
+
+
+def _contains_solver_ref(value) -> bool:
+    text = "" if value is None else str(value)
+    upper = text.upper()
+    return any(tok in upper for tok in REFERENCE_TOKENS)
+
+
+def clean_non_wcs_metadata_inplace(hdr) -> int:
+    """Drop redundant COMMENT/HISTORY cards and solver reference traces."""
+    to_delete_idx = []
+    seen_comment = set()
+    seen_history = set()
+
+    for idx, card in enumerate(hdr.cards):
+        key = str(card.keyword).upper()
+
+        if key in ("COMMENT", "HISTORY"):
+            norm = _normalize_comment_text(card.value)
+            if _contains_solver_ref(norm):
+                to_delete_idx.append(idx)
+                continue
+            if not norm:
+                continue
+            if key == "COMMENT":
+                if norm in seen_comment:
+                    to_delete_idx.append(idx)
+                else:
+                    seen_comment.add(norm)
+            else:
+                if norm in seen_history:
+                    to_delete_idx.append(idx)
+                else:
+                    seen_history.add(norm)
+            continue
+
+                # Drop explicit solver provenance keys/comments
+        if _contains_solver_ref(key):
+            to_delete_idx.append(idx)
+            continue
+        if _contains_solver_ref(card.comment):
+            to_delete_idx.append(idx)
+            continue
+
+    deleted = 0
+    for idx in reversed(to_delete_idx):
+        try:
+            del hdr[idx]
+            deleted += 1
+        except Exception:
+            pass
+    return deleted
+
 
 def header_has_wcs(hdr) -> bool:
     """Conservatively decide if a header 'has WCS'."""
@@ -41,7 +127,7 @@ def header_has_wcs(hdr) -> bool:
     return False
 
 def clean_wcs_header_inplace(hdr) -> int:
-    """Remove WCS-related cards from a FITS header. Returns number of deletions."""
+    """Remove WCS cards + redundant/commentary solver traces. Returns deletions."""
     to_delete = []
     for key in list(hdr.keys()):
         uk = str(key).upper()
@@ -54,17 +140,23 @@ def clean_wcs_header_inplace(hdr) -> int:
         # Generic CUNITi (any axis)
         if uk.startswith("CUNIT"):
             to_delete.append(key)
-    deleted = 0
+
+    deleted_wcs = 0
     for k in to_delete:
         try:
             del hdr[k]
-            deleted += 1
+            deleted_wcs += 1
         except Exception:
             pass
+
+    deleted_meta = clean_non_wcs_metadata_inplace(hdr)
+    deleted = deleted_wcs + deleted_meta
+
     if deleted:
-        # Keep record
         try:
-            hdr.add_history(f"[WCS-CLEAN] Removed {deleted} WCS cards on {datetime.utcnow().isoformat()}Z")
+            hdr.add_history(
+                f"[WCS-CLEAN] Removed {deleted_wcs} WCS cards + {deleted_meta} metadata cards on {datetime.utcnow().isoformat()}Z"
+            )
         except Exception:
             pass
     return deleted

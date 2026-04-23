@@ -1,4 +1,20 @@
 <#
+STANDARDIZED_PROJECT_HEADER_V1
+╔═══════════════════════════════════════════════════════════════════════════════════╗
+║ ZeSolver Project (ZeMosaic / ZeSeestarStacker ecosystem)                         ║
+║                                                                                   ║
+║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
+║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
+║                                                                                   ║
+║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+║                                                                                   ║
+║ Remerciements amont :                                                             ║
+║ - ASTAP, par Han Kleijn                                                           ║
+║ - Astrometry.net, par Dustin Lang, David W. Hogg, Keir Mierle, et al.            ║
+╚═══════════════════════════════════════════════════════════════════════════════════╝
+#>
+
+<#
   Installer toutes les dépendances du projet (Windows, PowerShell)
   - Crée un venv .venv (Python 3.13 si disponible)
   - Installe requirements.txt

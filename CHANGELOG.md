@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-04-23
+
+### Added
+
+- First stable public release of ZeSolver (Near + ZeBlind pipeline, GUI/CLI integration).
+- Formal semantic versioning baseline with release tag `v1.0.0`.
+
+
 ### Added
 
 - Introduced the standalone `zeblindsolver` module/CLI for ASTAP-based blind solving

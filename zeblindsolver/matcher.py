@@ -1,3 +1,29 @@
+# """
+# STANDARDIZED_PROJECT_HEADER_V1
+# ╔═══════════════════════════════════════════════════════════════════════════════════╗
+# ║ ZeSolver Project (ZeMosaic / ZeSeestarStacker ecosystem)                         ║
+# ║                                                                                   ║
+# ║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
+# ║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
+# ║                                                                                   ║
+# ║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+# ║                                                                                   ║
+# ║ Remerciements amont :                                                             ║
+# ║ - ASTAP, par Han Kleijn                                                           ║
+# ║ - Astrometry.net, par Dustin Lang, David W. Hogg, Keir Mierle, et al.            ║
+# ║                                                                                   ║
+# ║ Description FR :                                                                  ║
+# ║ Ce code sert à transformer des nuages de photons en solutions WCS et en images   ║
+# ║ astronomiques exploitables. Merci de créditer les auteurs et projets amont lors   ║
+# ║ de toute réutilisation.                                                           ║
+# ║                                                                                   ║
+# ║ EN Description:                                                                    ║
+# ║ This code helps turn clouds of photons into usable WCS solutions and astronomical ║
+# ║ imagery outputs. Please credit both project authors and upstream references when  ║
+# ║ reusing this work.                                                                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════╝
+# """
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -65,6 +91,8 @@ def estimate_similarity_RANSAC(
     min_inliers: int = 3,
     allow_reflection: bool = False,
     early_stop_inliers: int = 0,
+    min_scale: float | None = None,
+    max_scale: float | None = None,
     random_state: int | np.random.Generator | None = None,
 ) -> tuple[SimilarityTransform, SimilarityStats] | None:
     if len(image_points) < 2 or len(catalog_points) < 2:
@@ -95,6 +123,10 @@ def estimate_similarity_RANSAC(
             predictions = rot_scale * src_c + translation
             err_deg = np.abs(predictions - dst_c)
             scale = abs(rot_scale)
+            if min_scale is not None and scale < float(min_scale):
+                continue
+            if max_scale is not None and scale > float(max_scale):
+                continue
             err_px = err_deg / max(scale, 1e-8)
             mask = err_px <= tol_px
             score = int(mask.sum())

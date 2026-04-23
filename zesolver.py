@@ -1,4 +1,30 @@
 #!/usr/bin/env python3
+# """
+# STANDARDIZED_PROJECT_HEADER_V1
+# ╔═══════════════════════════════════════════════════════════════════════════════════╗
+# ║ ZeSolver Project (ZeMosaic / ZeSeestarStacker ecosystem)                         ║
+# ║                                                                                   ║
+# ║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
+# ║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
+# ║                                                                                   ║
+# ║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+# ║                                                                                   ║
+# ║ Remerciements amont :                                                             ║
+# ║ - ASTAP, par Han Kleijn                                                           ║
+# ║ - Astrometry.net, par Dustin Lang, David W. Hogg, Keir Mierle, et al.            ║
+# ║                                                                                   ║
+# ║ Description FR :                                                                  ║
+# ║ Ce code sert à transformer des nuages de photons en solutions WCS et en images   ║
+# ║ astronomiques exploitables. Merci de créditer les auteurs et projets amont lors   ║
+# ║ de toute réutilisation.                                                           ║
+# ║                                                                                   ║
+# ║ EN Description:                                                                    ║
+# ║ This code helps turn clouds of photons into usable WCS solutions and astronomical ║
+# ║ imagery outputs. Please credit both project authors and upstream references when  ║
+# ║ reusing this work.                                                                ║
+# ╚═══════════════════════════════════════════════════════════════════════════════════╝
+# """
+
 """
 ZeSolver batch utility: GUI + CLI wrapper around the zewcs290 catalogue reader.
 
@@ -15,7 +41,9 @@ import json
 import logging
 import math
 import os
+import re
 import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -33,16 +61,93 @@ ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 LOG_FILE = ROOT_DIR / "zesolver.log"
+APP_ICON_CANDIDATES = (
+    "ZSicon.ico",
+    "ZSicon.icns",
+    "ZSicon.png",
+    "ZSicon.jpeg",
+    "ZSicon.jpg",
+)
+
+
+def _runtime_resource_dirs() -> list[Path]:
+    roots: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        try:
+            roots.append(Path(meipass))
+        except Exception:
+            pass
+    roots.append(ROOT_DIR)
+    seen: set[str] = set()
+    ordered: list[Path] = []
+    for root in roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(root)
+    return ordered
+
+
+def resolve_app_icon_path() -> Optional[Path]:
+    if sys.platform == "darwin":
+        preferred = ("ZSicon.icns", "ZSicon.png", "ZSicon.jpeg", "ZSicon.jpg", "ZSicon.ico")
+    elif sys.platform.startswith("win"):
+        preferred = ("ZSicon.ico", "ZSicon.png", "ZSicon.jpeg", "ZSicon.jpg", "ZSicon.icns")
+    else:
+        preferred = ("ZSicon.png", "ZSicon.ico", "ZSicon.jpeg", "ZSicon.jpg", "ZSicon.icns")
+    for base in _runtime_resource_dirs():
+        icon_dir = base / "icon"
+        for name in preferred:
+            path = icon_dir / name
+            if path.is_file():
+                return path
+    return None
+
 
 try:
     from importlib.metadata import PackageNotFoundError, version as pkg_version
 except ImportError:  # pragma: no cover
     PackageNotFoundError = Exception  # type: ignore
 
+
+def _load_source_version(default: str = "0.0.dev") -> str:
+    pyproject = ROOT_DIR / "pyproject.toml"
+    try:
+        import tomllib
+
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        version = str((data.get("project") or {}).get("version") or "").strip()
+        return version or default
+    except Exception:
+        return default
+
+
 try:
     APP_VERSION = pkg_version("zewcs290")
 except PackageNotFoundError:  # pragma: no cover - running from source tree
-    APP_VERSION = "0.0.dev"
+    APP_VERSION = _load_source_version()
+
+
+def _format_ui_version(version: str) -> str:
+    value = str(version or "").strip()
+    if not value:
+        return ""
+    if value[0] in ("v", "V"):
+        return value
+    return f"V{value}"
+
+
+APP_VERSION_UI = _format_ui_version(APP_VERSION)
+
+
+def build_window_title(base_title: str) -> str:
+    base = str(base_title or "ZeSolver").strip() or "ZeSolver"
+    if not APP_VERSION_UI:
+        return base
+    return f"{base} {APP_VERSION_UI}"
+
 
 try:
     from zewcs290 import CatalogDB
@@ -79,6 +184,12 @@ from zesolver.settings_store import (
     PersistentSettings,
     load_persistent_settings,
     save_persistent_settings,
+)
+from zesolver.gui_profiles import apply_settings_easy_visibility, apply_solver_simple_visibility
+from zesolver.gui_settings_sections import (
+    build_blind_group,
+    build_presets_fov_reco_groups,
+    wire_settings_tab_callbacks,
 )
 from zeblindsolver.metadata_solver import NearSolveConfig as NearIndexConfig
 from zeblindsolver.db_convert import (
@@ -175,7 +286,6 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "interface_mode_wizard": "Wizard",
         "window_title": "ZeSolver – Traitement par lot",
         "browse_button": "Parcourir…",
-        "database_label": "Base de données",
         "input_label": "Dossier d'images",
         "scan_button": "Analyser les fichiers",
         "options_box": "Paramètres solveur",
@@ -261,6 +371,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "runner_start": "Démarrage: {files} fichier(s), {workers} thread(s).",
         "runner_stop_wait": "Arrêt demandé, attente de la fin des tâches…",
         "status_waiting": "en attente",
+        "status_wcs": "WCS présent",
         "status_solved": "résolu",
         "status_failed": "échec",
         "status_skipped": "ignoré",
@@ -292,7 +403,6 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "mag_cap_suggested": "Magnitude max conseillée",
         "quads_profile": "Profil quads",
         "max_quads_per_tile": "Quads max/tile",
-        "spec_warning_unknown": "Spécifications à confirmer (approx.)",
         "database_tab_title": "Base de données",
         "select_db_root": "Dossier database",
         "data_sources": "Sources de données (tuiles HNSKY/ASTAP)",
@@ -348,6 +458,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "fast_max_img_stars_label": "Étoiles image max (near)",
         "fast_max_cat_stars_label": "Étoiles catalogue max (near)",
         "fast_try_parity_label": "Autoriser symétrie (flip parité)",
+        "fast_astap_iso_strict_label": "Mode strict ASTAP-ISO (toujours actif)",
         "fast_search_margin_label": "Marge de recherche (near)",
         "fast_detect_k_sigma_label": "Seuil détection k-sigma (near)",
         "fast_detect_min_area_label": "Aire min source (near)",
@@ -376,7 +487,6 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "interface_mode_wizard": "Wizard",
         "window_title": "ZeSolver – Batch Solver",
         "browse_button": "Browse…",
-        "database_label": "Database",
         "input_label": "Image folder",
         "scan_button": "Scan files",
         "options_box": "Solver settings",
@@ -462,6 +572,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "runner_start": "Starting: {files} file(s), {workers} thread(s).",
         "runner_stop_wait": "Stop requested, waiting for tasks…",
         "status_waiting": "waiting",
+        "status_wcs": "WCS present",
         "status_solved": "solved",
         "status_failed": "failed",
         "status_skipped": "skipped",
@@ -493,7 +604,6 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "mag_cap_suggested": "Suggested mag cap",
         "quads_profile": "Quads profile",
         "max_quads_per_tile": "Max quads/tile",
-        "spec_warning_unknown": "Specifications need confirmation (approx.)",
         "database_tab_title": "Database",
         "select_db_root": "Database folder",
         "data_sources": "Data sources (HNSKY/ASTAP shards)",
@@ -549,6 +659,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "fast_max_img_stars_label": "Max image stars (near)",
         "fast_max_cat_stars_label": "Max catalog stars (near)",
         "fast_try_parity_label": "Allow parity flip",
+        "fast_astap_iso_strict_label": "Strict ASTAP-ISO mode (always on)",
         "fast_search_margin_label": "Search margin (near)",
         "fast_detect_k_sigma_label": "Detection k-sigma (near)",
         "fast_detect_min_area_label": "Min source area (near)",
@@ -600,9 +711,9 @@ for _lang, _mapping in _GUI_DOWNLOADS_I18N.items():
 _GUI_ASTROMETRY_I18N = {
     "fr": {
         "solver.backend.label": "Solveur",
-        "solver.backend.local": "Local (ZeBlind)",
+        "solver.backend.local": "Local (ZeNear → ZeBlind → Astrometry*)",
         "solver.backend.astrometry": "Astrometry.net (web)",
-        "solver.backend.note": "Choisissez le solveur à utiliser pour cette exécution.",
+        "solver.backend.note": "Par défaut: ZeNear, puis ZeBlind, puis Astrometry si clé API renseignée.",
         "solver.status.blind_disabled": "Mode ZeNear seul (blind solver désactivé).",
         "solver.status.using_backend": "Solveur utilisé : {backend}",
         "astrometry.tab.title": "Astrometry.net",
@@ -611,13 +722,6 @@ _GUI_ASTROMETRY_I18N = {
         "astrometry.login.test": "Tester la connexion",
         "astrometry.login.ok": "Connexion OK",
         "astrometry.login.fail": "Échec de connexion",
-        "astrometry.submit.batch": "Envoyer le lot",
-        "astrometry.submit.in_progress": "Envoi en cours…",
-        "astrometry.submit.done": "Tous les jobs envoyés",
-        "astrometry.polling.status": "Statut du job",
-        "astrometry.job.solved": "Résolu",
-        "astrometry.job.failed": "Échec",
-        "astrometry.job.timeout": "Délai dépassé",
         "astrometry.options.use_hints": "Utiliser les métadonnées (RA/Dec/échelle) si disponibles",
         "astrometry.options.fallback_local": "Basculement vers le solveur local en cas d’échec",
         "astrometry.options.parallel_jobs": "Jobs en parallèle",
@@ -625,14 +729,12 @@ _GUI_ASTROMETRY_I18N = {
         "astrometry.options.privacy_note": "Les images sont envoyées à un service tiers. Assurez-vous d’avoir les droits et le consentement.",
         "settings.saved": "Paramètres enregistrés",
         "settings.save": "Enregistrer",
-        "settings.cancel": "Annuler",
-        "solver.run.batch": "Lancer la résolution en lot",
     },
     "en": {
         "solver.backend.label": "Solver backend",
-        "solver.backend.local": "Local (ZeBlind)",
+        "solver.backend.local": "Local (ZeNear → ZeBlind → Astrometry*)",
         "solver.backend.astrometry": "Astrometry.net (web)",
-        "solver.backend.note": "Choose the solver to use for this run.",
+        "solver.backend.note": "Default: ZeNear, then ZeBlind, then Astrometry if an API key is configured.",
         "solver.status.blind_disabled": "ZeNear-only mode (blind solver disabled).",
         "solver.status.using_backend": "Using backend: {backend}",
         "astrometry.tab.title": "Astrometry.net",
@@ -641,13 +743,6 @@ _GUI_ASTROMETRY_I18N = {
         "astrometry.login.test": "Test login",
         "astrometry.login.ok": "Login OK",
         "astrometry.login.fail": "Login failed",
-        "astrometry.submit.batch": "Submit batch",
-        "astrometry.submit.in_progress": "Submitting…",
-        "astrometry.submit.done": "All jobs submitted",
-        "astrometry.polling.status": "Job status",
-        "astrometry.job.solved": "Solved",
-        "astrometry.job.failed": "Failed",
-        "astrometry.job.timeout": "Timed out",
         "astrometry.options.use_hints": "Use metadata hints (RA/Dec/scale) if available",
         "astrometry.options.fallback_local": "Fallback to local solver on failure",
         "astrometry.options.parallel_jobs": "Parallel jobs",
@@ -655,8 +750,6 @@ _GUI_ASTROMETRY_I18N = {
         "astrometry.options.privacy_note": "Images are sent to a third-party service. Ensure you have rights and consent.",
         "settings.saved": "Settings saved",
         "settings.save": "Save",
-        "settings.cancel": "Cancel",
-        "solver.run.batch": "Run batch solve",
     },
 }
 for _lang, _mapping in _GUI_ASTROMETRY_I18N.items():
@@ -947,9 +1040,9 @@ class SolveConfig:
     near_tile_cache_size: int = 128
     near_detect_backend: Optional[str] = None
     near_detect_device: Optional[int] = None
-    near_detect_k_sigma: float = 4.0
+    near_detect_k_sigma: float = 4.5
     near_detect_min_area: int = 8
-    near_detect_max_labels: int = 2500
+    near_detect_max_labels: int = 1200
     # Hybrid pipeline guard: max concurrent GPU detect sections across workers
     near_detect_gpu_slots: int = 1
     near_warm_start: bool = True
@@ -962,6 +1055,15 @@ class SolveConfig:
     near_max_cat_stars: int = 2000
     near_try_parity_flip: bool = True
     near_search_margin: float = 1.2
+    # Near ASTAP-like hint dynamics (throughput-first)
+    near_astap_hint_fastpath: bool = False
+    near_astap_hint_radius_deg: Optional[float] = None
+    near_second_pass_refine_in_fastpath: bool = False
+    near_astap_iso_strict: bool = True
+    # Batch mode option: hold ZeNear failures for phase-2 blind instead of
+    # triggering immediate blind fallback inside near_solve.
+    near_defer_blind_fallback: bool = False
+    near_allow_second_rescue: bool = False
     # Blind solver (Python) tunables (mirrors settings panel). These were
     # previously only used by the settings tester; we surface them here so the
     # batch run uses and logs the same values as the GUI:
@@ -972,9 +1074,17 @@ class SolveConfig:
     blind_quality_inliers: int = 40
     blind_quality_rms: float = 1.2
     blind_fast_mode: bool = True
+    # Optional last-resort fallback after ZeNear + ZeBlind (GUI local backend)
+    astrometry_api_url: str = "https://nova.astrometry.net/api"
+    astrometry_api_key: Optional[str] = None
+    astrometry_timeout_s: int = 600
+    astrometry_parallel_jobs: int = 2
+    astrometry_use_hints: bool = True
+    astrometry_fallback_after_blind: bool = True
     log_level: str = "INFO"
     dev_bucket_limit_override: int = 0
     dev_vote_percentile: int = 40
+    dev_collect_matches_vectorized_experimental: bool = False
     dev_bucket_cap_S: int = 0
     dev_bucket_cap_M: int = 0
     dev_bucket_cap_L: int = 0
@@ -1022,6 +1132,18 @@ class SolveConfig:
         detect_area = int(getattr(self, "dev_detect_min_area", 5) or 5)
         detect_area = max(1, detect_area)
         object.__setattr__(self, "dev_detect_min_area", detect_area)
+        # Legacy non-strict mode is retired.
+        object.__setattr__(self, "near_astap_iso_strict", True)
+        api_url = str(getattr(self, "astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api").strip()
+        if not api_url:
+            api_url = "https://nova.astrometry.net/api"
+        object.__setattr__(self, "astrometry_api_url", api_url)
+        api_key = getattr(self, "astrometry_api_key", None)
+        if isinstance(api_key, str):
+            api_key = api_key.strip() or None
+        else:
+            api_key = None
+        object.__setattr__(self, "astrometry_api_key", api_key)
 
 
 @dataclass(slots=True)
@@ -1059,6 +1181,85 @@ class ImageSolveResult:
     duration_s: Optional[float] = None
     catalog_family: Optional[str] = None
     run_info: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+
+
+_PROC_NEAR_SOLVER: Optional["ImageSolver"] = None
+_PROC_NEAR_WORKER_BACKEND: str = "auto"
+
+
+def _result_to_payload(result: ImageSolveResult) -> dict[str, Any]:
+    return {
+        "path": str(result.path),
+        "status": result.status,
+        "message": result.message,
+        "matched_stars": int(result.matched_stars),
+        "rms_arcsec": result.rms_arcsec,
+        "pixel_scale_arcsec": result.pixel_scale_arcsec,
+        "metadata_source": result.metadata_source,
+        "duration_s": result.duration_s,
+        "catalog_family": result.catalog_family,
+        "run_info": list(result.run_info or []),
+    }
+
+
+def _payload_to_result(payload: Mapping[str, Any]) -> ImageSolveResult:
+    return ImageSolveResult(
+        path=Path(str(payload.get("path") or "")),
+        status=str(payload.get("status") or "failed"),
+        message=str(payload.get("message") or ""),
+        matched_stars=int(payload.get("matched_stars") or 0),
+        rms_arcsec=(float(payload["rms_arcsec"]) if payload.get("rms_arcsec") is not None else None),
+        pixel_scale_arcsec=(float(payload["pixel_scale_arcsec"]) if payload.get("pixel_scale_arcsec") is not None else None),
+        metadata_source=(str(payload["metadata_source"]) if payload.get("metadata_source") is not None else None),
+        duration_s=(float(payload["duration_s"]) if payload.get("duration_s") is not None else None),
+        catalog_family=(str(payload["catalog_family"]) if payload.get("catalog_family") is not None else None),
+        run_info=list(payload.get("run_info") or []),
+    )
+
+
+def _near_worker_init(config: SolveConfig) -> None:
+    global _PROC_NEAR_SOLVER, _PROC_NEAR_WORKER_BACKEND
+    cfg = config
+    try:
+        backend = str(getattr(config, "near_detect_backend", "auto") or "auto").strip().lower()
+        _PROC_NEAR_WORKER_BACKEND = backend
+        if backend in {"auto", "cuda"}:
+            ndev, _names, _err = _cuda_runtime_summary()
+            if ndev <= 0:
+                # GPU is optional: enforce CPU fallback at worker level when CUDA is unavailable.
+                cfg = replace(config, near_detect_backend="cpu")
+                _PROC_NEAR_WORKER_BACKEND = "cpu"
+            elif backend == "auto":
+                # In hybrid mode, prefer explicit CUDA when available.
+                cfg = replace(config, near_detect_backend="cuda")
+                _PROC_NEAR_WORKER_BACKEND = "cuda"
+    except Exception:
+        cfg = config
+        _PROC_NEAR_WORKER_BACKEND = str(getattr(config, "near_detect_backend", "auto") or "auto").strip().lower()
+
+    _PROC_NEAR_SOLVER = ImageSolver(cfg)
+    try:
+        _PROC_NEAR_SOLVER.set_cancel_event(None)
+    except Exception:
+        pass
+
+
+def _near_worker_init_with_backend(config: SolveConfig, backend: str) -> None:
+    forced = replace(config, near_detect_backend=str(backend or "cpu").strip().lower())
+    _near_worker_init(forced)
+
+
+def _near_worker_solve(path_text: str) -> dict[str, Any]:
+    path = Path(path_text)
+    try:
+        if _PROC_NEAR_SOLVER is None:
+            raise RuntimeError("near worker not initialized")
+        result = _PROC_NEAR_SOLVER.solve_path(path, allow_blind_fallback=False)
+    except Exception as exc:
+        result = ImageSolveResult(path=path, status="failed", message=str(exc))
+    payload = _result_to_payload(result)
+    payload["worker_detect_backend"] = _PROC_NEAR_WORKER_BACKEND
+    return payload
 
 
 def _default_worker_count() -> int:
@@ -1108,6 +1309,143 @@ def _system_memory_gb() -> Optional[float]:
     return None
 
 
+def _format_bytes(value: Optional[int]) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        num = float(value)
+    except Exception:
+        return "n/a"
+    if not math.isfinite(num) or num < 0:
+        return "n/a"
+    units = ["B", "KiB", "MiB", "GiB", "TiB"]
+    idx = 0
+    while num >= 1024.0 and idx < len(units) - 1:
+        num /= 1024.0
+        idx += 1
+    return f"{num:.1f}{units[idx]}"
+
+
+def _process_memory_snapshot() -> dict[str, Optional[int]]:
+    snapshot: dict[str, Optional[int]] = {
+        "rss_bytes": None,
+        "working_set_bytes": None,
+        "vms_bytes": None,
+    }
+    try:
+        import psutil  # type: ignore
+
+        proc = psutil.Process(os.getpid())
+        mem = proc.memory_info()
+        rss = getattr(mem, "rss", None)
+        wset = getattr(mem, "wset", None)
+        vms = getattr(mem, "vms", None)
+        snapshot["rss_bytes"] = int(rss) if rss is not None else None
+        snapshot["working_set_bytes"] = int(wset) if wset is not None else snapshot["rss_bytes"]
+        snapshot["vms_bytes"] = int(vms) if vms is not None else None
+        return snapshot
+    except Exception:
+        pass
+    try:
+        import resource  # Unix fallback
+
+        ru = resource.getrusage(resource.RUSAGE_SELF)
+        rss = int(getattr(ru, "ru_maxrss", 0) or 0)
+        if rss > 0:
+            # Linux reports KiB, macOS reports bytes.
+            rss_bytes = rss if sys.platform == "darwin" else rss * 1024
+            snapshot["rss_bytes"] = rss_bytes
+            snapshot["working_set_bytes"] = rss_bytes
+    except Exception:
+        pass
+    return snapshot
+
+
+def _gpu_memory_snapshot(device: Optional[int], *, allow_cupy: bool = False) -> dict[str, Optional[int] | str]:
+    out: dict[str, Optional[int] | str] = {
+        "backend": "none",
+        "device": int(device) if isinstance(device, int) else None,
+        "used_bytes": None,
+        "total_bytes": None,
+        "free_bytes": None,
+        "process_used_bytes": None,
+        "pool_used_bytes": None,
+        "pool_reserved_bytes": None,
+    }
+
+    dev = out["device"] if isinstance(out["device"], int) else 0
+
+    # Prefer nvidia-smi first, no CUDA context side effects.
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi:
+        try:
+            cmd = [
+                nvidia_smi,
+                "--query-gpu=memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+                "-i",
+                str(dev),
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1.5)
+            if proc.returncode == 0 and proc.stdout.strip():
+                first = proc.stdout.strip().splitlines()[0]
+                parts = [x.strip() for x in first.split(",")]
+                if len(parts) >= 2:
+                    used_mb = float(parts[0])
+                    total_mb = float(parts[1])
+                    used_b = int(max(0.0, used_mb) * 1024.0 * 1024.0)
+                    total_b = int(max(0.0, total_mb) * 1024.0 * 1024.0)
+                    out["backend"] = "nvidia-smi"
+                    out["used_bytes"] = used_b
+                    out["total_bytes"] = total_b
+                    out["free_bytes"] = max(0, total_b - used_b)
+
+            # Optional per-process VRAM, may be unavailable on some drivers/modes.
+            cmd_apps = [
+                nvidia_smi,
+                "--query-compute-apps=pid,used_memory",
+                "--format=csv,noheader,nounits",
+            ]
+            proc_apps = subprocess.run(cmd_apps, capture_output=True, text=True, timeout=1.5)
+            if proc_apps.returncode == 0 and proc_apps.stdout.strip():
+                pid = int(os.getpid())
+                proc_used_mb = 0.0
+                for line in proc_apps.stdout.strip().splitlines():
+                    cols = [x.strip() for x in line.split(",")]
+                    if len(cols) < 2:
+                        continue
+                    try:
+                        if int(cols[0]) == pid:
+                            proc_used_mb += float(cols[1])
+                    except Exception:
+                        continue
+                if proc_used_mb > 0.0:
+                    out["process_used_bytes"] = int(proc_used_mb * 1024.0 * 1024.0)
+        except Exception:
+            pass
+
+    if allow_cupy:
+        try:
+            import cupy  # type: ignore
+            from cupy.cuda import runtime as _rt  # type: ignore
+
+            with cupy.cuda.Device(int(dev)):
+                free_b, total_b = _rt.memGetInfo()
+                used_b = int(total_b) - int(free_b)
+                pool = cupy.get_default_memory_pool()
+                out["pool_used_bytes"] = int(pool.used_bytes())
+                out["pool_reserved_bytes"] = int(pool.total_bytes())
+                if out.get("used_bytes") is None:
+                    out["backend"] = "cupy"
+                    out["used_bytes"] = int(used_b)
+                    out["total_bytes"] = int(total_b)
+                    out["free_bytes"] = int(free_b)
+        except Exception:
+            pass
+
+    return out
+
+
 def _iter_image_files(input_dir: Path, extensions: Sequence[str]) -> Iterator[Path]:
     allowed = {ext.lower() for ext in extensions}
     for path in sorted(input_dir.rglob("*")):
@@ -1128,6 +1466,43 @@ def _header_has_wcs(header: fits.Header) -> bool:
 def _fits_requires_memmap_off(header: fits.Header) -> bool:
     """Astropy cannot memmap scaled data (BZERO/BSCALE/BLANK)."""
     return any(key in header for key in FITS_MEMMAP_FORBIDDEN_KEYS)
+
+
+def _quick_scan_initial_status(path: Path) -> tuple[str, str]:
+    """Best-effort pre-scan status for the file list (WCS present vs waiting)."""
+    suffix = path.suffix.lower()
+    if suffix in FITS_EXTENSIONS:
+        try:
+            with fits.open(path, mode="readonly", memmap=False) as hdul:
+                for hdu in hdul:
+                    try:
+                        if _header_has_wcs(hdu.header):
+                            return "wcs", ""
+                    except Exception:
+                        continue
+                # Diagnostic hint: file stamped solved but no usable WCS cards.
+                try:
+                    h0 = hdul[0].header
+                    if bool(h0.get("SOLVED", False)) and not _header_has_wcs(h0):
+                        return "failed", "SOLVED present but WCS cards missing"
+                except Exception:
+                    pass
+        except Exception as exc:
+            return "failed", f"scan error: {exc}"
+        return "waiting", ""
+
+    if suffix in RASTER_EXTENSIONS:
+        sidecar = path.with_suffix(path.suffix + SIDE_CAR_SUFFIX)
+        if sidecar.is_file():
+            try:
+                payload = json.loads(sidecar.read_text(errors='ignore'))
+                if isinstance(payload, dict) and all(k in payload for k in ("crpix", "crval", "cd")):
+                    return "wcs", ""
+            except Exception:
+                pass
+        return "waiting", ""
+
+    return "waiting", ""
 
 
 def _sexagesimal_to_deg(value: str, is_ra: bool) -> Optional[float]:
@@ -1326,6 +1701,10 @@ class ImageSolver:
         # Sequential near-solver warm start: (scale_deg_per_px, rotation_rad, parity)
         self._near_seed: Optional[tuple[float, float, int]] = None
         self._near_warmstart_parallel_notified: bool = False
+        # Recent solved sky positions used to sanity-check/replace bad header hints.
+        self._blind_hint_lock = threading.Lock()
+        self._recent_sky_hints: list[dict[str, Any]] = []
+        self._recent_sky_hints_max: int = 128
         # Cache to avoid repeating expensive blind index preflight checks per file
         self._blind_index_checked: bool = False
         self._blind_index_checked_root: Optional[Path] = None
@@ -1418,9 +1797,9 @@ class ImageSolver:
                     "tile_cache_size": int(getattr(self.config, "near_tile_cache_size", 128) or 128),
                     "detect_backend": str(getattr(self.config, "near_detect_backend", "auto") or "auto"),
                     "detect_device": getattr(self.config, "near_detect_device", None),
-                    "detect_k_sigma": float(getattr(self.config, "near_detect_k_sigma", 4.0) or 4.0),
+                    "detect_k_sigma": float(getattr(self.config, "near_detect_k_sigma", 4.5) or 4.5),
                     "detect_min_area": int(getattr(self.config, "near_detect_min_area", 8) or 8),
-                    "detect_max_labels": int(getattr(self.config, "near_detect_max_labels", 2500) or 2500),
+                    "detect_max_labels": int(getattr(self.config, "near_detect_max_labels", 1200) or 1200),
                     "detect_gpu_slots": int(getattr(self.config, "near_detect_gpu_slots", 1) or 1),
                     "warm_start": bool(getattr(self.config, "near_warm_start", True)),
                     "quality_inliers": int(getattr(self.config, "near_quality_inliers", 60) or 60),
@@ -1432,6 +1811,7 @@ class ImageSolver:
                     "max_cat_stars": int(getattr(self.config, "near_max_cat_stars", 2000) or 2000),
                     "try_parity_flip": bool(getattr(self.config, "near_try_parity_flip", True)),
                     "search_margin": float(getattr(self.config, "near_search_margin", 1.2) or 1.2),
+                    "defer_blind_fallback": bool(getattr(self.config, "near_defer_blind_fallback", False)),
                 },
                 "blind": {
                     "max_stars": int(getattr(self.config, "blind_max_stars", 500) or 500),
@@ -1565,6 +1945,157 @@ class ImageSolver:
         return unique or [base]
 
     @staticmethod
+    def _series_key(path: Path) -> str:
+        stem = path.stem.lower()
+        stem = re.sub(r"20\d{6}[-_ ]?\d{6}", " ", stem)
+        stem = re.sub(r"\d{6,}", " ", stem)
+        stem = re.sub(r"[_\-\s]+", " ", stem).strip()
+        parent = path.parent.name.lower().strip()
+        return f"{parent}|{stem}"
+
+    @staticmethod
+    def _frame_order_key(path: Path) -> Optional[int]:
+        stem = path.stem
+        m = re.search(r"(20\d{6})[-_ ]?(\d{6})", stem)
+        if m:
+            try:
+                return int(f"{m.group(1)}{m.group(2)}")
+            except Exception:
+                return None
+        nums = re.findall(r"\d{6,}", stem)
+        if not nums:
+            return None
+        try:
+            return int(nums[-1])
+        except Exception:
+            return None
+
+    @staticmethod
+    def _angular_separation_deg(ra1_deg: float, dec1_deg: float, ra2_deg: float, dec2_deg: float) -> float:
+        ra1 = math.radians(float(ra1_deg) % 360.0)
+        dec1 = math.radians(float(dec1_deg))
+        ra2 = math.radians(float(ra2_deg) % 360.0)
+        dec2 = math.radians(float(dec2_deg))
+        cos_sep = (
+            math.sin(dec1) * math.sin(dec2)
+            + math.cos(dec1) * math.cos(dec2) * math.cos(ra1 - ra2)
+        )
+        cos_sep = max(-1.0, min(1.0, cos_sep))
+        return math.degrees(math.acos(cos_sep))
+
+    def _remember_recent_sky_hint(
+        self,
+        *,
+        path: Path,
+        ra_deg: Optional[float],
+        dec_deg: Optional[float],
+        origin: str,
+        tile_key: Optional[str] = None,
+    ) -> None:
+        if ra_deg is None or dec_deg is None:
+            return
+        try:
+            ra = float(ra_deg)
+            dec = float(dec_deg)
+        except Exception:
+            return
+        if not (math.isfinite(ra) and math.isfinite(dec)):
+            return
+        entry = {
+            "path_name": path.name,
+            "series_key": self._series_key(path),
+            "order_key": self._frame_order_key(path),
+            "ra_deg": ra,
+            "dec_deg": dec,
+            "origin": str(origin),
+            "tile_key": str(tile_key) if tile_key else None,
+            "ts": time.time(),
+        }
+        with self._blind_hint_lock:
+            self._recent_sky_hints.append(entry)
+            if len(self._recent_sky_hints) > self._recent_sky_hints_max:
+                self._recent_sky_hints = self._recent_sky_hints[-self._recent_sky_hints_max :]
+
+    def _remember_keywords_hint(
+        self,
+        *,
+        path: Path,
+        keywords: Optional[Mapping[str, Any]],
+        origin: str,
+        tile_key: Optional[str] = None,
+    ) -> None:
+        if not keywords:
+            return
+        ra = _parse_angle((keywords.get("CRVAL1") if isinstance(keywords, Mapping) else None), is_ra=True)
+        dec = _parse_angle((keywords.get("CRVAL2") if isinstance(keywords, Mapping) else None), is_ra=False)
+        self._remember_recent_sky_hint(path=path, ra_deg=ra, dec_deg=dec, origin=origin, tile_key=tile_key)
+
+    def _remember_file_wcs_hint(
+        self,
+        *,
+        path: Path,
+        origin: str,
+        tile_key: Optional[str] = None,
+    ) -> None:
+        try:
+            with fits.open(path, mode="readonly", memmap=False) as hdul:
+                header = hdul[0].header
+            ra = _parse_angle(header.get("CRVAL1"), is_ra=True)
+            dec = _parse_angle(header.get("CRVAL2"), is_ra=False)
+            self._remember_recent_sky_hint(path=path, ra_deg=ra, dec_deg=dec, origin=origin, tile_key=tile_key)
+        except Exception:
+            return
+
+    def _select_adaptive_blind_hint(
+        self,
+        *,
+        path: Path,
+        ra_hint: Optional[float],
+        dec_hint: Optional[float],
+    ) -> tuple[Optional[float], Optional[float], Optional[str]]:
+        with self._blind_hint_lock:
+            history = list(self._recent_sky_hints)
+        if not history:
+            return ra_hint, dec_hint, None
+
+        series = self._series_key(path)
+        candidates = [h for h in reversed(history) if str(h.get("series_key") or "") == series]
+        if not candidates:
+            return ra_hint, dec_hint, None
+
+        target_order = self._frame_order_key(path)
+        ref: dict[str, Any]
+        if target_order is not None:
+            with_order = [h for h in candidates if isinstance(h.get("order_key"), int)]
+            if with_order:
+                ref = min(with_order, key=lambda h: abs(int(h.get("order_key", 0)) - target_order))
+            else:
+                ref = candidates[0]
+        else:
+            ref = candidates[0]
+
+        try:
+            ref_ra = float(ref.get("ra_deg"))
+            ref_dec = float(ref.get("dec_deg"))
+        except Exception:
+            return ra_hint, dec_hint, None
+
+        source_tag = f"from={ref.get('path_name','?')} origin={ref.get('origin','?')}"
+        if ra_hint is None or dec_hint is None:
+            return ref_ra, ref_dec, f"missing RA/DEC hint, using neighbor ({source_tag})"
+
+        sep = self._angular_separation_deg(float(ra_hint), float(dec_hint), ref_ra, ref_dec)
+        threshold = 12.0
+        if self.config.hint_radius_deg is not None:
+            try:
+                threshold = max(8.0, min(30.0, float(self.config.hint_radius_deg) * 6.0))
+            except Exception:
+                threshold = 12.0
+        if sep >= threshold:
+            return ref_ra, ref_dec, f"header hint incoherent (sep={sep:.1f}° >= {threshold:.1f}°), using neighbor ({source_tag})"
+        return ra_hint, dec_hint, None
+
+    @staticmethod
     def _family_label(family: str) -> str:
         return family.upper()
 
@@ -1583,6 +2114,26 @@ class ImageSolver:
         label: Optional[str],
         catalog_family: Optional[str],
     ) -> ImageSolveResult:
+        def _sanitize_points(points: np.ndarray, label_name: str) -> np.ndarray:
+            pts = np.asarray(points, dtype=np.float64)
+            if pts.ndim != 2 or pts.shape[1] < 2:
+                raise SolveError(f"invalid {label_name} point array")
+            pts = pts[:, :2]
+            finite = np.isfinite(pts).all(axis=1)
+            pts = pts[finite]
+            if pts.shape[0] < 3:
+                raise SolveError(f"not enough finite {label_name} stars")
+            try:
+                key = np.round(pts, decimals=9)
+                _, keep = np.unique(key, axis=0, return_index=True)
+                if keep.size < pts.shape[0]:
+                    pts = pts[np.sort(keep)]
+            except Exception:
+                pass
+            if pts.shape[0] < 3:
+                raise SolveError(f"not enough distinct {label_name} stars")
+            return pts
+
         catalog = self.db.query_cone(
             ra_deg=metadata.ra_deg,
             dec_deg=metadata.dec_deg,
@@ -1604,25 +2155,44 @@ class ImageSolver:
             raise SolveError(
                 self._family_error(catalog_family, error) if catalog_family else error
             )
-        image_points = peaks[:, :2].astype(np.float64, copy=False)
+        plane = _sanitize_points(plane, "catalogue")
+        image_points = _sanitize_points(peaks[:, :2], "image")
         max_points = min(self.config.max_alignment_stars, plane.shape[0], image_points.shape[0])
         if max_points < 3:
             error = "not enough overlap between catalogue and detected stars"
             raise SolveError(
                 self._family_error(catalog_family, error) if catalog_family else error
             )
-        transform, (used_src, used_dst) = astroalign.find_transform(
-            plane,
-            image_points,
-            max_control_points=max_points,
-        )
+        try:
+            transform, (used_src, used_dst) = astroalign.find_transform(
+                plane,
+                image_points,
+                max_control_points=max_points,
+            )
+        except Exception as exc:
+            msg = str(exc)
+            error = f"alignment failed: {msg}" if msg else "alignment failed"
+            raise SolveError(self._family_error(catalog_family, error) if catalog_family else error) from exc
         projected = astroalign.matrix_transform(used_src, transform.params)
-        residuals = np.linalg.norm(projected - used_dst, axis=1)
+        valid = np.isfinite(projected).all(axis=1) & np.isfinite(used_dst).all(axis=1)
+        if not np.any(valid):
+            error = "alignment produced non-finite residuals"
+            raise SolveError(self._family_error(catalog_family, error) if catalog_family else error)
+        residuals = np.linalg.norm(projected[valid] - used_dst[valid], axis=1)
         rms_px = float(np.sqrt(np.mean(residuals**2))) if residuals.size else None
         solution = self._build_solution(transform, metadata, matches=used_src.shape[0], rms=rms_px)
         pixel_scale_arcsec = self._pixel_scale_arcsec(solution.cd)
         rms_arcsec = rms_px * pixel_scale_arcsec if rms_px is not None else None
         self._write_solution(metadata, solution)
+        try:
+            self._remember_recent_sky_hint(
+                path=path,
+                ra_deg=float(solution.crval[0]),
+                dec_deg=float(solution.crval[1]),
+                origin=(f"catalog:{catalog_family}" if catalog_family else "catalog"),
+            )
+        except Exception:
+            pass
         scale_str = f'{pixel_scale_arcsec:.2f}' + '"/px'
         if label:
             message = f"Solved via {label} ({solution.matches} matches, ~{scale_str})"
@@ -1641,7 +2211,7 @@ class ImageSolver:
             catalog_family=catalog_family,
         )
 
-    def solve_path(self, path: Path) -> ImageSolveResult:
+    def solve_path(self, path: Path, *, allow_blind_fallback: bool = True) -> ImageSolveResult:
         start = time.perf_counter()
         run_info: list[tuple[str, dict[str, Any]]] = []
         logging.info("[solve] start %s", path.name)
@@ -1673,7 +2243,11 @@ class ImageSolver:
             ):
                 if self._cancelled():
                     return ImageSolveResult(path=path, status="skipped", message="cancelled")
-                near_first = self._run_index_near_solver(path, metadata)
+                near_first = self._run_index_near_solver(
+                    path,
+                    metadata,
+                    allow_blind_fallback=allow_blind_fallback,
+                )
                 if near_first is not None:
                     near_first.duration_s = time.perf_counter() - start
                     near_first.run_info.extend(run_info)
@@ -1805,18 +2379,20 @@ class ImageSolver:
         except SolveError as exc:
             if self._cancelled():
                 return ImageSolveResult(path=path, status="skipped", message="cancelled")
-            blind_result = self._resolve_with_blind_after_failure(
-                path=path,
-                run_info=run_info,
-                cached_result=None,
-                ra_hint=metadata.ra_deg if metadata else None,
-                dec_hint=metadata.dec_deg if metadata else None,
-                metadata=metadata,
-                peaks=peaks,
-            )
-            if blind_result is not None:
-                blind_result.duration_s = time.perf_counter() - start
-                return blind_result
+            if allow_blind_fallback:
+                blind_result = self._resolve_with_blind_after_failure(
+                    path=path,
+                    run_info=run_info,
+                    cached_result=None,
+                    ra_hint=metadata.ra_deg if metadata else None,
+                    dec_hint=metadata.dec_deg if metadata else None,
+                    metadata=metadata,
+                    peaks=peaks,
+                    frame_data=data,
+                )
+                if blind_result is not None:
+                    blind_result.duration_s = time.perf_counter() - start
+                    return blind_result
             duration = time.perf_counter() - start
             status = "skipped" if exc.skip else "failed"
             return ImageSolveResult(
@@ -1836,6 +2412,58 @@ class ImageSolver:
                 message=f"Internal error: {exc}",
                 metadata_source=metadata.source if metadata else None,
                 duration_s=duration,
+                run_info=list(run_info),
+            )
+
+    def solve_path_blind_only(self, path: Path, *, near_failure: Optional[ImageSolveResult] = None) -> ImageSolveResult:
+        start = time.perf_counter()
+        run_info: list[tuple[str, dict[str, Any]]] = list(getattr(near_failure, 'run_info', []) or [])
+        metadata: Optional[ImageMetadata] = None
+        try:
+            if self._cancelled():
+                return ImageSolveResult(path=path, status="skipped", message="cancelled")
+            data, metadata = self._load_image(path)
+            if metadata.kind == "raster" and self._should_try_blind(path) and self.config.blind_index_path is not None:
+                bridged = self._run_blind_on_raster(raster_path=path, raster_data=data, run_info=run_info)
+                if bridged is not None:
+                    bridged.duration_s = time.perf_counter() - start
+                    return bridged
+            result = self._run_blind_solver(
+                path,
+                run_info,
+                skip_if_header_has_wcs=False,
+                skip_if_valid=False,
+                ra_hint=metadata.ra_deg if metadata else None,
+                dec_hint=metadata.dec_deg if metadata else None,
+                metadata=metadata,
+                frame_data=data,
+            )
+            if result and result.get("success"):
+                out = self._build_blind_result(path, result, run_info)
+                out.duration_s = time.perf_counter() - start
+                return out
+            blind_msg = (result or {}).get("message") if isinstance(result, dict) else None
+            if not blind_msg:
+                blind_msg = "blind solver failed"
+            if near_failure is not None and near_failure.message:
+                msg = f"Near failed: {near_failure.message}; Blind failed: {blind_msg}"
+            else:
+                msg = str(blind_msg)
+            return ImageSolveResult(
+                path=path,
+                status="failed",
+                message=msg,
+                metadata_source=metadata.source if metadata else None,
+                duration_s=time.perf_counter() - start,
+                run_info=list(run_info),
+            )
+        except Exception as exc:
+            return ImageSolveResult(
+                path=path,
+                status="failed",
+                message=f"Blind-only internal error: {exc}",
+                metadata_source=metadata.source if metadata else None,
+                duration_s=time.perf_counter() - start,
                 run_info=list(run_info),
             )
 
@@ -2007,6 +2635,136 @@ class ImageSolver:
             path.suffix.lower() in FITS_EXTENSIONS or path.suffix.lower() in RASTER_EXTENSIONS
         )
 
+
+    def _compute_blind_quality_metrics(
+        self,
+        *,
+        metadata: Optional[ImageMetadata],
+        peaks: Optional[np.ndarray],
+        frame_data: Optional[np.ndarray],
+    ) -> dict[str, Any]:
+        metrics: dict[str, Any] = {}
+        arr2d: Optional[np.ndarray] = None
+        width: Optional[int] = None
+        height: Optional[int] = None
+
+        if frame_data is not None:
+            try:
+                arr = np.asarray(frame_data, dtype=np.float32)
+                if arr.ndim == 3:
+                    if arr.shape[-1] in (3, 4):
+                        arr = np.mean(arr[..., :3], axis=-1)
+                    elif arr.shape[0] in (3, 4):
+                        arr = np.mean(arr[:3, ...], axis=0)
+                    else:
+                        arr = arr[0]
+                if arr.ndim == 2 and arr.size > 0:
+                    arr2d = arr
+                    height = int(arr.shape[0])
+                    width = int(arr.shape[1]) if arr.ndim >= 2 else None
+                    finite = np.isfinite(arr)
+                    if np.any(finite):
+                        v = arr[finite]
+                        p5, p95 = np.percentile(v, [5, 95])
+                        dyn = max(1e-6, float(p95 - p5))
+                        norm = np.clip((arr - float(p5)) / dyn, 0.0, 5.0)
+                        gx = np.abs(np.diff(norm, axis=1))
+                        gy = np.abs(np.diff(norm, axis=0))
+                        metrics["texture_grad"] = float(0.5 * (float(gx.mean()) + float(gy.mean())))
+                        metrics["sat_ratio"] = float(np.mean(norm >= 2.2))
+                        metrics["dyn_span"] = float(dyn)
+            except Exception:
+                arr2d = None
+
+        use_peaks = peaks
+        if use_peaks is None and arr2d is not None:
+            try:
+                use_peaks = _detect_stars(
+                    arr2d,
+                    downsample=max(1, int(self.config.downsample or 1)),
+                    max_stars=min(200, int(getattr(self.config, "max_image_stars", 200) or 200)),
+                )
+                metrics["star_count_source"] = "estimated"
+            except Exception:
+                use_peaks = None
+
+        try:
+            if use_peaks is not None:
+                star_count = int(use_peaks.shape[0])
+                metrics["star_count"] = star_count
+                if metadata is not None and metadata.width > 0 and metadata.height > 0:
+                    width = int(metadata.width)
+                    height = int(metadata.height)
+                if width and height and star_count > 0:
+                    w = float(width)
+                    h = float(height)
+                    x = use_peaks[:, 0]
+                    y = use_peaks[:, 1]
+                    edge_mask = (
+                        (x <= (0.08 * w))
+                        | (x >= (0.92 * w))
+                        | (y <= (0.08 * h))
+                        | (y >= (0.92 * h))
+                    )
+                    metrics["edge_star_fraction"] = float(np.mean(edge_mask))
+                    metrics["star_density_mpix"] = float(star_count) / max(1.0, (w * h) / 1_000_000.0)
+        except Exception:
+            pass
+        return metrics
+
+    def _select_blind_quality_profile(
+        self,
+        *,
+        metadata: Optional[ImageMetadata],
+        peaks: Optional[np.ndarray],
+        frame_data: Optional[np.ndarray],
+    ) -> tuple[str, dict[str, Any]]:
+        metrics = self._compute_blind_quality_metrics(metadata=metadata, peaks=peaks, frame_data=frame_data)
+        profile = "normal"
+        reasons: list[str] = []
+
+        star_count = metrics.get("star_count")
+        edge_frac = metrics.get("edge_star_fraction")
+        texture = metrics.get("texture_grad")
+        sat_ratio = metrics.get("sat_ratio")
+
+        try:
+            if star_count is not None and int(star_count) <= 32:
+                profile = "degraded"
+                reasons.append("low_star_count")
+            if (
+                star_count is not None
+                and texture is not None
+                and int(star_count) <= 42
+                and float(texture) >= 0.46
+            ):
+                profile = "degraded"
+                reasons.append("low_star_high_texture")
+            if (
+                star_count is not None
+                and edge_frac is not None
+                and texture is not None
+                and int(star_count) <= 52
+                and float(edge_frac) >= 0.30
+                and float(texture) >= 0.47
+            ):
+                profile = "degraded"
+                reasons.append("edge_biased_texture")
+            if (
+                sat_ratio is not None
+                and star_count is not None
+                and float(sat_ratio) >= 0.018
+                and int(star_count) <= 60
+            ):
+                profile = "degraded"
+                reasons.append("high_saturation")
+        except Exception:
+            pass
+
+        metrics["quality_profile"] = profile
+        metrics["quality_reasons"] = reasons
+        return profile, metrics
+
     def _run_blind_solver(
         self,
         path: Path,
@@ -2016,6 +2774,9 @@ class ImageSolver:
         skip_if_valid: bool,
         ra_hint: Optional[float] = None,
         dec_hint: Optional[float] = None,
+        metadata: Optional[ImageMetadata] = None,
+        peaks: Optional[np.ndarray] = None,
+        frame_data: Optional[np.ndarray] = None,
     ) -> Optional[BlindSolveResult]:
         if self._cancelled():
             return None
@@ -2086,6 +2847,24 @@ class ImageSolver:
                 return None
             final_ra = self.config.hint_ra_deg if self.config.hint_ra_deg is not None else ra_hint
             final_dec = self.config.hint_dec_deg if self.config.hint_dec_deg is not None else dec_hint
+            explicit_user_hint = self.config.hint_ra_deg is not None and self.config.hint_dec_deg is not None
+            if not explicit_user_hint:
+                prev_ra, prev_dec = final_ra, final_dec
+                final_ra, final_dec, adaptive_reason = self._select_adaptive_blind_hint(
+                    path=path,
+                    ra_hint=final_ra,
+                    dec_hint=final_dec,
+                )
+                if adaptive_reason:
+                    logging.info(
+                        "[ZEBLIND] adaptive hint for %s: %s (ra=%s->%s, dec=%s->%s)",
+                        path.name,
+                        adaptive_reason,
+                        "-" if prev_ra is None else f"{float(prev_ra):.6f}",
+                        "-" if final_ra is None else f"{float(final_ra):.6f}",
+                        "-" if prev_dec is None else f"{float(prev_dec):.6f}",
+                        "-" if final_dec is None else f"{float(final_dec):.6f}",
+                    )
             blind_cfg = BlindSolveConfig(
                 # Tunables from GUI / persistent settings
                 max_candidates=int(getattr(self.config, "blind_max_candidates", 10) or 10),
@@ -2103,6 +2882,7 @@ class ImageSolver:
                 log_level=getattr(self.config, "log_level", "INFO"),
                 bucket_limit_override=int(getattr(self.config, "dev_bucket_limit_override", 0) or 0),
                 vote_percentile=int(getattr(self.config, "dev_vote_percentile", 40) or 40),
+                collect_matches_vectorized_experimental=bool(getattr(self.config, "dev_collect_matches_vectorized_experimental", False)),
                 # Hints / optics
                 ra_hint_deg=final_ra,
                 dec_hint_deg=final_dec,
@@ -2113,7 +2893,46 @@ class ImageSolver:
                 pixel_scale_min_arcsec=self.config.hint_resolution_min_arcsec,
                 pixel_scale_max_arcsec=self.config.hint_resolution_max_arcsec,
                 downsample=max(1, int(self.config.downsample or 1)),
+                verify_logodds_enabled=bool(getattr(self.config, "dev_verify_logodds_enabled", False)),
+                verify_logodds_bail=float(getattr(self.config, "dev_verify_logodds_bail", -24.0) or -24.0),
+                verify_logodds_stoplooking=float(getattr(self.config, "dev_verify_logodds_stoplooking", 24.0) or 24.0),
+                verify_logodds_min_validations=int(getattr(self.config, "dev_verify_logodds_min_validations", 8) or 8),
+                hard_max_candidates_tried=int(getattr(self.config, "dev_hard_max_candidates_tried", 0) or 0),
+                hard_max_validations=int(getattr(self.config, "dev_hard_max_validations", 0) or 0),
+                depth_ladder_enabled=bool(getattr(self.config, "dev_depth_ladder_enabled", False)),
+                depth_ladder_caps=tuple(
+                    int(v)
+                    for v in getattr(self.config, "dev_depth_ladder_caps", (80, 160, 500))
+                    if isinstance(v, (int, float)) and int(v) > 0
+                ) or (80, 160, 500),
             )
+
+            quality_profile, quality_metrics = self._select_blind_quality_profile(
+                metadata=metadata,
+                peaks=peaks,
+                frame_data=frame_data,
+            )
+            if bool(getattr(blind_cfg, "depth_ladder_enabled", False)) and quality_profile != "degraded":
+                blind_cfg = replace(blind_cfg, depth_ladder_enabled=False)
+            if quality_profile == "degraded":
+                blind_cfg = replace(
+                    blind_cfg,
+                    max_candidates=min(int(blind_cfg.max_candidates), 8),
+                    max_quads=min(int(blind_cfg.max_quads), 6000),
+                    fail_attempt_budget_s=min(float(getattr(blind_cfg, "fail_attempt_budget_s", 70.0) or 70.0), 48.0),
+                    fail_attempt_min_validations=min(int(getattr(blind_cfg, "fail_attempt_min_validations", 18) or 18), 12),
+                    fail_attempt_max_best_inliers=max(int(getattr(blind_cfg, "fail_attempt_max_best_inliers", 4) or 4), 7),
+                    fail_attempt_min_candidates=min(int(getattr(blind_cfg, "fail_attempt_min_candidates", 20) or 20), 16),
+                    global_budget_fast_s=min(float(getattr(blind_cfg, "global_budget_fast_s", 8.0) or 8.0), 6.0),
+                    global_budget_slow_s=min(float(getattr(blind_cfg, "global_budget_slow_s", 18.0) or 18.0), 12.0),
+                )
+            logging.info(
+                "[ZEBLIND] quality profile for %s: %s metrics=%s",
+                path.name,
+                quality_profile,
+                json.dumps(quality_metrics, ensure_ascii=False),
+            )
+
             try:
                 # Log the effective blind config used
                 log_cfg = {
@@ -2126,6 +2945,23 @@ class ImageSolver:
                     "fast_mode": blind_cfg.fast_mode,
                     "bucket_limit_override": getattr(blind_cfg, "bucket_limit_override", 0),
                     "vote_percentile": getattr(blind_cfg, "vote_percentile", 40),
+                    "collect_matches_vectorized_experimental": getattr(blind_cfg, "collect_matches_vectorized_experimental", False),
+                    "quality_profile": quality_profile,
+                    "quality_metrics": quality_metrics,
+                    "fail_attempt_budget_s": getattr(blind_cfg, "fail_attempt_budget_s", None),
+                    "fail_attempt_min_validations": getattr(blind_cfg, "fail_attempt_min_validations", None),
+                    "fail_attempt_max_best_inliers": getattr(blind_cfg, "fail_attempt_max_best_inliers", None),
+                    "fail_attempt_min_candidates": getattr(blind_cfg, "fail_attempt_min_candidates", None),
+                    "verify_logodds_enabled": getattr(blind_cfg, "verify_logodds_enabled", None),
+                    "verify_logodds_bail": getattr(blind_cfg, "verify_logodds_bail", None),
+                    "verify_logodds_stoplooking": getattr(blind_cfg, "verify_logodds_stoplooking", None),
+                    "verify_logodds_min_validations": getattr(blind_cfg, "verify_logodds_min_validations", None),
+                    "hard_max_candidates_tried": getattr(blind_cfg, "hard_max_candidates_tried", None),
+                    "hard_max_validations": getattr(blind_cfg, "hard_max_validations", None),
+                    "depth_ladder_enabled": getattr(blind_cfg, "depth_ladder_enabled", None),
+                    "depth_ladder_caps": list(getattr(blind_cfg, "depth_ladder_caps", ()) or ()),
+                    "global_budget_fast_s": getattr(blind_cfg, "global_budget_fast_s", None),
+                    "global_budget_slow_s": getattr(blind_cfg, "global_budget_slow_s", None),
                     "ra_hint": blind_cfg.ra_hint_deg,
                     "dec_hint": blind_cfg.dec_hint_deg,
                     "radius_hint": blind_cfg.radius_hint_deg,
@@ -2139,6 +2975,7 @@ class ImageSolver:
                 logging.info("Blind config: %s", json.dumps(log_cfg, ensure_ascii=False))
             except Exception:
                 pass
+            blind_prep_cache: dict[str, Any] = {}
             result = blind_solve(
                 fits_path=str(path),
                 index_root=str(index_root),
@@ -2146,12 +2983,20 @@ class ImageSolver:
                 log=logging.info,
                 skip_if_valid=skip_if_valid,
                 cancel_check=(self._cancelled if self._cancel_event else None),
+                prep_cache=blind_prep_cache,
             )
             # Blind rescue loop for extremely low-support failures (best inliers <= 1)
             # Keeps retries bounded and only activates on clearly weak blind attempts.
             rescue_plans = (
-                {"max_candidates": 24, "max_quads": 16000, "pixel_tolerance": 3.0, "quality_rms": 1.6},
-                {"max_candidates": 36, "max_quads": 24000, "pixel_tolerance": 3.4, "quality_rms": 2.0},
+                (
+                    {"max_candidates": 20, "max_quads": 12000, "pixel_tolerance": 3.0, "quality_rms": 1.65},
+                    {"max_candidates": 24, "max_quads": 15000, "pixel_tolerance": 3.2, "quality_rms": 1.9},
+                )
+                if quality_profile == "degraded"
+                else (
+                    {"max_candidates": 24, "max_quads": 16000, "pixel_tolerance": 3.0, "quality_rms": 1.6},
+                    {"max_candidates": 36, "max_quads": 24000, "pixel_tolerance": 3.4, "quality_rms": 2.0},
+                )
             )
             for rescue_idx, plan in enumerate(rescue_plans, start=1):
                 if result.get("success"):
@@ -2160,18 +3005,126 @@ class ImageSolver:
                 best_inliers = int(stats.get("inliers", -1) or -1)
                 if best_inliers > 1:
                     break
+                effective_plan = dict(plan)
+                if rescue_idx >= 2 and isinstance(stats, Mapping) and (
+                    "best_fail_inliers" in stats or "fail_validation_count" in stats
+                ):
+                    fail_best_inliers = int(stats.get("best_fail_inliers", -1) or -1)
+                    fail_validation_count = int(stats.get("fail_validation_count", 0) or 0)
+                    prev_elapsed = float(result.get("elapsed_sec", 0.0) or 0.0)
+                    fail_early_abort = bool(stats.get("fail_early_abort", False))
+                    fail_early_phase = str(stats.get("fail_early_abort_phase", "-"))
+                    low_potential = (
+                        fail_validation_count > 0
+                        and fail_best_inliers >= 0
+                        and fail_best_inliers < 4
+                        and fail_validation_count < 6
+                    )
+                    if fail_early_abort:
+                        low_potential = True
+                    low_signal_hard = (
+                        prev_elapsed >= 20.0
+                        and fail_best_inliers >= 0
+                        and fail_best_inliers <= 3
+                        and fail_validation_count <= 8
+                    )
+                    low_signal_sparse = (
+                        prev_elapsed >= 20.0
+                        and fail_best_inliers >= 0
+                        and fail_best_inliers <= 3
+                        and fail_validation_count <= 4
+                    )
+                    if low_signal_hard or low_signal_sparse:
+                        low_potential = True
+                    if low_potential:
+                        logging.info(
+                            "[ZEBLIND] skipping blind_rescue_attempt=%d for %s (low potential: best_fail_inliers=%d fail_validations=%d fail_early_abort=%s phase=%s prev_elapsed=%.1fs)",
+                            rescue_idx,
+                            path.name,
+                            fail_best_inliers,
+                            fail_validation_count,
+                            str(fail_early_abort),
+                            fail_early_phase,
+                            prev_elapsed,
+                        )
+                        break
+                    no_validation = fail_validation_count <= 0
+                    stalled_high_churn = (
+                        fail_validation_count >= 12
+                        and fail_best_inliers >= 0
+                        and fail_best_inliers <= 8
+                    )
+                    costly_attempt = prev_elapsed >= 35.0
+                    if no_validation and prev_elapsed >= 25.0:
+                        logging.info(
+                            "[ZEBLIND] skipping blind_rescue_attempt=%d for %s (no-validation stall: prev_elapsed=%.1fs)",
+                            rescue_idx,
+                            path.name,
+                            prev_elapsed,
+                        )
+                        break
+                    plateau_mid_support = (
+                        prev_elapsed >= 60.0
+                        and fail_best_inliers >= 6
+                        and fail_best_inliers <= 8
+                        and fail_validation_count >= 10
+                        and fail_validation_count <= 30
+                    )
+                    if plateau_mid_support:
+                        logging.info(
+                            "[ZEBLIND] skipping blind_rescue_attempt=%d for %s (mid-support plateau: prev_elapsed=%.1fs best_fail_inliers=%d fail_validations=%d)",
+                            rescue_idx,
+                            path.name,
+                            prev_elapsed,
+                            fail_best_inliers,
+                            fail_validation_count,
+                        )
+                        break
+                    if costly_attempt and stalled_high_churn:
+                        effective_plan = {
+                            "max_candidates": 26,
+                            "max_quads": 17000,
+                            "pixel_tolerance": 3.1,
+                            "quality_rms": 1.75,
+                        }
+                        logging.info(
+                            "[ZEBLIND] soft-capping blind_rescue_attempt=%d for %s (prev_elapsed=%.1fs best_fail_inliers=%d fail_validations=%d)",
+                            rescue_idx,
+                            path.name,
+                            prev_elapsed,
+                            fail_best_inliers,
+                            fail_validation_count,
+                        )
                 if self._cancelled():
                     break
+                try:
+                    if isinstance(blind_prep_cache, dict):
+                        remaining = rescue_plans[rescue_idx - 1 :]
+                        target_max_quads = max(int(x.get("max_quads", 0) or 0) for x in remaining)
+                        target_max_quads = min(target_max_quads, int(effective_plan.get("max_quads", target_max_quads) or target_max_quads))
+                        if target_max_quads > 0:
+                            blind_prep_cache["__target_max_quads__"] = int(target_max_quads)
+                except Exception:
+                    pass
                 rescue_cfg = replace(
                     blind_cfg,
-                    max_candidates=max(int(blind_cfg.max_candidates), int(plan["max_candidates"])),
-                    max_quads=max(int(blind_cfg.max_quads), int(plan["max_quads"])),
-                    pixel_tolerance=max(float(blind_cfg.pixel_tolerance), float(plan["pixel_tolerance"])),
-                    quality_rms=max(float(blind_cfg.quality_rms), float(plan["quality_rms"])),
+                    max_candidates=max(int(blind_cfg.max_candidates), int(effective_plan["max_candidates"])),
+                    max_quads=max(int(blind_cfg.max_quads), int(effective_plan["max_quads"])),
+                    pixel_tolerance=max(float(blind_cfg.pixel_tolerance), float(effective_plan["pixel_tolerance"])),
+                    quality_rms=max(float(blind_cfg.quality_rms), float(effective_plan["quality_rms"])),
                     fast_mode=False,
+                    depth_ladder_enabled=False,
                 )
+                if rescue_idx >= 2:
+                    rescue_cfg = replace(
+                        rescue_cfg,
+                        fail_attempt_budget_s=min(float(getattr(rescue_cfg, "fail_attempt_budget_s", 70.0) or 70.0), 42.0),
+                        fail_attempt_min_validations=min(int(getattr(rescue_cfg, "fail_attempt_min_validations", 18) or 18), 12),
+                        fail_attempt_max_best_inliers=max(int(getattr(rescue_cfg, "fail_attempt_max_best_inliers", 4) or 4), 8),
+                        fail_attempt_min_candidates=min(int(getattr(rescue_cfg, "fail_attempt_min_candidates", 20) or 20), 18),
+                    )
                 logging.info(
-                    "[ZEBLIND] blind_rescue_attempt=%d/2 file=%s prev_inliers=%d max_candidates=%d->%d max_quads=%d->%d pixel_tolerance=%.2f->%.2f quality_rms=%.2f->%.2f",
+                    "[ZEBLIND] blind_rescue_attempt=%d/2 file=%s prev_inliers=%d max_candidates=%d->%d max_quads=%d->%d pixel_tolerance=%.2f->%.2f quality_rms=%.2f->%.2f fail_budget=%.1fs fail_min_val=%d fail_max_inliers=%d",
                     rescue_idx,
                     path.name,
                     best_inliers,
@@ -2183,6 +3136,9 @@ class ImageSolver:
                     float(rescue_cfg.pixel_tolerance),
                     float(blind_cfg.quality_rms),
                     float(rescue_cfg.quality_rms),
+                    float(getattr(rescue_cfg, "fail_attempt_budget_s", 0.0) or 0.0),
+                    int(getattr(rescue_cfg, "fail_attempt_min_validations", 0) or 0),
+                    int(getattr(rescue_cfg, "fail_attempt_max_best_inliers", 0) or 0),
                 )
                 result = blind_solve(
                     fits_path=str(path),
@@ -2191,6 +3147,7 @@ class ImageSolver:
                     log=logging.info,
                     skip_if_valid=skip_if_valid,
                     cancel_check=(self._cancelled if self._cancel_event else None),
+                    prep_cache=blind_prep_cache,
                 )
                 if result.get("success"):
                     logging.info("[ZEBLIND] blind_rescue_attempt=%d succeeded for %s", rescue_idx, path.name)
@@ -2203,6 +3160,17 @@ class ImageSolver:
             label = Path(db).name or db
             run_info.append(("run_info_blind_db", {"db": label}))
         if result["success"]:
+            try:
+                tile_key = (str(result.get("used_db")) if isinstance(result, Mapping) and result.get("used_db") is not None else None)
+                self._remember_keywords_hint(
+                    path=path,
+                    keywords=result.get("updated_keywords") if isinstance(result, Mapping) else None,
+                    origin="blind",
+                    tile_key=tile_key,
+                )
+                self._remember_file_wcs_hint(path=path, origin="blind", tile_key=tile_key)
+            except Exception:
+                pass
             db_name = result["used_db"] or (Path(result["tried_dbs"][-1]).name if result["tried_dbs"] else "unknown")
             run_info.append(
                 (
@@ -2213,6 +3181,37 @@ class ImageSolver:
             logging.info("Blind solver success for %s via %s (%s)", path.name, db_name, result["message"])
         else:
             run_info.append(("run_info_blind_failed", {"message": result["message"]}))
+            stats = result.get("stats") or {}
+            if isinstance(stats, Mapping):
+                try:
+                    logging.info(
+                        "[ZEBLIND] fail metrics for %s: elapsed=%.2fs best_fail_inliers=%s fail_validations=%s candidates_tried=%s fail_early_abort=%s phase=%s",
+                        path.name,
+                        float(stats.get("attempt_elapsed_s", result.get("elapsed_sec", 0.0)) or 0.0),
+                        str(stats.get("best_fail_inliers", "-")),
+                        str(stats.get("fail_validation_count", "-")),
+                        str(stats.get("total_candidates_tried", "-")),
+                        str(bool(stats.get("fail_early_abort", False))),
+                        str(stats.get("fail_early_abort_phase", "-")),
+                    )
+                    cmet = stats.get("collect_metrics") or {}
+                    if isinstance(cmet, Mapping):
+                        calls = int(cmet.get("calls", 0) or 0)
+                        hits = int(cmet.get("cache_hits", 0) or 0)
+                        misses = int(cmet.get("cache_misses", 0) or 0)
+                        compute_s = float(cmet.get("compute_s", 0.0) or 0.0)
+                        hit_rate = (100.0 * hits / calls) if calls > 0 else 0.0
+                        logging.info(
+                            "[ZEBLIND] collect metrics for %s: calls=%d hits=%d misses=%d hit_rate=%.1f%% compute=%.2fs",
+                            path.name,
+                            calls,
+                            hits,
+                            misses,
+                            hit_rate,
+                            compute_s,
+                        )
+                except Exception:
+                    pass
             logging.info("Blind solver failed for %s: %s", path.name, result["message"])
         return result
 
@@ -2253,6 +3252,7 @@ class ImageSolver:
                 run_info,
                 skip_if_header_has_wcs=False,
                 skip_if_valid=False,
+                frame_data=raster_data,
             )
             if not result or not result["success"]:
                 return None
@@ -2326,7 +3326,13 @@ class ImageSolver:
             run_info=list(run_info),
         )
 
-    def _run_index_near_solver(self, path: Path, metadata: ImageMetadata) -> Optional[ImageSolveResult]:
+    def _run_index_near_solver(
+        self,
+        path: Path,
+        metadata: ImageMetadata,
+        *,
+        allow_blind_fallback: bool = True,
+    ) -> Optional[ImageSolveResult]:
         """Attempt a metadata-assisted near solve using the Zeblind index.
 
         Uses the same internal routine as the Settings tab tester (no quads).
@@ -2363,9 +3369,7 @@ class ImageSolver:
                 obj_name = None
             base_margin = float(getattr(self.config, 'near_search_margin', 1.2) or 1.2)
             search_margin = base_margin
-            if obj_name and metadata.ra_deg is not None and metadata.dec_deg is not None:
-                search_margin = min(base_margin, 1.05)
-                logging.info("[ZENEAR] OBJECT=%s -> tighter search margin (%.2f)", obj_name, search_margin)
+            # Keep user/configured search margin unchanged. Tightening by OBJECT can over-constrain candidate tiles.
             near_cfg = NearIndexConfig(
                 fov_override_deg=fov_override,
                 family=family,
@@ -2373,9 +3377,9 @@ class ImageSolver:
                 tile_cache_size=int(getattr(self.config, "near_tile_cache_size", 128) or 128),
                 detect_backend=(getattr(self.config, "near_detect_backend", None) or "auto"),
                 detect_device=(getattr(self.config, "near_detect_device", None)),
-                detect_k_sigma=float(getattr(self.config, 'near_detect_k_sigma', 4.0) or 4.0),
+                detect_k_sigma=float(getattr(self.config, 'near_detect_k_sigma', 4.5) or 4.5),
                 detect_min_area=int(getattr(self.config, 'near_detect_min_area', 8) or 8),
-                detect_max_labels=int(getattr(self.config, 'near_detect_max_labels', 2500) or 2500),
+                detect_max_labels=int(getattr(self.config, 'near_detect_max_labels', 1200) or 1200),
                 detect_gpu_slots=int(getattr(self.config, 'near_detect_gpu_slots', 1) or 1),
                 ransac_trials=int(getattr(self.config, 'near_ransac_trials', 0) or 0) or ransac_trials,
                 ransac_seed=(int(getattr(self.config, 'near_ransac_seed')) if getattr(self.config, 'near_ransac_seed', None) is not None else None),
@@ -2389,6 +3393,14 @@ class ImageSolver:
                 max_img_stars=int(getattr(self.config, 'near_max_img_stars', 800) or 800),
                 max_cat_stars=int(getattr(self.config, 'near_max_cat_stars', 2000) or 2000),
                 try_parity_flip=bool(getattr(self.config, 'near_try_parity_flip', True)),
+                astap_hint_fastpath=bool(getattr(self.config, 'near_astap_hint_fastpath', False)),
+                astap_hint_radius_deg=float(
+                    getattr(self.config, 'near_astap_hint_radius_deg', None)
+                    if getattr(self.config, 'near_astap_hint_radius_deg', None) is not None
+                    else (getattr(self.config, 'hint_radius_deg', None) or 3.0)
+                ),
+                second_pass_refine_in_fastpath=bool(getattr(self.config, 'near_second_pass_refine_in_fastpath', False)),
+                astap_iso_strict=bool(getattr(self.config, 'near_astap_iso_strict', True)),
             )
             try:
                 log_near = {
@@ -2412,6 +3424,11 @@ class ImageSolver:
                     "quality_rms": near_cfg.quality_rms,
                     "max_img_stars": near_cfg.max_img_stars,
                     "max_cat_stars": near_cfg.max_cat_stars,
+                    "astap_hint_fastpath": near_cfg.astap_hint_fastpath,
+                    "astap_hint_radius_deg": near_cfg.astap_hint_radius_deg,
+                    "second_pass_refine_in_fastpath": near_cfg.second_pass_refine_in_fastpath,
+                    "astap_iso_strict": near_cfg.astap_iso_strict,
+                    "allow_second_rescue": bool(getattr(self.config, "near_allow_second_rescue", False)),
                 }
                 logging.info("[ZENEAR] config: %s", json.dumps(log_near, ensure_ascii=False))
             except Exception:
@@ -2422,6 +3439,7 @@ class ImageSolver:
                 config=near_cfg,
                 log=logging.info,
                 skip_if_valid=False,
+                # Avoid repeated blind fallbacks on each near retry; run blind once after near attempts are exhausted.
                 fallback_to_blind=False,
                 cancel_check=(self._cancelled if self._cancel_event else None),
             )
@@ -2429,12 +3447,30 @@ class ImageSolver:
                 base_margin = float(near_cfg.search_margin)
                 base_tiles = int(near_cfg.max_tile_candidates)
                 base_rms = float(getattr(near_cfg, "quality_rms", 1.0) or 1.0)
-                rescue_plan = (
+                rescue_plan: list[tuple[float, int, float]] = [
                     (max(base_margin * 1.6, base_margin + 0.20), max(base_tiles, 96), max(base_rms, 1.70)),
-                    (max(base_margin * 2.2, base_margin + 0.45), max(base_tiles, 192), max(base_rms, 2.00)),
-                )
+                ]
+                allow_second_near_rescue = bool(getattr(self.config, "near_allow_second_rescue", False))
+                if allow_second_near_rescue:
+                    rescue_plan.append(
+                        (max(base_margin * 2.2, base_margin + 0.45), max(base_tiles, 192), max(base_rms, 2.00))
+                    )
+                total_rescues = len(rescue_plan)
                 for rescue_idx, (rescue_margin, rescue_tiles, rescue_rms) in enumerate(rescue_plan, start=1):
                     if self._cancelled() if self._cancel_event else False:
+                        break
+                    prev_error = str(result.get("message") or "unknown")
+                    if (
+                        rescue_idx >= 2
+                        and "could not estimate a similarity transform" in prev_error.lower()
+                    ):
+                        logging.info(
+                            "[ZENEAR] skipping near_rescue_attempt=%d/%d for %s (persistent low-potential error: %s)",
+                            rescue_idx,
+                            total_rescues,
+                            path.name,
+                            prev_error,
+                        )
                         break
                     if (
                         rescue_margin <= near_cfg.search_margin
@@ -2449,10 +3485,11 @@ class ImageSolver:
                     near_cfg.max_tile_candidates = int(max(near_cfg.max_tile_candidates, rescue_tiles))
                     near_cfg.quality_rms = float(max(prev_rms, rescue_rms))
                     logging.info(
-                        "[ZENEAR] near_rescue_attempt=%d/2 file=%s prev_error=%s search_margin=%.2f->%.2f max_tiles=%d->%d quality_rms=%.2f->%.2f",
+                        "[ZENEAR] near_rescue_attempt=%d/%d file=%s prev_error=%s search_margin=%.2f->%.2f max_tiles=%d->%d quality_rms=%.2f->%.2f",
                         rescue_idx,
+                        total_rescues,
                         path.name,
-                        (result.get("message") or "unknown"),
+                        prev_error,
                         prev_margin,
                         near_cfg.search_margin,
                         prev_tiles,
@@ -2466,6 +3503,7 @@ class ImageSolver:
                         config=near_cfg,
                         log=logging.info,
                         skip_if_valid=False,
+                        # Avoid repeated blind fallbacks on each near retry; run blind once after near attempts are exhausted.
                         fallback_to_blind=False,
                         cancel_check=(self._cancelled if self._cancel_event else None),
                     )
@@ -2476,6 +3514,31 @@ class ImageSolver:
                             path.name,
                         )
                         break
+                if (
+                    not result["success"]
+                    and bool(self.config.blind_enabled)
+                    and not (self._cancelled() if self._cancel_event else False)
+                ):
+                    defer_blind = bool(getattr(self.config, "near_defer_blind_fallback", False)) and (not allow_blind_fallback)
+                    if defer_blind:
+                        logging.info(
+                            "[ZENEAR] near attempts exhausted for %s; deferring blind fallback to batch blind phase",
+                            path.name,
+                        )
+                    else:
+                        logging.info(
+                            "[ZENEAR] near attempts exhausted for %s; running a single blind fallback",
+                            path.name,
+                        )
+                        result = near_solve(
+                            fits_path=str(path),
+                            index_root=str(index_root),
+                            config=near_cfg,
+                            log=logging.info,
+                            skip_if_valid=False,
+                            fallback_to_blind=True,
+                            cancel_check=(self._cancelled if self._cancel_event else None),
+                        )
         except BlindSolverRuntimeError as exc:
             logging.info("Near solver (index) failed for %s: %s", path.name, exc)
             return None
@@ -2489,6 +3552,14 @@ class ImageSolver:
                 p = int(kw.get("SEED_PAR")) if kw.get("SEED_PAR") is not None else 1
                 if s and r is not None and use_seq_warm_start:
                     self._near_seed = (s, r, p)
+                tile_key = (str(result.get("used_db")) if result.get("used_db") is not None else None)
+                self._remember_keywords_hint(
+                    path=path,
+                    keywords=kw,
+                    origin="near-index",
+                    tile_key=tile_key,
+                )
+                self._remember_file_wcs_hint(path=path, origin="near-index", tile_key=tile_key)
             except Exception:
                 pass
             return ImageSolveResult(
@@ -2502,24 +3573,6 @@ class ImageSolver:
             )
         return None
 
-    def _try_blind_shortcut(
-        self,
-        path: Path,
-        run_info: list[tuple[str, dict[str, Any]]],
-    ) -> tuple[Optional[ImageSolveResult], Optional[BlindSolveResult]]:
-        result = self._run_blind_solver(
-            path,
-            run_info,
-            skip_if_header_has_wcs=True,
-            skip_if_valid=self.config.blind_skip_if_valid,
-        )
-        if result is None or not result["success"]:
-            return None, None
-        if not self.config.overwrite:
-            image = self._build_blind_result(path, result, run_info)
-            image.duration_s = result["elapsed_sec"]
-            return image, None
-        return None, result
 
     def _resolve_with_blind_after_failure(
         self,
@@ -2531,6 +3584,7 @@ class ImageSolver:
         dec_hint: Optional[float],
         metadata: Optional[ImageMetadata],
         peaks: Optional[np.ndarray],
+        frame_data: Optional[np.ndarray],
     ) -> Optional[ImageSolveResult]:
         if not self.config.blind_enabled or not self.config.overwrite:
             return None
@@ -2544,6 +3598,9 @@ class ImageSolver:
             skip_if_valid=False,
             ra_hint=ra_hint,
             dec_hint=dec_hint,
+            metadata=metadata,
+            peaks=peaks,
+            frame_data=frame_data,
         )
         if result and result["success"]:
             return self._build_blind_result(path, result, run_info)
@@ -2562,7 +3619,11 @@ class BatchSolver:
             files = files[: self.config.max_files]
         return files
 
-    def run(self, cancel_event: Optional[threading.Event] = None) -> Iterator[ImageSolveResult]:
+    def run(
+        self,
+        cancel_event: Optional[threading.Event] = None,
+        on_result: Optional[Callable[[ImageSolveResult], None]] = None,
+    ) -> Iterator[ImageSolveResult]:
         if not self.files:
             yield ImageSolveResult(
                 path=self.config.input_dir,
@@ -2575,67 +3636,585 @@ class BatchSolver:
             self.solver.set_cancel_event(cancel_event)
         except Exception:
             pass
-        workers = max(1, self.config.workers)
-        pool = concurrent.futures.ThreadPoolExecutor(max_workers=workers)
-        cancelled = False
-        it = iter(self.files)
-        inflight: dict[concurrent.futures.Future[ImageSolveResult], Path] = {}
+
+        workers_base = max(1, self.config.workers)
+        unresolved: dict[Path, ImageSolveResult] = {}
+        yield_queue: list[ImageSolveResult] = []
+        astrometry_api_key = str(getattr(self.config, "astrometry_api_key", "") or "").strip()
+        astrometry_fallback_ready = bool(
+            getattr(self.config, "astrometry_fallback_after_blind", True) and astrometry_api_key
+        )
+        near_mode = "n/a"
+        requested_detect_backend = str(getattr(self.config, "near_detect_backend", "auto") or "auto").strip().lower()
+        configured_detect_device = getattr(self.config, "near_detect_device", None)
+        try:
+            configured_detect_device = int(configured_detect_device) if configured_detect_device is not None else None
+        except Exception:
+            configured_detect_device = None
+        try:
+            mem_interval = float(os.environ.get("ZE_MEM_SNAPSHOT_INTERVAL_S", "2") or "2")
+        except Exception:
+            mem_interval = 2.0
+        mem_interval = max(0.5, mem_interval) if mem_interval > 0 else 0.0
+        _next_mem_log_ts = 0.0
+
+        def _log_runtime_memory(stage: str, *, force: bool = False) -> None:
+            nonlocal _next_mem_log_ts
+            if mem_interval <= 0:
+                return
+            now = time.perf_counter()
+            if (not force) and now < _next_mem_log_ts:
+                return
+            _next_mem_log_ts = now + mem_interval
+            proc_mem = _process_memory_snapshot()
+            allow_cupy = requested_detect_backend == "cuda" or str(near_mode).lower() == "hybrid"
+            gpu_mem = _gpu_memory_snapshot(configured_detect_device, allow_cupy=allow_cupy)
+            logging.info(
+                "Runtime memory [%s]: rss=%s working_set=%s vms=%s | vram backend=%s dev=%s used=%s total=%s free=%s process=%s pool=%s/%s",
+                stage,
+                _format_bytes(proc_mem.get("rss_bytes")),
+                _format_bytes(proc_mem.get("working_set_bytes")),
+                _format_bytes(proc_mem.get("vms_bytes")),
+                str(gpu_mem.get("backend") or "n/a"),
+                str(gpu_mem.get("device") if gpu_mem.get("device") is not None else "n/a"),
+                _format_bytes(gpu_mem.get("used_bytes") if isinstance(gpu_mem.get("used_bytes"), int) else None),
+                _format_bytes(gpu_mem.get("total_bytes") if isinstance(gpu_mem.get("total_bytes"), int) else None),
+                _format_bytes(gpu_mem.get("free_bytes") if isinstance(gpu_mem.get("free_bytes"), int) else None),
+                _format_bytes(gpu_mem.get("process_used_bytes") if isinstance(gpu_mem.get("process_used_bytes"), int) else None),
+                _format_bytes(gpu_mem.get("pool_used_bytes") if isinstance(gpu_mem.get("pool_used_bytes"), int) else None),
+                _format_bytes(gpu_mem.get("pool_reserved_bytes") if isinstance(gpu_mem.get("pool_reserved_bytes"), int) else None),
+            )
+
+        def _queue_result(result: ImageSolveResult) -> None:
+            yield_queue.append(result)
+            if on_result is not None:
+                try:
+                    on_result(result)
+                except Exception:
+                    pass
 
         def _cancel_requested() -> bool:
             return bool(cancel_event and cancel_event.is_set())
 
-        try:
-            # Prime up to worker count
+        def _run_phase(
+            phase_paths: Sequence[Path],
+            task: Callable[[Path], ImageSolveResult],
+            emit: Callable[[Path, ImageSolveResult], None],
+            phase_workers: Optional[int] = None,
+            phase_name: str = "phase-thread",
+        ) -> bool:
+            if not phase_paths:
+                return False
+            eff_workers = max(1, int(phase_workers or workers_base))
+            pool = concurrent.futures.ThreadPoolExecutor(max_workers=eff_workers)
+            cancelled = False
+            it = iter(phase_paths)
+            inflight: dict[concurrent.futures.Future[ImageSolveResult], Path] = {}
             try:
-                for _ in range(workers):
-                    if _cancel_requested():
-                        cancelled = True
-                        break
-                    path = next(it)
-                    inflight[pool.submit(self.solver.solve_path, path)] = path
-            except StopIteration:
-                pass
-
-            while inflight:
-                if _cancel_requested():
-                    cancelled = True
-                    break
-                done, _pending = concurrent.futures.wait(
-                    tuple(inflight.keys()),
-                    timeout=0.2,
-                    return_when=concurrent.futures.FIRST_COMPLETED,
-                )
-                if not done:
-                    continue
-                for future in done:
-                    path = inflight.pop(future, None)
-                    if path is None:
-                        continue
-                    try:
-                        yield future.result()
-                    except Exception as exc:
-                        yield ImageSolveResult(path=path, status="failed", message=str(exc))
-                    if _cancel_requested():
-                        cancelled = True
-                        break
-                    try:
-                        path = next(it)
-                    except StopIteration:
-                        continue
-                    inflight[pool.submit(self.solver.solve_path, path)] = path
-                if cancelled:
-                    break
-        finally:
-            if cancelled or _cancel_requested():
-                for f in list(inflight.keys()):
-                    f.cancel()
-                # Return control immediately; running tasks must observe cancel_event.
                 try:
-                    pool.shutdown(wait=False, cancel_futures=True)
-                except TypeError:
-                    pool.shutdown(wait=False)
+                    for _ in range(eff_workers):
+                        if _cancel_requested():
+                            cancelled = True
+                            break
+                        path = next(it)
+                        inflight[pool.submit(task, path)] = path
+                except StopIteration:
+                    pass
+
+                while inflight:
+                    _log_runtime_memory(stage=phase_name)
+                    if _cancel_requested():
+                        cancelled = True
+                        break
+                    done, _pending = concurrent.futures.wait(
+                        tuple(inflight.keys()),
+                        timeout=0.2,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    if not done:
+                        continue
+                    for future in done:
+                        path = inflight.pop(future, None)
+                        if path is None:
+                            continue
+                        try:
+                            result = future.result()
+                        except Exception as exc:
+                            result = ImageSolveResult(path=path, status="failed", message=str(exc))
+                        emit(path, result)
+                        if _cancel_requested():
+                            cancelled = True
+                            break
+                        try:
+                            path = next(it)
+                        except StopIteration:
+                            continue
+                        inflight[pool.submit(task, path)] = path
+                    if cancelled:
+                        break
+            finally:
+                if cancelled or _cancel_requested():
+                    for f in list(inflight.keys()):
+                        f.cancel()
+                    try:
+                        pool.shutdown(wait=False, cancel_futures=True)
+                    except TypeError:
+                        pool.shutdown(wait=False)
+                else:
+                    pool.shutdown(wait=True)
+            return cancelled
+
+        # Phase 1: run ZeNear on all files (no per-file blind fallback)
+        def _emit_phase1(path: Path, result: ImageSolveResult) -> None:
+            if result.status == "solved" or (result.status == "skipped" and "WCS already present" in (result.message or "")):
+                _queue_result(result)
+                return
+            if (self.config.blind_enabled and self.config.overwrite) or astrometry_fallback_ready:
+                unresolved[path] = result
             else:
-                pool.shutdown(wait=True)
+                _queue_result(result)
+
+        def _run_phase_near_process(
+            phase_paths: Sequence[Path],
+            emit: Callable[[Path, ImageSolveResult], None],
+            phase_workers: int,
+        ) -> bool:
+            if not phase_paths:
+                return False
+            cancelled = False
+            pool = concurrent.futures.ProcessPoolExecutor(
+                max_workers=max(1, int(phase_workers)),
+                initializer=_near_worker_init,
+                initargs=(self.config,),
+            )
+            it = iter(phase_paths)
+            inflight: dict[concurrent.futures.Future[dict[str, Any]], Path] = {}
+            try:
+                try:
+                    for _ in range(max(1, int(phase_workers))):
+                        if _cancel_requested():
+                            cancelled = True
+                            break
+                        path = next(it)
+                        inflight[pool.submit(_near_worker_solve, str(path))] = path
+                except StopIteration:
+                    pass
+
+                while inflight:
+                    _log_runtime_memory(stage="phase-near-process")
+                    if _cancel_requested():
+                        cancelled = True
+                        break
+                    done, _pending = concurrent.futures.wait(
+                        tuple(inflight.keys()),
+                        timeout=0.2,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    if not done:
+                        continue
+                    for future in done:
+                        path = inflight.pop(future, None)
+                        if path is None:
+                            continue
+                        try:
+                            payload = future.result()
+                            result = _payload_to_result(payload)
+                        except Exception as exc:
+                            result = ImageSolveResult(path=path, status="failed", message=str(exc))
+                        emit(path, result)
+                        if _cancel_requested():
+                            cancelled = True
+                            break
+                        try:
+                            path = next(it)
+                        except StopIteration:
+                            continue
+                        inflight[pool.submit(_near_worker_solve, str(path))] = path
+                    if cancelled:
+                        break
+            finally:
+                if cancelled or _cancel_requested():
+                    for f in list(inflight.keys()):
+                        f.cancel()
+                    try:
+                        pool.shutdown(wait=False, cancel_futures=True)
+                    except TypeError:
+                        pool.shutdown(wait=False)
+                else:
+                    pool.shutdown(wait=True)
+            return cancelled
+
+        def _run_phase_near_hybrid(
+            phase_paths: Sequence[Path],
+            emit: Callable[[Path, ImageSolveResult], None],
+            phase_workers: int,
+            cuda_devices: int,
+        ) -> bool:
+            if not phase_paths:
+                return False
+            eff = max(1, int(phase_workers))
+            gpu_w = min(max(1, int(cuda_devices)), max(1, eff // 3))
+            cpu_w = max(1, eff - gpu_w)
+            if gpu_w <= 0:
+                return _run_phase_near_process(phase_paths, emit, phase_workers=eff)
+
+            cancelled = False
+            cpu_pool = concurrent.futures.ProcessPoolExecutor(
+                max_workers=cpu_w,
+                initializer=_near_worker_init_with_backend,
+                initargs=(self.config, "cpu"),
+            )
+            gpu_pool = concurrent.futures.ProcessPoolExecutor(
+                max_workers=gpu_w,
+                initializer=_near_worker_init_with_backend,
+                initargs=(self.config, "cuda"),
+            )
+            it = iter(phase_paths)
+            inflight: dict[concurrent.futures.Future[dict[str, Any]], tuple[Path, str]] = {}
+
+            def _submit(pool_name: str, path: Path) -> None:
+                if pool_name == "gpu":
+                    inflight[gpu_pool.submit(_near_worker_solve, str(path))] = (path, "gpu")
+                else:
+                    inflight[cpu_pool.submit(_near_worker_solve, str(path))] = (path, "cpu")
+
+            try:
+                try:
+                    for _ in range(cpu_w):
+                        if _cancel_requested():
+                            cancelled = True
+                            break
+                        _submit("cpu", next(it))
+                    for _ in range(gpu_w):
+                        if _cancel_requested():
+                            cancelled = True
+                            break
+                        _submit("gpu", next(it))
+                except StopIteration:
+                    pass
+
+                while inflight:
+                    _log_runtime_memory(stage="phase-near-hybrid")
+                    if _cancel_requested():
+                        cancelled = True
+                        break
+                    done, _pending = concurrent.futures.wait(
+                        tuple(inflight.keys()),
+                        timeout=0.2,
+                        return_when=concurrent.futures.FIRST_COMPLETED,
+                    )
+                    if not done:
+                        continue
+                    for future in done:
+                        item = inflight.pop(future, None)
+                        if item is None:
+                            continue
+                        path, pool_name = item
+                        try:
+                            payload = future.result()
+                            result = _payload_to_result(payload)
+                        except Exception as exc:
+                            result = ImageSolveResult(path=path, status="failed", message=str(exc))
+                        emit(path, result)
+                        if _cancel_requested():
+                            cancelled = True
+                            break
+                        try:
+                            nxt = next(it)
+                        except StopIteration:
+                            continue
+                        _submit(pool_name, nxt)
+                    if cancelled:
+                        break
+            finally:
+                if cancelled or _cancel_requested():
+                    for f in list(inflight.keys()):
+                        f.cancel()
+                    try:
+                        cpu_pool.shutdown(wait=False, cancel_futures=True)
+                    except TypeError:
+                        cpu_pool.shutdown(wait=False)
+                    try:
+                        gpu_pool.shutdown(wait=False, cancel_futures=True)
+                    except TypeError:
+                        gpu_pool.shutdown(wait=False)
+                else:
+                    cpu_pool.shutdown(wait=True)
+                    gpu_pool.shutdown(wait=True)
+            return cancelled
+
+        def _auto_near_strategy() -> tuple[str, int, Optional[float], Optional[float], str, int]:
+            env_mode = str(os.environ.get("ZE_NEAR_PARALLEL_MODE", "auto") or "auto").strip().lower()
+            fits_only = all(p.suffix.lower() in FITS_EXTENSIONS for p in self.files)
+            source = "heuristic"
+            if env_mode in {"thread", "process", "hybrid"}:
+                mode = env_mode
+                source = "env"
+            else:
+                mode = "process" if (workers_base > 1 and fits_only) else "thread"
+            if not fits_only:
+                mode = "thread"
+
+            cuda_devices = 0
+            try:
+                cuda_devices, _gpu_names, _gpu_err = _cuda_runtime_summary()
+            except Exception:
+                cuda_devices = 0
+            if mode == "hybrid" and cuda_devices <= 0:
+                mode = "process" if fits_only and workers_base > 1 else "thread"
+            if env_mode == "auto" and fits_only and workers_base > 2 and cuda_devices > 0:
+                mode = "hybrid"
+
+            eff = workers_base
+            cur_cpu = int(os.cpu_count() or 1)
+            auto_workers_mode = (env_mode == "auto" and workers_base == _default_worker_count())
+            max_workers_cap = max(1, workers_base)
+            if auto_workers_mode:
+                # If user kept default workers, allow auto to scale up on stronger hosts.
+                max_workers_cap = max(max_workers_cap, max(1, cur_cpu - 1))
+            ram_gb = _system_memory_gb()
+
+            sample_mb: Optional[float] = None
+            try:
+                sample_sizes = [float(p.stat().st_size) / (1024.0 * 1024.0) for p in self.files[: min(len(self.files), 12)]]
+                if sample_sizes:
+                    sample_sizes = sorted(sample_sizes)
+                    sample_mb = float(sample_sizes[len(sample_sizes) // 2])
+            except Exception:
+                sample_mb = None
+
+            # Optional learned hint from prior local calibration.
+            if env_mode == "auto" and fits_only:
+                try:
+                    hint_path = Path.home() / ".zesolver_near_autotune.json"
+                    if hint_path.is_file():
+                        hint = json.loads(hint_path.read_text(encoding="utf-8"))
+                        h_mode = str(hint.get("recommended_mode") or "").strip().lower()
+                        h_workers = int(hint.get("recommended_workers") or 0)
+                        h_platform = str(hint.get("platform") or "")
+                        h_cpu = int(hint.get("cpu_count") or 0)
+                        if h_mode in {"thread", "process"} and h_workers > 0 and h_platform == sys.platform:
+                            cur_cpu = int(os.cpu_count() or 1)
+                            mode = h_mode
+                            if h_cpu > 0:
+                                # Scale learned worker count to the current machine class,
+                                # so a profile learned on a smaller host does not under-use
+                                # a bigger one (and inverse for smaller hosts).
+                                scaled = int(round(float(h_workers) * (float(cur_cpu) / float(h_cpu))))
+                                eff = min(max(1, scaled), max_workers_cap)
+                            else:
+                                eff = min(max(1, h_workers), max_workers_cap)
+                            source = "learned"
+                except Exception:
+                    pass
+
+            if source != "learned":
+                if ram_gb is not None:
+                    if ram_gb <= 8.0:
+                        eff = min(eff, 2)
+                    elif ram_gb <= 16.0:
+                        eff = min(eff, 4)
+                    elif ram_gb <= 32.0:
+                        eff = min(eff, 6)
+                    elif ram_gb <= 64.0:
+                        eff = min(eff, 8)
+                    else:
+                        eff = min(eff, 12)
+
+                if sample_mb is not None:
+                    if sample_mb >= 80.0:
+                        eff = min(eff, 2)
+                    elif sample_mb >= 40.0:
+                        eff = min(eff, 4)
+                    elif sample_mb >= 20.0:
+                        eff = min(eff, 6)
+
+            # Aggressive autoscaling on capable machines (CPU/RAM), while preserving safety caps.
+            if env_mode == "auto" and mode == "process":
+                if ram_gb is not None and ram_gb >= 48.0 and (sample_mb is None or sample_mb <= 40.0):
+                    target = int(round(cur_cpu * 0.90))
+                    eff = max(eff, min(target, max_workers_cap))
+                elif ram_gb is not None and ram_gb >= 24.0 and (sample_mb is None or sample_mb <= 60.0):
+                    target = int(round(cur_cpu * 0.80))
+                    eff = max(eff, min(target, max_workers_cap))
+                elif ram_gb is not None and ram_gb >= 16.0 and (sample_mb is None or sample_mb <= 80.0):
+                    target = int(round(cur_cpu * 0.70))
+                    eff = max(eff, min(target, max_workers_cap))
+
+            if mode == "process" and sys.platform == "darwin":
+                # Keep macOS spawn overhead reasonable in default auto mode.
+                eff = min(eff, 6)
+            eff = min(int(eff), int(max_workers_cap))
+            eff = max(1, int(eff))
+            if eff <= 1:
+                mode = "thread"
+            return mode, eff, ram_gb, sample_mb, source, int(cuda_devices)
+
+        near_mode, near_workers, ram_gb, sample_mb, near_strategy_source, near_cuda_devices = _auto_near_strategy()
+        if str(os.environ.get("ZE_NEAR_PROCESS_POOL", "1")).strip().lower() in {"0", "false", "no", "off"}:
+            near_mode = "thread"
+        logging.info(
+            "Near auto strategy: mode=%s workers=%d base_workers=%d source=%s cuda_devices=%d ram_gb=%s median_file_mb=%s",
+            near_mode,
+            near_workers,
+            workers_base,
+            near_strategy_source,
+            int(near_cuda_devices),
+            f"{ram_gb:.2f}" if isinstance(ram_gb, float) else "n/a",
+            f"{sample_mb:.1f}" if isinstance(sample_mb, float) else "n/a",
+        )
+        logging.info(
+            "Runtime memory telemetry enabled: interval=%.1fs detect_backend=%s detect_device=%s",
+            mem_interval,
+            requested_detect_backend,
+            str(configured_detect_device) if configured_detect_device is not None else "auto",
+        )
+        _log_runtime_memory(stage="run-start", force=True)
+
+        cancelled = False
+        if near_mode == "hybrid":
+            try:
+                cancelled = _run_phase_near_hybrid(self.files, _emit_phase1, near_workers, near_cuda_devices)
+            except Exception as exc:
+                logging.warning("Near phase hybrid unavailable, fallback to process/thread: %s", exc)
+                if near_workers > 1:
+                    try:
+                        cancelled = _run_phase_near_process(self.files, _emit_phase1, near_workers)
+                    except Exception:
+                        cancelled = _run_phase(
+                            self.files,
+                            lambda p: self.solver.solve_path(p, allow_blind_fallback=False),
+                            _emit_phase1,
+                            phase_workers=near_workers,
+                            phase_name="phase-near-thread",
+                        )
+                else:
+                    cancelled = _run_phase(
+                        self.files,
+                        lambda p: self.solver.solve_path(p, allow_blind_fallback=False),
+                        _emit_phase1,
+                        phase_workers=near_workers,
+                        phase_name="phase-near-thread",
+                    )
+        elif near_mode == "process":
+            try:
+                cancelled = _run_phase_near_process(self.files, _emit_phase1, near_workers)
+            except Exception as exc:
+                logging.warning("Near phase process-pool unavailable, fallback to thread-pool: %s", exc)
+                cancelled = _run_phase(
+                    self.files,
+                    lambda p: self.solver.solve_path(p, allow_blind_fallback=False),
+                    _emit_phase1,
+                    phase_workers=near_workers,
+                    phase_name="phase-near-thread",
+                )
+        else:
+            cancelled = _run_phase(
+                self.files,
+                lambda p: self.solver.solve_path(p, allow_blind_fallback=False),
+                _emit_phase1,
+                phase_workers=near_workers,
+                phase_name="phase-near-thread",
+            )
+
+        for item in yield_queue:
+            yield item
+        yield_queue.clear()
+        if cancelled:
+            return
+
+        # Phase 2: run Zeblind on unresolved files when enabled.
+        final_unresolved: dict[Path, ImageSolveResult] = dict(unresolved)
+        if self.config.blind_enabled and self.config.overwrite and final_unresolved:
+            unresolved_paths = [p for p in self.files if p in final_unresolved]
+            phase2_unresolved: dict[Path, ImageSolveResult] = {}
+
+            def _emit_phase2(path: Path, result: ImageSolveResult) -> None:
+                solved = (result.status == "solved") or (
+                    result.status == "skipped" and "WCS already present" in (result.message or "")
+                )
+                if solved:
+                    _queue_result(result)
+                    return
+                if astrometry_fallback_ready:
+                    phase2_unresolved[path] = result
+                else:
+                    _queue_result(result)
+
+            cancelled = _run_phase(
+                unresolved_paths,
+                lambda p: self.solver.solve_path_blind_only(p, near_failure=final_unresolved.get(p)),
+                _emit_phase2,
+                phase_workers=workers_base,
+                phase_name="phase-blind-thread",
+            )
+            for item in yield_queue:
+                yield item
+            yield_queue.clear()
+            if cancelled:
+                return
+            final_unresolved = phase2_unresolved
+
+        # Phase 3: optional Astrometry fallback (last resort) when API key is configured.
+        if astrometry_fallback_ready and final_unresolved:
+            try:
+                from zeblindsolver.astrometry_backend import AstrometryConfig, solve_batch as astrometry_solve_batch
+
+                ast_cfg = AstrometryConfig(
+                    api_url=str(getattr(self.config, "astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api"),
+                    api_key=astrometry_api_key,
+                    parallel_jobs=max(1, int(getattr(self.config, "astrometry_parallel_jobs", 2) or 2)),
+                    timeout_s=max(30, int(getattr(self.config, "astrometry_timeout_s", 600) or 600)),
+                    use_hints=bool(getattr(self.config, "astrometry_use_hints", True)),
+                    fallback_local=False,
+                    index_root=(str(self.config.blind_index_path) if self.config.blind_index_path else None),
+                )
+                ast_paths = [p for p in self.files if p in final_unresolved]
+                logging.info("[FALLBACK] Astrometry last-resort enabled, trying %d files", len(ast_paths))
+                for job in astrometry_solve_batch(ast_paths, ast_cfg, log=logging.info):
+                    _log_runtime_memory(stage="phase-astrometry")
+                    if _cancel_requested():
+                        break
+                    path = Path(job.path)
+                    if job.success:
+                        result = ImageSolveResult(
+                            path=path,
+                            status="solved",
+                            message=job.message,
+                            metadata_source="astrometry",
+                        )
+                    else:
+                        prev = final_unresolved.get(path)
+                        if prev and prev.message:
+                            msg = f"{prev.message} | astrometry: {job.message}"
+                        else:
+                            msg = str(job.message)
+                        result = ImageSolveResult(
+                            path=path,
+                            status="failed",
+                            message=msg,
+                            metadata_source="astrometry",
+                        )
+                    final_unresolved.pop(path, None)
+                    _queue_result(result)
+                for item in yield_queue:
+                    yield item
+                yield_queue.clear()
+                if _cancel_requested():
+                    return
+            except Exception as exc:
+                logging.warning("[FALLBACK] Astrometry fallback unavailable: %s", exc)
+
+        # Emit remaining unresolved failures (if any).
+        if final_unresolved:
+            for p in self.files:
+                if p in final_unresolved:
+                    _queue_result(final_unresolved[p])
+            for item in yield_queue:
+                yield item
+            yield_queue.clear()
+
+        _log_runtime_memory(stage="run-end", force=True)
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -2702,8 +4281,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--near-detect-k-sigma",
         type=float,
-        default=4.0,
-        help="Near-solver: star detection threshold in sigma units (default: 4.0)",
+        default=4.5,
+        help="Near-solver: star detection threshold in sigma units (default: 4.5)",
     )
     parser.add_argument(
         "--near-detect-min-area",
@@ -2714,8 +4293,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--near-detect-max-labels",
         type=int,
-        default=2500,
-        help="Near-solver: max connected components evaluated during detection (default: 2500)",
+        default=1200,
+        help="Near-solver: max connected components evaluated during detection (default: 1200)",
     )
     parser.add_argument(
         "--near-detect-gpu-slots",
@@ -2730,6 +4309,19 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Near-solver: explicit RANSAC seed (default: auto/stable per file)",
     )
     parser.add_argument(
+        "--near-astap-iso-strict",
+        dest="near_astap_iso_strict",
+        action="store_true",
+        default=True,
+        help="Near-solver: strict ASTAP-ISO path (always enabled; compatibility flag)",
+    )
+    parser.add_argument(
+        "--no-near-astap-iso-strict",
+        dest="near_astap_iso_strict",
+        action="store_false",
+        help="Near-solver: deprecated, ignored (strict ASTAP-ISO is always enabled)",
+    )
+    parser.add_argument(
         "--near-warm-start",
         dest="near_warm_start",
         action="store_true",
@@ -2741,6 +4333,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
         dest="near_warm_start",
         action="store_false",
         help="Disable sequential warm-start for near solver",
+    )
+    parser.add_argument(
+        "--near-defer-blind-fallback",
+        dest="near_defer_blind_fallback",
+        action="store_true",
+        help="Batch mode: keep near failures for phase-2 blind instead of immediate near blind fallback",
+    )
+    parser.add_argument(
+        "--no-near-defer-blind-fallback",
+        dest="near_defer_blind_fallback",
+        action="store_false",
+        help="Batch mode: keep immediate near blind fallback (default)",
+    )
+    parser.add_argument(
+        "--near-allow-second-rescue",
+        dest="near_allow_second_rescue",
+        action="store_true",
+        help="Near-solver: allow a second rescue attempt after the first retry",
+    )
+    parser.add_argument(
+        "--no-near-allow-second-rescue",
+        dest="near_allow_second_rescue",
+        action="store_false",
+        help="Near-solver: keep single-retry mode (default)",
     )
     parser.add_argument(
         "--io-concurrency",
@@ -2808,9 +4424,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=5,
         help="Developer: minimum blob area (pixels) for detections (default: 5)",
     )
+    parser.add_argument(
+        "--dev-collect-matches-vectorized",
+        dest="dev_collect_matches_vectorized_experimental",
+        action="store_true",
+        help="Developer: enable experimental vectorized vote/pair filtering in _collect_tile_matches",
+    )
+    parser.add_argument(
+        "--no-dev-collect-matches-vectorized",
+        dest="dev_collect_matches_vectorized_experimental",
+        action="store_false",
+        help="Developer: disable experimental vectorized vote/pair filtering (default)",
+    )
     parser.add_argument("--headless", action="store_true", help="Force CLI mode even if arguments are missing")
     parser.add_argument("--gui", action="store_true", help="Force GUI mode even if CLI arguments are provided")
-    parser.set_defaults(blind_enabled=True)
+    parser.set_defaults(blind_enabled=True, near_defer_blind_fallback=False, near_allow_second_rescue=False, dev_collect_matches_vectorized_experimental=False)
     return parser
 
 
@@ -2861,6 +4489,8 @@ def run_cli(args: argparse.Namespace) -> int:
     if not args.db_root or not args.input_dir:
         raise SystemExit("--db-root and --input-dir are required in CLI mode (use --gui to launch the GUI)")
     families = _normalize_family_args(args.family)
+    if bool(getattr(args, "near_astap_iso_strict", True)) is False:
+        logging.warning("--no-near-astap-iso-strict is deprecated and ignored; strict mode is always enabled")
     config = SolveConfig(
         db_root=args.db_root.expanduser().resolve(),
         input_dir=args.input_dir.expanduser().resolve(),
@@ -2882,13 +4512,15 @@ def run_cli(args: argparse.Namespace) -> int:
         near_tile_cache_size=max(1, int(args.near_tile_cache_size or 128)),
         near_detect_backend=str(args.near_detect_backend or "auto"),
         near_detect_device=(int(args.near_detect_device) if args.near_detect_device is not None else None),
-        near_detect_k_sigma=float(args.near_detect_k_sigma or 4.0),
+        near_detect_k_sigma=float(args.near_detect_k_sigma or 4.5),
         near_detect_min_area=int(args.near_detect_min_area or 8),
-        near_detect_max_labels=int(args.near_detect_max_labels or 2500),
+        near_detect_max_labels=int(args.near_detect_max_labels or 1200),
         near_detect_gpu_slots=max(1, int(args.near_detect_gpu_slots or 1)),
         io_concurrency=int(args.io_concurrency or 0),
         gc_interval=int(args.gc_interval or 0),
         near_warm_start=(True if args.near_warm_start is None else bool(args.near_warm_start)),
+        near_defer_blind_fallback=bool(getattr(args, "near_defer_blind_fallback", False)),
+        near_allow_second_rescue=bool(getattr(args, "near_allow_second_rescue", False)),
         near_ransac_seed=(int(args.near_ransac_seed) if args.near_ransac_seed is not None else None),
         hint_ra_deg=args.ra_hint,
         hint_dec_deg=args.dec_hint,
@@ -2898,9 +4530,14 @@ def run_cli(args: argparse.Namespace) -> int:
         hint_resolution_arcsec=args.pixel_scale,
         hint_resolution_min_arcsec=args.pixel_scale_min,
         hint_resolution_max_arcsec=args.pixel_scale_max,
+        near_astap_hint_fastpath=False,
+        near_astap_hint_radius_deg=args.radius_hint,
+        near_second_pass_refine_in_fastpath=False,
+        near_astap_iso_strict=True,
         log_level=(args.log_level or "INFO").upper(),
         dev_bucket_limit_override=max(0, int(args.dev_bucket_limit or 0)),
         dev_vote_percentile=min(95, max(5, int(args.dev_vote_percentile or 40))),
+        dev_collect_matches_vectorized_experimental=bool(getattr(args, "dev_collect_matches_vectorized_experimental", False)),
         dev_bucket_cap_S=max(0, int(args.bucket_cap_s or 0)),
         dev_bucket_cap_M=max(0, int(args.bucket_cap_m or 0)),
         dev_bucket_cap_L=max(0, int(args.bucket_cap_l or 0)),
@@ -3001,7 +4638,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             try:
                 import gc as _gc
                 processed = 0
-                for result in batch.run(cancel_event=self._cancel_event):
+
+                def _on_result(result: ImageSolveResult) -> None:
+                    nonlocal processed
                     self.progress.emit(result)
                     processed += 1
                     # Optional periodic GC if requested
@@ -3014,6 +4653,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                             _gc.collect()
                         except Exception:
                             pass
+
+                for _ in batch.run(cancel_event=self._cancel_event, on_result=_on_result):
                     if self._cancel_event.is_set():
                         self.info.emit(self._translate("runner_stop_wait"))
                         break
@@ -3023,7 +4664,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.finished.emit()
 
     class FileScanner(QtCore.QThread):
-        file_found = QtCore.Signal(str)
+        file_found = QtCore.Signal(str, str, str)
         finished = QtCore.Signal(int)
 
         def __init__(self, root: Path, exts: list[str], limit: Optional[int]) -> None:
@@ -3043,9 +4684,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                     if self._cancel.is_set():
                         break
                     try:
-                        self.file_found.emit(str(path))
+                        status, detail = _quick_scan_initial_status(path)
+                        self.file_found.emit(str(path), status, detail)
                     except Exception:
-                        pass
+                        try:
+                            self.file_found.emit(str(path), "waiting", "")
+                        except Exception:
+                            pass
                     count += 1
                     if self._limit and count >= self._limit:
                         break
@@ -3453,9 +5098,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                     tile_cache_size=max(1, self.tile_cache),
                     detect_backend=self.detect_backend,
                     detect_device=self.detect_device,
-                    detect_k_sigma=float(self.detect_k_sigma or 4.0),
+                    detect_k_sigma=float(self.detect_k_sigma or 4.5),
                     detect_min_area=int(self.detect_min_area or 8),
-                    detect_max_labels=int(self.detect_max_labels or 2500),
+                    detect_max_labels=int(self.detect_max_labels or 1200),
                     quality_inliers=int(self.quality_inliers or 60),
                     quality_rms=float(self.quality_rms or 1.0),
                     pixel_tolerance=float(self.pixel_tolerance or 3.0),
@@ -3564,6 +5209,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._pending_hash_level: Optional[str] = None
             self._current_input_dir: Optional[Path] = None
             self._results_seen = 0
+            self._run_started_ts: Optional[float] = None
+            self._last_result_ts: Optional[float] = None
             self._language_actions: dict[str, QtGui.QAction] = {}
             self._interface_actions: dict[str, QtGui.QAction] = {}
             self._interface_mode = "easy"
@@ -3575,13 +5222,16 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._near_worker: Optional[NearRunner] = None
             self._benchmark_worker: Optional[BenchmarkRunner] = None
             self._scanner: Optional[FileScanner] = None
-            self._scan_buffer: list[Path] = []
+            self._scan_buffer: list[tuple[Path, str, str]] = []
             self._scan_flush_threshold = 250
             self._log_level_actions: dict[str, QtGui.QAction] = {}
             self._db_family_scan_thread: Optional[DbFamilyScanner] = None
             self._db_scan_timer = QtCore.QTimer(self)
             self._db_scan_timer.setSingleShot(True)
             self._db_scan_timer.timeout.connect(self._run_db_family_scan)
+            self._progress_timer = QtCore.QTimer(self)
+            self._progress_timer.setInterval(400)
+            self._progress_timer.timeout.connect(self._on_progress_tick)
             self._pending_db_scan_path: str = (self._settings.db_root or "").strip()
             self._active_db_scan_root: Optional[str] = None
             self._db_family_latest: set[str] = set((self._settings.db_family_cache or []) or [])
@@ -3759,6 +5409,16 @@ def launch_gui(args: argparse.Namespace) -> int:
                     action.setChecked(mode == self._interface_mode)
                 finally:
                     action.blockSignals(False)
+            self._apply_simple_mode_visibility()
+            self._apply_settings_mode_visibility()
+
+        def _apply_simple_mode_visibility(self) -> None:
+            simple = bool(hasattr(self, "simple_mode_check") and self.simple_mode_check.isChecked())
+            apply_solver_simple_visibility(self, simple=simple)
+
+        def _apply_settings_mode_visibility(self) -> None:
+            expert = (self._interface_mode == "expert")
+            apply_settings_easy_visibility(self, expert=expert)
 
         def _run_startup_wizard_from_menu(self) -> None:
             ok = self._run_simple_startup_wizard()
@@ -4742,10 +6402,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.backend_combo.addItem(self._text("solver.backend.local"), "local")
             self.backend_combo.addItem(self._text("solver.backend.astrometry"), "astrometry")
             try:
-                backend_saved = (self._settings.solver_backend or "local").lower()
-                idx = self.backend_combo.findData(backend_saved)
-                if idx >= 0:
-                    self.backend_combo.setCurrentIndex(idx)
+                # Always default to local ZeNear flow for safer/faster offline behavior.
+                self.backend_combo.setCurrentIndex(self.backend_combo.findData("local"))
             except Exception:
                 pass
             form.addRow(self.backend_label_widget, self.backend_combo)
@@ -4842,6 +6500,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.blind_check.setChecked(bool(self._settings.solver_blind_enabled))
             self.simple_mode_check = QtWidgets.QCheckBox()
             self.simple_mode_check.setChecked(True)
+            self.simple_mode_check.toggled.connect(lambda _checked: self._apply_simple_mode_visibility())
             self.simple_clean_wcs_check = QtWidgets.QCheckBox()
             self.simple_clean_wcs_check.setChecked(False)
             self.fov_label_widget = QtWidgets.QLabel()
@@ -4880,6 +6539,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.overwrite_check)
             form.addRow(self.simple_mode_check)
             form.addRow(self.simple_clean_wcs_check)
+            self._apply_simple_mode_visibility()
             return self.options_box
 
         def _populate_families_from_index(self, index_root_text: str) -> None:
@@ -5013,142 +6673,17 @@ def launch_gui(args: argparse.Namespace) -> int:
             sample_layout.addWidget(self.settings_sample_browse)
             form.addRow(self.settings_sample_label, sample_row)
 
-            # Presets group
-            self.presets_group = QtWidgets.QGroupBox()
-            self.presets_group.setTitle(self._text("presets_title"))
-            presets_layout = QtWidgets.QVBoxLayout(self.presets_group)
-            self.presets_combo = QtWidgets.QComboBox()
-            preset_list = list(preset_utils.list_presets())
-            for p in preset_list:
-                self.presets_combo.addItem(p.label, p.id)
-            self.preset_warning_label = QtWidgets.QLabel()
-            self.preset_warning_label.setStyleSheet("color: #c08000;")
-            # Hide the legacy approx-specs notice; presets now have vetted values
-            try:
-                self.preset_warning_label.setVisible(False)
-            except Exception:
-                pass
-            presets_layout.addWidget(self.presets_combo)
-            presets_layout.addWidget(self.preset_warning_label)
-
-            # FOV group
-            self.fov_group = QtWidgets.QGroupBox()
-            self.fov_group.setTitle(self._text("fov_mode_title"))
-            fov_form = QtWidgets.QFormLayout(self.fov_group)
-            self.fov_focal_spin = QtWidgets.QDoubleSpinBox()
-            self.fov_focal_spin.setRange(10.0, 6000.0)
-            self.fov_focal_spin.setDecimals(1)
-            self.fov_pixel_spin = QtWidgets.QDoubleSpinBox()
-            self.fov_pixel_spin.setRange(1.0, 20.0)
-            self.fov_pixel_spin.setDecimals(2)
-            self.fov_res_w_spin = QtWidgets.QSpinBox()
-            self.fov_res_w_spin.setRange(64, 20000)
-            self.fov_res_h_spin = QtWidgets.QSpinBox()
-            self.fov_res_h_spin.setRange(64, 20000)
-            self.fov_reducer_spin = QtWidgets.QDoubleSpinBox()
-            self.fov_reducer_spin.setRange(0.2, 2.0)
-            self.fov_reducer_spin.setDecimals(2)
-            self.fov_reducer_spin.setSingleStep(0.01)
-            self.fov_binning_spin = QtWidgets.QSpinBox()
-            self.fov_binning_spin.setRange(1, 8)
-            # Labels for results
-            self.reco_group = QtWidgets.QGroupBox()
-            self.reco_group.setTitle(self._text("recommendations_title"))
-            reco_form = QtWidgets.QFormLayout(self.reco_group)
-            self.reco_scale_label = QtWidgets.QLabel()
-            self.reco_scale_value = QtWidgets.QLabel("-")
-            self.reco_fov_label = QtWidgets.QLabel()
-            self.reco_fov_value = QtWidgets.QLabel("-")
-            self.reco_mag_label = QtWidgets.QLabel()
-            self.reco_mag_value = QtWidgets.QLabel("-")
-            self.reco_quads_label = QtWidgets.QLabel()
-            self.reco_quads_value = QtWidgets.QLabel("-")
-            self.reco_notes_label = QtWidgets.QLabel("")
-            self.reco_notes_label.setWordWrap(True)
-            self.compute_button = QtWidgets.QPushButton()
-
-            fov_form.addRow(QtWidgets.QLabel(self._text("focal_length_mm")), self.fov_focal_spin)
-            fov_form.addRow(QtWidgets.QLabel(self._text("pixel_size_um")), self.fov_pixel_spin)
-            # Resolution as two widgets in one row
-            res_row = QtWidgets.QWidget()
-            res_layout = QtWidgets.QHBoxLayout(res_row)
-            res_layout.setContentsMargins(0, 0, 0, 0)
-            res_layout.addWidget(self.fov_res_w_spin)
-            res_layout.addWidget(self.fov_res_h_spin)
-            fov_form.addRow(QtWidgets.QLabel(self._text("resolution_px")), res_row)
-            fov_form.addRow(QtWidgets.QLabel(self._text("reducer_factor")), self.fov_reducer_spin)
-            fov_form.addRow(QtWidgets.QLabel(self._text("binning")), self.fov_binning_spin)
-            fov_form.addRow(self.compute_button)
-
-            reco_form.addRow(self.reco_scale_label, self.reco_scale_value)
-            reco_form.addRow(self.reco_fov_label, self.reco_fov_value)
-            reco_form.addRow(self.reco_mag_label, self.reco_mag_value)
-            reco_form.addRow(self.reco_quads_label, self.reco_quads_value)
-            reco_form.addRow(self.reco_notes_label)
-
-            column.addLayout(form)
-            column.addWidget(self.presets_group)
-            column.addWidget(self.fov_group)
-            column.addWidget(self.reco_group)
+            # Presets/FOV/Reco groups
+            build_presets_fov_reco_groups(self, QtWidgets, preset_utils, column, form)
 
             # Blind solver tuning group
-            self.blind_group = QtWidgets.QGroupBox()
-            self.blind_group.setTitle(self._text("settings_blind_group"))
-            blind_form = QtWidgets.QFormLayout(self.blind_group)
-            self.settings_blind_max_stars_label = QtWidgets.QLabel()
-            self.settings_blind_max_stars_spin = QtWidgets.QSpinBox()
-            self.settings_blind_max_stars_spin.setRange(100, 5000)
-            self.settings_blind_max_stars_spin.setValue(self._settings.blind_max_stars)
-            blind_form.addRow(self.settings_blind_max_stars_label, self.settings_blind_max_stars_spin)
-
-            self.settings_blind_max_quads_label = QtWidgets.QLabel()
-            self.settings_blind_max_quads_spin = QtWidgets.QSpinBox()
-            self.settings_blind_max_quads_spin.setRange(500, 100000)
-            self.settings_blind_max_quads_spin.setSingleStep(500)
-            self.settings_blind_max_quads_spin.setValue(self._settings.blind_max_quads)
-            blind_form.addRow(self.settings_blind_max_quads_label, self.settings_blind_max_quads_spin)
-
-            self.settings_blind_max_candidates_label = QtWidgets.QLabel()
-            self.settings_blind_max_candidates_spin = QtWidgets.QSpinBox()
-            self.settings_blind_max_candidates_spin.setRange(4, 64)
-            self.settings_blind_max_candidates_spin.setValue(self._settings.blind_max_candidates)
-            blind_form.addRow(self.settings_blind_max_candidates_label, self.settings_blind_max_candidates_spin)
-
-            self.settings_blind_pixel_tol_label = QtWidgets.QLabel()
-            self.settings_blind_pixel_tol_spin = QtWidgets.QDoubleSpinBox()
-            self.settings_blind_pixel_tol_spin.setRange(0.5, 10.0)
-            self.settings_blind_pixel_tol_spin.setDecimals(1)
-            self.settings_blind_pixel_tol_spin.setSingleStep(0.5)
-            self.settings_blind_pixel_tol_spin.setValue(self._settings.blind_pixel_tolerance)
-            blind_form.addRow(self.settings_blind_pixel_tol_label, self.settings_blind_pixel_tol_spin)
-
-            self.settings_blind_quality_inliers_label = QtWidgets.QLabel()
-            self.settings_blind_quality_inliers_spin = QtWidgets.QSpinBox()
-            self.settings_blind_quality_inliers_spin.setRange(4, 200)
-            self.settings_blind_quality_inliers_spin.setValue(self._settings.blind_quality_inliers)
-            blind_form.addRow(self.settings_blind_quality_inliers_label, self.settings_blind_quality_inliers_spin)
-
-            self.settings_blind_quality_rms_label = QtWidgets.QLabel()
-            self.settings_blind_quality_rms_spin = QtWidgets.QDoubleSpinBox()
-            self.settings_blind_quality_rms_spin.setRange(0.2, 5.0)
-            self.settings_blind_quality_rms_spin.setDecimals(2)
-            self.settings_blind_quality_rms_spin.setSingleStep(0.1)
-            self.settings_blind_quality_rms_spin.setValue(self._settings.blind_quality_rms)
-            blind_form.addRow(self.settings_blind_quality_rms_label, self.settings_blind_quality_rms_spin)
-            # Fast mode (S-only then fallback)
-            self.settings_blind_fast_check = QtWidgets.QCheckBox()
-            self.settings_blind_fast_check.setChecked(self._settings.blind_fast_mode)
-            blind_form.addRow(QtWidgets.QLabel(self._text("settings_blind_fast_label")), self.settings_blind_fast_check)
+            self.blind_group = build_blind_group(self, QtWidgets)
 
             button_row = QtWidgets.QHBoxLayout()
             self.settings_save_btn = QtWidgets.QPushButton()
-            self.settings_save_btn.clicked.connect(self._on_save_settings_clicked)
             self.settings_build_btn = QtWidgets.QPushButton()
-            self.settings_build_btn.clicked.connect(self._on_build_index_clicked)
             self.settings_run_blind_btn = QtWidgets.QPushButton()
-            self.settings_run_blind_btn.clicked.connect(self._on_run_blind_clicked)
             self.settings_run_near_btn = QtWidgets.QPushButton()
-            self.settings_run_near_btn.clicked.connect(self._on_run_near_clicked)
             button_row.addWidget(self.settings_save_btn)
             button_row.addWidget(self.settings_build_btn)
             button_row.addWidget(self.settings_run_blind_btn)
@@ -5161,7 +6696,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_log_view.document().setMaximumBlockCount(2000)
             except Exception:
                 pass
-            column.addLayout(form)
             column.addWidget(self.blind_group)
             column.addLayout(button_row)
             self.settings_log_label = QtWidgets.QLabel()
@@ -5174,57 +6708,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             column.addWidget(self.settings_progress)
             column.addWidget(self.settings_log_view)
 
-            self.settings_db_browse.clicked.connect(
-                lambda: self._pick_settings_directory(self.settings_db_edit)
-            )
-            # Keep Database tab DB field in sync when editing in Settings
-            def _sync_db_tab_text(text: str) -> None:
-                try:
-                    if hasattr(self, "db_tab_edit"):
-                        if self.db_tab_edit.text().strip() != text.strip():
-                            self.db_tab_edit.setText(text)
-                except Exception:
-                    pass
-            self.settings_db_edit.textChanged.connect(_sync_db_tab_text)
-            self.settings_db_edit.textChanged.connect(self._on_db_root_text_changed)
-            self.settings_index_browse.clicked.connect(
-                lambda: self._pick_settings_directory(self.settings_index_edit)
-            )
-            self.settings_sample_browse.clicked.connect(self._pick_settings_sample)
-            # Presets interactions: load preset populates FOV fields
-            def _apply_preset(preset_id: str) -> None:
-                try:
-                    presets = {p.id: p for p in preset_utils.list_presets()}
-                    p = presets.get(preset_id)
-                    if not p:
-                        return
-                    self.fov_focal_spin.setValue(p.focal_mm)
-                    self.fov_pixel_spin.setValue(p.pixel_um)
-                    self.fov_res_w_spin.setValue(p.res_w)
-                    self.fov_res_h_spin.setValue(p.res_h)
-                    self.fov_reducer_spin.setValue(p.reducer)
-                    self.fov_binning_spin.setValue(1)
-                    # Do not display the old approx-specs banner anymore
-                    try:
-                        self.preset_warning_label.clear()
-                        self.preset_warning_label.setVisible(False)
-                    except Exception:
-                        pass
-                    self._on_compute_fov_clicked()
-                except Exception:
-                    pass
+            self._apply_settings_mode_visibility()
 
-            self.presets_combo.currentIndexChanged.connect(
-                lambda idx: _apply_preset(self.presets_combo.itemData(idx))
-            )
-            saved_preset = getattr(self._settings, "last_preset_id", None)
-            if saved_preset:
-                idx = self.presets_combo.findData(saved_preset)
-                if idx >= 0:
-                    self.presets_combo.setCurrentIndex(idx)
-                    _apply_preset(saved_preset)
-
-            self.compute_button.clicked.connect(self._on_compute_fov_clicked)
+            wire_settings_tab_callbacks(self, preset_utils)
             return widget
 
         def _build_performance_tab(self) -> QtWidgets.QWidget:
@@ -5544,6 +7030,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.fast_try_parity_check = QtWidgets.QCheckBox()
             self.fast_try_parity_check.setChecked(bool(getattr(self._settings, 'near_try_parity_flip', True)))
             form.addRow(self.fast_try_parity_check)
+            # Strict ASTAP-ISO mode
+            self.fast_astap_iso_strict_check = QtWidgets.QCheckBox()
+            self.fast_astap_iso_strict_check.setChecked(True)
+            self.fast_astap_iso_strict_check.setEnabled(False)
+            form.addRow(self.fast_astap_iso_strict_check)
             # Search margin
             self.fast_search_margin_label = QtWidgets.QLabel()
             self.fast_search_margin_spin = QtWidgets.QDoubleSpinBox()
@@ -5558,7 +7049,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.fast_detect_k_sigma_spin.setRange(1.5, 8.0)
             self.fast_detect_k_sigma_spin.setDecimals(2)
             self.fast_detect_k_sigma_spin.setSingleStep(0.1)
-            self.fast_detect_k_sigma_spin.setValue(float(getattr(self._settings, 'near_detect_k_sigma', 4.0) or 4.0))
+            self.fast_detect_k_sigma_spin.setValue(float(getattr(self._settings, 'near_detect_k_sigma', 4.5) or 4.5))
             form.addRow(self.fast_detect_k_sigma_label, self.fast_detect_k_sigma_spin)
             # Detection min area
             self.fast_detect_min_area_label = QtWidgets.QLabel()
@@ -5572,7 +7063,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.fast_detect_max_labels_spin = QtWidgets.QSpinBox()
             self.fast_detect_max_labels_spin.setRange(200, 20000)
             self.fast_detect_max_labels_spin.setSingleStep(100)
-            self.fast_detect_max_labels_spin.setValue(int(getattr(self._settings, 'near_detect_max_labels', 2500) or 2500))
+            self.fast_detect_max_labels_spin.setValue(int(getattr(self._settings, 'near_detect_max_labels', 1200) or 1200))
             form.addRow(self.fast_detect_max_labels_label, self.fast_detect_max_labels_spin)
             # Assemble
             column.addWidget(self.fast_group)
@@ -5686,11 +7177,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_blind_quality_rms_spin.setValue(settings.blind_quality_rms)
             if hasattr(self, 'settings_blind_fast_check'):
                 self.settings_blind_fast_check.setChecked(settings.blind_fast_mode)
-            # Solver backend selector
+            # Solver backend selector: default to local ZeNear workflow.
             try:
                 if hasattr(self, 'backend_combo'):
-                    backend_saved = (settings.solver_backend or "local").lower()
-                    idx = self.backend_combo.findData(backend_saved)
+                    idx = self.backend_combo.findData("local")
                     if idx >= 0:
                         self.backend_combo.setCurrentIndex(idx)
             except Exception:
@@ -5775,14 +7265,16 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.fast_max_cat_stars_spin.setValue(int(getattr(settings, 'near_max_cat_stars', 2000) or 2000))
                 if hasattr(self, 'fast_try_parity_check'):
                     self.fast_try_parity_check.setChecked(bool(getattr(settings, 'near_try_parity_flip', True)))
+                if hasattr(self, 'fast_astap_iso_strict_check'):
+                    self.fast_astap_iso_strict_check.setChecked(True)
                 if hasattr(self, 'fast_search_margin_spin'):
                     self.fast_search_margin_spin.setValue(float(getattr(settings, 'near_search_margin', 1.2) or 1.2))
                 if hasattr(self, 'fast_detect_k_sigma_spin'):
-                    self.fast_detect_k_sigma_spin.setValue(float(getattr(settings, 'near_detect_k_sigma', 4.0) or 4.0))
+                    self.fast_detect_k_sigma_spin.setValue(float(getattr(settings, 'near_detect_k_sigma', 4.5) or 4.5))
                 if hasattr(self, 'fast_detect_min_area_spin'):
                     self.fast_detect_min_area_spin.setValue(int(getattr(settings, 'near_detect_min_area', 8) or 8))
                 if hasattr(self, 'fast_detect_max_labels_spin'):
-                    self.fast_detect_max_labels_spin.setValue(int(getattr(settings, 'near_detect_max_labels', 2500) or 2500))
+                    self.fast_detect_max_labels_spin.setValue(int(getattr(settings, 'near_detect_max_labels', 1200) or 1200))
             except Exception:
                 pass
             self._populate_benchmark_tab_from_settings()
@@ -5938,9 +7430,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_tile_cache_size=int(self.perf_near_cache_spin.value()) if hasattr(self, 'perf_near_cache_spin') else 128,
                 near_detect_backend=str(backend_sel),
                 near_detect_device=int(dev_sel if isinstance(dev_sel, int) else 0),
-                near_detect_k_sigma=float(self.fast_detect_k_sigma_spin.value()) if hasattr(self, 'fast_detect_k_sigma_spin') else 4.0,
+                near_detect_k_sigma=float(self.fast_detect_k_sigma_spin.value()) if hasattr(self, 'fast_detect_k_sigma_spin') else 4.5,
                 near_detect_min_area=int(self.fast_detect_min_area_spin.value()) if hasattr(self, 'fast_detect_min_area_spin') else 8,
-                near_detect_max_labels=int(self.fast_detect_max_labels_spin.value()) if hasattr(self, 'fast_detect_max_labels_spin') else 2500,
+                near_detect_max_labels=int(self.fast_detect_max_labels_spin.value()) if hasattr(self, 'fast_detect_max_labels_spin') else 1200,
                 io_concurrency=int(self.perf_io_spin.value()) if hasattr(self, 'perf_io_spin') else 0,
                 near_warm_start=bool(self.perf_near_warm_check.isChecked()) if hasattr(self, 'perf_near_warm_check') else True,
                 # Near (fast solver) thresholds and tuning
@@ -5952,6 +7444,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_max_img_stars=int(self.fast_max_img_stars_spin.value()) if hasattr(self, 'fast_max_img_stars_spin') else 800,
                 near_max_cat_stars=int(self.fast_max_cat_stars_spin.value()) if hasattr(self, 'fast_max_cat_stars_spin') else 2000,
                 near_try_parity_flip=bool(self.fast_try_parity_check.isChecked()) if hasattr(self, 'fast_try_parity_check') else True,
+                near_astap_iso_strict=True,
+                near_defer_blind_fallback=bool(getattr(self._settings, 'near_defer_blind_fallback', False)),
+                near_allow_second_rescue=bool(getattr(self._settings, 'near_allow_second_rescue', False)),
                 near_search_margin=float(self.fast_search_margin_spin.value()) if hasattr(self, 'fast_search_margin_spin') else 1.2,
                 # Backend + astrometry
                 solver_backend=(self.backend_combo.currentData() if hasattr(self, 'backend_combo') else "local"),
@@ -6284,6 +7779,18 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pixel_scale_min_arcsec=settings.solver_hint_resolution_min_arcsec,
                 pixel_scale_max_arcsec=settings.solver_hint_resolution_max_arcsec,
                 downsample=max(1, int(settings.solver_downsample or 1)),
+                verify_logodds_enabled=bool(getattr(settings, "dev_verify_logodds_enabled", False)),
+                verify_logodds_bail=float(getattr(settings, "dev_verify_logodds_bail", -24.0) or -24.0),
+                verify_logodds_stoplooking=float(getattr(settings, "dev_verify_logodds_stoplooking", 24.0) or 24.0),
+                verify_logodds_min_validations=int(getattr(settings, "dev_verify_logodds_min_validations", 8) or 8),
+                hard_max_candidates_tried=int(getattr(settings, "dev_hard_max_candidates_tried", 0) or 0),
+                hard_max_validations=int(getattr(settings, "dev_hard_max_validations", 0) or 0),
+                depth_ladder_enabled=bool(getattr(settings, "dev_depth_ladder_enabled", False)),
+                depth_ladder_caps=tuple(
+                    int(v)
+                    for v in getattr(settings, "dev_depth_ladder_caps", (80, 160, 500))
+                    if isinstance(v, (int, float)) and int(v) > 0
+                ) or (80, 160, 500),
             )
             self._blind_worker = BlindRunner(
                 fits_path=sample_path,
@@ -6330,9 +7837,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 tile_cache=int(self.perf_near_cache_spin.value()) if hasattr(self, 'perf_near_cache_spin') else int(self._settings.near_tile_cache_size or 128),
                 detect_backend=self._settings.near_detect_backend or "auto",
                 detect_device=self._settings.near_detect_device,
-                detect_k_sigma=float(getattr(self._settings, 'near_detect_k_sigma', 4.0) or 4.0),
+                detect_k_sigma=float(getattr(self._settings, 'near_detect_k_sigma', 4.5) or 4.5),
                 detect_min_area=int(getattr(self._settings, 'near_detect_min_area', 8) or 8),
-                detect_max_labels=int(getattr(self._settings, 'near_detect_max_labels', 2500) or 2500),
+                detect_max_labels=int(getattr(self._settings, 'near_detect_max_labels', 1200) or 1200),
                 quality_inliers=int(getattr(self._settings, 'near_quality_inliers', 60) or 60),
                 quality_rms=float(getattr(self._settings, 'near_quality_rms', 1.0) or 1.0),
                 pixel_tolerance=float(getattr(self._settings, 'near_pixel_tolerance', 3.0) or 3.0),
@@ -6456,7 +7963,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._apply_language()
 
         def _apply_language(self) -> None:
-            self.setWindowTitle(self._text("window_title"))
+            self.setWindowTitle(build_window_title(self._text("window_title")))
             if hasattr(self, "language_menu"):
                 self.language_menu.setTitle(self._text("language_menu"))
                 for code, action in self._language_actions.items():
@@ -6749,6 +8256,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.fast_max_cat_stars_label.setText(self._text("fast_max_cat_stars_label"))
             if hasattr(self, "fast_try_parity_check"):
                 self.fast_try_parity_check.setText(self._text("fast_try_parity_label"))
+            if hasattr(self, "fast_astap_iso_strict_check"):
+                self.fast_astap_iso_strict_check.setText(self._text("fast_astap_iso_strict_label"))
             if hasattr(self, "fast_search_margin_label"):
                 self.fast_search_margin_label.setText(self._text("fast_search_margin_label"))
             if hasattr(self, "fast_detect_k_sigma_label"):
@@ -7150,11 +8659,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             # Give immediate feedback
             self._log(self._text("info_files_detected", count=0))
 
-        def _on_scan_file_found(self, path_text: str) -> None:
+        def _on_scan_file_found(self, path_text: str, status: str, detail: str) -> None:
             try:
                 p = Path(path_text).resolve()
+                status_norm = str(status or "waiting").strip().lower()
+                if status_norm not in {"waiting", "wcs", "failed", "solved", "skipped"}:
+                    status_norm = "waiting"
                 self._pending_files.append(p)
-                self._scan_buffer.append(p)
+                self._scan_buffer.append((p, status_norm, str(detail or "")))
             except Exception:
                 return
             # Flush in chunks to keep UI responsive
@@ -7175,11 +8687,21 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.files_view.setUpdatesEnabled(False)
             try:
                 entries: list[tuple[Path, QtWidgets.QTreeWidgetItem]] = []
-                for path in self._scan_buffer:
+                color_map = {
+                    "wcs": QtGui.QColor("#2b8a3e"),
+                    "failed": QtGui.QColor("#c92a2a"),
+                    "waiting": QtGui.QColor("#ffffff"),
+                }
+                for path, status, detail in self._scan_buffer:
+                    status_key = status if status in {"waiting", "wcs", "failed", "solved", "skipped"} else "waiting"
                     item = QtWidgets.QTreeWidgetItem(
-                        [self._format_path(path), self._status_label_for("waiting"), ""]
+                        [self._format_path(path), self._status_label_for(status_key), detail or ""]
                     )
-                    item.setData(1, QtCore.Qt.UserRole, "waiting")
+                    item.setData(1, QtCore.Qt.UserRole, status_key)
+                    color = color_map.get(status_key)
+                    if color is not None:
+                        for idx in range(3):
+                            item.setForeground(idx, color)
                     entries.append((path, item))
                 if entries:
                     self.files_view.addTopLevelItems([item for _, item in entries])
@@ -7193,36 +8715,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.files_view.setUpdatesEnabled(True)
                 self._scan_buffer.clear()
 
-        def _gather_candidate_files(self) -> List[Path]:
-            path = self.input_edit.text().strip()
-            if not path:
-                raise ValueError(self._text("error_select_input"))
-            directory = Path(path).expanduser()
-            if not directory.is_dir():
-                raise ValueError(self._text("error_input_missing", path=directory))
-            formats = self._parse_formats()
-            files = [p.resolve() for p in _iter_image_files(directory, formats)]
-            limit = self.max_files_spin.value()
-            if limit > 0:
-                files = files[:limit]
-            self._current_input_dir = directory
-            return files
-
         def _parse_formats(self) -> List[str]:
             return _parse_formats_value(self.formats_edit.text())
 
-        def _refresh_file_list(self) -> None:
-            self.files_view.clear()
-            self._item_by_path.clear()
-            for path in self._pending_files:
-                item = QtWidgets.QTreeWidgetItem(
-                    [self._format_path(path), self._status_label_for("waiting"), ""]
-                )
-                item.setData(1, QtCore.Qt.UserRole, "waiting")
-                self.files_view.addTopLevelItem(item)
-                resolved = self._store_item_path(item, path)
-                self._item_by_path[resolved] = item
-            self.files_view.resizeColumnToContents(0)
 
         def _format_path(self, path: Path) -> str:
             base = self._current_input_dir
@@ -7368,13 +8863,17 @@ def launch_gui(args: argparse.Namespace) -> int:
                 hint_resolution_arcsec=scale_hint,
                 hint_resolution_min_arcsec=scale_min_hint,
                 hint_resolution_max_arcsec=scale_max_hint,
+                near_astap_hint_fastpath=False,
+                near_astap_hint_radius_deg=radius_hint,
+                near_second_pass_refine_in_fastpath=False,
+                near_astap_iso_strict=True,
                 near_max_tile_candidates=int(self._settings.near_max_tile_candidates or 48),
                 near_tile_cache_size=int(self._settings.near_tile_cache_size or 128),
                 near_detect_backend=str(self._settings.near_detect_backend or "auto"),
                 near_detect_device=int(self._settings.near_detect_device) if self._settings.near_detect_device is not None else None,
-                near_detect_k_sigma=float(getattr(self._settings, 'near_detect_k_sigma', 4.0) or 4.0),
+                near_detect_k_sigma=float(getattr(self._settings, 'near_detect_k_sigma', 4.5) or 4.5),
                 near_detect_min_area=int(getattr(self._settings, 'near_detect_min_area', 8) or 8),
-                near_detect_max_labels=int(getattr(self._settings, 'near_detect_max_labels', 2500) or 2500),
+                near_detect_max_labels=int(getattr(self._settings, 'near_detect_max_labels', 1200) or 1200),
                 io_concurrency=int(self._settings.io_concurrency or 0),
                 near_warm_start=bool(self._settings.near_warm_start),
                 near_quality_inliers=int(self._settings.near_quality_inliers or 60),
@@ -7385,6 +8884,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_max_img_stars=int(self._settings.near_max_img_stars or 800),
                 near_max_cat_stars=int(self._settings.near_max_cat_stars or 2000),
                 near_try_parity_flip=bool(self._settings.near_try_parity_flip),
+                near_defer_blind_fallback=bool(getattr(self._settings, 'near_defer_blind_fallback', False)),
+                near_allow_second_rescue=bool(getattr(self._settings, 'near_allow_second_rescue', False)),
                 near_search_margin=float(self._settings.near_search_margin or 1.2),
                 # Blind solver tunables from the Settings panel
                 blind_max_stars=int(self._settings.blind_max_stars or 500),
@@ -7394,6 +8895,15 @@ def launch_gui(args: argparse.Namespace) -> int:
                 blind_quality_inliers=int(self._settings.blind_quality_inliers or 40),
                 blind_quality_rms=float(self._settings.blind_quality_rms or 1.2),
                 blind_fast_mode=bool(self._settings.blind_fast_mode),
+                astrometry_api_url=str(getattr(self._settings, "astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api"),
+                astrometry_api_key=(
+                    (str(getattr(self._settings, "astrometry_api_key", "") or "").strip() or None)
+                    or (str(os.environ.get("ASTROMETRY_API_KEY", "") or "").strip() or None)
+                ),
+                astrometry_timeout_s=int(getattr(self._settings, "astrometry_timeout_s", 600) or 600),
+                astrometry_parallel_jobs=int(getattr(self._settings, "astrometry_parallel_jobs", 2) or 2),
+                astrometry_use_hints=bool(getattr(self._settings, "astrometry_use_hints", True)),
+                astrometry_fallback_after_blind=True,
                 log_level=self._current_log_level,
                 dev_bucket_limit_override=int(self._settings.dev_bucket_limit_override or 0),
                 dev_vote_percentile=int(self._settings.dev_vote_percentile or 40),
@@ -7556,26 +9066,35 @@ def launch_gui(args: argparse.Namespace) -> int:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
             self._results_seen = 0
+            try:
+                self._log(
+                    "Hints run: FOV={:.2f}° | radius={} | focal={}mm | pixel={}µm | scale={}\"/px".format(
+                        float(config.fov_deg),
+                        (f"{float(config.hint_radius_deg):.2f}°" if config.hint_radius_deg is not None else "auto"),
+                        (f"{float(config.hint_focal_mm):.1f}" if config.hint_focal_mm is not None else "auto"),
+                        (f"{float(config.hint_pixel_um):.2f}" if config.hint_pixel_um is not None else "auto"),
+                        (f"{float(config.hint_resolution_arcsec):.2f}" if config.hint_resolution_arcsec is not None else "auto"),
+                    )
+                )
+            except Exception:
+                pass
             target_total = len(self._pending_files)
             limit = self.max_files_spin.value()
             if limit > 0:
                 target_total = min(target_total, limit)
             target_total = max(1, target_total)
-            self.progress_bar.setMaximum(target_total)
+            self.progress_bar.setMaximum(target_total * 100)
             self.progress_bar.setValue(0)
             self.status_label.setText(f"0 / {target_total}")
+            self._run_started_ts = time.perf_counter()
+            self._last_result_ts = self._run_started_ts
+            self._progress_timer.start()
             self._set_running(True)
             backend = (self.backend_combo.currentData() if hasattr(self, 'backend_combo') else 'local')
             self._log(self._text("solver.status.using_backend", backend=self.backend_combo.currentText() if hasattr(self, 'backend_combo') else 'Local'))
             if not config.blind_enabled:
                 self._log(self._text("solver.status.blind_disabled"))
             if backend == 'astrometry':
-                # Use finer-grained progress (100 steps per file) so we can reflect upload/queue stages
-                try:
-                    self.progress_bar.setMaximum(target_total * 100)
-                    self.progress_bar.setValue(0)
-                except Exception:
-                    pass
                 api_url = self.ast_api_url_edit.text().strip() if hasattr(self, 'ast_api_url_edit') else ''
                 api_key = self.ast_api_key_edit.text().strip() if hasattr(self, 'ast_api_key_edit') else ''
                 if not api_key:
@@ -7584,6 +9103,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                 if not api_key:
                     QtWidgets.QMessageBox.warning(self, self._text("astrometry.tab.title"), self._text("astrometry.login.fail"))
                     self._set_running(False)
+                    try:
+                        self._progress_timer.stop()
+                    except Exception:
+                        pass
+                    self._run_started_ts = None
+                    self._last_result_ts = None
                     return
                 parallel = int(self.ast_parallel_spin.value()) if hasattr(self, 'ast_parallel_spin') else 2
                 timeout_s = int(self.ast_timeout_spin.value()) if hasattr(self, 'ast_timeout_spin') else 600
@@ -7640,6 +9165,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self._log(self._text(key, **payload))
             if not result.path.is_dir():
                 self._results_seen += 1
+                self._last_result_ts = time.perf_counter()
                 # If we are in fine-grained mode (100 per file), advance to end of current file bucket
                 try:
                     maxv = int(self.progress_bar.maximum())
@@ -7678,15 +9204,19 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.files_view.addTopLevelItem(item)
                 resolved = self._store_item_path(item, result.path)
                 self._item_by_path[resolved] = item
-            item.setText(1, self._status_label_for(result.status))
-            item.setData(1, QtCore.Qt.UserRole, result.status)
+            status_key = result.status
+            if status_key == "skipped" and "WCS already present" in (result.message or ""):
+                status_key = "wcs"
+            item.setText(1, self._status_label_for(status_key))
+            item.setData(1, QtCore.Qt.UserRole, status_key)
             item.setText(2, result.message or "")
             color_map = {
                 "solved": QtGui.QColor("#2b8a3e"),
+                "wcs": QtGui.QColor("#2b8a3e"),
                 "failed": QtGui.QColor("#c92a2a"),
                 "skipped": QtGui.QColor("#5f3dc4"),
             }
-            color = color_map.get(result.status)
+            color = color_map.get(status_key)
             if color:
                 for idx in range(3):
                     item.setForeground(idx, color)
@@ -7751,10 +9281,66 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _on_worker_finished(self) -> None:
             self._log(self._text("log_processing_done"))
             self._set_running(False)
+            try:
+                self._progress_timer.stop()
+            except Exception:
+                pass
+            self._run_started_ts = None
+            self._last_result_ts = None
+            self._copy_runtime_log_to_output()
             if self._worker:
                 self._worker.deleteLater()
             self._worker = None
             self.status_label.setText(self._text("status_ready"))
+
+        def _on_progress_tick(self) -> None:
+            if self._worker is None:
+                return
+            total_files = max(1, len(self._pending_files))
+            if self._results_seen >= total_files:
+                return
+            maxv = max(1, int(self.progress_bar.maximum()))
+            if maxv <= total_files:
+                return
+            now = time.perf_counter()
+            run_start = self._run_started_ts or now
+            last_result = self._last_result_ts or run_start
+            elapsed = max(0.0, now - run_start)
+            if self._results_seen > 0:
+                avg_per_file = max(0.001, elapsed / float(self._results_seen))
+                since_last = max(0.0, now - last_result)
+                extra_pct = int(min(95.0, 100.0 * min(0.95, since_last / avg_per_file)))
+            else:
+                warm = max(0.0, now - run_start)
+                extra_pct = int(min(15.0, warm * 3.0))
+            base = int(self._results_seen * 100)
+            target = min(maxv - 1, base + max(0, extra_pct))
+            if target > int(self.progress_bar.value()):
+                self.progress_bar.setValue(target)
+
+        def _copy_runtime_log_to_output(self) -> None:
+            try:
+                src = Path(LOG_FILE)
+            except Exception:
+                return
+            if not src.exists():
+                return
+            out_dir = self._current_input_dir
+            if out_dir is None:
+                try:
+                    raw = self.input_edit.text().strip() if hasattr(self, "input_edit") else ""
+                    out_dir = Path(raw).expanduser() if raw else None
+                except Exception:
+                    out_dir = None
+            if out_dir is None or (not out_dir.exists()) or (not out_dir.is_dir()):
+                return
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            dst = out_dir / f"zesolver_run_{stamp}.log"
+            try:
+                shutil.copy2(src, dst)
+                self._log(f"Log copied to output folder: {dst}")
+            except Exception as exc:
+                self._log(f"Log copy skipped: {exc}")
 
         def _on_worker_stage(self, index: int, message: str) -> None:
             try:
@@ -7815,6 +9401,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._shutdown_thread(self._benchmark_worker, cancel_method="cancel")
             self._benchmark_worker = None
             try:
+                self._progress_timer.stop()
+            except Exception:
+                pass
+            try:
                 self._db_scan_timer.stop()
             except Exception:
                 pass
@@ -7824,10 +9414,28 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._dl_worker = None
             super().closeEvent(event)
 
-    QtWidgets.QApplication.setApplicationName("ZeSolver")
+    QtWidgets.QApplication.setApplicationName(build_window_title("ZeSolver"))
     QtWidgets.QApplication.setApplicationVersion(APP_VERSION)
     app = QtWidgets.QApplication(sys.argv)
+    app_icon = None
+    icon_path = resolve_app_icon_path()
+    if icon_path is not None:
+        try:
+            candidate = QtGui.QIcon(str(icon_path))
+            if candidate.isNull():
+                logging.warning("GUI icon found but not loadable: %s", icon_path)
+            else:
+                app_icon = candidate
+                app.setWindowIcon(app_icon)
+                logging.info("GUI icon loaded: %s", icon_path)
+        except Exception as exc:
+            logging.warning("GUI icon loading failed for %s: %s", icon_path, exc)
     window = ZeSolverWindow(persistent_settings)
+    if app_icon is not None:
+        try:
+            window.setWindowIcon(app_icon)
+        except Exception:
+            pass
     window.show()
     return app.exec()
 
