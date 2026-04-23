@@ -295,6 +295,18 @@ Critère de sortie:
 Notes exécution P6 (2026-04-23):
 - Nouveaux knobs ZeBlind: `hard_max_candidates_tried`, `hard_max_validations` (CLI + config runtime).
 - Raisons d’arrêt hard-budget remontées dans `fail_early_abort_reason` et `phase_perf`.
+- Tuning rescue blind-only ajouté: skip `rescue2` sur profils low-signal (support trop faible après rescue1) avec garde-fous pour préserver `233828`.
+- Benchmark focus4 pipeline-like (hinted):
+  - Baseline r2: `reports/zeblind_speed_baseline_20260423_focus4_r2.json`
+  - Candidate r2: `reports/zeblind_speed_lowsignal_20260423_focus4_r2.json`
+  - Comparatif: `reports/zeblind_speed_compare_lowsignal_20260423_151900.{json,md}`
+- Résultat r2: solve-rate inchangé (**4/8**) avec baisse nette du temps cumulé (candidate **-115.80s** sur focus4 r2).
+- Ajustement post-r2: seuil low-signal rendu plus conservateur (`best_fail_inliers <= 3` au lieu de `<= 4/6`) pour éviter les faux négatifs rescue2.
+- Validation lot complet M106 (même protocole que baseline, `--overwrite`, chemin dataset réel):
+  - Baseline: `zemosaic/example/testzenear/zesolver_run_20260423_091723_patch30s.cli.log`
+  - Candidate: `reports/zesolver_run_20260423_163025_cand_lowsignal_full30_overwrite_REALPATH.cli.log`
+  - Compare: `reports/zeblind_fullrun_compare_20260423_164257.{json,md}`
+  - Verdict fullrun: solve-rate conservé (**29/30**, même unique échec `233232`) avec gain temps **-24.9s** (693.3s vs 718.2s).
 
 ### P7 — Verrou parité (quand l’info est fiable)
 

@@ -35,6 +35,50 @@ ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 LOG_FILE = ROOT_DIR / "zesolver.log"
+APP_ICON_CANDIDATES = (
+    "ZSicon.ico",
+    "ZSicon.icns",
+    "ZSicon.png",
+    "ZSicon.jpeg",
+    "ZSicon.jpg",
+)
+
+
+def _runtime_resource_dirs() -> list[Path]:
+    roots: list[Path] = []
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        try:
+            roots.append(Path(meipass))
+        except Exception:
+            pass
+    roots.append(ROOT_DIR)
+    seen: set[str] = set()
+    ordered: list[Path] = []
+    for root in roots:
+        key = str(root)
+        if key in seen:
+            continue
+        seen.add(key)
+        ordered.append(root)
+    return ordered
+
+
+def resolve_app_icon_path() -> Optional[Path]:
+    if sys.platform == "darwin":
+        preferred = ("ZSicon.icns", "ZSicon.png", "ZSicon.jpeg", "ZSicon.jpg", "ZSicon.ico")
+    elif sys.platform.startswith("win"):
+        preferred = ("ZSicon.ico", "ZSicon.png", "ZSicon.jpeg", "ZSicon.jpg", "ZSicon.icns")
+    else:
+        preferred = ("ZSicon.png", "ZSicon.ico", "ZSicon.jpeg", "ZSicon.jpg", "ZSicon.icns")
+    for base in _runtime_resource_dirs():
+        icon_dir = base / "icon"
+        for name in preferred:
+            path = icon_dir / name
+            if path.is_file():
+                return path
+    return None
+
 
 try:
     from importlib.metadata import PackageNotFoundError, version as pkg_version
@@ -58,6 +102,26 @@ try:
     APP_VERSION = pkg_version("zewcs290")
 except PackageNotFoundError:  # pragma: no cover - running from source tree
     APP_VERSION = _load_source_version()
+
+
+def _format_ui_version(version: str) -> str:
+    value = str(version or "").strip()
+    if not value:
+        return ""
+    if value[0] in ("v", "V"):
+        return value
+    return f"V{value}"
+
+
+APP_VERSION_UI = _format_ui_version(APP_VERSION)
+
+
+def build_window_title(base_title: str) -> str:
+    base = str(base_title or "ZeSolver").strip() or "ZeSolver"
+    if not APP_VERSION_UI:
+        return base
+    return f"{base} {APP_VERSION_UI}"
+
 
 try:
     from zewcs290 import CatalogDB
@@ -1286,50 +1350,53 @@ def _gpu_memory_snapshot(device: Optional[int], *, allow_cupy: bool = False) -> 
     dev = out["device"] if isinstance(out["device"], int) else 0
 
     # Prefer nvidia-smi first, no CUDA context side effects.
-    try:
-        cmd = [
-            "nvidia-smi",
-            "--query-gpu=memory.used,memory.total",
-            "--format=csv,noheader,nounits",
-            "-i",
-            str(dev),
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1.5)
-        if proc.returncode == 0 and proc.stdout.strip():
-            first = proc.stdout.strip().splitlines()[0]
-            parts = [x.strip() for x in first.split(",")]
-            if len(parts) >= 2:
-                used_mb = float(parts[0])
-                total_mb = float(parts[1])
-                used_b = int(max(0.0, used_mb) * 1024.0 * 1024.0)
-                total_b = int(max(0.0, total_mb) * 1024.0 * 1024.0)
-                out["backend"] = "nvidia-smi"
-                out["used_bytes"] = used_b
-                out["total_bytes"] = total_b
-                out["free_bytes"] = max(0, total_b - used_b)
-        # Optional per-process VRAM, may be unavailable on some drivers/modes.
-        cmd_apps = [
-            "nvidia-smi",
-            "--query-compute-apps=pid,used_memory",
-            "--format=csv,noheader,nounits",
-        ]
-        proc_apps = subprocess.run(cmd_apps, capture_output=True, text=True, timeout=1.5)
-        if proc_apps.returncode == 0 and proc_apps.stdout.strip():
-            pid = int(os.getpid())
-            proc_used_mb = 0.0
-            for line in proc_apps.stdout.strip().splitlines():
-                cols = [x.strip() for x in line.split(",")]
-                if len(cols) < 2:
-                    continue
-                try:
-                    if int(cols[0]) == pid:
-                        proc_used_mb += float(cols[1])
-                except Exception:
-                    continue
-            if proc_used_mb > 0.0:
-                out["process_used_bytes"] = int(proc_used_mb * 1024.0 * 1024.0)
-    except Exception:
-        pass
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi:
+        try:
+            cmd = [
+                nvidia_smi,
+                "--query-gpu=memory.used,memory.total",
+                "--format=csv,noheader,nounits",
+                "-i",
+                str(dev),
+            ]
+            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=1.5)
+            if proc.returncode == 0 and proc.stdout.strip():
+                first = proc.stdout.strip().splitlines()[0]
+                parts = [x.strip() for x in first.split(",")]
+                if len(parts) >= 2:
+                    used_mb = float(parts[0])
+                    total_mb = float(parts[1])
+                    used_b = int(max(0.0, used_mb) * 1024.0 * 1024.0)
+                    total_b = int(max(0.0, total_mb) * 1024.0 * 1024.0)
+                    out["backend"] = "nvidia-smi"
+                    out["used_bytes"] = used_b
+                    out["total_bytes"] = total_b
+                    out["free_bytes"] = max(0, total_b - used_b)
+
+            # Optional per-process VRAM, may be unavailable on some drivers/modes.
+            cmd_apps = [
+                nvidia_smi,
+                "--query-compute-apps=pid,used_memory",
+                "--format=csv,noheader,nounits",
+            ]
+            proc_apps = subprocess.run(cmd_apps, capture_output=True, text=True, timeout=1.5)
+            if proc_apps.returncode == 0 and proc_apps.stdout.strip():
+                pid = int(os.getpid())
+                proc_used_mb = 0.0
+                for line in proc_apps.stdout.strip().splitlines():
+                    cols = [x.strip() for x in line.split(",")]
+                    if len(cols) < 2:
+                        continue
+                    try:
+                        if int(cols[0]) == pid:
+                            proc_used_mb += float(cols[1])
+                    except Exception:
+                        continue
+                if proc_used_mb > 0.0:
+                    out["process_used_bytes"] = int(proc_used_mb * 1024.0 * 1024.0)
+        except Exception:
+            pass
 
     if allow_cupy:
         try:
@@ -2928,6 +2995,20 @@ class ImageSolver:
                         and fail_validation_count < 6
                     )
                     if fail_early_abort:
+                        low_potential = True
+                    low_signal_hard = (
+                        prev_elapsed >= 20.0
+                        and fail_best_inliers >= 0
+                        and fail_best_inliers <= 3
+                        and fail_validation_count <= 8
+                    )
+                    low_signal_sparse = (
+                        prev_elapsed >= 20.0
+                        and fail_best_inliers >= 0
+                        and fail_best_inliers <= 3
+                        and fail_validation_count <= 4
+                    )
+                    if low_signal_hard or low_signal_sparse:
                         low_potential = True
                     if low_potential:
                         logging.info(
@@ -7856,7 +7937,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._apply_language()
 
         def _apply_language(self) -> None:
-            self.setWindowTitle(self._text("window_title"))
+            self.setWindowTitle(build_window_title(self._text("window_title")))
             if hasattr(self, "language_menu"):
                 self.language_menu.setTitle(self._text("language_menu"))
                 for code, action in self._language_actions.items():
@@ -9307,10 +9388,28 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._dl_worker = None
             super().closeEvent(event)
 
-    QtWidgets.QApplication.setApplicationName("ZeSolver")
+    QtWidgets.QApplication.setApplicationName(build_window_title("ZeSolver"))
     QtWidgets.QApplication.setApplicationVersion(APP_VERSION)
     app = QtWidgets.QApplication(sys.argv)
+    app_icon = None
+    icon_path = resolve_app_icon_path()
+    if icon_path is not None:
+        try:
+            candidate = QtGui.QIcon(str(icon_path))
+            if candidate.isNull():
+                logging.warning("GUI icon found but not loadable: %s", icon_path)
+            else:
+                app_icon = candidate
+                app.setWindowIcon(app_icon)
+                logging.info("GUI icon loaded: %s", icon_path)
+        except Exception as exc:
+            logging.warning("GUI icon loading failed for %s: %s", icon_path, exc)
     window = ZeSolverWindow(persistent_settings)
+    if app_icon is not None:
+        try:
+            window.setWindowIcon(app_icon)
+        except Exception:
+            pass
     window.show()
     return app.exec()
 
