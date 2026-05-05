@@ -1,7 +1,24 @@
 # Agent Guide for This Repository
 
-Scope: This AGENTS.md lives at the repository root and applies to the entire tree.
+Scope: This AGENT.md lives at the repository root and applies to the entire tree.
 Use it as the source of truth when you (the coding agent) interact with the codebase.
+
+## Mission Override (2026-04-29) — PRIORITÉ ABSOLUE
+
+Objectif produit actuel:
+- Atteindre la **parité fonctionnelle ZeBlind vs Astrometry blind solver** en local et en Python pur.
+- **Ne pas toucher ZeNear** sauf correctif de non-régression strictement nécessaire.
+
+Portée obligatoire de l’audit parité:
+- Couvrir de façon explicite les briques de `astrometry-main/solver/` (solve loop, permutations, resolve, verify, tweak),
+  ainsi que les dépendances utiles (`include/astrometry`, `libkd`, `util`).
+- `plot/` est requis comme appui diagnostic (pas comme dépendance runtime).
+- Exclure la logique web/service (`net/`, docker webservice) du périmètre produit.
+
+Règles d’implémentation:
+- Reproduire fidèlement les équations et la sémantique du pipeline blind Astrometry (sans copier-coller de code source C).
+- Tracer chaque brique de parité dans `followup.md` avec checklist [ ]/[x].
+- Toute itération doit laisser une trace accomplie dans `memory.md` + artefact de rapport dans `reports/`.
 
 ## Mission
 
@@ -322,3 +339,53 @@ Sinon, on compare ASTAP à un pipeline différent, et le diagnostic reste mécan
   1. stabilité long run (aucun faux échec de fin de run),
   2. saturation CPU/GPU contrôlée et reproductible,
   3. instrumentation débit/latence/mémoire robuste pour tuning itératif.
+
+## Mission Execution Mode (2026-05-04) — Parité stricte ZeBlind = Astrometry
+
+Le mode opératoire de cette mission est désormais:
+
+1. **Diff d’abord, tuning ensuite**
+   - Chaque cycle commence par une comparaison ZeBlind vs Astrometry sur un cas oracle.
+   - Pas d’itération heuristique sans divergence causale identifiée.
+
+2. **Un seul delta causal par patch**
+   - Une PR/patch doit corriger une divergence unique (pas de mélange de changements).
+   - Validation A/B obligatoire sur le même protocole.
+
+3. **KPI de progression imposés**
+   - KPI #1 (prioritaire): baisse de `hypothesis_fail_empty_inliers`.
+   - KPI #2: hausse du signal verify utile (`nummatches` / validations exploitables).
+   - KPI #3: maintien ou amélioration du coût runtime.
+
+4. **Gates GO/NO-GO**
+   - Si 2 itérations sans amélioration KPI #1/#2, pivot obligatoire vers la prochaine divergence structurelle.
+
+5. **Traçabilité obligatoire**
+   - Tout cycle met à jour: `followup.md`, `memory.md`, et un rapport dans `reports/`.
+   - Les étapes manquantes vers l’objectif final sont maintenues sous forme de checklist vivante.
+
+Référence actuelle de la divergence:
+- `reports/zeblind_vs_astrometry_online_20260504_single_233459.json`
+- `reports/zeblind_vs_astrometry_diff_20260504_233459.md`
+
+### Anti-loop rule (2026-05-04)
+
+Pour éviter les boucles de tests/fine-tuning:
+- ne pas empiler des heuristiques locales sans divergence causale identifiée;
+- prioriser les changements structurels de parité (pipeline, sémantique stop/verify, lifecycle des hits);
+- limiter les probes à la validation d’un changement causal unique;
+- documenter explicitement pourquoi une itération est structurelle et non tuning.
+
+## Addendum audit profondeur (2026-05-05) — couverture "sans trou noir"
+
+Pour la clôture de parité ZeBlind/Astrometry, la couverture minimale d’audit doit inclure **aussi** les chemins connexes souvent oubliés au premier passage:
+
+1. chemin verify-only: `solver_verify_sip_wcs -> solver_inject_match -> solver_handle_hit(fake_match=TRUE)`;
+2. sémantique `fake_match` dans `verify_hit` (gamma/RoR/gestion quad);
+3. branche `predistort` / `pixel_xscale` dans `solver_handle_hit` (refit TAN/SIP pondéré, `set_crpix`);
+4. orchestration `onefield/engine` (seuils `ANODDS*`, `best_hit_only`, `remove_duplicate_solutions`, callbacks);
+5. points d’entrée périphériques (`control-program.c`, `solver.i`) vérifiés comme wrappers non-sémantiques.
+
+Règle de conduite:
+- maintenir `followup.md` comme checklist unique de mission (pas de TODO parallèle) ;
+- cocher uniquement les items terminés avec preuve diffable (run/dump/report).

@@ -2386,6 +2386,9 @@ def solve_near(
         )
         if stars_fb.size > stars.size:
             stars = stars_fb
+            # Raw-image fallback already returns full-resolution coordinates.
+            # Do not re-apply the strict-mode bin2 coordinate scale afterwards.
+            detect_coord_scale = 1.0
     if detect_backend != "astap" and stars.size < 8:
         logger.info("near detect fallback #2 (raw/global k=2.5), stars=%d", int(stars.size))
         detect_trace_fb2: dict[str, str] = {}
@@ -2410,6 +2413,9 @@ def solve_near(
         )
         if stars_fb2.size > stars.size:
             stars = stars_fb2
+            # Raw-image fallback already returns full-resolution coordinates.
+            # Do not re-apply the strict-mode bin2 coordinate scale afterwards.
+            detect_coord_scale = 1.0
     if detect_coord_scale != 1.0 and stars.size > 0:
         stars = stars.copy()
         stars["x"] = stars["x"] * np.float32(detect_coord_scale)

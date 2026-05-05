@@ -9026,7 +9026,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     deleted, edited_hdus = process_fits(
                         str(path),
                         dry_run=False,
-                        backup=True,
+                        backup=False,
                         only_if_wcs=True,
                         all_hdus=False,
                     )
