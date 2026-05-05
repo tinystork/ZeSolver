@@ -33,7 +33,8 @@ import math
 import os
 import time
 import zlib
-from collections import OrderedDict
+from itertools import combinations, permutations
+from collections import OrderedDict, Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Iterable, Optional
@@ -118,20 +119,382 @@ class SolveConfig:
     bucket_limit_override: int | None = None
     vote_percentile: int = 40
     collect_matches_vectorized_experimental: bool = False
+    blind_pair_geom_scoring: bool = True
+    blind_pair_geom_weight: float = 0.35
+    blind_pair_geom_sigma: float = 0.45
+    blind_pair_geom_angle_weight: float = 0.30
+    blind_pair_geom_angle_sigma_deg: float = 42.0
+    blind_pair_scale_prefilter_enabled: bool = True
+    blind_pair_scale_prefilter_width: float = 6.0
+    blind_pair_scale_prefilter_min_pairs: int = 12
+    blind_pair_scale_prefilter_min_keep_ratio: float = 0.20
     fail_attempt_budget_s: float = 70.0
     fail_attempt_min_validations: int = 18
     fail_attempt_max_best_inliers: int = 4
     fail_attempt_min_candidates: int = 20
     global_budget_fast_s: float = 8.0
     global_budget_slow_s: float = 18.0
-    verify_logodds_enabled: bool = False
+    blind_astrometry_try_all_codes_mode: bool = True
+    blind_astrometry_add_stars_inbox_enabled: bool = True
+    blind_astrometry_add_stars_inbox_min_pairs: int = 18
+    blind_astrometry_add_stars_inbox_code_tol: float = 0.08
+    blind_astrometry_add_stars_inbox_min_edge_px: float = 8.0
+    blind_astrometry_add_stars_inbox_min_keep_ratio: float = 0.45
+    blind_astrometry_add_stars_inbox_max_ab_trials: int = 12
+    blind_astrometry_try_permutations_on_quad_matches: bool = True
+    blind_astrometry_try_permutations_max: int = 12
+    blind_astrometry_cxdx_meanx_checks: bool = True
+    blind_astrometry_cxdx_margin: float = 0.12
+    blind_astrometry_code_near_lookup_enabled: bool = True
+    blind_astrometry_code_near_max_abs_delta: int = 640
+    blind_astrometry_code_near_max_buckets: int = 48
+    blind_astrometry_code_near_max_probes_per_level: int = 24
+    blind_astrometry_code_continuous_filter_enabled: bool = True
+    blind_astrometry_code_continuous_log_tol: float = 0.25
+    blind_astrometry_code_continuous_adapt_enabled: bool = True
+    blind_astrometry_code_continuous_relaxed_log_tol: float = 0.55
+    blind_astrometry_code_continuous_adapt_after_candidates: int = 18
+    blind_astrometry_code_continuous_adapt_best_inliers_max: int = 1
+    blind_astrometry_code_rangesearch_enabled: bool = True
+    blind_astrometry_code_rangesearch_log_tol: float = 0.18
+    blind_astrometry_code_rangesearch_max_neighbors: int = 32
+    blind_astrometry_code_rangesearch_backend: str = "linf"
+    blind_astrometry_code_rangesearch_l2_radius: float = 0.26
+    blind_astrometry_code_rangesearch_grid_bin: float = 0.12
+    blind_astrometry_code_rangesearch_grid_radius_bins: int = 1
+    blind_astrometry_code_rangesearch_allow_experimental_backends: bool = False
+    blind_astrometry_code_rangesearch_adapt_disable_enabled: bool = False
+    blind_astrometry_code_rangesearch_adapt_disable_after_candidates: int = 12
+    blind_astrometry_code_rangesearch_adapt_disable_after_validations: int = 0
+    blind_astrometry_code_rangesearch_adapt_disable_best_inliers_max: int = 0
+    blind_astrometry_code_hit_object_enabled: bool = True
+    blind_astrometry_code_hit_score_max: float = 0.48
+    blind_astrometry_code_hit_geom_gate_enabled: bool = True
+    blind_astrometry_code_hit_geom_log_tol: float = 0.16
+    blind_astrometry_code_hit_only_mode: bool = False
+    blind_astrometry_code_hit_only_min_entries: int = 4
+    blind_astrometry_hit_pipeline_first_enabled: bool = True
+    blind_astrometry_hit_pipeline_first_fallback_enabled: bool = True
+    blind_astrometry_hit_pipeline_dedicated_enabled: bool = True
+    blind_astrometry_hit_pipeline_dedicated_fallback_enabled: bool = True
+    blind_astrometry_resolve_hit_enabled: bool = True
+    blind_astrometry_resolve_hit_max_points: int = 192
+    blind_astrometry_resolve_hit_max_pairs: int = 64
+    blind_astrometry_resolve_hit_tol_factor: float = 3.0
+    blind_astrometry_strict_resolve_hit_subset_mode: str = "nn_radius"
+    blind_astrometry_resolve_hit_pool_mode: str = "field_index_all"
+    blind_astrometry_resolve_hit_min_pairs: int = 4
+    blind_astrometry_resolve_hit_index_seed_enabled: bool = True
+    blind_astrometry_resolve_hit_index_seed_max_pairs: int = 256
+    blind_astrometry_resolve_hit_quality_max_median_tol_ratio: float = 12.0
+    blind_astrometry_resolve_hit_quality_gate_enabled: bool = False
+    blind_astrometry_resolve_hit_hybrid_refit_enabled: bool = True
+    blind_astrometry_resolve_hit_hybrid_max_pairs: int = 96
+    blind_astrometry_resolve_hit_preresolve_dump_path: str = ""
+    blind_astrometry_resolve_hit_preresolve_dump_max_entries: int = 400
+    blind_astrometry_post_resolve_bootstrap_enabled: bool = True
+    blind_astrometry_post_resolve_bootstrap_relaxed_tol_factor: float = 9.0
+    blind_astrometry_strict_verify_path_enabled: bool = True
+    blind_astrometry_strict_disable_nonastrometry_fallbacks: bool = True
+    blind_non_parity_mode_enabled: bool = True
+    blind_astrometry_strict_pool_widen_enabled: bool = False
+    blind_astrometry_strict_pool_widen_max_neighbors: int = 96
+    blind_astrometry_strict_pair_pool_expand_enabled: bool = True
+    blind_astrometry_strict_pair_pool_expand_bucket_factor: float = 3.0
+    blind_astrometry_strict_pair_pool_expand_vote_percentile: int = 20
+    blind_astrometry_strict_pair_pool_expand_max_pairs: int = 256
+    blind_astrometry_strict_slot_align_enabled: bool = False
+    blind_astrometry_strict_quad_inbox_gate_enabled: bool = False
+    blind_astrometry_strict_translation_reanchor_enabled: bool = False
+    blind_astrometry_strict_require_perm_hash_match_enabled: bool = True
+    blind_astrometry_strict_perm_hash_max_qdelta: int = 1536
+    blind_astrometry_strict_resolve_hit_seed_fallback_enabled: bool = True
+    blind_astrometry_strict_resolve_hit_global_eval_use_all_enabled: bool = True
+    blind_astrometry_strict_resolve_hit_relaxed_retry_enabled: bool = True
+    blind_astrometry_strict_resolve_hit_relaxed_retry_tol_factor: float = 10.0
+    blind_astrometry_strict_resolve_hit_relaxed_retry_max_pairs_factor: int = 3
+    blind_astrometry_strict_resolve_hit_prune_enabled: bool = True
+    blind_astrometry_strict_resolve_hit_prune_tol_factor: float = 2.5
+    blind_validation_pairs_dump_path: str = ""
+    blind_validation_pairs_dump_max_entries: int = 120
+    blind_validation_pairs_dump_max_rows: int = 120
+    blind_wcs_coherence_dump_path: str = ""
+    blind_wcs_coherence_dump_max_entries: int = 120
+    blind_astrometry_lowpairs_scale_guard_enabled: bool = True
+    blind_astrometry_lowpairs_scale_guard_min_ratio: float = 0.5
+    blind_astrometry_lowpairs_scale_guard_max_ratio: float = 2.0
+    blind_astrometry_lowpairs_wcs_residual_max_arcsec: float = 8.0
+    blind_scale_prefilter_dump_path: str = ""
+    blind_scale_prefilter_dump_max_entries: int = 200
+    blind_scale_hard_reject_dump_path: str = ""
+    blind_scale_hard_reject_dump_max_entries: int = 200
+    blind_zero_inlier_origin_block_dump_path: str = ""
+    blind_zero_inlier_origin_block_dump_max_entries: int = 200
+    blind_transform_scale_precheck_dump_path: str = ""
+    blind_transform_scale_precheck_dump_max_entries: int = 200
+    blind_pairset_scale_precheck_dump_path: str = ""
+    blind_pairset_scale_precheck_dump_max_entries: int = 200
+    blind_astrometry_exact_trace_dump_path: str = ""
+    blind_astrometry_exact_trace_dump_max_entries: int = 600
+    blind_pairset_scale_gate_enabled: bool = False
+    blind_astrometry_quad_scale_guard_enabled: bool = True
+    blind_astrometry_saturated_hash_seed_bypass_enabled: bool = True
+    blind_astrometry_observed_unsaturated_first_enabled: bool = True
+    blind_pairset_scale_recenter_enabled: bool = True
+    blind_pairset_scale_recenter_min_pairs: int = 6
+    blind_pairset_scale_recenter_min_keep_ratio: float = 0.20
+    blind_collect_matches_exact_dump_path: str = ""
+    blind_collect_matches_exact_dump_max_entries: int = 400
+    blind_collect_matches_exact_dump_max_rows: int = 48
+    blind_parity_diff_dump_path: str = ""
+    blind_parity_diff_dump_max_entries: int = 120
+    blind_collect_scale_filter_enabled: bool = True
+    blind_collect_scale_filter_min_pairs: int = 6
+    blind_collect_scale_filter_min_keep_ratio: float = 0.15
+    blind_collect_skip_saturated_hashes_enabled: bool = False
+    blind_collect_obs_hash_span_gate_enabled: bool = False
+    blind_collect_obs_hash_span_max_buckets: int = 20000
+    blind_collect_obs_hash_span_saturated_only: bool = True
+    blind_collect_prefer_unsaturated_hash_votes_enabled: bool = True
+    blind_observed_hash_exact_dump_path: str = ""
+    blind_observed_hash_exact_dump_max_entries: int = 400
+    blind_astrometry_reassign_eval_enabled: bool = True
+    blind_astrometry_reassign_eval_max_points: int = 256
+    blind_astrometry_reassign_eval_max_pairs: int = 256
+    verify_logodds_enabled: bool = True
     verify_logodds_bail: float = -24.0
     verify_logodds_stoplooking: float = 24.0
+    verify_logodds_accept: float = 12.0
     verify_logodds_min_validations: int = 8
     hard_max_candidates_tried: int = 0
     hard_max_validations: int = 0
     depth_ladder_enabled: bool = False
     depth_ladder_caps: tuple[int, ...] = (80, 160, 500)
+    blind_scale_guard_min_ratio: float = 0.75
+    blind_scale_guard_max_ratio: float = 1.35
+    blind_scale_guard_auto_relax_enabled: bool = True
+    blind_scale_guard_auto_relax_after_validations: int = 2
+    blind_scale_guard_auto_relax_best_inliers: int = 8
+    blind_scale_guard_auto_relax_factor: float = 3.0
+    blind_scale_guard_auto_relax_min_floor: float = 0.15
+    blind_scale_guard_auto_relax_max_ceil: float = 12.0
+    blind_scale_ladder_enabled: bool = True
+    blind_scale_ladder_factors: tuple[float, ...] = (1.0, 1.5, 2.5, 4.0, 6.0)
+    blind_scale_ladder_min_ratio: float = 0.75
+    blind_scale_ladder_max_ratio: float = 1.35
+    blind_scale_prefilter_enabled: bool = True
+    blind_scale_prefilter_margin: float = 1.35
+    blind_scale_prefilter_escape_enabled: bool = True
+    blind_scale_prefilter_escape_after_validations: int = 4
+    blind_scale_prefilter_escape_best_inliers_max: int = 12
+    blind_scale_prefilter_escape_margin: float = 5.5
+    blind_scale_prefilter_auto_disable: bool = True
+    blind_scale_prefilter_auto_disable_after: int = 3
+    blind_scale_anchor_adapt_enabled: bool = True
+    blind_scale_anchor_adapt_min_samples: int = 1
+    blind_scale_anchor_adapt_min_inliers: int = 3
+    blind_scale_anchor_adapt_after_validations: int = 0
+    blind_scale_anchor_adapt_clip_min_arcsec: float = 0.2
+    blind_scale_anchor_adapt_clip_max_arcsec: float = 5000.0
+    blind_scale_anchor_adapt_max_ratio_from_initial: float = 20.0
+    blind_min_inliers_abs: int = 8
+    blind_min_inliers_ratio: float = 0.18
+    blind_sparse_adaptive_inliers: bool = True
+    blind_sparse_min_inliers_floor: int = 4
+    blind_quad_min_area_frac: float = 0.0015
+    blind_quad_min_edge_px: float = 12.0
+    blind_quad_relax_enabled: bool = True
+    blind_quad_relax_after_candidates: int = 120
+    blind_quad_relax_best_inliers_max: int = 8
+    blind_quad_relax_edge_factor: float = 0.55
+    blind_quad_relax_area_factor: float = 0.30
+    blind_seed_hypothesis_enabled: bool = False
+    blind_seed_hypothesis_top_n: int = 96
+    blind_seed_hypothesis_trials: int = 400
+    blind_hypothesis_scale_prior_enabled: bool = True
+    blind_hypothesis_scale_prior_strength: float = 1.5
+    blind_hypothesis_scale_prior_relax_after_validations: int = 8
+    blind_hypothesis_scale_prior_relaxed_strength: float = 0.45
+    blind_hypothesis_scale_hard_filter_enabled: bool = True
+    blind_hypothesis_scale_hard_auto_disable: bool = True
+    blind_hypothesis_scale_hard_auto_disable_after: int = 24
+    blind_hypothesis_scale_hard_min_ratio: float = 0.04
+    blind_hypothesis_scale_hard_max_ratio: float = 20.0
+    blind_hypothesis_scale_hard_escape_enabled: bool = True
+    blind_hypothesis_scale_hard_escape_after_validations: int = 2
+    blind_hypothesis_scale_hard_escape_best_inliers_max: int = 8
+    blind_hypothesis_scale_hard_escape_min_ratio: float = 0.01
+    blind_hypothesis_scale_hard_escape_max_ratio: float = 80.0
+    blind_hypothesis_rank_enabled: bool = True
+    blind_hypothesis_rank_ratio_weight: float = 6.0
+    blind_hypothesis_rank_rms_weight: float = 0.75
+    blind_multitol_ransac_enabled: bool = True
+    blind_multitol_ransac_scales: tuple[float, ...] = (1.0, 1.4, 2.0)
+    blind_hypothesis_ransac_escape_enabled: bool = False
+    blind_hypothesis_ransac_escape_after_validations: int = 2
+    blind_hypothesis_ransac_escape_after_candidates: int = 18
+    blind_hypothesis_ransac_escape_max_attempts_per_phase: int = 12
+    blind_hypothesis_ransac_escape_trials: int = 1600
+    blind_hypothesis_ransac_escape_tol_scales: tuple[float, ...] = (2.5, 3.5, 5.0)
+    blind_hypothesis_rescue_enabled: bool = True
+    blind_hypothesis_rescue_min_pairs: int = 6
+    blind_hypothesis_rescue_vote_percentile: int = 12
+    blind_hypothesis_rescue_bucket_factor: float = 2.0
+    blind_hypothesis_rescue_use_dedup: bool = False
+    blind_hypothesis_rescue_use_uniformize: bool = False
+    blind_hypothesis_permutation_rescue_enabled: bool = True
+    blind_hypothesis_permutation_rescue_top_pairs: int = 14
+    blind_hypothesis_permutation_rescue_max_quads: int = 140
+    blind_hypothesis_permutation_rescue_tol_factor: float = 1.25
+    blind_hypothesis_permutation_rescue_min_inliers: int = 6
+    blind_hypothesis_permutation_rescue_max_attempts_per_level: int = 16
+    blind_hypothesis_permutation_rescue_code_tol: float = 0.08
+    blind_hypothesis_permutation_rescue_min_edge_px: float = 8.0
+    blind_hypothesis_permutation_astrometry_order: bool = True
+    blind_hypothesis_permutation_scale_prior_strength: float = 0.35
+    blind_hypothesis_permutation_ladder_enabled: bool = True
+    blind_hypothesis_permutation_ladder_top_pairs: tuple[int, ...] = (8, 12, 16, 20, 24)
+    blind_hypothesis_permutation_ladder_max_steps: int = 3
+    blind_hypothesis_permutation_ladder_stop_inliers: int = 8
+    blind_hypothesis_permutation_rescue_adapt_enabled: bool = True
+    blind_hypothesis_permutation_rescue_adapt_after_validations: int = 2
+    blind_hypothesis_permutation_rescue_adapt_after_candidates: int = 18
+    blind_hypothesis_permutation_rescue_adapt_best_inliers_max: int = 8
+    blind_hypothesis_permutation_rescue_adapt_top_pairs_factor: float = 1.5
+    blind_hypothesis_permutation_rescue_adapt_max_top_pairs: int = 24
+    blind_hypothesis_permutation_rescue_adapt_max_quads_factor: float = 2.0
+    blind_hypothesis_permutation_rescue_adapt_max_max_quads: int = 320
+    blind_preinlier_relax_enabled: bool = True
+    blind_preinlier_relax_target_inliers: int = 4
+    blind_preinlier_relax_quantile_scale: float = 1.08
+    blind_preinlier_relax_max_factor: float = 2.4
+    blind_preinlier_relax_max_px: float = 7.5
+    blind_preinlier_refit_enabled: bool = True
+    blind_preinlier_refit_top_n: int = 14
+    blind_preinlier_refit_sigma_px: float = 1.8
+    blind_three_inlier_rescue_enabled: bool = True
+    blind_three_inlier_rescue_max_extra: int = 3
+    blind_three_inlier_rescue_tol_factor: float = 1.15
+    blind_three_inlier_rescue_aggressive_on_zero_validation: bool = True
+    blind_three_inlier_rescue_aggressive_tol_factor: float = 2.0
+    blind_global_streak_relax_enabled: bool = True
+    blind_global_streak_relax_validations: int = 6
+    blind_global_streak_relax_inliers: int = 4
+    blind_global_streak_relax_factor: float = 3.0
+    blind_global_streak_relax_logodds: float = 0.25
+    blind_reuse_existing_solved_wcs: bool = True
+    blind_reuse_existing_solved_wcs_require_solved: bool = True
+    blind_reuse_existing_solved_wcs_validate: bool = True
+    blind_dev_existing_wcs_seed_enabled: bool = False
+    blind_dev_existing_wcs_seed_require_solved: bool = True
+    blind_dev_existing_wcs_seed_validate: bool = True
+    blind_accept_logodds_min: float = 0.25
+    blind_accept_logodds_geo_weight: float = 1.10
+    blind_accept_logodds_astrometry_stages: bool = True
+    blind_logodds_totune: float = 0.20
+    blind_logodds_tokeep: float = 0.45
+    blind_tune_reverify_enabled: bool = True
+    blind_tune_reverify_max_iters: int = 1
+    blind_tune_reverify_tol_factor: float = 1.35
+    blind_final_min_cov_area: float = 0.005
+    blind_geo_sparse_min_span: float = 0.08
+    blind_geo_sparse_min_area: float = 0.003
+    blind_geo_dense_min_span: float = 0.10
+    blind_geo_dense_min_area: float = 0.005
+    blind_geo_dense_max_cond: float = 2.0e4
+    blind_prob_verify_enabled: bool = True
+    blind_prob_logodds_accept: float = 0.35
+    blind_prob_sigma_px: float = 1.6
+    blind_prob_sigma_auto: bool = True
+    blind_prob_sigma_floor_px: float = 0.7
+    blind_prob_distance_from_quad_bonus: bool = True
+    blind_prob_distance_gamma_cap: float = 4.0
+    blind_prob_distance_quad_frac: float = 0.35
+    blind_prob_prior_match: float = 0.35
+    blind_verify_adaptive_distractor_prior: bool = True
+    blind_verify_distractor_blend: float = 0.45
+    blind_verify_distractor_floor: float = 0.08
+    blind_verify_distractor_ceil: float = 0.85
+    blind_prob_clip_delta: float = 7.0
+    blind_prob_min_match_ratio: float = 0.20
+    blind_prob_dynamic_thresholds: bool = True
+    blind_prob_dynamic_min_logodds: float = -0.15
+    blind_prob_dynamic_scale: float = 0.18
+    blind_prob_dynamic_ratio_relax: float = 0.70
+    blind_prob_dynamic_ratio_inliers: int = 12
+    blind_prob_dynamic_ratio_rms_px: float = 1.4
+    blind_candidate_rerank_top_k: int = 12
+    blind_candidate_rerank_trials: int = 120
+    blind_candidate_rerank_prob_weight: float = 0.30
+    blind_refit_irls_iters: int = 3
+    blind_refit_include_global_inliers: bool = True
+    blind_tweak_iterations: int = 2
+    blind_tweak_expand_factor: float = 1.25
+    blind_tweak2_verify_enabled: bool = True
+    blind_tweak2_verify_tol_factor: float = 1.8
+    blind_tweak2_verify_max_px: float = 8.0
+    blind_tweak2_verify_min_pairs: int = 6
+    blind_tweak2_verify_max_iters: int = 1
+    blind_validate_scale_rescue_enabled: bool = True
+    blind_validate_scale_rescue_factor: float = 1.10
+    blind_validate_scale_rescue_min_arcsec: float = 0.10
+    blind_validate_scale_rescue_max_arcsec: float = 30.0
+    # A2-v34: pre-validation plausibility gate to cut false borderline scale candidates early.
+    blind_a2v34_scale_plausibility_enabled: bool = False
+    blind_a2v34_scale_plausibility_min_ratio: float = 0.35
+    blind_a2v34_scale_plausibility_max_ratio: float = 3.20
+    blind_a2v34_scale_plausibility_max_pairs: int = 10
+    # A2-v35: keep searching when v34 rejects accumulate (diversify instead of early budget burn).
+    blind_a2v35_scale_reject_counts_as_validation: bool = False
+    blind_a2v35_scale_reject_candidate_boost_step: int = 4
+    blind_a2v35_scale_reject_candidate_boost_max: int = 24
+    # A2-v36: guided inlier expansion for scale-plausible hypotheses before declaring too-few/empty.
+    blind_a2v36_guided_inlier_expand_enabled: bool = False
+    blind_a2v36_guided_inlier_expand_tol_factor: float = 1.75
+    blind_a2v36_guided_inlier_expand_min_ratio: float = 0.60
+    blind_a2v36_guided_inlier_expand_max_ratio: float = 1.80
+    blind_a2v36_guided_inlier_expand_min_inliers: int = 4
+    # A2-v37: scale-guided seed refit when plausible hypotheses still have too few inliers.
+    blind_a2v37_seed_refit_enabled: bool = False
+    blind_a2v37_seed_refit_max_seed_points: int = 8
+    blind_a2v37_seed_refit_tol_factor: float = 2.20
+    blind_a2v37_seed_refit_min_ratio: float = 0.70
+    blind_a2v37_seed_refit_max_ratio: float = 1.55
+    blind_match_object_expand_enabled: bool = False
+    blind_match_object_expand_min_pairs: int = 8
+    blind_match_object_expand_max_pairs: int = 16
+    blind_match_object_expand_tol_factor: float = 1.35
+    blind_star_quality_filter: bool = True
+    blind_star_min_sep_px: float = 0.0
+    blind_verify_uniformize_pairs: bool = True
+    blind_verify_uniform_grid_px: float = 48.0
+    blind_verify_uniform_max_per_cell: int = 4
+    blind_verify_uniform_min_keep_ratio: float = 0.35
+    blind_pre_model_matching: bool = True
+    blind_pre_model_min_pairs: int = 24
+    blind_pre_model_min_keep_ratio: float = 0.25
+    blind_pre_model_image_bin_px: float = 1.5
+    blind_pre_model_tile_bin_px: float = 1.5
+    blind_verify_dedup_pairs: bool = True
+    blind_verify_dedup_min_keep_ratio: float = 0.45
+    blind_verify_conflict_resolution: bool = True
+    blind_verify_conflict_min_keep_ratio: float = 0.45
+    blind_verify_conflict_image_bin_px: float = 2.5
+    blind_verify_conflict_tile_bin_px: float = 2.5
+    blind_hypothesis_resolve_matches_enabled: bool = True
+    blind_hypothesis_resolve_matches_min_pairs: int = 12
+    blind_hypothesis_resolve_matches_min_keep_ratio: float = 0.20
+    blind_hypothesis_resolve_matches_image_bin_px: float = 1.8
+    blind_hypothesis_resolve_matches_tile_bin_px: float = 1.8
+    blind_parity_mode: str = "auto"
+    blind_parity_lock_enabled: bool = True
+    blind_parity_lock_min_votes: int = 18
+    blind_parity_lock_ratio: float = 1.35
+    blind_parity_lock_hint_phase_only: bool = True
+    blind_final_center_min_tol_deg: float = 0.20
+    blind_final_center_max_tol_deg: float = 10.0
+    blind_final_center_tol_factor: float = 1.25
+    blind_final_rotation_max_delta_deg: float = 0.0
 
 
 @dataclass
@@ -148,7 +511,16 @@ def _image_positions(stars: np.ndarray) -> np.ndarray:
     return np.column_stack((stars["x"], stars["y"]))
 
 
-def _blind_geometric_guardrails(img_points: np.ndarray, image_shape: tuple[int, int]) -> tuple[bool, dict[str, float | int | str]]:
+def _blind_geometric_guardrails(
+    img_points: np.ndarray,
+    image_shape: tuple[int, int],
+    *,
+    sparse_min_span: float = 0.08,
+    sparse_min_area: float = 0.003,
+    dense_min_span: float = 0.10,
+    dense_min_area: float = 0.005,
+    dense_max_cond: float = 2.0e4,
+) -> tuple[bool, dict[str, float | int | str]]:
     """Lightweight geometric sanity checks before accepting a blind solution.
 
     Inspired by ASTAP-like robustness: reject highly fragile fits with weak spatial
@@ -168,7 +540,7 @@ def _blind_geometric_guardrails(img_points: np.ndarray, image_shape: tuple[int, 
     cov_area = cov_x * cov_y
     # Keep permissive behavior for tiny sparse sets: only footprint checks.
     if n < 10:
-        ok = (max(cov_x, cov_y) >= 0.08) and (cov_area >= 0.003)
+        ok = (max(cov_x, cov_y) >= float(sparse_min_span)) and (cov_area >= float(sparse_min_area))
         return ok, {
             "reason": "ok" if ok else "insufficient spatial footprint",
             "n": n,
@@ -186,8 +558,8 @@ def _blind_geometric_guardrails(img_points: np.ndarray, image_shape: tuple[int, 
         cond = lam_max / lam_min
     except Exception:
         cond = float("inf")
-    ok = (max(cov_x, cov_y) >= 0.10) and (cov_area >= 0.005) and (cond <= 2.0e4)
-    reason = "ok" if ok else ("near-collinear inliers" if cond > 2.0e4 else "insufficient spatial footprint")
+    ok = (max(cov_x, cov_y) >= float(dense_min_span)) and (cov_area >= float(dense_min_area)) and (cond <= float(dense_max_cond))
+    reason = "ok" if ok else ("near-collinear inliers" if cond > float(dense_max_cond) else "insufficient spatial footprint")
     return ok, {
         "reason": reason,
         "n": n,
@@ -196,6 +568,2306 @@ def _blind_geometric_guardrails(img_points: np.ndarray, image_shape: tuple[int, 
         "cov_area": cov_area,
         "cond": cond,
     }
+
+
+def _quad_min_edge_and_area_frac(points: np.ndarray, image_shape: tuple[int, int]) -> tuple[float, float]:
+    """Return (min_edge_px, area_fraction) for a 4-point quad in image space."""
+    if points is None or points.shape != (4, 2):
+        return 0.0, 0.0
+    pts = np.asarray(points, dtype=np.float64)
+    edges = np.vstack((pts[1:] - pts[:-1], pts[:1] - pts[-1:]))
+    edge_len = np.hypot(edges[:, 0], edges[:, 1])
+    min_edge = float(np.nanmin(edge_len)) if edge_len.size else 0.0
+    x = pts[:, 0]
+    y = pts[:, 1]
+    area = 0.5 * abs(float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1))))
+    h, w = int(image_shape[0]), int(image_shape[1])
+    denom = max(1.0, float(max(w, 1) * max(h, 1)))
+    area_frac = float(area / denom)
+    return min_edge, area_frac
+
+
+def _candidate_logodds_like(
+    *,
+    inliers: int,
+    rms_px: float,
+    cov_area: float,
+    n_pairs: int,
+    geo_weight: float,
+) -> float:
+    """Astrometry-inspired compact quality score for acceptance gating."""
+    safe_inliers = max(0, int(inliers))
+    safe_pairs = max(1, int(n_pairs))
+    safe_rms = float(rms_px)
+    if (not np.isfinite(safe_rms)) or safe_rms <= 0.0:
+        safe_rms = 10.0
+    safe_cov = float(cov_area)
+    if (not np.isfinite(safe_cov)) or safe_cov <= 0.0:
+        safe_cov = 1e-6
+    support = math.log1p(float(safe_inliers))
+    support_ratio = 0.85 * math.log1p(float(safe_inliers) / float(safe_pairs))
+    residual_penalty = 1.45 * math.log(max(1e-6, safe_rms))
+    coverage_bonus = float(geo_weight) * math.log1p(120.0 * safe_cov)
+    return float(support + support_ratio + coverage_bonus - residual_penalty - 1.9)
+
+
+def _derive_similarity_weighted(
+    src: np.ndarray,
+    dst: np.ndarray,
+    weights: np.ndarray,
+    *,
+    reflected: bool = False,
+) -> tuple[np.complex128, np.complex128] | None:
+    if src.shape[0] < 2 or dst.shape[0] < 2:
+        return None
+    src_c = src[:, 0].astype(np.float64) + 1j * src[:, 1].astype(np.float64)
+    if reflected:
+        src_c = np.conj(src_c)
+    dst_c = dst[:, 0].astype(np.float64) + 1j * dst[:, 1].astype(np.float64)
+    w = np.asarray(weights, dtype=np.float64)
+    if w.ndim != 1 or w.size != src.shape[0]:
+        return None
+    wsum = float(np.sum(w))
+    if not np.isfinite(wsum) or wsum <= 0.0:
+        return None
+    w = w / wsum
+    src_mean = np.sum(w * src_c)
+    dst_mean = np.sum(w * dst_c)
+    src_zero = src_c - src_mean
+    dst_zero = dst_c - dst_mean
+    denom = np.sum(w * np.abs(src_zero) ** 2)
+    if float(np.abs(denom)) < 1e-12:
+        return None
+    rot_scale = np.sum(w * dst_zero * np.conj(src_zero)) / denom
+    translation = dst_mean - rot_scale * src_mean
+    return np.complex128(rot_scale), np.complex128(translation)
+
+
+def _robust_refine_similarity(
+    image_pts: np.ndarray,
+    tile_pts: np.ndarray,
+    transform: SimilarityTransform,
+    *,
+    tol_px: float,
+    max_iters: int = 3,
+) -> tuple[SimilarityTransform, np.ndarray, float] | None:
+    n = int(image_pts.shape[0])
+    if n < 4 or tile_pts.shape[0] != n:
+        return None
+    reflected = int(getattr(transform, "parity", 1)) < 0
+    scale = float(max(transform.scale, 1e-12))
+    rot = float(transform.rotation)
+    trans = complex(*transform.translation)
+    keep = np.ones(n, dtype=bool)
+
+    for _ in range(max(1, int(max_iters))):
+        src = image_pts
+        dst = tile_pts
+        src_c = src[:, 0].astype(np.float64) + 1j * src[:, 1].astype(np.float64)
+        if reflected:
+            src_c = np.conj(src_c)
+        dst_c = dst[:, 0].astype(np.float64) + 1j * dst[:, 1].astype(np.float64)
+        rot_scale = np.complex128(scale * np.exp(1j * rot))
+        pred = rot_scale * src_c + trans
+        err_deg = np.abs(pred - dst_c)
+        err_px = err_deg / max(scale, 1e-12)
+        finite = np.isfinite(err_px)
+        if not np.any(finite):
+            return None
+        rp = err_px[finite]
+        med = float(np.median(rp)) if rp.size else float("inf")
+        mad = float(np.median(np.abs(rp - med))) if rp.size else 0.0
+        sigma = max(1e-3, 1.4826 * mad)
+        cutoff = max(float(tol_px) * 1.15, med + 3.5 * sigma)
+        keep = finite & (err_px <= cutoff)
+        if int(np.count_nonzero(keep)) < 4:
+            break
+
+        r_keep = err_px[keep]
+        huber = np.maximum(1.0, r_keep / max(1e-3, 2.0 * sigma))
+        w = 1.0 / (huber * huber)
+        refined = _derive_similarity_weighted(
+            image_pts[keep].astype(np.float64),
+            tile_pts[keep].astype(np.float64),
+            w.astype(np.float64),
+            reflected=reflected,
+        )
+        if refined is None:
+            break
+        rs2, tr2 = refined
+        scale = float(max(abs(rs2), 1e-12))
+        rot = float(np.angle(rs2))
+        trans = tr2
+
+    src_c = image_pts[:, 0].astype(np.float64) + 1j * image_pts[:, 1].astype(np.float64)
+    if reflected:
+        src_c = np.conj(src_c)
+    dst_c = tile_pts[:, 0].astype(np.float64) + 1j * tile_pts[:, 1].astype(np.float64)
+    rot_scale = np.complex128(scale * np.exp(1j * rot))
+    err_px = np.abs(rot_scale * src_c + trans - dst_c) / max(scale, 1e-12)
+    finite = np.isfinite(err_px)
+    if not np.any(finite):
+        return None
+    final_keep = finite & (err_px <= max(float(tol_px), float(np.median(err_px[finite]) + 3.5 * np.median(np.abs(err_px[finite] - np.median(err_px[finite]))))))
+    if int(np.count_nonzero(final_keep)) < 4:
+        final_keep = finite
+    rms_px = float(np.sqrt(np.mean((err_px[final_keep]) ** 2))) if np.any(final_keep) else float("inf")
+    refined_transform = SimilarityTransform(
+        scale=float(scale),
+        rotation=float(rot),
+        translation=(float(trans.real), float(trans.imag)),
+        parity=-1 if reflected else 1,
+    )
+    return refined_transform, final_keep, rms_px
+
+
+def _seeded_similarity_from_pairs(
+    image_pts: np.ndarray,
+    tile_pts: np.ndarray,
+    *,
+    tol_px: float,
+    allow_reflection: bool,
+    trials: int = 400,
+    top_n: int = 96,
+) -> tuple[SimilarityTransform, SimilarityStats] | None:
+    """Build a stronger initial model from top-ranked pair subset, then RANSAC.
+
+    This is a hypothesis-enrichment step (before wide RANSAC).
+    """
+    n = int(image_pts.shape[0])
+    if n < 8 or tile_pts.shape[0] != n:
+        return None
+
+    src = np.asarray(image_pts, dtype=np.float64)
+    dst = np.asarray(tile_pts, dtype=np.float64)
+    if not np.all(np.isfinite(src)) or not np.all(np.isfinite(dst)):
+        return None
+
+    c_src = np.median(src, axis=0)
+    c_dst = np.median(dst, axis=0)
+    v_src = src - c_src
+    v_dst = dst - c_dst
+
+    r_src = np.hypot(v_src[:, 0], v_src[:, 1])
+    r_dst = np.hypot(v_dst[:, 0], v_dst[:, 1])
+    med_src = max(1e-6, float(np.median(r_src)))
+    med_dst = max(1e-12, float(np.median(r_dst)))
+
+    q_rad = np.exp(-0.5 * ((np.abs((r_src / med_src) - (r_dst / med_dst))) / 0.45) ** 2)
+
+    th_src = np.arctan2(v_src[:, 1], v_src[:, 0])
+    th_dst = np.arctan2(v_dst[:, 1], v_dst[:, 0])
+
+    d_nom = np.arctan2(np.sin(th_dst - th_src), np.cos(th_dst - th_src))
+    if allow_reflection:
+        d_mir = np.arctan2(np.sin(th_dst + th_src), np.cos(th_dst + th_src))
+        score_nom = float(np.abs(np.mean(np.exp(1j * d_nom))))
+        score_mir = float(np.abs(np.mean(np.exp(1j * d_mir))))
+        d_use = d_nom if score_nom >= score_mir else d_mir
+    else:
+        d_use = d_nom
+
+    off = float(np.angle(np.mean(np.exp(1j * d_use)))) if d_use.size else 0.0
+    resid = np.arctan2(np.sin(d_use - off), np.cos(d_use - off))
+    q_ang = np.exp(-0.5 * (resid / max(math.radians(6.0), math.radians(42.0))) ** 2)
+
+    q = np.asarray(np.clip(0.65 * q_rad + 0.35 * (q_rad * q_ang), 0.0, 1.0), dtype=np.float64)
+    order = np.argsort(q)[::-1]
+    keep = order[: max(8, min(int(top_n), n))]
+    src_k = src[keep]
+    dst_k = dst[keep]
+
+    ransac_seed = int((np.bitwise_xor.reduce((keep.astype(np.uint64) + 1) * np.uint64(0x9E3779B97F4A7C15))).item() & np.uint64(0xFFFFFFFF))
+
+    return estimate_similarity_RANSAC(
+        src_k,
+        dst_k,
+        trials=max(80, int(trials)),
+        tol_px=max(0.8, float(tol_px)),
+        min_inliers=4,
+        allow_reflection=bool(allow_reflection),
+        early_stop_inliers=max(10, int(0.65 * src_k.shape[0])),
+        random_state=ransac_seed,
+    )
+
+
+def _quad_code_space_inbox_ok(points4: np.ndarray, *, code_tol: float = 0.08, min_edge_px: float = 8.0) -> bool:
+    """Astrometry-like AB-frame inbox constraint for a 4-star quad candidate."""
+    pts = np.asarray(points4, dtype=np.float64)
+    if pts.shape != (4, 2) or not np.all(np.isfinite(pts)):
+        return False
+    # choose AB as farthest pair (stable backbone)
+    best_i, best_j = 0, 1
+    best_d2 = -1.0
+    for i in range(4):
+        for j in range(i + 1, 4):
+            d2 = float(np.sum((pts[j] - pts[i]) ** 2))
+            if d2 > best_d2:
+                best_d2 = d2
+                best_i, best_j = i, j
+    if best_d2 <= float(max(1e-6, min_edge_px * min_edge_px)):
+        return False
+
+    ax, ay = float(pts[best_i, 0]), float(pts[best_i, 1])
+    dx = float(pts[best_j, 0] - ax)
+    dy = float(pts[best_j, 1] - ay)
+    scale = float(dx * dx + dy * dy)
+    if scale <= 1e-12:
+        return False
+
+    costheta = float((dy + dx) / scale)
+    sintheta = float((dy - dx) / scale)
+    tol = float(max(1e-4, code_tol))
+    lim = float(tol * (math.sqrt(2.0) + tol))
+
+    for k in range(4):
+        if k == best_i or k == best_j:
+            continue
+        cx = float(pts[k, 0] - ax)
+        cy = float(pts[k, 1] - ay)
+        x = float(cx * costheta + cy * sintheta)
+        y = float(-cx * sintheta + cy * costheta)
+        r = float((x * x - x) + (y * y - y))
+        if r > lim:
+            return False
+    return True
+
+
+def _ab_code_inbox_mask(points: np.ndarray, ia: int, ib: int, *, code_tol: float = 0.08, min_edge_px: float = 8.0) -> np.ndarray | None:
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 2 or pts.shape[0] < 4:
+        return None
+    n = int(pts.shape[0])
+    if ia < 0 or ib < 0 or ia >= n or ib >= n or ia == ib:
+        return None
+    ax, ay = float(pts[ia, 0]), float(pts[ia, 1])
+    dx = float(pts[ib, 0] - ax)
+    dy = float(pts[ib, 1] - ay)
+    d2 = float(dx * dx + dy * dy)
+    if d2 <= float(max(1e-6, min_edge_px * min_edge_px)):
+        return None
+
+    costheta = float((dy + dx) / d2)
+    sintheta = float((dy - dx) / d2)
+    cx = np.asarray(pts[:, 0] - ax, dtype=np.float64)
+    cy = np.asarray(pts[:, 1] - ay, dtype=np.float64)
+    x = cx * costheta + cy * sintheta
+    y = -cx * sintheta + cy * costheta
+    r = (x * x - x) + (y * y - y)
+    tol = float(max(1e-4, code_tol))
+    lim = float(tol * (math.sqrt(2.0) + tol))
+    mask = np.isfinite(r) & (r <= lim)
+    mask[int(ia)] = True
+    mask[int(ib)] = True
+    return np.asarray(mask, dtype=bool)
+
+
+def _astrometry_add_stars_inbox_filter(
+    image_pts: np.ndarray,
+    tile_pts: np.ndarray,
+    tile_world_pts: np.ndarray,
+    *,
+    code_tol: float = 0.08,
+    min_edge_px: float = 8.0,
+    min_keep_ratio: float = 0.20,
+    max_ab_trials: int = 12,
+    scale_anchor_arcsec: float | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    img = np.asarray(image_pts, dtype=np.float64)
+    tile = np.asarray(tile_pts, dtype=np.float64)
+    world = np.asarray(tile_world_pts)
+    n = int(img.shape[0])
+    if n < 4 or tile.shape[0] != n or world.shape[0] != n:
+        return image_pts, tile_pts, tile_world_pts, {"input": n, "kept": n, "removed": 0, "mode": "too_few"}
+
+    k = min(n, max(6, int(max_ab_trials) * 2))
+    # preserve incoming order: this approximates Astrometry add_stars traversal order.
+    candidates = list(range(k))
+    pairs: list[tuple[float, int, int]] = []
+    anchor_deg = None
+    try:
+        if scale_anchor_arcsec is not None and np.isfinite(float(scale_anchor_arcsec)) and float(scale_anchor_arcsec) > 0.0:
+            anchor_deg = float(scale_anchor_arcsec) / 3600.0
+    except Exception:
+        anchor_deg = None
+
+    for ii in range(len(candidates)):
+        ia = candidates[ii]
+        for jj in range(ii + 1, len(candidates)):
+            ib = candidates[jj]
+            d_img = float(np.linalg.norm(img[ib] - img[ia]))
+            d_tile = float(np.linalg.norm(tile[ib] - tile[ia]))
+            if d_img <= float(max(1e-6, min_edge_px)) or d_tile <= 1e-12:
+                continue
+            backbone = float(min(d_img, d_tile))
+            score = backbone
+            if anchor_deg is not None and anchor_deg > 0.0:
+                model_arcsec = 3600.0 * float(d_tile / max(d_img, 1e-12))
+                ratio = float(model_arcsec) / float(max(1e-9, scale_anchor_arcsec))
+                if np.isfinite(ratio) and ratio > 0.0:
+                    score -= 0.35 * abs(math.log(max(1e-6, ratio)))
+            pairs.append((score, ia, ib))
+
+    if not pairs:
+        return image_pts, tile_pts, tile_world_pts, {"input": n, "kept": n, "removed": 0, "mode": "no_ab"}
+    pairs.sort(key=lambda row: row[0], reverse=True)
+
+    keep_best = None
+    best_kept = -1
+    trials = max(1, int(max_ab_trials))
+    for _score, ia, ib in pairs[:trials]:
+        m_img = _ab_code_inbox_mask(img, ia, ib, code_tol=float(code_tol), min_edge_px=float(min_edge_px))
+        m_tile = _ab_code_inbox_mask(tile, ia, ib, code_tol=float(code_tol), min_edge_px=0.0)
+        if m_img is None or m_tile is None:
+            continue
+        keep = np.asarray(m_img & m_tile, dtype=bool)
+        kept = int(np.count_nonzero(keep))
+        if kept > best_kept:
+            best_kept = kept
+            keep_best = keep
+
+    if keep_best is None:
+        return image_pts, tile_pts, tile_world_pts, {"input": n, "kept": n, "removed": 0, "mode": "ab_invalid"}
+
+    keep_ratio = float(best_kept) / float(max(1, n))
+    min_keep = max(0.05, min(1.0, float(min_keep_ratio)))
+    if best_kept < 4 or keep_ratio < min_keep:
+        return image_pts, tile_pts, tile_world_pts, {
+            "input": n,
+            "kept": n,
+            "removed": 0,
+            "mode": "ratio_guard",
+            "keep_ratio": float(keep_ratio),
+        }
+
+    keep_idx = np.flatnonzero(keep_best)
+    return (
+        image_pts[keep_idx],
+        tile_pts[keep_idx],
+        tile_world_pts[keep_idx],
+        {"input": n, "kept": int(keep_idx.size), "removed": int(n - keep_idx.size), "mode": "ab_inbox"},
+    )
+
+
+def _ab_frame_code_xy(points4: np.ndarray, idx_a: int, idx_b: int, idx_p: int) -> tuple[float, float] | None:
+    pts = np.asarray(points4, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 2:
+        return None
+    a = pts[int(idx_a)]
+    b = pts[int(idx_b)]
+    p = pts[int(idx_p)]
+    d = b - a
+    s = float(np.dot(d, d))
+    if (not np.isfinite(s)) or s <= 1e-12:
+        return None
+    cst = float((d[1] + d[0]) / s)
+    snt = float((d[1] - d[0]) / s)
+    v = p - a
+    x = float(v[0] * cst + v[1] * snt)
+    y = float(v[1] * cst - v[0] * snt)
+    if not (np.isfinite(x) and np.isfinite(y)):
+        return None
+    return x, y
+
+
+def _quad_slots_code(points4: np.ndarray) -> np.ndarray | None:
+    """Return AB-frame slot codes for internal stars (C,D,...) in given point order."""
+    pts = np.asarray(points4, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 2:
+        return None
+    n = int(pts.shape[0])
+    if n < 3:
+        return None
+    out: list[tuple[float, float]] = []
+    for idx in range(2, n):
+        xy = _ab_frame_code_xy(pts, 0, 1, idx)
+        if xy is None:
+            return None
+        out.append((float(xy[0]), float(xy[1])))
+    if len(out) <= 0:
+        return None
+    arr = np.asarray(out, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[1] != 2:
+        return None
+    return arr
+
+
+def _align_dst4_by_slot_code(
+    src4: np.ndarray,
+    dst4: np.ndarray,
+    *,
+    parity_flip01: bool = False,
+) -> tuple[np.ndarray, np.ndarray, float | None]:
+    """Reorder destination quad to best match source AB-slot code coordinates."""
+    s4 = np.asarray(src4, dtype=np.float64)
+    d4 = np.asarray(dst4, dtype=np.float64)
+    if s4.shape != (4, 2) or d4.shape != (4, 2):
+        return d4, np.asarray([0, 1, 2, 3], dtype=np.int64), None
+    src_code = _quad_slots_code(s4)
+    if src_code is None:
+        return d4, np.asarray([0, 1, 2, 3], dtype=np.int64), None
+    if parity_flip01:
+        src_code = 1.0 - np.asarray(src_code, dtype=np.float64)
+
+    best_perm = np.asarray([0, 1, 2, 3], dtype=np.int64)
+    best_err = float("inf")
+    best_pts = d4
+    for pp in permutations((0, 1, 2, 3)):
+        perm = np.asarray(pp, dtype=np.int64)
+        cand = d4[perm]
+        dst_code = _quad_slots_code(cand)
+        if dst_code is None:
+            continue
+        try:
+            dd = np.asarray(src_code, dtype=np.float64) - np.asarray(dst_code, dtype=np.float64)
+            err = float(np.sqrt(np.mean(np.sum(dd * dd, axis=1))))
+        except Exception:
+            continue
+        if not np.isfinite(err):
+            continue
+        if err < best_err:
+            best_err = float(err)
+            best_perm = perm
+            best_pts = cand
+    if not np.isfinite(best_err):
+        return d4, np.asarray([0, 1, 2, 3], dtype=np.int64), None
+    return np.asarray(best_pts, dtype=np.float64), np.asarray(best_perm, dtype=np.int64), float(best_err)
+
+
+def _astrometry_try_permutations_orders(
+    points4: np.ndarray,
+    *,
+    max_orders: int,
+    margin: float = 0.12,
+    include_backbone_swap: bool = True,
+) -> tuple[list[np.ndarray], dict[str, int]]:
+    """Astrometry-like recursive slot-filling for internal stars (try_permutations discipline).
+
+    Strict intent: mirror solver.c `try_all_codes_2` + `try_permutations` for dimquad=4:
+    - backbone AB pass uses origcode as-is,
+    - flipped BA pass uses `flipcode = 1 - origcode`,
+    - recursion fills internal slots with cx<=dx and meanx<=0.5 guards.
+    """
+    pts = np.asarray(points4, dtype=np.float64)
+    n = int(pts.shape[0]) if pts.ndim == 2 else 0
+    stats = {"cxdx_rejects": 0, "meanx_rejects": 0, "invalid_code": 0}
+    if n != 4 or pts.shape[1] != 2 or not np.all(np.isfinite(pts)):
+        return [np.asarray([0, 1, 2, 3], dtype=np.int64)], stats
+
+    k = max(1, int(max_orders))
+    tol = float(max(1e-6, margin))
+    out: list[np.ndarray] = []
+    seen: set[tuple[int, int, int, int]] = set()
+
+    # Canonical origstars for dimquad=4: A,B,C,D -> indices 0,1,2,3.
+    internal = [2, 3]
+    code_nom: list[tuple[float, float]] = []
+    for idx in internal:
+        xy = _ab_frame_code_xy(pts, 0, 1, idx)
+        if xy is None:
+            stats["invalid_code"] += 1
+            return [np.asarray([0, 1, 2, 3], dtype=np.int64)], stats
+        code_nom.append((float(xy[0]), float(xy[1])))
+
+    passes: list[tuple[list[int], list[tuple[float, float]]]] = [([0, 1], code_nom)]
+    if include_backbone_swap:
+        code_flip = [(1.0 - float(cx), float(cy)) for (cx, cy) in code_nom]
+        passes.append(([1, 0], code_flip))
+
+    for backbone, code_xy in passes:
+        nstars = len(internal)
+        placed = [False] * nstars
+        chosen: list[int] = []
+
+        def _rec(slot: int, sumx: float, prevx: float | None) -> bool:
+            if len(out) >= k:
+                return True
+            for ii in range(nstars):
+                if placed[ii]:
+                    continue
+                xcur = float(code_xy[ii][0])
+                # solver.c: if (slot > 0) cx_prev <= cx_cur + margin
+                if (slot > 0) and (prevx is not None) and (prevx > xcur + tol):
+                    stats["cxdx_rejects"] += 1
+                    continue
+                meanx = float(sumx + xcur) / float(slot + 1)
+                # solver.c: meanx <= 0.5 + margin
+                if meanx > 0.5 + tol:
+                    stats["meanx_rejects"] += 1
+                    continue
+
+                placed[ii] = True
+                chosen.append(ii)
+                if slot < (nstars - 1):
+                    stop = _rec(slot + 1, sumx + xcur, xcur)
+                    chosen.pop()
+                    placed[ii] = False
+                    if stop:
+                        return True
+                else:
+                    # origstars ids: backbone + chosen internal ids.
+                    order = [int(backbone[0]), int(backbone[1])] + [int(internal[jj]) for jj in chosen]
+                    key = tuple(order)
+                    if key not in seen:
+                        seen.add(key)
+                        out.append(np.asarray(order, dtype=np.int64))
+                    chosen.pop()
+                    placed[ii] = False
+                    if len(out) >= k:
+                        return True
+            return False
+
+        _rec(0, 0.0, None)
+        if len(out) >= k:
+            break
+
+    if not out:
+        out = [np.asarray([0, 1, 2, 3], dtype=np.int64)]
+    return out[:k], stats
+
+
+def _astrometry_cxdx_meanx_ok(points4: np.ndarray, *, code_tol: float = 0.08) -> bool:
+    orders, _st = _astrometry_try_permutations_orders(
+        points4,
+        max_orders=1,
+        margin=1.5 * float(max(1e-4, code_tol)),
+        include_backbone_swap=False,
+    )
+    if not orders:
+        return False
+    first = np.asarray(orders[0], dtype=np.int64)
+    return bool(first.shape[0] == 4 and np.array_equal(first, np.asarray([0, 1, 2, 3], dtype=np.int64)))
+
+
+def _astrometry_permutation_orders(max_orders: int) -> list[np.ndarray]:
+    """Deterministic fallback list when Astrometry cxdx recursion is disabled."""
+    k = max(1, int(max_orders))
+    primary = [
+        (0, 1, 2, 3),
+        (0, 1, 3, 2),
+        (1, 0, 2, 3),
+        (1, 0, 3, 2),
+    ]
+    allp = list(permutations(range(4)))
+    seen: set[tuple[int, int, int, int]] = set()
+    ordered: list[tuple[int, int, int, int]] = []
+    for pp in primary + allp:
+        t = tuple(int(x) for x in pp)
+        if t in seen:
+            continue
+        seen.add(t)
+        ordered.append(t)
+        if len(ordered) >= k:
+            break
+    return [np.asarray(t, dtype=np.int64) for t in ordered]
+
+
+def _quad_ratio_code(points4: np.ndarray) -> np.ndarray | None:
+    """Continuous 3-ratio quad code compatible with hash geometry."""
+    pts = np.asarray(points4, dtype=np.float64)
+    if pts.shape != (4, 2) or not np.all(np.isfinite(pts)):
+        return None
+    a, b, c, d = pts
+    def _dist(u: np.ndarray, v: np.ndarray) -> float:
+        return float(np.hypot(float(u[0] - v[0]), float(u[1] - v[1])))
+    d12 = _dist(a, b)
+    d34 = _dist(c, d)
+    d13 = _dist(a, c)
+    d24 = _dist(b, d)
+    d14 = _dist(a, d)
+    d23 = _dist(b, c)
+    eps = 1e-12
+    if d12 <= eps or d34 <= eps or d13 <= eps or d24 <= eps or d14 <= eps or d23 <= eps:
+        return None
+    return np.asarray([
+        float(d12 / (d34 + eps)),
+        float(d13 / (d24 + eps)),
+        float(d14 / (d23 + eps)),
+    ], dtype=np.float64)
+
+
+
+
+
+def _hash_from_ordered_quad_points(points4: np.ndarray) -> int | None:
+    """Compute Astrometry-style 64-bit quad hash from ordered points A,B,C,D."""
+    pts = np.asarray(points4, dtype=np.float64)
+    if pts.shape != (4, 2) or not np.all(np.isfinite(pts)):
+        return None
+    a, b, c, d = pts
+    def _dist(u: np.ndarray, v: np.ndarray) -> float:
+        return float(np.hypot(float(u[0] - v[0]), float(u[1] - v[1])))
+    d12 = _dist(a, b)
+    d34 = _dist(c, d)
+    d13 = _dist(a, c)
+    d24 = _dist(b, d)
+    d14 = _dist(a, d)
+    d23 = _dist(b, c)
+    eps = 1e-8
+    if d12 <= eps or d34 <= eps or d13 <= eps or d24 <= eps or d14 <= eps or d23 <= eps:
+        return None
+    r12 = float(d12 / (d34 + eps))
+    r13 = float(d13 / (d24 + eps))
+    r14 = float(d14 / (d23 + eps))
+    def _q(v: float) -> int:
+        lo, hi = 0.25, 4.0
+        vv = min(max(float(v), lo), hi)
+        norm = (vv - lo) / (hi - lo)
+        return int(round(norm * 65535.0))
+    q1 = _q(r12)
+    q2 = _q(r13)
+    q3 = _q(r14)
+    cross_z = float((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
+    parity = 1 if cross_z >= 0.0 else 0
+    hv = (int(q1) << 48) | (int(q2) << 32) | (int(q3) << 16) | int(parity)
+    return int(hv)
+
+
+def _hash_q_triplet(hv: int | None) -> tuple[int, int, int] | None:
+    if hv is None:
+        return None
+    h = int(hv)
+    return (int((h >> 48) & 0xFFFF), int((h >> 32) & 0xFFFF), int((h >> 16) & 0xFFFF))
+
+
+def _quad_edge_signature(points4: np.ndarray) -> np.ndarray | None:
+    """Permutation-agnostic quad geometry signature from normalized pairwise distances."""
+    pts = np.asarray(points4, dtype=np.float64)
+    if pts.shape != (4, 2) or not np.all(np.isfinite(pts)):
+        return None
+    d: list[float] = []
+    for i in range(4):
+        for j in range(i + 1, 4):
+            dd = float(np.hypot(float(pts[i, 0] - pts[j, 0]), float(pts[i, 1] - pts[j, 1])))
+            if not np.isfinite(dd) or dd <= 1e-12:
+                return None
+            d.append(dd)
+    arr = np.asarray(d, dtype=np.float64)
+    m = float(np.max(arr))
+    if not np.isfinite(m) or m <= 1e-12:
+        return None
+    sig = np.sort(arr / m)
+    return sig.astype(np.float64, copy=False)
+
+
+def _build_code_kdtree(points: np.ndarray, *, leaf_size: int = 32) -> dict[str, Any] | None:
+    """Build a lightweight 3D KD-tree for log-code range queries."""
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] != 3 or pts.shape[0] <= 0:
+        return None
+    if not np.all(np.isfinite(pts)):
+        return None
+    leaf_size = max(8, int(leaf_size))
+    nodes: list[dict[str, Any]] = []
+
+    def _build(idxs: np.ndarray) -> int:
+        bmin = np.min(pts[idxs], axis=0)
+        bmax = np.max(pts[idxs], axis=0)
+        node: dict[str, Any] = {
+            "bbox_min": bmin.astype(np.float64, copy=False),
+            "bbox_max": bmax.astype(np.float64, copy=False),
+        }
+        ni = len(nodes)
+        nodes.append(node)
+        if idxs.size <= leaf_size:
+            node["leaf"] = True
+            node["idxs"] = idxs.astype(np.int64, copy=False)
+            return ni
+        span = bmax - bmin
+        axis = int(np.argmax(span))
+        ord_local = np.argsort(pts[idxs, axis], kind="mergesort")
+        sidx = idxs[ord_local]
+        mid = int(sidx.size // 2)
+        left = sidx[:mid]
+        right = sidx[mid:]
+        if left.size == 0 or right.size == 0:
+            node["leaf"] = True
+            node["idxs"] = idxs.astype(np.int64, copy=False)
+            return ni
+        node["leaf"] = False
+        node["axis"] = axis
+        node["split"] = float(pts[sidx[mid], axis])
+        node["left"] = _build(left)
+        node["right"] = _build(right)
+        return ni
+
+    root = _build(np.arange(pts.shape[0], dtype=np.int64))
+    return {"points": pts, "nodes": nodes, "root": int(root)}
+
+
+def _kdtree_box_query(tree: dict[str, Any] | None, q: np.ndarray, rad: float) -> np.ndarray:
+    """Query KD-tree with L-infinity box around q (+/- rad on each axis)."""
+    if tree is None:
+        return np.zeros(0, dtype=np.int64)
+    pts = np.asarray(tree.get("points"), dtype=np.float64)
+    nodes = tree.get("nodes")
+    root = int(tree.get("root", 0) or 0)
+    if pts.ndim != 2 or pts.shape[1] != 3 or not isinstance(nodes, list) or not nodes:
+        return np.zeros(0, dtype=np.int64)
+    qq = np.asarray(q, dtype=np.float64).reshape(3)
+    if (not np.all(np.isfinite(qq))) or (not np.isfinite(rad)) or rad < 0.0:
+        return np.zeros(0, dtype=np.int64)
+    lo = qq - float(rad)
+    hi = qq + float(rad)
+    out: list[np.ndarray] = []
+    stack: list[int] = [root]
+    while stack:
+        ni = int(stack.pop())
+        if ni < 0 or ni >= len(nodes):
+            continue
+        node = nodes[ni]
+        bmin = np.asarray(node.get("bbox_min"), dtype=np.float64)
+        bmax = np.asarray(node.get("bbox_max"), dtype=np.float64)
+        if bmin.shape != (3,) or bmax.shape != (3,):
+            continue
+        if np.any(bmax < lo) or np.any(bmin > hi):
+            continue
+        if bool(node.get("leaf", False)):
+            idxs = np.asarray(node.get("idxs", np.zeros(0, dtype=np.int64)), dtype=np.int64)
+            if idxs.size <= 0:
+                continue
+            p = pts[idxs]
+            m = np.all(np.abs(p - qq[None, :]) <= float(rad), axis=1)
+            if np.any(m):
+                out.append(idxs[np.flatnonzero(m)])
+            continue
+        stack.append(int(node.get("left", -1)))
+        stack.append(int(node.get("right", -1)))
+    if not out:
+        return np.zeros(0, dtype=np.int64)
+    return np.unique(np.concatenate(out).astype(np.int64, copy=False))
+
+
+def _greedy_global_pairing(
+    pred: np.ndarray,
+    dst_sel: np.ndarray,
+    *,
+    thr: float,
+    max_pairs: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
+    """Greedy one-to-one pairing over all candidate pairs within threshold (global distance order)."""
+    if pred.size == 0 or dst_sel.size == 0:
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float64), 0
+    try:
+        dmat = np.abs(pred[:, None] - dst_sel[None, :])
+    except Exception:
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float64), 0
+    if dmat.size == 0:
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float64), 0
+
+    finite = np.isfinite(dmat)
+    mask = finite & (dmat <= float(thr))
+    if not np.any(mask):
+        return np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.int64), np.zeros(0, dtype=np.float64), 0
+
+    nearest_j = np.argmin(dmat, axis=1)
+    nearest_i_for_dst = np.argmin(dmat, axis=0)
+
+    flat = np.flatnonzero(mask.ravel())
+    vals = dmat.ravel()[flat]
+    order = flat[np.argsort(vals, kind="mergesort")]
+
+    used_src: set[int] = set()
+    used_dst: set[int] = set()
+    keep_i: list[int] = []
+    keep_j: list[int] = []
+    keep_d: list[float] = []
+    mutual_kept = 0
+    n_dst = int(dmat.shape[1])
+    cap = max(4, int(max_pairs))
+
+    for ff in order:
+        i = int(ff // n_dst)
+        j = int(ff % n_dst)
+        if i in used_src or j in used_dst:
+            continue
+        dd = float(dmat[i, j])
+        if not np.isfinite(dd):
+            continue
+        used_src.add(i)
+        used_dst.add(j)
+        keep_i.append(i)
+        keep_j.append(j)
+        keep_d.append(dd)
+        if int(nearest_j[i]) == j and int(nearest_i_for_dst[j]) == i:
+            mutual_kept += 1
+        if len(keep_i) >= cap:
+            break
+
+    return (
+        np.asarray(keep_i, dtype=np.int64),
+        np.asarray(keep_j, dtype=np.int64),
+        np.asarray(keep_d, dtype=np.float64),
+        int(mutual_kept),
+    )
+
+
+def _score_transform_with_reassignment(
+    src_all_c: np.ndarray,
+    dst_all_c: np.ndarray,
+    *,
+    rot_scale: complex,
+    translation: complex,
+    tol_deg: float,
+    max_points: int = 256,
+    max_pairs: int = 256,
+) -> tuple[int, float, dict[str, int | float]]:
+    """Evaluate a transform with Astrometry-like greedy one-to-one reassignment (not index-locked)."""
+    src_c = np.asarray(src_all_c, dtype=np.complex128)
+    dst_c = np.asarray(dst_all_c, dtype=np.complex128)
+    n_src = int(src_c.shape[0])
+    n_dst = int(dst_c.shape[0])
+    if n_src < 4 or n_dst < 4:
+        return 0, float("inf"), {"kept": 0, "n_eval": 0, "median_dist_deg": float("nan")}
+
+    n_keep = int(max(8, min(max_points, n_src, n_dst)))
+    src_idx = np.arange(n_src, dtype=np.int64)
+    dst_idx = np.arange(n_dst, dtype=np.int64)
+    if n_src > n_keep:
+        src_idx = src_idx[:n_keep]
+    if n_dst > n_keep:
+        dst_idx = dst_idx[:n_keep]
+
+    pred = rot_scale * src_c[src_idx] + translation
+    dst_sel = dst_c[dst_idx]
+    if pred.size == 0 or dst_sel.size == 0:
+        return 0, float("inf"), {"kept": 0, "n_eval": 0, "median_dist_deg": float("nan")}
+
+    thr = float(max(1e-10, tol_deg))
+    thr_base = float(thr)
+    li, lj, ld, mutual_kept = _greedy_global_pairing(
+        pred,
+        dst_sel,
+        thr=thr,
+        max_pairs=max_pairs,
+    )
+
+    if li.size > 0:
+        kept_px = ld / max(abs(rot_scale), 1e-12)
+        rms_px = float(np.sqrt(np.mean(np.square(np.asarray(kept_px, dtype=np.float64)))))
+        src_keep = src_idx[li]
+        dst_keep = dst_idx[lj]
+    else:
+        rms_px = float("inf")
+        src_keep = np.zeros(0, dtype=np.int64)
+        dst_keep = np.zeros(0, dtype=np.int64)
+
+    inliers = int(li.size)
+    diag = {
+        "kept": int(inliers),
+        "n_eval": int(pred.shape[0]),
+        "mutual_kept": int(mutual_kept),
+        "median_dist_deg": float(np.median(ld)) if ld.size > 0 else float("nan"),
+        "src_indices": np.asarray(src_keep, dtype=np.int64),
+        "dst_indices": np.asarray(dst_keep, dtype=np.int64),
+    }
+    return inliers, rms_px, diag
+
+
+def _resolve_hit_correspondences(
+    src_all_c: np.ndarray,
+    dst_all_c: np.ndarray,
+    *,
+    rot_scale: complex,
+    translation: complex,
+    tol_deg: float,
+    max_points: int = 192,
+    max_pairs: int = 64,
+    astrometry_iso: bool = False,
+    strict_subset_mode: str = "nn_radius",
+    strict_relaxed_retry: bool = False,
+    strict_relaxed_retry_tol_factor: float = 10.0,
+    strict_relaxed_retry_max_pairs_factor: int = 3,
+    strict_prune_enabled: bool = True,
+    strict_prune_tol_factor: float = 2.5,
+) -> tuple[np.ndarray, np.ndarray, dict[str, int | float]] | None:
+    """Approximate Astrometry resolve_matches: one-to-one correspondences under hypothesis.
+
+    P0.2 step: avoid first-N truncation bias in strict mode by evaluating all source stars
+    then building a candidate pool by nearest-distance radius gate.
+    """
+    src_c = np.asarray(src_all_c, dtype=np.complex128)
+    dst_c = np.asarray(dst_all_c, dtype=np.complex128)
+    n_src = int(src_c.shape[0])
+    n_dst = int(dst_c.shape[0])
+    if n_src < 4 or n_dst < 4:
+        return None
+
+    thr = float(max(1e-10, tol_deg))
+
+    if bool(astrometry_iso):
+        src_idx = np.arange(n_src, dtype=np.int64)
+        pred = rot_scale * src_c[src_idx] + translation
+        if pred.size <= 0 or dst_c.size <= 0:
+            return None
+        # Radius-first candidate prefilter: keep stars that are plausibly matchable.
+        try:
+            dmat_all = np.abs(pred[:, None] - dst_c[None, :])
+            nn_all = np.min(dmat_all, axis=1) if dmat_all.size > 0 else np.zeros((0,), dtype=np.float64)
+            mode = str(strict_subset_mode or "nn_radius").strip().lower()
+            if mode not in {"nn_radius", "nn_ranked", "hybrid"}:
+                mode = "nn_radius"
+            keep_mask = np.isfinite(nn_all) & (nn_all <= float(thr))
+            ord_nn = np.argsort(nn_all)
+            k_take = int(max(8, min(max_points, n_src)))
+            if mode == "nn_ranked":
+                src_idx = np.asarray(ord_nn[:k_take], dtype=np.int64)
+            elif mode == "hybrid":
+                if int(np.count_nonzero(keep_mask)) >= 4:
+                    idx_r = np.flatnonzero(keep_mask)
+                    if idx_r.size > k_take:
+                        idx_r = idx_r[np.argsort(nn_all[idx_r])[:k_take]]
+                    src_idx = np.asarray(idx_r, dtype=np.int64)
+                else:
+                    src_idx = np.asarray(ord_nn[:k_take], dtype=np.int64)
+            else:
+                # nn_radius
+                if int(np.count_nonzero(keep_mask)) >= 4:
+                    idx_r = np.flatnonzero(keep_mask)
+                    if idx_r.size > k_take:
+                        idx_r = idx_r[np.argsort(nn_all[idx_r])[:k_take]]
+                    src_idx = np.asarray(idx_r, dtype=np.int64)
+                else:
+                    src_idx = np.asarray(ord_nn[:k_take], dtype=np.int64)
+            pred = rot_scale * src_c[src_idx] + translation
+        except Exception:
+            k_take = int(max(8, min(max_points, n_src)))
+            src_idx = np.arange(n_src, dtype=np.int64)[:k_take]
+            pred = rot_scale * src_c[src_idx] + translation
+
+        dst_idx = np.arange(n_dst, dtype=np.int64)
+        dst_sel = dst_c[dst_idx]
+    else:
+        n_keep = int(max(8, min(max_points, n_src, n_dst)))
+        src_idx = np.arange(n_src, dtype=np.int64)
+        dst_idx = np.arange(n_dst, dtype=np.int64)
+        if n_src > n_keep:
+            src_idx = src_idx[:n_keep]
+        if n_dst > n_keep:
+            dst_idx = dst_idx[:n_keep]
+        pred = rot_scale * src_c[src_idx] + translation
+        dst_sel = dst_c[dst_idx]
+
+    if pred.size == 0 or dst_sel.size == 0:
+        return None
+
+    li, lj, ld, mutual_kept = _greedy_global_pairing(
+        pred,
+        dst_sel,
+        thr=thr,
+        max_pairs=max_pairs,
+    )
+
+    if li.size < 4 and bool(astrometry_iso) and bool(strict_relaxed_retry):
+        thr_relaxed_s = float(max(thr * max(1.0, float(strict_relaxed_retry_tol_factor)), thr + 1e-10))
+        mp_relaxed_s = int(max(max_pairs, int(max_pairs) * max(1, int(strict_relaxed_retry_max_pairs_factor))))
+        li_s, lj_s, ld_s, mutual_kept_s = _greedy_global_pairing(
+            pred,
+            dst_sel,
+            thr=thr_relaxed_s,
+            max_pairs=mp_relaxed_s,
+        )
+        if li_s.size > li.size:
+            li, lj, ld, mutual_kept = li_s, lj_s, ld_s, mutual_kept_s
+            thr = thr_relaxed_s
+
+    if li.size >= 4 and bool(astrometry_iso) and bool(strict_prune_enabled):
+        try:
+            src0 = np.column_stack((src_c[src_idx[li]].real, src_c[src_idx[li]].imag)).astype(np.float64)
+            dst0 = np.column_stack((dst_c[dst_idx[lj]].real, dst_c[dst_idx[lj]].imag)).astype(np.float64)
+            hyp0 = _derive_similarity(src0, dst0)
+            if hyp0 is not None:
+                rs0, tr0 = hyp0
+                sc0 = float(max(abs(rs0), 1e-12))
+                err0 = np.abs((complex(rs0) * (src0[:, 0] + 1j * src0[:, 1]) + complex(tr0)) - (dst0[:, 0] + 1j * dst0[:, 1]))
+                thr_pr = float(max(thr_base * max(1.0, float(strict_prune_tol_factor)), thr_base + 1e-10))
+                km = np.isfinite(err0) & (err0 <= thr_pr)
+                if int(np.count_nonzero(km)) >= 4 and int(np.count_nonzero(km)) < int(li.size):
+                    li = li[km]
+                    lj = lj[km]
+                    ld = ld[km]
+                    # keep thr at prune scale for diag consistency
+                    thr = thr_pr
+        except Exception:
+            pass
+
+    if li.size < 4 and (not bool(astrometry_iso)):
+        # Adaptive retry in non-strict mode.
+        thr_relaxed = float(max(thr * 2.5, thr + 1e-10))
+        li2, lj2, ld2, mutual_kept2 = _greedy_global_pairing(
+            pred,
+            dst_sel,
+            thr=thr_relaxed,
+            max_pairs=max(max_pairs, int(max_pairs * 2)),
+        )
+        if li2.size > li.size:
+            li, lj, ld, mutual_kept = li2, lj2, ld2, mutual_kept2
+            thr = thr_relaxed
+
+    if li.size < 4:
+        return None
+
+    keep_src = src_idx[li]
+    keep_dst = dst_idx[lj]
+    src_pts = np.column_stack((src_c[keep_src].real, src_c[keep_src].imag)).astype(np.float64)
+    dst_pts = np.column_stack((dst_c[keep_dst].real, dst_c[keep_dst].imag)).astype(np.float64)
+
+    # Small robustification pass before returning correspondences (non-iso only).
+    if not bool(astrometry_iso):
+        hyp = _derive_similarity(src_pts, dst_pts)
+        if hyp is not None and src_pts.shape[0] >= 5:
+            rs, tr = hyp
+            pred_pts = rs * (src_pts[:, 0] + 1j * src_pts[:, 1]) + tr
+            err = np.abs(pred_pts - (dst_pts[:, 0] + 1j * dst_pts[:, 1]))
+            if np.any(np.isfinite(err)):
+                med = float(np.median(err[np.isfinite(err)]))
+                thr_refine = max(3.0 * float(thr), 2.5 * max(1e-12, med))
+                km = np.isfinite(err) & (err <= float(thr_refine))
+                if int(np.sum(km)) >= 4 and int(np.sum(km)) < int(src_pts.shape[0]):
+                    src_pts = src_pts[km]
+                    dst_pts = dst_pts[km]
+
+    diag = {
+        "kept": int(src_pts.shape[0]),
+        "n_src": int(n_src),
+        "n_dst": int(n_dst),
+        "n_eval": int(pred.shape[0]),
+        "mutual_kept": int(mutual_kept),
+        "median_match_dist_deg": float(np.median(ld)) if ld.size > 0 else float("nan"),
+        "tol_deg": float(thr),
+        "src_indices": np.asarray(keep_src, dtype=np.int64),
+        "dst_indices": np.asarray(keep_dst, dtype=np.int64),
+        "source": "resolve_hit",
+    }
+    return src_pts, dst_pts, diag
+
+def _permutation_hypothesis_rescue(
+
+    image_pts: np.ndarray,
+    tile_pts: np.ndarray,
+    *,
+    tol_px: float,
+    allow_reflection: bool,
+    top_pairs: int = 14,
+    max_quads: int = 140,
+    min_inliers: int = 6,
+    code_tol: float = 0.08,
+    min_edge_px: float = 8.0,
+    scale_arcsec_min: float | None = None,
+    scale_arcsec_max: float | None = None,
+    scale_anchor_arcsec: float | None = None,
+    scale_prior_strength: float = 0.0,
+    random_state: int = 0,
+    astrometry_order: bool = False,
+) -> tuple[SimilarityTransform, SimilarityStats] | None:
+    """Astrometry-inspired fallback: explicit small-quad permutation sweep.
+
+    This approximates solver.c `try_permutations` behavior on a compact subset of
+    candidate pairs when RANSAC/seed paths fail.
+    """
+    n = int(image_pts.shape[0])
+    if n < 4 or tile_pts.shape[0] != n:
+        return None
+
+    src = np.asarray(image_pts, dtype=np.float64)
+    dst = np.asarray(tile_pts, dtype=np.float64)
+    finite = np.all(np.isfinite(src), axis=1) & np.all(np.isfinite(dst), axis=1)
+    if not np.any(finite):
+        return None
+    src = src[finite]
+    dst = dst[finite]
+    n = int(src.shape[0])
+    if n < 4:
+        return None
+
+    keep_n = max(4, min(n, int(max(4, top_pairs))))
+    if n > keep_n:
+        if astrometry_order:
+            # Astrometry-like: preserve incoming vote order from candidate collection.
+            src_k = src[:keep_n]
+            dst_k = dst[:keep_n]
+        else:
+            c_src = np.median(src, axis=0)
+            c_dst = np.median(dst, axis=0)
+            r_src = np.hypot(src[:, 0] - c_src[0], src[:, 1] - c_src[1])
+            r_dst = np.hypot(dst[:, 0] - c_dst[0], dst[:, 1] - c_dst[1])
+            med_src = max(1e-6, float(np.median(r_src)))
+            med_dst = max(1e-12, float(np.median(r_dst)))
+            q = np.exp(-0.5 * ((np.abs((r_src / med_src) - (r_dst / med_dst))) / 0.55) ** 2)
+            order = np.argsort(q)[::-1]
+            sel = order[:keep_n]
+            src_k = src[sel]
+            dst_k = dst[sel]
+    else:
+        src_k = src
+        dst_k = dst
+
+    k = int(src_k.shape[0])
+    if k < 4:
+        return None
+
+    all_combos = list(combinations(range(k), 4))
+    if not all_combos:
+        return None
+    maxq = int(max(8, max_quads))
+    if len(all_combos) > maxq:
+        if astrometry_order:
+            # Astrometry-like deterministic order: prefer quads with stronger AB baselines in both spaces.
+            combo_scores: list[tuple[float, tuple[int, int, int, int]]] = []
+            for cb in all_combos:
+                ids = np.asarray(cb, dtype=np.int64)
+                s4 = src_k[ids]
+                d4 = dst_k[ids]
+                src_best = 0.0
+                dst_best = 0.0
+                for ii in range(4):
+                    for jj in range(ii + 1, 4):
+                        ds = float(np.sum((s4[jj] - s4[ii]) ** 2))
+                        dd = float(np.sum((d4[jj] - d4[ii]) ** 2))
+                        if ds > src_best:
+                            src_best = ds
+                        if dd > dst_best:
+                            dst_best = dd
+                combo_scores.append((float(min(src_best, dst_best)), cb))
+            combo_scores.sort(key=lambda row: row[0], reverse=True)
+            combos = [cb for _score, cb in combo_scores[:maxq]]
+        else:
+            rng = np.random.default_rng(int(random_state) & 0xFFFFFFFF)
+            pick = rng.choice(len(all_combos), size=maxq, replace=False)
+            combos = [all_combos[int(i)] for i in pick]
+    else:
+        combos = all_combos
+
+    src_all_c = src_k[:, 0].astype(np.float64) + 1j * src_k[:, 1].astype(np.float64)
+    dst_all_c = dst_k[:, 0].astype(np.float64) + 1j * dst_k[:, 1].astype(np.float64)
+    min_inl = max(4, int(min_inliers))
+    tol = max(0.8, float(tol_px))
+
+    parity_modes = [1, -1] if bool(allow_reflection) else [1]
+    perm4 = list(permutations(range(4)))
+
+    s_min = None
+    s_max = None
+    try:
+        if scale_arcsec_min is not None and np.isfinite(float(scale_arcsec_min)) and float(scale_arcsec_min) > 0.0:
+            s_min = float(scale_arcsec_min)
+    except Exception:
+        s_min = None
+    try:
+        if scale_arcsec_max is not None and np.isfinite(float(scale_arcsec_max)) and float(scale_arcsec_max) > 0.0:
+            s_max = float(scale_arcsec_max)
+    except Exception:
+        s_max = None
+    s_anchor = None
+    try:
+        if scale_anchor_arcsec is not None and np.isfinite(float(scale_anchor_arcsec)) and float(scale_anchor_arcsec) > 0.0:
+            s_anchor = float(scale_anchor_arcsec)
+    except Exception:
+        s_anchor = None
+    s_prior = max(0.0, float(scale_prior_strength or 0.0))
+
+    best_tr: SimilarityTransform | None = None
+    best_inl = -1
+    best_rms = float("inf")
+    best_metric = float("-inf")
+
+    for combo in combos:
+        ids = np.asarray(combo, dtype=np.int64)
+        src4 = src_k[ids]
+        dst4_base = dst_k[ids]
+
+        if not _quad_code_space_inbox_ok(src4, code_tol=float(code_tol), min_edge_px=float(min_edge_px)):
+            continue
+        if not _quad_code_space_inbox_ok(dst4_base, code_tol=float(code_tol), min_edge_px=0.0):
+            continue
+
+        for parity in parity_modes:
+            reflected = bool(parity < 0)
+            src_eval_c = np.conj(src_all_c) if reflected else src_all_c
+            for pp in perm4:
+                dst4 = dst4_base[np.asarray(pp, dtype=np.int64)]
+                hyp = _derive_similarity(src4, dst4, reflected=reflected)
+                if hyp is None:
+                    continue
+                rot_scale, translation = hyp
+                scale = float(abs(rot_scale))
+                if not (1e-8 <= scale <= 1e-1):
+                    continue
+                model_scale_arcsec = 3600.0 * float(max(scale, 1e-12))
+                if s_min is not None and float(model_scale_arcsec) < float(s_min):
+                    continue
+                if s_max is not None and float(model_scale_arcsec) > float(s_max):
+                    continue
+
+                pred = rot_scale * src_eval_c + translation
+                err_px = np.abs(pred - dst_all_c) / max(scale, 1e-12)
+                mask = np.isfinite(err_px) & (err_px <= tol)
+                inl = int(np.count_nonzero(mask))
+                if inl < min_inl:
+                    continue
+                rms = float(np.sqrt(np.mean((err_px[mask]) ** 2))) if inl > 0 else float("inf")
+
+                metric = float(inl)
+                if np.isfinite(rms):
+                    metric -= 0.25 * math.log1p(max(0.0, rms - 0.35))
+                if s_anchor is not None and s_prior > 0.0:
+                    ratio_s = float(model_scale_arcsec) / float(max(1e-9, s_anchor))
+                    if np.isfinite(ratio_s) and ratio_s > 0.0:
+                        metric -= s_prior * abs(math.log(max(1e-6, ratio_s)))
+
+                if (metric > best_metric) or (metric == best_metric and ((inl > best_inl) or (inl == best_inl and rms < best_rms))):
+                    best_metric = float(metric)
+                    best_inl = inl
+                    best_rms = rms
+                    best_tr = SimilarityTransform(
+                        scale=float(max(scale, 1e-12)),
+                        rotation=float(np.angle(rot_scale)),
+                        translation=(float(translation.real), float(translation.imag)),
+                        parity=int(parity),
+                    )
+
+    if best_tr is None:
+        return None
+    return best_tr, SimilarityStats(rms_px=float(best_rms), inliers=int(best_inl))
+
+
+def _permutation_hypothesis_rescue_ladder(
+    image_pts: np.ndarray,
+    tile_pts: np.ndarray,
+    *,
+    tol_px: float,
+    allow_reflection: bool,
+    top_pairs: int,
+    max_quads: int,
+    min_inliers: int,
+    code_tol: float,
+    min_edge_px: float,
+    scale_arcsec_min: float | None,
+    scale_arcsec_max: float | None,
+    scale_anchor_arcsec: float | None,
+    scale_prior_strength: float,
+    random_state: int,
+    config: Any | None = None,
+    astrometry_order: bool = False,
+) -> tuple[SimilarityTransform, SimilarityStats] | None:
+    if not bool(getattr(config, "blind_hypothesis_permutation_ladder_enabled", True)):
+        return _permutation_hypothesis_rescue(
+            image_pts,
+            tile_pts,
+            tol_px=tol_px,
+            allow_reflection=allow_reflection,
+            top_pairs=top_pairs,
+            max_quads=max_quads,
+            min_inliers=min_inliers,
+            code_tol=code_tol,
+            min_edge_px=min_edge_px,
+            scale_arcsec_min=scale_arcsec_min,
+            scale_arcsec_max=scale_arcsec_max,
+            scale_anchor_arcsec=scale_anchor_arcsec,
+            scale_prior_strength=scale_prior_strength,
+            random_state=random_state,
+            astrometry_order=astrometry_order,
+        )
+
+    raw_steps = tuple(getattr(config, "blind_hypothesis_permutation_ladder_top_pairs", (8, 12, 16, 20, 24)) or (8, 12, 16, 20, 24))
+    steps: list[int] = []
+    for v in raw_steps:
+        try:
+            iv = int(v)
+        except Exception:
+            continue
+        if iv >= 4:
+            steps.append(iv)
+    if not steps:
+        steps = [int(max(4, top_pairs))]
+    if int(top_pairs) not in steps:
+        steps.append(int(max(4, top_pairs)))
+    steps = sorted(set(steps))
+
+    max_steps = max(1, int(getattr(config, "blind_hypothesis_permutation_ladder_max_steps", 3) or 1))
+    if len(steps) > max_steps:
+        # Keep smallest->largest progression around requested top_pairs.
+        steps = steps[:max_steps]
+        if int(top_pairs) not in steps:
+            steps[-1] = int(max(4, top_pairs))
+
+    stop_inliers = max(int(min_inliers), int(getattr(config, "blind_hypothesis_permutation_ladder_stop_inliers", 8) or 0))
+
+    best: tuple[SimilarityTransform, SimilarityStats] | None = None
+    best_inl = -1
+    best_rms = float("inf")
+
+    base_tp = max(4, int(top_pairs))
+    base_mq = max(8, int(max_quads))
+    for i, tp in enumerate(steps):
+        tp_eff = max(4, int(tp))
+        mq_eff = max(8, int(round(base_mq * (float(tp_eff) / float(base_tp)))))
+        seed_i = int((int(random_state) ^ ((i + 1) * 0x9E3779B1)) & 0xFFFFFFFF)
+        cur = _permutation_hypothesis_rescue(
+            image_pts,
+            tile_pts,
+            tol_px=tol_px,
+            allow_reflection=allow_reflection,
+            top_pairs=tp_eff,
+            max_quads=mq_eff,
+            min_inliers=min_inliers,
+            code_tol=code_tol,
+            min_edge_px=min_edge_px,
+            scale_arcsec_min=scale_arcsec_min,
+            scale_arcsec_max=scale_arcsec_max,
+            scale_anchor_arcsec=scale_anchor_arcsec,
+            scale_prior_strength=scale_prior_strength,
+            random_state=seed_i,
+            astrometry_order=astrometry_order,
+        )
+        if cur is None:
+            continue
+        _tr, _st = cur
+        inl = int(getattr(_st, "inliers", 0) or 0)
+        rms = float(getattr(_st, "rms_px", float("inf")) or float("inf"))
+        if (inl > best_inl) or (inl == best_inl and rms < best_rms):
+            best = cur
+            best_inl = inl
+            best_rms = rms
+        if inl >= stop_inliers:
+            break
+
+    return best
+
+
+def _estimate_similarity_multitolerance(
+    image_pts: np.ndarray,
+    tile_pts: np.ndarray,
+    *,
+    base_tol_px: float,
+    allow_reflection: bool,
+    random_state: int,
+    base_trials: int,
+    quality_inliers: int,
+    tol_scales: tuple[float, ...] = (1.0, 1.4, 2.0),
+) -> tuple[SimilarityTransform, SimilarityStats] | None:
+    if image_pts.shape[0] < 4 or tile_pts.shape[0] < 4:
+        return None
+
+    # sanitize scales (keep deterministic ordering, dedup near-equal values)
+    scales_raw = [float(v) for v in tuple(tol_scales or ()) if np.isfinite(float(v)) and float(v) > 0.0]
+    if not scales_raw:
+        scales_raw = [1.0, 1.4, 2.0]
+    scales = sorted({round(v, 3) for v in scales_raw})
+
+    best: tuple[SimilarityTransform, SimilarityStats] | None = None
+    best_score = -1e18
+    for k, sc in enumerate(scales):
+        tol = max(0.8, float(base_tol_px) * float(sc))
+        # keep compute bounded on wider tolerances
+        if k == 0:
+            trials = max(80, int(base_trials))
+        elif k == 1:
+            trials = max(80, int(base_trials * 0.65))
+        else:
+            trials = max(60, int(base_trials * 0.45))
+
+        seed_k = int((int(random_state) ^ ((k + 1) * 0x9E3779B1)) & 0xFFFFFFFF)
+        cand = estimate_similarity_RANSAC(
+            image_pts,
+            tile_pts,
+            trials=trials,
+            tol_px=tol,
+            min_inliers=4,
+            allow_reflection=bool(allow_reflection),
+            early_stop_inliers=max(10, int(0.85 * int(quality_inliers))),
+            random_state=seed_k,
+        )
+        if cand is None:
+            continue
+        tr, st = cand
+        inl = int(getattr(st, "inliers", 0) or 0)
+        rms = float(getattr(st, "rms_px", float("inf")) or float("inf"))
+        if not np.isfinite(rms):
+            rms = 1e6
+        # prefer support first; break ties with RMS and stricter tol
+        score = (10.0 * float(inl)) - (1.6 * float(rms)) - (0.25 * float(k))
+        if score > best_score:
+            best_score = score
+            best = cand
+        if inl >= int(quality_inliers) and rms <= max(0.8, float(base_tol_px) * 0.9):
+            return cand
+
+    return best
+
+
+
+
+def _pre_model_bipartite_reassign(
+    image_pts: np.ndarray,
+    tile_pts: np.ndarray,
+    world_pts: np.ndarray,
+    *,
+    min_keep_ratio: float = 0.25,
+    image_bin_px: float = 1.5,
+    tile_bin_px: float = 1.5,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, int | float | str]]:
+    """Early one-to-one reassignment on raw candidate pairs before model fitting.
+
+    This is intentionally lightweight: it bins points to collapse near-duplicates,
+    then applies a weighted greedy bipartite matching favoring low ambiguity.
+    """
+    n = int(image_pts.shape[0])
+    if n <= 0 or tile_pts.shape[0] != n or world_pts.shape[0] != n:
+        return image_pts, tile_pts, world_pts, {"input": n, "kept": n, "removed": 0, "mode": "noop"}
+
+    src = np.asarray(image_pts, dtype=np.float64)
+    dst = np.asarray(tile_pts, dtype=np.float64)
+    finite = np.all(np.isfinite(src), axis=1) & np.all(np.isfinite(dst), axis=1)
+    if not np.any(finite):
+        return image_pts, tile_pts, world_pts, {"input": n, "kept": n, "removed": 0, "mode": "non_finite"}
+
+    src_f = src[finite]
+    dst_f = dst[finite]
+    idx_map = np.where(finite)[0]
+
+    c_img = np.median(src_f, axis=0)
+    c_tile = np.median(dst_f, axis=0)
+    img_r = np.hypot(src_f[:, 0] - c_img[0], src_f[:, 1] - c_img[1])
+    tile_r = np.hypot(dst_f[:, 0] - c_tile[0], dst_f[:, 1] - c_tile[1])
+    img_spread = float(np.median(img_r)) if img_r.size else 1.0
+    tile_spread = float(np.median(tile_r)) if tile_r.size else 1.0
+    scale_deg_per_px = max(1e-12, tile_spread / max(1e-6, img_spread))
+
+    ib = max(0.25, float(image_bin_px))
+    tb = max(1e-12, float(tile_bin_px) * scale_deg_per_px)
+
+    ii = np.round(src_f[:, 0] / ib).astype(np.int64, copy=False)
+    ij = np.round(src_f[:, 1] / ib).astype(np.int64, copy=False)
+    ti = np.round(dst_f[:, 0] / tb).astype(np.int64, copy=False)
+    tj = np.round(dst_f[:, 1] / tb).astype(np.int64, copy=False)
+
+    img_node_for: dict[tuple[int, int], int] = {}
+    tile_node_for: dict[tuple[int, int], int] = {}
+    edges: list[tuple[float, int, int, int]] = []  # cost, img_node, tile_node, original_idx
+    img_deg: dict[int, int] = {}
+    tile_deg: dict[int, int] = {}
+
+    for k in range(src_f.shape[0]):
+        ik = (int(ii[k]), int(ij[k]))
+        tk = (int(ti[k]), int(tj[k]))
+        i_id = img_node_for.setdefault(ik, len(img_node_for))
+        t_id = tile_node_for.setdefault(tk, len(tile_node_for))
+        img_deg[i_id] = int(img_deg.get(i_id, 0) + 1)
+        tile_deg[t_id] = int(tile_deg.get(t_id, 0) + 1)
+        # radial consistency term (dimensionless)
+        ri = float(img_r[k] / max(1e-6, img_spread))
+        rt = float(tile_r[k] / max(1e-6, tile_spread))
+        cost = abs(ri - rt)
+        edges.append((cost, i_id, t_id, int(idx_map[k])))
+
+    if not edges:
+        return image_pts, tile_pts, world_pts, {"input": n, "kept": n, "removed": 0, "mode": "no_edges"}
+
+    conflict = any(v > 1 for v in img_deg.values()) or any(v > 1 for v in tile_deg.values())
+    if not conflict:
+        return image_pts, tile_pts, world_pts, {"input": n, "kept": n, "removed": 0, "mode": "no_conflict"}
+
+    weighted: list[tuple[float, int, int, int]] = []
+    for base, i_id, t_id, idx in edges:
+        amb = float(max(0, img_deg.get(i_id, 1) - 1) + max(0, tile_deg.get(t_id, 1) - 1))
+        weighted.append((amb + 0.20 * base, i_id, t_id, idx))
+    weighted.sort(key=lambda x: x[0])
+
+    used_i: set[int] = set()
+    used_t: set[int] = set()
+    keep: list[int] = []
+    for _c, i_id, t_id, idx in weighted:
+        if i_id in used_i or t_id in used_t:
+            continue
+        used_i.add(i_id)
+        used_t.add(t_id)
+        keep.append(int(idx))
+
+    if not keep:
+        return image_pts, tile_pts, world_pts, {"input": n, "kept": n, "removed": 0, "mode": "empty_keep"}
+
+    keep_idx = np.asarray(sorted(set(keep)), dtype=np.int64)
+    keep_ratio = float(keep_idx.size) / float(max(1, n))
+    if keep_ratio < float(max(0.05, min(1.0, min_keep_ratio))):
+        return image_pts, tile_pts, world_pts, {
+            "input": n,
+            "kept": n,
+            "removed": 0,
+            "mode": "ratio_guard",
+            "keep_ratio": float(keep_ratio),
+        }
+
+    return (
+        image_pts[keep_idx],
+        tile_pts[keep_idx],
+        world_pts[keep_idx],
+        {
+            "input": n,
+            "kept": int(keep_idx.size),
+            "removed": int(n - keep_idx.size),
+            "mode": "weighted_greedy",
+            "keep_ratio": float(keep_ratio),
+            "nodes_img": int(len(img_node_for)),
+            "nodes_tile": int(len(tile_node_for)),
+        },
+    )
+
+
+def _resolve_verify_conflicts(
+    image_pts: np.ndarray,
+    tile_pts: np.ndarray,
+    world_pts: np.ndarray,
+    transform: SimilarityTransform,
+    *,
+    min_keep_ratio: float = 0.45,
+    image_bin_px: float = 2.5,
+    tile_bin_px: float = 2.5,
+    max_component_edges: int = 256,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, int | float | str]]:
+    """Resolve ambiguous verify correspondences with weighted bipartite matching.
+
+    Strategy:
+    - group near-duplicate image/tile points with configurable bins,
+    - build conflict components,
+    - keep a one-to-one weighted matching (low residual first) with a small 2-opt
+      refinement inside each component.
+    """
+    n = int(image_pts.shape[0])
+    if n <= 0 or tile_pts.shape[0] != n or world_pts.shape[0] != n:
+        return image_pts, tile_pts, world_pts, {"input": n, "kept": n, "removed": 0, "mode": "noop"}
+
+    src = np.asarray(image_pts, dtype=np.float64)
+    dst = np.asarray(tile_pts, dtype=np.float64)
+    src_c = src[:, 0] + 1j * src[:, 1]
+    if int(getattr(transform, "parity", 1)) < 0:
+        src_c = np.conj(src_c)
+    rs = float(getattr(transform, "scale", 0.0) or 0.0) * np.exp(1j * float(getattr(transform, "rotation", 0.0) or 0.0))
+    tr = complex(*getattr(transform, "translation", (0.0, 0.0)))
+    scale_abs = max(1e-12, float(abs(rs)))
+    pred = rs * src_c + tr
+    err_px = np.abs(pred - (dst[:, 0] + 1j * dst[:, 1])) / scale_abs
+    finite = np.isfinite(err_px)
+    if not np.any(finite):
+        return image_pts, tile_pts, world_pts, {"input": n, "kept": n, "removed": 0, "mode": "non_finite"}
+
+    img_bin = max(0.25, float(image_bin_px))
+    tile_bin_deg = max(1e-10, float(tile_bin_px) * scale_abs)
+    ii = np.round(src[:, 0] / img_bin).astype(np.int64, copy=False)
+    ij = np.round(src[:, 1] / img_bin).astype(np.int64, copy=False)
+    ti = np.round(dst[:, 0] / tile_bin_deg).astype(np.int64, copy=False)
+    tj = np.round(dst[:, 1] / tile_bin_deg).astype(np.int64, copy=False)
+
+    def _pair_key(a: int, b: int) -> tuple[int, int]:
+        return (int(a), int(b))
+
+    img_node_for: dict[tuple[int, int], int] = {}
+    tile_node_for: dict[tuple[int, int], int] = {}
+    edges: list[tuple[int, int, float, int]] = []
+    img_degree: dict[int, int] = {}
+    tile_degree: dict[int, int] = {}
+
+    idxs = np.where(finite)[0]
+    for k in idxs:
+        ik = _pair_key(ii[k], ij[k])
+        tk = _pair_key(ti[k], tj[k])
+        i_id = img_node_for.setdefault(ik, len(img_node_for))
+        t_id = tile_node_for.setdefault(tk, len(tile_node_for))
+        cost = float(err_px[k]) if np.isfinite(err_px[k]) else 1e9
+        edges.append((i_id, t_id, cost, int(k)))
+        img_degree[i_id] = int(img_degree.get(i_id, 0) + 1)
+        tile_degree[t_id] = int(tile_degree.get(t_id, 0) + 1)
+
+    if not edges:
+        return image_pts, tile_pts, world_pts, {"input": n, "kept": n, "removed": 0, "mode": "no_edges"}
+
+    has_conflict = any(v > 1 for v in img_degree.values()) or any(v > 1 for v in tile_degree.values())
+    if not has_conflict:
+        return image_pts, tile_pts, world_pts, {
+            "input": n,
+            "kept": n,
+            "removed": 0,
+            "mode": "no_conflict",
+            "components": 0,
+        }
+
+    n_img = len(img_node_for)
+    n_tile = len(tile_node_for)
+    total_nodes = n_img + n_tile
+    parent = list(range(total_nodes))
+
+    def _find(x: int) -> int:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def _union(a: int, b: int) -> None:
+        ra = _find(a)
+        rb = _find(b)
+        if ra != rb:
+            parent[rb] = ra
+
+    for i_id, t_id, _c, _idx in edges:
+        _union(i_id, n_img + t_id)
+
+    comp_edges: dict[int, list[tuple[int, int, float, int]]] = {}
+    for e in edges:
+        root = _find(e[0])
+        comp_edges.setdefault(root, []).append(e)
+
+    keep_indices: list[int] = []
+    components_used = 0
+
+    for comp in comp_edges.values():
+        if len(comp) == 1:
+            keep_indices.append(int(comp[0][3]))
+            continue
+
+        components_used += 1
+        comp_sorted = sorted(comp, key=lambda t: t[2])
+        matched_img: dict[int, int] = {}
+        matched_tile: dict[int, int] = {}
+        selected: set[int] = set()
+
+        # Initial weighted greedy matching
+        for ei, (im, tii, _cost, _idx) in enumerate(comp_sorted):
+            if im in matched_img or tii in matched_tile:
+                continue
+            matched_img[im] = ei
+            matched_tile[tii] = ei
+            selected.add(ei)
+
+        # Local 2-opt on ambiguous components (cheap, bounded)
+        if len(comp_sorted) <= int(max_component_edges):
+            best_edge_for_pair: dict[tuple[int, int], int] = {}
+            for ei, (im, tii, cost, _idx) in enumerate(comp_sorted):
+                key = (im, tii)
+                prev = best_edge_for_pair.get(key)
+                if prev is None or cost < comp_sorted[prev][2]:
+                    best_edge_for_pair[key] = ei
+
+            improved = True
+            sweep = 0
+            while improved and sweep < 8:
+                improved = False
+                sweep += 1
+                for ei, (im, tii, cost_e, _idx) in enumerate(comp_sorted):
+                    if ei in selected:
+                        continue
+                    ei_im = matched_img.get(im)
+                    ei_ti = matched_tile.get(tii)
+                    if ei_im is None or ei_ti is None or ei_im == ei_ti:
+                        continue
+                    im2, ti2, c_im, _ = comp_sorted[ei_im]
+                    im3, ti3, c_ti, _ = comp_sorted[ei_ti]
+                    # Existing edges are (im,ti2) and (im3,tii), try swapping to
+                    # (im,tii)=ei and (im3,ti2)=e_swap
+                    swap_key = (im3, ti2)
+                    e_swap = best_edge_for_pair.get(swap_key)
+                    if e_swap is None or e_swap in selected or e_swap == ei:
+                        continue
+                    c_swap = comp_sorted[e_swap][2]
+                    old_cost = float(c_im + c_ti)
+                    new_cost = float(cost_e + c_swap)
+                    if new_cost + 1e-9 < old_cost:
+                        selected.discard(ei_im)
+                        selected.discard(ei_ti)
+                        matched_img.pop(im, None)
+                        matched_tile.pop(ti2, None)
+                        matched_img.pop(im3, None)
+                        matched_tile.pop(tii, None)
+
+                        selected.add(ei)
+                        selected.add(e_swap)
+                        matched_img[im] = ei
+                        matched_tile[tii] = ei
+                        matched_img[im3] = e_swap
+                        matched_tile[ti2] = e_swap
+                        improved = True
+
+        for ei in sorted(selected):
+            keep_indices.append(int(comp_sorted[ei][3]))
+
+    if not keep_indices:
+        return image_pts, tile_pts, world_pts, {"input": n, "kept": n, "removed": 0, "mode": "empty_keep"}
+
+    keep_idx = np.asarray(sorted(set(keep_indices)), dtype=np.int64)
+    keep_ratio = float(keep_idx.size) / float(max(1, n))
+    if keep_ratio < float(max(0.05, min(1.0, min_keep_ratio))):
+        return image_pts, tile_pts, world_pts, {
+            "input": n,
+            "kept": n,
+            "removed": 0,
+            "mode": "ratio_guard",
+            "keep_ratio": float(keep_ratio),
+        }
+
+    return (
+        image_pts[keep_idx],
+        tile_pts[keep_idx],
+        world_pts[keep_idx],
+        {
+            "input": n,
+            "kept": int(keep_idx.size),
+            "removed": int(n - keep_idx.size),
+            "mode": "weighted_bipartite",
+            "keep_ratio": float(keep_ratio),
+            "components": int(components_used),
+        },
+    )
+
+
+def _compute_wcs_residuals_px(wcs: WCS, matches: np.ndarray, pix_scale_arcsec: float | None) -> np.ndarray:
+    if matches.size == 0:
+        return np.empty(0, dtype=np.float64)
+    if pix_scale_arcsec is None or not np.isfinite(float(pix_scale_arcsec)) or float(pix_scale_arcsec) <= 0.0:
+        return np.empty(0, dtype=np.float64)
+    try:
+        world = wcs.wcs_pix2world(matches[:, :2], 0)
+    except Exception:
+        return np.empty(0, dtype=np.float64)
+    ddeg = np.linalg.norm(np.asarray(world, dtype=np.float64) - np.asarray(matches[:, 2:], dtype=np.float64), axis=1)
+    return ddeg / max(1e-12, float(pix_scale_arcsec) / 3600.0)
+
+
+def _distance_from_quad_adjust_residuals(
+    residuals_px: np.ndarray,
+    image_xy: np.ndarray | None,
+    *,
+    enabled: bool = True,
+    gamma_cap: float = 4.0,
+    quad_frac: float = 0.35,
+) -> tuple[np.ndarray, dict[str, float | int | bool]]:
+    r = np.asarray(residuals_px, dtype=np.float64)
+    if (not bool(enabled)) or r.size == 0 or image_xy is None:
+        return r, {
+            "prob_gamma_enabled": bool(enabled),
+            "prob_gamma_applied": False,
+            "prob_gamma_q2_px2": float("nan"),
+            "prob_gamma_mean": float("nan"),
+        }
+    xy = np.asarray(image_xy, dtype=np.float64)
+    if xy.ndim != 2 or xy.shape[0] != r.shape[0] or xy.shape[1] < 2:
+        return r, {
+            "prob_gamma_enabled": bool(enabled),
+            "prob_gamma_applied": False,
+            "prob_gamma_q2_px2": float("nan"),
+            "prob_gamma_mean": float("nan"),
+        }
+    finite = np.isfinite(r) & np.all(np.isfinite(xy[:, :2]), axis=1)
+    if not np.any(finite):
+        return r, {
+            "prob_gamma_enabled": bool(enabled),
+            "prob_gamma_applied": False,
+            "prob_gamma_q2_px2": float("nan"),
+            "prob_gamma_mean": float("nan"),
+        }
+    pts = xy[finite, :2]
+    rr = r.copy()
+    qc = np.median(pts, axis=0)
+    d2 = np.sum((pts - qc[None, :]) ** 2, axis=1)
+    qf = float(min(0.80, max(0.10, float(quad_frac))))
+    q2 = float(np.percentile(d2, 100.0 * qf)) if d2.size else float("nan")
+    if (not np.isfinite(q2)) or q2 <= 1e-6:
+        q2 = float(np.mean(d2)) if d2.size else float("nan")
+    if (not np.isfinite(q2)) or q2 <= 1e-6:
+        return r, {
+            "prob_gamma_enabled": bool(enabled),
+            "prob_gamma_applied": False,
+            "prob_gamma_q2_px2": float("nan"),
+            "prob_gamma_mean": float("nan"),
+        }
+    q2 = float(max(4.0, q2))
+    gamma_cap_v = float(max(1.0, gamma_cap))
+    gamma = np.sqrt(1.0 + (d2 / q2))
+    gamma = np.clip(gamma, 1.0, gamma_cap_v)
+    rr_f = rr[finite]
+    rr_f = rr_f / gamma
+    rr[finite] = rr_f
+    return rr, {
+        "prob_gamma_enabled": bool(enabled),
+        "prob_gamma_applied": True,
+        "prob_gamma_q2_px2": float(q2),
+        "prob_gamma_mean": float(np.mean(gamma)) if gamma.size else float("nan"),
+    }
+
+
+def _probabilistic_verify_logodds(
+    residuals_px: np.ndarray,
+    *,
+    image_shape: tuple[int, int],
+    sigma_px: float,
+    prior_match: float = 0.35,
+    clip_delta: float = 7.0,
+    sigma_auto: bool = True,
+    sigma_floor_px: float = 0.7,
+) -> dict[str, float | int]:
+    """Compute an Astrometry-inspired match/conflict/distractor log-odds score.
+
+    Model:
+    - foreground residuals follow a Rayleigh law from 2D Gaussian centroid noise
+    - background residuals follow a uniform radial density over the image radius
+    - per-residual log-odds are accumulated with clipping for robustness
+    """
+    if residuals_px.size == 0:
+        return {
+            "prob_logodds": float("-inf"),
+            "prob_matches": 0,
+            "prob_conflicts": 0,
+            "prob_distractors": 0,
+            "prob_match_ratio": 0.0,
+            "prob_sigma_px": float(sigma_px),
+            "prob_sigma_est_px": float("nan"),
+            "prob_prior_match": float(prior_match),
+            "prob_rmax_px": float("nan"),
+        }
+
+    r = np.asarray(residuals_px, dtype=np.float64)
+    finite = np.isfinite(r)
+    if not np.any(finite):
+        n = int(r.size)
+        return {
+            "prob_logodds": float("-inf"),
+            "prob_matches": 0,
+            "prob_conflicts": int(n),
+            "prob_distractors": int(n),
+            "prob_match_ratio": 0.0,
+            "prob_sigma_px": float(sigma_px),
+            "prob_sigma_est_px": float("nan"),
+            "prob_prior_match": float(prior_match),
+            "prob_rmax_px": float("nan"),
+        }
+
+    r = np.abs(r[finite])
+    n = int(r.size)
+
+    sigma_cfg = float(max(1e-3, sigma_px))
+    sigma_est = float(np.median(r) / 1.1774100225) if n > 0 else sigma_cfg  # Rayleigh median = sigma*sqrt(2 ln 2)
+    if not np.isfinite(sigma_est) or sigma_est <= 0.0:
+        sigma_est = sigma_cfg
+    sigma_floor = float(max(0.2, sigma_floor_px))
+    if bool(sigma_auto):
+        sigma = float(max(sigma_floor, min(6.0, 0.45 * sigma_cfg + 0.55 * sigma_est)))
+    else:
+        sigma = float(max(sigma_floor, sigma_cfg))
+    sigma2 = sigma * sigma
+
+    h, w = int(image_shape[0]), int(image_shape[1])
+    rmax = float(max(1.0, 0.5 * math.hypot(max(h, 1), max(w, 1))))
+
+    p = float(prior_match)
+    p = min(1.0 - 1e-6, max(1e-6, p))
+    log_prior_odds = math.log(p) - math.log(1.0 - p)
+
+    r_safe = np.maximum(r, 1e-6)
+    # Rayleigh foreground (radial residual of 2D Gaussian localization error).
+    log_fg = np.log(r_safe) - 2.0 * math.log(sigma) - (r_safe * r_safe) / (2.0 * sigma2)
+    # Uniform background over disk radius rmax => p(r)=2r/rmax^2.
+    log_bg = np.log(2.0 * r_safe) - 2.0 * math.log(rmax)
+
+    delta = log_prior_odds + (log_fg - log_bg)
+    clip = float(max(1.0, clip_delta))
+    delta_clipped = np.clip(delta, -clip, clip)
+    logodds = float(np.sum(delta_clipped))
+
+    # Posterior-style buckets for telemetry.
+    post = 1.0 / (1.0 + np.exp(-delta_clipped))
+    matches = int(np.count_nonzero(post >= 0.65))
+    conflicts = int(np.count_nonzero(post <= 0.20))
+    distractors = int(max(0, n - matches - conflicts))
+
+    return {
+        "prob_logodds": logodds,
+        "prob_matches": matches,
+        "prob_conflicts": conflicts,
+        "prob_distractors": distractors,
+        "prob_match_ratio": float(matches / max(1, n)),
+        "prob_sigma_px": float(sigma),
+        "prob_sigma_est_px": float(sigma_est),
+        "prob_prior_match": float(p),
+        "prob_rmax_px": float(rmax),
+    }
+
+
+
+# Astrometry verify theta states.
+THETA_DISTRACTOR = -1
+THETA_CONFLICT = -2
+THETA_FILTERED = -3
+THETA_BAILEDOUT = -4
+THETA_STOPPEDLOOKING = -5
+
+
+def _logd_at(distractor: float, mu: int, nr: int, logbg: float) -> float:
+    nr_safe = max(1, int(nr))
+    d = float(min(0.999999, max(1e-6, distractor)))
+    return float(math.log(max(1e-12, d + (1.0 - d) * float(mu) / float(nr_safe))) + logbg)
+
+
+def _astrometry_verify_sequence_logodds(
+    *,
+    test_xy_px: np.ndarray,
+    ref_xy_px: np.ndarray,
+    testsigma2_px: np.ndarray | float,
+    effective_area_px2: float,
+    distractor_rate: float,
+    logodds_bail: float,
+    logodds_stoplooking: float,
+) -> dict[str, Any]:
+    """Astrometry-like sequential verify core (match/conflict/distractor)."""
+    test_xy = np.asarray(test_xy_px, dtype=np.float64)
+    ref_xy = np.asarray(ref_xy_px, dtype=np.float64)
+    if test_xy.ndim != 2 or ref_xy.ndim != 2 or test_xy.shape[1] < 2 or ref_xy.shape[1] < 2:
+        return {
+            "prob_logodds": float("-inf"),
+            "prob_logodds_last": float("-inf"),
+            "prob_matches": 0,
+            "prob_conflicts": 0,
+            "prob_distractors": 0,
+            "prob_match_ratio": 0.0,
+            "prob_theta": [],
+            "prob_steps": 0,
+            "prob_best_i": -1,
+            "prob_ibailed": -1,
+            "prob_istopped": -1,
+        }
+
+    nt = int(test_xy.shape[0])
+    nr = int(ref_xy.shape[0])
+    if nt <= 0 or nr <= 0:
+        return {
+            "prob_logodds": float("-inf"),
+            "prob_logodds_last": float("-inf"),
+            "prob_matches": 0,
+            "prob_conflicts": 0,
+            "prob_distractors": int(max(0, nt)),
+            "prob_match_ratio": 0.0,
+            "prob_theta": [int(THETA_DISTRACTOR)] * max(0, nt),
+            "prob_steps": int(max(0, nt)),
+            "prob_best_i": -1,
+            "prob_ibailed": -1,
+            "prob_istopped": -1,
+        }
+
+    sig2 = np.asarray(testsigma2_px, dtype=np.float64)
+    if sig2.ndim == 0:
+        sig2 = np.full((nt,), float(sig2), dtype=np.float64)
+    elif sig2.shape[0] != nt:
+        med = float(np.nanmedian(sig2)) if sig2.size else 1.0
+        sig2 = np.full((nt,), med if np.isfinite(med) and med > 0.0 else 1.0, dtype=np.float64)
+    sig2 = np.where(np.isfinite(sig2) & (sig2 > 1e-12), sig2, 1.0)
+
+    logbg = float(math.log(1.0 / max(1.0, float(effective_area_px2))))
+    d = float(min(0.999999, max(1e-6, distractor_rate)))
+
+    theta = np.full((nt,), int(THETA_FILTERED), dtype=np.int32)
+    rmatches = np.full((nr,), -1, dtype=np.int32)
+    rprobs = np.full((nr,), -float("inf"), dtype=np.float64)
+
+    all_delta = np.zeros((nt,), dtype=np.float64)
+    logodds = 0.0
+    worstlogodds = 0.0
+    bestworstlogodds = -float("inf")
+    bestlogodds = -float("inf")
+    besti = -1
+    mu = 0
+    ibailed = -1
+    istopped = -1
+    iend = nt
+
+    for i in range(nt):
+        tx = test_xy[i, :2]
+        s2 = float(sig2[i])
+        logd = _logd_at(d, mu, nr, logbg)
+
+        refi = -1
+        logfg = -float("inf")
+        if np.all(np.isfinite(tx)) and np.isfinite(s2) and s2 > 0.0:
+            diff = ref_xy[:, :2] - tx[None, :]
+            d2 = np.sum(diff * diff, axis=1)
+            if d2.size:
+                j = int(np.argmin(d2))
+                d2min = float(d2[j])
+                if np.isfinite(d2min) and d2min <= 25.0 * s2:
+                    refi = j
+                    loggmax = float(math.log(max(1e-12, (1.0 - d) / (2.0 * math.pi * s2 * float(max(1, nr))))))
+                    logfg = float(loggmax - d2min / (2.0 * s2))
+
+        if (refi < 0) or (not np.isfinite(logfg)) or (logfg < logd):
+            logfg = float(logd)
+            theta[i] = int(THETA_DISTRACTOR)
+        else:
+            oldj = int(rmatches[refi])
+            if oldj != -1:
+                oldfg = float(rprobs[refi])
+                keepfg = float(logd)
+
+                switchfg = float(logfg)
+                muj = 0
+                for j in range(oldj):
+                    if int(theta[j]) >= 0:
+                        muj += 1
+                switchfg += float(_logd_at(d, muj, nr, logbg) - oldfg)
+                for j in range(oldj, i):
+                    if int(theta[j]) < 0:
+                        switchfg += float(_logd_at(d, muj, nr, logbg) - _logd_at(d, muj + 1, nr, logbg))
+                    else:
+                        muj += 1
+
+                if switchfg > keepfg:
+                    theta[oldj] = int(THETA_CONFLICT)
+                    theta[i] = int(refi)
+                    rmatches[refi] = int(i)
+                    rprobs[refi] = float(logfg)
+                    logfg = float(switchfg)
+                else:
+                    logfg = float(keepfg)
+                    theta[i] = int(THETA_CONFLICT)
+            else:
+                rmatches[refi] = int(i)
+                rprobs[refi] = float(logfg)
+                theta[i] = int(refi)
+                mu += 1
+
+        delta = float(logfg - logbg)
+        logodds = float(logodds + delta)
+        all_delta[i] = delta
+
+        if logodds < float(logodds_bail):
+            ibailed = int(i)
+            if i + 1 < nt:
+                theta[i + 1 :] = int(THETA_BAILEDOUT)
+            iend = i + 1
+            break
+
+        worstlogodds = float(min(worstlogodds, logodds))
+        if logodds > bestlogodds:
+            bestlogodds = float(logodds)
+            besti = int(i)
+            bestworstlogodds = float(worstlogodds)
+
+        if logodds > float(logodds_stoplooking):
+            istopped = int(i)
+            if i + 1 < nt:
+                theta[i + 1 :] = int(THETA_STOPPEDLOOKING)
+            iend = i + 1
+            break
+
+    if besti < 0 and iend > 0:
+        besti = int(iend - 1)
+        bestlogodds = float(np.sum(all_delta[:iend]))
+        bestworstlogodds = float(np.min(np.cumsum(all_delta[:iend]))) if iend > 0 else 0.0
+
+    prefix_end = int(min(max(besti + 1, 0), nt))
+    theta_prefix = theta[:prefix_end] if prefix_end > 0 else np.empty((0,), dtype=np.int32)
+    nm = int(np.count_nonzero(theta_prefix >= 0))
+    nc = int(np.count_nonzero(theta_prefix == int(THETA_CONFLICT)))
+    nd = int(np.count_nonzero(theta_prefix == int(THETA_DISTRACTOR)))
+
+    theta_all = theta.astype(np.int32, copy=False)
+    m_all = int(np.count_nonzero(theta_all >= 0))
+    c_all = int(np.count_nonzero(theta_all == int(THETA_CONFLICT)))
+    d_all = int(np.count_nonzero(theta_all == int(THETA_DISTRACTOR)))
+    f_all = int(np.count_nonzero(theta_all == int(THETA_FILTERED)))
+    b_all = int(np.count_nonzero(theta_all == int(THETA_BAILEDOUT)))
+    s_all = int(np.count_nonzero(theta_all == int(THETA_STOPPEDLOOKING)))
+
+    return {
+        "prob_logodds": float(bestlogodds),
+        "prob_logodds_last": float(logodds),
+        "prob_matches": int(nm),
+        "prob_conflicts": int(nc),
+        "prob_distractors": int(nd),
+        "prob_match_ratio": float(nm / max(1, prefix_end)),
+        "prob_theta": [int(v) for v in theta_all.tolist()],
+        "prob_steps": int(iend),
+        "prob_best_i": int(besti),
+        "prob_ibailed": int(ibailed),
+        "prob_istopped": int(istopped),
+        "prob_worstlogodds": float(bestworstlogodds),
+        "prob_effective_area_px2": float(max(1.0, float(effective_area_px2))),
+        "prob_distractor_rate": float(d),
+        "prob_theta_match_total": int(m_all),
+        "prob_theta_conflict_total": int(c_all),
+        "prob_theta_distractor_total": int(d_all),
+        "prob_theta_filtered_total": int(f_all),
+        "prob_theta_bailedout_total": int(b_all),
+        "prob_theta_stoppedlooking_total": int(s_all),
+        "prob_theta_total": int(theta_all.size),
+    }
+
+def _quick_candidate_likelihood(
+    *,
+    img_points: np.ndarray,
+    tile_points: np.ndarray,
+    base_score: int,
+    image_shape: tuple[int, int],
+    tol_px: float,
+    try_parity_flip: bool,
+    approx_scale_deg: float | None,
+    trials: int,
+    seed: int,
+    prob_weight: float = 0.30,
+    prob_prior_match: float = 0.35,
+    prob_clip_delta: float = 7.0,
+) -> tuple[float, int, float]:
+    n = int(img_points.shape[0])
+    if n < 4 or tile_points.shape[0] != n:
+        return -1e9, 0, float("inf")
+    cap = min(n, 180)
+    if n > cap:
+        rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
+        idx = np.sort(rng.choice(n, size=cap, replace=False))
+        ip = img_points[idx]
+        tp = tile_points[idx]
+    else:
+        ip = img_points
+        tp = tile_points
+    quick = estimate_similarity_RANSAC(
+        ip,
+        tp,
+        trials=max(40, int(trials)),
+        tol_px=max(2.0, float(tol_px) * 1.25),
+        min_inliers=4,
+        allow_reflection=bool(try_parity_flip),
+        early_stop_inliers=16,
+        random_state=int(seed) & 0xFFFFFFFF,
+    )
+    if quick is None:
+        return float(math.log1p(max(1, int(base_score))) - 4.0), 0, float("inf")
+    tr, st = quick
+    x = ip[:, 0].astype(np.float64)
+    y = ip[:, 1].astype(np.float64)
+    cov = ((float(np.nanmax(x) - np.nanmin(x)) / max(1.0, float(image_shape[1]))) * (float(np.nanmax(y) - np.nanmin(y)) / max(1.0, float(image_shape[0])))) if x.size else 0.0
+    score = math.log1p(max(1, int(base_score))) + math.log1p(max(0, int(st.inliers))) - 1.15 * math.log(max(1e-6, float(st.rms_px))) + 0.45 * math.log1p(max(0.0, cov) * 120.0)
+    if approx_scale_deg is not None and approx_scale_deg > 0.0:
+        ratio = float(tr.scale) / float(approx_scale_deg)
+        score -= 0.80 * abs(math.log(max(1e-6, ratio)))
+
+    if float(prob_weight) > 0.0:
+        src_all_c = (ip[:, 0] + 1j * ip[:, 1]).astype(np.complex128)
+        if getattr(tr, "parity", 1) < 0:
+            src_all_c = np.conj(src_all_c)
+        dst_all_c = (tp[:, 0] + 1j * tp[:, 1]).astype(np.complex128)
+        rot_scale = float(tr.scale) * np.exp(1j * float(tr.rotation))
+        translation = complex(*tr.translation)
+        err_px = np.abs(rot_scale * src_all_c + translation - dst_all_c) / max(float(tr.scale), 1e-12)
+        err_in = np.asarray(err_px, dtype=np.float64)
+        err_in, _bonus = _distance_from_quad_adjust_residuals(
+            err_in,
+            ip,
+            enabled=True,
+            gamma_cap=4.0,
+            quad_frac=0.35,
+        )
+        prob = _probabilistic_verify_logodds(
+            err_in,
+            image_shape=image_shape,
+            sigma_px=max(0.8, float(tol_px) * 0.75),
+            prior_match=float(prob_prior_match),
+            clip_delta=float(prob_clip_delta),
+            sigma_auto=True,
+            sigma_floor_px=max(0.5, float(tol_px) * 0.30),
+        )
+        norm = max(6.0, float(ip.shape[0]))
+        score += float(prob_weight) * float(prob.get("prob_logodds", 0.0)) / norm
+    return float(score), int(st.inliers), float(st.rms_px)
+
+
+def _filter_blind_input_stars(
+    stars: np.ndarray,
+    *,
+    image_shape: tuple[int, int],
+    min_sep_px: float = 0.0,
+) -> tuple[np.ndarray, dict[str, float | int]]:
+    if stars.size == 0:
+        return stars, {"input": 0, "kept": 0, "removed": 0, "min_sep_px": float(min_sep_px)}
+    arr = np.asarray(stars)
+    finite = np.isfinite(arr["x"]) & np.isfinite(arr["y"]) & np.isfinite(arr["flux"]) & np.isfinite(arr["fwhm"]) & (arr["flux"] > 0.0)
+    arr = arr[finite]
+    if arr.size == 0:
+        return arr, {"input": int(stars.size), "kept": 0, "removed": int(stars.size), "min_sep_px": float(min_sep_px)}
+
+    fwhm = np.asarray(arr["fwhm"], dtype=np.float64)
+    med_f = float(np.median(fwhm)) if fwhm.size else 2.0
+    mad_f = float(np.median(np.abs(fwhm - med_f))) if fwhm.size else 0.0
+    lo_f = max(0.7, med_f - 3.5 * max(mad_f, 0.15))
+    hi_f = med_f + 4.5 * max(mad_f, 0.15)
+    shape_mask = (fwhm >= lo_f) & (fwhm <= hi_f)
+    arr = arr[shape_mask]
+    if arr.size == 0:
+        return arr, {"input": int(stars.size), "kept": 0, "removed": int(stars.size), "min_sep_px": float(min_sep_px)}
+
+    fwhm = np.asarray(arr["fwhm"], dtype=np.float64)
+    flux = np.asarray(arr["flux"], dtype=np.float64)
+    med_f = float(np.median(fwhm)) if fwhm.size else 2.0
+    mad_f = float(np.median(np.abs(fwhm - med_f))) if fwhm.size else 0.2
+
+    # Local-density penalty to down-rank likely hot-pixel clusters / streak fragments.
+    xs0 = np.asarray(arr["x"], dtype=np.float64)
+    ys0 = np.asarray(arr["y"], dtype=np.float64)
+    dens_cell = max(1.0, 1.8 * max(0.8, med_f))
+    cx = np.floor(xs0 / dens_cell).astype(np.int64)
+    cy = np.floor(ys0 / dens_cell).astype(np.int64)
+    cell_occ: dict[tuple[int, int], int] = {}
+    for ii in range(arr.shape[0]):
+        key = (int(cx[ii]), int(cy[ii]))
+        cell_occ[key] = int(cell_occ.get(key, 0)) + 1
+    density = np.asarray([cell_occ.get((int(cx[ii]), int(cy[ii])), 1) for ii in range(arr.shape[0])], dtype=np.float64)
+
+    qscore = (
+        np.log1p(np.maximum(0.0, flux))
+        - 0.35 * (np.abs(fwhm - med_f) / max(0.2, mad_f))
+        - 0.22 * np.log1p(np.maximum(0.0, density - 1.0))
+    )
+    order = np.argsort(qscore)[::-1]
+    arr = arr[order]
+
+    sep = float(min_sep_px)
+    if not np.isfinite(sep) or sep <= 0.0:
+        sep = max(1.0, 0.6 * med_f)
+    sep2 = sep * sep
+
+    kept_idx: list[int] = []
+    buckets: dict[tuple[int, int], list[int]] = {}
+    xs = np.asarray(arr["x"], dtype=np.float64)
+    ys = np.asarray(arr["y"], dtype=np.float64)
+    h, w = int(image_shape[0]), int(image_shape[1])
+    for i in range(arr.shape[0]):
+        x = float(xs[i])
+        y = float(ys[i])
+        if not (0.0 <= x < float(w) and 0.0 <= y < float(h)):
+            continue
+        cx = int(x // sep)
+        cy = int(y // sep)
+        reject = False
+        for nx in (cx - 1, cx, cx + 1):
+            for ny in (cy - 1, cy, cy + 1):
+                for j in buckets.get((nx, ny), []):
+                    dx = x - float(xs[j])
+                    dy = y - float(ys[j])
+                    if (dx * dx + dy * dy) < sep2:
+                        reject = True
+                        break
+                if reject:
+                    break
+            if reject:
+                break
+        if reject:
+            continue
+        kept_idx.append(i)
+        buckets.setdefault((cx, cy), []).append(i)
+
+    out = arr[np.asarray(kept_idx, dtype=np.int64)] if kept_idx else np.zeros(0, dtype=arr.dtype)
+    stats = {
+        "input": int(stars.size),
+        "kept": int(out.size),
+        "removed": int(stars.size - out.size),
+        "min_sep_px": float(sep),
+        "density_cell_px": float(dens_cell),
+    }
+    return out, stats
 
 
 @dataclass(frozen=True)
@@ -342,6 +3014,28 @@ def _angular_separation(ra1: float, dec1: float, ra2: float, dec2: float) -> flo
     return math.degrees(math.acos(cos_sep))
 
 
+def _angle_delta_deg(a_deg: float, b_deg: float, *, period_deg: float = 360.0) -> float:
+    period = float(max(1e-6, period_deg))
+    half = 0.5 * period
+    delta = (float(a_deg) - float(b_deg) + half) % period - half
+    return abs(float(delta))
+
+
+def _wcs_rotation_deg(wcs: WCS | None) -> float | None:
+    if wcs is None:
+        return None
+    try:
+        cd = np.asarray(wcs.pixel_scale_matrix, dtype=np.float64)
+    except Exception:
+        return None
+    if cd.shape != (2, 2) or not np.all(np.isfinite(cd)):
+        return None
+    try:
+        return float(np.degrees(np.arctan2(cd[1, 0], cd[0, 0])))
+    except Exception:
+        return None
+
+
 def _resolve_scale_arcsec(config: SolveConfig, header_scale_arcsec: float | None) -> float | None:
     candidates: list[float] = []
     if config.pixel_scale_arcsec:
@@ -390,6 +3084,146 @@ def _resolve_scale_arcsec(config: SolveConfig, header_scale_arcsec: float | None
         if value and value > 0.0 and math.isfinite(value):
             return float(value)
     return None
+
+
+def _scale_bounds_arcsec(
+    config: SolveConfig,
+    approx_scale_arcsec: float | None,
+) -> tuple[float, float] | None:
+    lo = None
+    hi = None
+    try:
+        if config.pixel_scale_min_arcsec and float(config.pixel_scale_min_arcsec) > 0.0:
+            lo = float(config.pixel_scale_min_arcsec)
+    except Exception:
+        lo = None
+    try:
+        if config.pixel_scale_max_arcsec and float(config.pixel_scale_max_arcsec) > 0.0:
+            hi = float(config.pixel_scale_max_arcsec)
+    except Exception:
+        hi = None
+
+    if lo is None and hi is None:
+        if approx_scale_arcsec is None or (not np.isfinite(float(approx_scale_arcsec))) or float(approx_scale_arcsec) <= 0.0:
+            return None
+        c = float(approx_scale_arcsec)
+        # Auto-derived bounds must tolerate header/instrument scale bias on resampled mosaics.
+        # Keep this broad, then let downstream geometry/probability/center guards prune.
+        return (max(0.2, 0.20 * c), min(60.0, 5.00 * c))
+
+    if lo is None and hi is not None:
+        lo = max(0.2, 0.35 * float(hi))
+    if hi is None and lo is not None:
+        hi = min(30.0, 2.85 * float(lo))
+    if lo is None or hi is None:
+        return None
+    lo = float(max(0.2, lo))
+    hi = float(min(30.0, hi))
+    if hi <= lo:
+        hi = max(lo * 1.25, lo + 0.1)
+    return (lo, hi)
+
+
+def _scale_gate_bounds_arcsec(
+    config: SolveConfig,
+    approx_scale_arcsec: float | None,
+    scale_bounds_arcsec: tuple[float, float] | None,
+    *,
+    gate: str,
+    fail_validation_count: int = 0,
+    fail_best_inliers_seen: int = -1,
+) -> tuple[float, float, dict[str, Any]] | None:
+    stage = str(gate or "").strip().lower()
+    approx = None
+    try:
+        if approx_scale_arcsec is not None and np.isfinite(float(approx_scale_arcsec)) and float(approx_scale_arcsec) > 0.0:
+            approx = float(approx_scale_arcsec)
+    except Exception:
+        approx = None
+
+    if stage == "prefilter":
+        base_bounds = scale_bounds_arcsec
+        # If bounds are auto-derived (no explicit min/max), recompute from current approx
+        # so dynamic scale anchors can propagate consistently across gates.
+        explicit_bounds = bool(getattr(config, "pixel_scale_min_arcsec", None) or getattr(config, "pixel_scale_max_arcsec", None))
+        if (not explicit_bounds) and approx is not None:
+            auto_bounds = _scale_bounds_arcsec(config, approx)
+            if auto_bounds is not None:
+                base_bounds = auto_bounds
+        if base_bounds is None:
+            return None
+        lo, hi = float(base_bounds[0]), float(base_bounds[1])
+        margin = max(1.0, float(getattr(config, "blind_scale_prefilter_margin", 1.35) or 1.0))
+        escape_used = False
+        if bool(getattr(config, "blind_scale_prefilter_escape_enabled", True)):
+            esc_after = max(0, int(getattr(config, "blind_scale_prefilter_escape_after_validations", 4) or 0))
+            esc_best_max = max(0, int(getattr(config, "blind_scale_prefilter_escape_best_inliers_max", 12) or 0))
+            if int(fail_validation_count) >= esc_after and int(fail_best_inliers_seen) <= esc_best_max:
+                esc_margin = float(getattr(config, "blind_scale_prefilter_escape_margin", 5.5) or 1.0)
+                if np.isfinite(esc_margin) and esc_margin > margin:
+                    margin = float(max(margin, esc_margin))
+                    escape_used = True
+        lo_e = max(0.2, float(lo) / margin)
+        hi_cap = 60.0 if escape_used else 30.0
+        hi_e = min(hi_cap, float(hi) * margin)
+        return (
+            float(lo_e),
+            float(hi_e),
+            {
+                "gate": "prefilter",
+                "base_lo": float(lo),
+                "base_hi": float(hi),
+                "margin": float(margin),
+                "escape_used": bool(escape_used),
+                "hi_cap": float(hi_cap),
+            },
+        )
+
+    if approx is None:
+        return None
+
+    if stage == "hard":
+        rmin = max(1e-4, float(getattr(config, "blind_hypothesis_scale_hard_min_ratio", 0.04) or 1e-4))
+        rmax = max(1.0, float(getattr(config, "blind_hypothesis_scale_hard_max_ratio", 20.0) or 1.0))
+        escape_used = False
+        if bool(getattr(config, "blind_hypothesis_scale_hard_escape_enabled", True)):
+            esc_after = max(0, int(getattr(config, "blind_hypothesis_scale_hard_escape_after_validations", 2) or 0))
+            esc_best_max = max(0, int(getattr(config, "blind_hypothesis_scale_hard_escape_best_inliers_max", 8) or 0))
+            if int(fail_validation_count) >= esc_after and int(fail_best_inliers_seen) <= esc_best_max:
+                rmin_e = max(1e-5, float(getattr(config, "blind_hypothesis_scale_hard_escape_min_ratio", 0.01) or 1e-5))
+                rmax_e = max(rmin_e + 1e-6, float(getattr(config, "blind_hypothesis_scale_hard_escape_max_ratio", 80.0) or (rmin_e + 1e-6)))
+                if rmin_e < rmin or rmax_e > rmax:
+                    rmin = min(rmin, rmin_e)
+                    rmax = max(rmax, rmax_e)
+                    escape_used = True
+    elif stage == "final":
+        rmin = max(1e-4, float(getattr(config, "blind_scale_guard_min_ratio", 0.75) or 1e-4))
+        rmax = max(rmin + 1e-6, float(getattr(config, "blind_scale_guard_max_ratio", 1.35) or (rmin + 1e-6)))
+        if bool(getattr(config, "blind_scale_guard_auto_relax_enabled", True)):
+            relax_after = max(0, int(getattr(config, "blind_scale_guard_auto_relax_after_validations", 2) or 0))
+            relax_best = max(0, int(getattr(config, "blind_scale_guard_auto_relax_best_inliers", 8) or 0))
+            if int(fail_validation_count) >= relax_after and int(fail_best_inliers_seen) <= relax_best:
+                fac = max(1.0, float(getattr(config, "blind_scale_guard_auto_relax_factor", 3.0) or 1.0))
+                floor_r = max(1e-4, float(getattr(config, "blind_scale_guard_auto_relax_min_floor", 0.15) or 1e-4))
+                ceil_r = max(rmin + 1e-6, float(getattr(config, "blind_scale_guard_auto_relax_max_ceil", 12.0) or (rmin + 1e-6)))
+                rmin = max(floor_r, rmin / fac)
+                rmax = min(ceil_r, rmax * fac)
+    else:
+        return None
+
+    lo = float(approx * rmin)
+    hi = float(approx * rmax)
+    return (
+        lo,
+        hi,
+        {
+            "gate": stage,
+            "ratio_min": float(rmin),
+            "ratio_max": float(rmax),
+            "approx_scale_arcsec": float(approx),
+            "escape_used": bool(escape_used) if stage == "hard" else False,
+        },
+    )
 
 
 def _radius_from_hints(
@@ -454,21 +3288,132 @@ def _collect_tile_matches(
     bucket_limit: int,
     vote_percentile: int,
     use_vectorized: bool = False,
+    index_lookup_cache: dict[tuple[str, int], tuple[QuadIndex, list[slice]]] | None = None,
+    index_obj_cache: dict[str, QuadIndex] | None = None,
+    uniformize_grid_px: float = 0.0,
+    uniformize_max_per_cell: int = 0,
+    uniformize_min_keep_ratio: float = 0.35,
+    dedup_pairs: bool = False,
+    dedup_min_keep_ratio: float = 0.45,
+    pair_geom_scoring: bool = False,
+    pair_geom_weight: float = 0.35,
+    pair_geom_sigma: float = 0.45,
+    pair_geom_angle_weight: float = 0.30,
+    pair_geom_angle_sigma_deg: float = 42.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     # Accumulate votes for (image_star, tile_star) pairs across matching quads,
     # then keep only pairs with sufficient support to reduce spurious matches.
     from collections import Counter
     votes: Counter[tuple[int, int]] = Counter()
+    saturated_pair_votes: Counter[tuple[int, int]] = Counter()
+    vote_supports: dict[tuple[int, int], list[dict[str, Any]]] = {}
+    support_cap = 4
+    obs_diag_cache: dict[int, dict[str, Any]] = {}
+    prefer_unsat_votes_used = False
+    vote_mass_before_unsat = 0
+    vote_mass_after_unsat = 0
+    saturated_skip_count = 0
+    saturated_skip_examples: list[dict[str, Any]] = []
+    hash_span_skip_count = 0
+    hash_span_skip_examples: list[dict[str, Any]] = []
     for level in levels:
-        try:
-            index = QuadIndex.load(index_root, level)
-        except FileNotFoundError:
-            continue
-        slices = lookup_hashes(index_root, level, observed_hashes)
+        cache_key = (str(level), int(id(observed_hashes)))
+        index: QuadIndex | None = None
+        slices: list[slice] | None = None
+        if index_lookup_cache is not None:
+            cached = index_lookup_cache.get(cache_key)
+            if cached is not None:
+                index, slices = cached
+        if index is None or slices is None:
+            if index_obj_cache is not None:
+                index = index_obj_cache.get(str(level))
+            if index is None:
+                try:
+                    index = QuadIndex.load(index_root, level)
+                except FileNotFoundError:
+                    continue
+                if index_obj_cache is not None:
+                    index_obj_cache[str(level)] = index
+            slices = lookup_hashes(index_root, level, observed_hashes)
+            if index_lookup_cache is not None:
+                index_lookup_cache[cache_key] = (index, slices)
         for idx, slc in enumerate(slices):
             if slc.start == slc.stop:
                 continue
             obs_combo = observed_quads[idx]
+            obs_diag = obs_diag_cache.get(int(idx))
+            if obs_diag is None:
+                obs_diag = {}
+                try:
+                    obs_ids = np.asarray(obs_combo, dtype=np.int64)
+                    obs_diag["obs_combo"] = [int(v) for v in obs_ids.tolist()]
+                    if np.all((obs_ids >= 0) & (obs_ids < int(image_positions.shape[0]))):
+                        obs_pts = np.asarray(image_positions[obs_ids], dtype=np.float64)
+                        qcode = _quad_ratio_code(obs_pts)
+                        qedge, qarea = _quad_min_edge_and_area_frac(obs_pts, (int(np.max(image_positions[:,1])+1), int(np.max(image_positions[:,0])+1)))
+                        obs_diag["obs_quad_min_edge_px"] = float(qedge)
+                        obs_diag["obs_quad_area_frac"] = float(qarea)
+                        if qcode is not None and np.all(np.isfinite(qcode)):
+                            obs_diag["obs_quad_code"] = [float(v) for v in np.asarray(qcode, dtype=np.float64).tolist()]
+                except Exception:
+                    pass
+                try:
+                    if int(idx) < int(observed_hashes.shape[0]):
+                        obs_diag["obs_hash"] = int(observed_hashes[int(idx)])
+                except Exception:
+                    pass
+                obs_diag_cache[int(idx)] = obs_diag
+
+            hv_idx = None
+            q1_idx = q2_idx = q3_idx = None
+            sat_hit_idx = False
+            try:
+                hv_idx = int(observed_hashes[int(idx)]) if int(idx) < int(observed_hashes.shape[0]) else None
+                if hv_idx is not None:
+                    q1_idx = int((hv_idx >> 48) & 0xFFFF)
+                    q2_idx = int((hv_idx >> 32) & 0xFFFF)
+                    q3_idx = int((hv_idx >> 16) & 0xFFFF)
+                    sat_hit_idx = (q1_idx in (0, 0xFFFF)) or (q2_idx in (0, 0xFFFF)) or (q3_idx in (0, 0xFFFF))
+            except Exception:
+                hv_idx = None
+                q1_idx = q2_idx = q3_idx = None
+                sat_hit_idx = False
+
+            if bool(globals().get("_A2V_COLLECT_SKIP_SATURATED_HASHES_ENABLED", False)):
+                if sat_hit_idx:
+                    saturated_skip_count += 1
+                    if len(saturated_skip_examples) < 24:
+                        saturated_skip_examples.append({
+                            "obs_quad_idx": int(idx),
+                            "obs_hash": int(hv_idx) if hv_idx is not None else None,
+                            "q": [q1_idx, q2_idx, q3_idx],
+                            "level": str(level),
+                            "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                        })
+                    continue
+
+            if bool(globals().get("_A2V_COLLECT_OBS_HASH_SPAN_GATE_ENABLED", False)):
+                try:
+                    span = int(slc.stop - slc.start)
+                    span_max = max(1, int(globals().get("_A2V_COLLECT_OBS_HASH_SPAN_MAX_BUCKETS", 20000) or 20000))
+                    sat_only = bool(globals().get("_A2V_COLLECT_OBS_HASH_SPAN_SATURATED_ONLY", True))
+                    if span > span_max and ((not sat_only) or sat_hit_idx):
+                        hash_span_skip_count += 1
+                        if len(hash_span_skip_examples) < 24:
+                            hash_span_skip_examples.append({
+                                "obs_quad_idx": int(idx),
+                                "obs_hash": int(hv_idx) if hv_idx is not None else None,
+                                "q": [q1_idx, q2_idx, q3_idx],
+                                "span": int(span),
+                                "span_max": int(span_max),
+                                "sat_only": bool(sat_only),
+                                "sat_hit": bool(sat_hit_idx),
+                                "level": str(level),
+                                "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                            })
+                        continue
+                except Exception:
+                    pass
             # Do not skip large buckets outright; cap per-bucket iterations to bound work
             per_bucket_cap = bucket_limit
             for off, bucket in enumerate(range(slc.start, slc.stop)):
@@ -478,27 +3423,472 @@ def _collect_tile_matches(
                     continue
                 tile_combo = index.quad_indices[bucket]
                 for obs_star, tile_star in zip(obs_combo, tile_combo):
-                    votes[(int(obs_star), int(tile_star))] += 1
+                    key_pair = (int(obs_star), int(tile_star))
+                    votes[key_pair] += 1
+                    if sat_hit_idx:
+                        saturated_pair_votes[key_pair] += 1
+                    lst = vote_supports.get(key_pair)
+                    if lst is None:
+                        lst = []
+                        vote_supports[key_pair] = lst
+                    if len(lst) < int(support_cap):
+                        entry_sup = {
+                            "level": str(level),
+                            "obs_quad_idx": int(idx),
+                            "bucket": int(bucket),
+                            "obs_star": int(obs_star),
+                            "tile_star": int(tile_star),
+                        }
+                        try:
+                            if isinstance(obs_diag, dict):
+                                for kk in ("obs_hash", "obs_combo", "obs_quad_min_edge_px", "obs_quad_area_frac", "obs_quad_code"):
+                                    if kk in obs_diag:
+                                        entry_sup[kk] = obs_diag.get(kk)
+                        except Exception:
+                            pass
+                        lst.append(entry_sup)
+    try:
+        vote_mass_before_unsat = int(sum(int(v) for v in votes.values()))
+    except Exception:
+        vote_mass_before_unsat = 0
+    try:
+        saturated_vote_mass = int(sum(int(v) for v in saturated_pair_votes.values()))
+    except Exception:
+        saturated_vote_mass = 0
+    unsaturated_vote_mass = int(max(0, int(vote_mass_before_unsat) - int(saturated_vote_mass)))
+    try:
+        unsaturated_pair_count_pre = int(sum(1 for kk, vv in votes.items() if int(vv) - int(saturated_pair_votes.get(kk, 0)) > 0))
+    except Exception:
+        unsaturated_pair_count_pre = 0
+    vote_mass_after_unsat = int(vote_mass_before_unsat)
+
+    if bool(globals().get("_A2V_COLLECT_PREFER_UNSAT_HASH_VOTES", True)) and len(votes) > 0 and len(saturated_pair_votes) > 0:
+        try:
+            votes_unsat: Counter[tuple[int, int]] = Counter()
+            for kk, vv in votes.items():
+                sv = int(saturated_pair_votes.get(kk, 0))
+                uv = int(vv) - int(sv)
+                if uv > 0:
+                    votes_unsat[kk] = int(uv)
+            if len(votes_unsat) > 0:
+                votes = votes_unsat
+                prefer_unsat_votes_used = True
+                vote_mass_after_unsat = int(sum(int(v) for v in votes.values()))
+        except Exception:
+            prefer_unsat_votes_used = False
+            vote_mass_after_unsat = int(vote_mass_before_unsat)
+
     if not votes:
+        try:
+            dump_path = str(globals().get("_A2V_COLLECT_DUMP_PATH", "") or "").strip()
+            if dump_path:
+                max_entries = max(1, int(globals().get("_A2V_COLLECT_DUMP_MAX_ENTRIES", 400) or 400))
+                context = globals().get("_A2V_COLLECT_DUMP_CONTEXT", {})
+                entry = {
+                    "schema_event": "collect_exact",
+                    "stage": "no_votes",
+                    "tile_index": int(tile_index),
+                    "levels": [str(v) for v in levels],
+                    "votes_total": 0,
+                    "pairs_selected": 0,
+                    "saturated_skip_count": int(saturated_skip_count),
+                    "saturated_skip_examples": list(saturated_skip_examples),
+                    "hash_span_skip_count": int(hash_span_skip_count),
+                    "hash_span_skip_examples": list(hash_span_skip_examples),
+                    "prefer_unsat_votes_used": bool(prefer_unsat_votes_used),
+                    "vote_mass_before_unsat": int(vote_mass_before_unsat),
+                    "vote_mass_after_unsat": int(vote_mass_after_unsat),
+                    "saturated_vote_mass": int(saturated_vote_mass),
+                    "unsaturated_vote_mass": int(unsaturated_vote_mass),
+                    "unsaturated_pair_count_pre": int(unsaturated_pair_count_pre),
+                    "context": context if isinstance(context, dict) else {},
+                }
+                dp = Path(dump_path)
+                obj = {"schema": "zeblind.collect_matches_exact_dump.v1", "entries": []}
+                if dp.exists():
+                    try:
+                        prev = json.loads(dp.read_text(encoding="utf-8"))
+                        if isinstance(prev, dict) and isinstance(prev.get("entries"), list):
+                            obj = prev
+                    except Exception:
+                        pass
+                obj.setdefault("entries", []).append(entry)
+                if len(obj["entries"]) > int(max_entries):
+                    obj["entries"] = obj["entries"][-int(max_entries):]
+                dp.parent.mkdir(parents=True, exist_ok=True)
+                dp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+        except Exception:
+            pass
         empty = np.empty((0, 2), dtype=np.float32)
         return empty, empty, empty
+
+    vote_items_all = list(votes.items())
+    pair_idx_all = np.asarray([k for k, _ in vote_items_all], dtype=np.int64)
+    raw_counts_all = np.asarray([float(c) for _, c in vote_items_all], dtype=np.float64)
+
+    def _pair_geom_quality_from_idx(pair_idx: np.ndarray) -> np.ndarray:
+        if pair_idx.size == 0:
+            return np.empty(0, dtype=np.float64)
+        if not bool(pair_geom_scoring):
+            return np.ones(int(pair_idx.shape[0]), dtype=np.float64)
+
+        sigma = float(pair_geom_sigma)
+        if (not np.isfinite(sigma)) or sigma <= 0.0:
+            sigma = 0.45
+        sigma = max(0.08, min(2.0, sigma))
+
+        ang_w = float(pair_geom_angle_weight)
+        if not np.isfinite(ang_w):
+            ang_w = 0.30
+        ang_w = min(1.0, max(0.0, ang_w))
+
+        ang_sigma_deg = float(pair_geom_angle_sigma_deg)
+        if (not np.isfinite(ang_sigma_deg)) or ang_sigma_deg <= 0.0:
+            ang_sigma_deg = 42.0
+        ang_sigma_rad = max(math.radians(6.0), min(math.radians(90.0), math.radians(ang_sigma_deg)))
+
+        img_ids = pair_idx[:, 0].astype(np.intp, copy=False)
+        tile_ids = pair_idx[:, 1].astype(np.intp, copy=False)
+        src = np.asarray(image_positions[img_ids], dtype=np.float64)
+        dst = np.asarray(tile_positions[tile_ids], dtype=np.float64)
+        if src.size == 0 or dst.size == 0:
+            return np.ones(int(pair_idx.shape[0]), dtype=np.float64)
+
+        c_src = np.median(np.asarray(image_positions, dtype=np.float64), axis=0)
+        c_dst = np.median(np.asarray(tile_positions, dtype=np.float64), axis=0)
+        src_r = np.hypot(src[:, 0] - c_src[0], src[:, 1] - c_src[1])
+        dst_r = np.hypot(dst[:, 0] - c_dst[0], dst[:, 1] - c_dst[1])
+
+        src_all = np.asarray(image_positions, dtype=np.float64)
+        dst_all = np.asarray(tile_positions, dtype=np.float64)
+        src_med = float(np.median(np.hypot(src_all[:, 0] - c_src[0], src_all[:, 1] - c_src[1]))) if src_all.size else 1.0
+        dst_med = float(np.median(np.hypot(dst_all[:, 0] - c_dst[0], dst_all[:, 1] - c_dst[1]))) if dst_all.size else 1.0
+        src_med = max(1e-6, src_med)
+        dst_med = max(1e-12, dst_med)
+
+        sr = src_r / src_med
+        tr = dst_r / dst_med
+        delta_r = np.abs(sr - tr)
+        q_rad = np.exp(-0.5 * (delta_r / sigma) ** 2)
+
+        if ang_w <= 0.0:
+            q = q_rad
+        else:
+            th_src = np.arctan2(src[:, 1] - c_src[1], src[:, 0] - c_src[0])
+            th_dst = np.arctan2(dst[:, 1] - c_dst[1], dst[:, 0] - c_dst[0])
+
+            d_nom = np.arctan2(np.sin(th_dst - th_src), np.cos(th_dst - th_src))
+            d_mir = np.arctan2(np.sin(th_dst + th_src), np.cos(th_dst + th_src))
+
+            score_nom = float(np.abs(np.mean(np.exp(1j * d_nom))))
+            score_mir = float(np.abs(np.mean(np.exp(1j * d_mir))))
+            d_use = d_nom if score_nom >= score_mir else d_mir
+
+            if d_use.size:
+                off = float(np.angle(np.mean(np.exp(1j * d_use))))
+            else:
+                off = 0.0
+            resid = np.arctan2(np.sin(d_use - off), np.cos(d_use - off))
+            q_ang = np.exp(-0.5 * (resid / ang_sigma_rad) ** 2)
+
+            q = q_rad * ((1.0 - ang_w) + ang_w * q_ang)
+
+        q = np.asarray(np.clip(q, 0.0, 1.0), dtype=np.float64)
+        return q
+
+    def _effective_pair_counts(pair_idx: np.ndarray, raw_counts: np.ndarray) -> np.ndarray:
+        rc = np.asarray(raw_counts, dtype=np.float64)
+        if rc.size == 0:
+            return rc
+        if not bool(pair_geom_scoring):
+            return rc
+        w = float(pair_geom_weight)
+        if (not np.isfinite(w)):
+            w = 0.35
+        w = min(1.0, max(0.0, w))
+        if w <= 0.0:
+            return rc
+        q = _pair_geom_quality_from_idx(pair_idx)
+        if q.size != rc.size:
+            return rc
+        return rc * ((1.0 - w) + w * q)
+
+    def _apply_collect_scale_filter(pair_idx_sel: np.ndarray, pair_counts_sel: np.ndarray | None) -> tuple[np.ndarray, np.ndarray | None, bool]:
+        try:
+            if not bool(globals().get("_A2V_COLLECT_SCALE_FILTER_ENABLED", True)):
+                return pair_idx_sel, pair_counts_sel, False
+            bounds = globals().get("_A2V_COLLECT_DUMP_SCALE_BOUNDS_ARCSEC", None)
+            if bounds is None or not isinstance(bounds, (tuple, list)) or len(bounds) < 2:
+                return pair_idx_sel, pair_counts_sel, False
+            lo_arc = float(bounds[0]); hi_arc = float(bounds[1])
+            if not (np.isfinite(lo_arc) and np.isfinite(hi_arc) and hi_arc > lo_arc):
+                return pair_idx_sel, pair_counts_sel, False
+            if int(np.asarray(pair_idx_sel).shape[0]) <= 0:
+                return pair_idx_sel, pair_counts_sel, False
+            ids_img = np.asarray(pair_idx_sel[:, 0], dtype=np.int64)
+            ids_tile = np.asarray(pair_idx_sel[:, 1], dtype=np.int64)
+            valid = (ids_img >= 0) & (ids_img < int(image_positions.shape[0])) & (ids_tile >= 0) & (ids_tile < int(tile_positions.shape[0]))
+            if not np.any(valid):
+                return pair_idx_sel, pair_counts_sel, False
+            p = np.asarray(pair_idx_sel[valid], dtype=np.int64)
+            c = np.asarray(pair_counts_sel[valid], dtype=np.float64) if pair_counts_sel is not None else None
+            img = np.asarray(image_positions[p[:, 0]], dtype=np.float64)
+            tile = np.asarray(tile_positions[p[:, 1]], dtype=np.float64)
+            ic = np.median(img, axis=0)
+            tc = np.median(tile, axis=0)
+            rimg = np.hypot(img[:, 0] - ic[0], img[:, 1] - ic[1])
+            rtile = np.hypot(tile[:, 0] - tc[0], tile[:, 1] - tc[1])
+            ratio = rtile / np.maximum(rimg, 1e-9)
+            lo = float(lo_arc / 3600.0); hi = float(hi_arc / 3600.0)
+            keep = np.isfinite(ratio) & (ratio >= lo) & (ratio <= hi)
+            kept = int(np.count_nonzero(keep))
+            total = int(p.shape[0])
+            min_pairs = max(4, int(globals().get("_A2V_COLLECT_SCALE_FILTER_MIN_PAIRS", 6) or 6))
+            min_ratio = max(0.05, float(globals().get("_A2V_COLLECT_SCALE_FILTER_MIN_KEEP_RATIO", 0.15) or 0.05))
+            if kept >= min_pairs and (kept / max(1, total)) >= min_ratio:
+                p2 = p[keep]
+                c2 = c[keep] if c is not None else None
+                return p2, c2, True
+            return pair_idx_sel, pair_counts_sel, False
+        except Exception:
+            return pair_idx_sel, pair_counts_sel, False
+
+    def _dump_collect_exact(stage: str, pair_idx_sel: np.ndarray, pair_counts_sel: np.ndarray | None = None) -> None:
+        try:
+            dump_path = str(globals().get("_A2V_COLLECT_DUMP_PATH", "") or "").strip()
+            if not dump_path:
+                return
+            max_entries = max(1, int(globals().get("_A2V_COLLECT_DUMP_MAX_ENTRIES", 400) or 400))
+            max_rows = max(1, int(globals().get("_A2V_COLLECT_DUMP_MAX_ROWS", 48) or 48))
+            context = globals().get("_A2V_COLLECT_DUMP_CONTEXT", {})
+            raw_map = {tuple(map(int, k)): float(v) for k, v in votes.items()}
+
+            ratio_vals = []
+            rows = []
+            approx_scale = None
+            try:
+                approx_scale = float(globals().get("_A2V_COLLECT_DUMP_APPROX_SCALE_ARCSEC", float("nan")))
+                if not np.isfinite(approx_scale):
+                    approx_scale = None
+            except Exception:
+                approx_scale = None
+
+            for rr, pr in enumerate(np.asarray(pair_idx_sel, dtype=np.int64)[:max_rows]):
+                i = int(pr[0]); t = int(pr[1])
+                if i < 0 or i >= int(image_positions.shape[0]) or t < 0 or t >= int(tile_positions.shape[0]):
+                    continue
+                imgx = float(image_positions[i, 0]); imgy = float(image_positions[i, 1])
+                tdegx = float(tile_positions[t, 0]); tdegy = float(tile_positions[t, 1])
+                rows.append({
+                    "k": int(rr),
+                    "img_idx": int(i),
+                    "tile_idx": int(t),
+                    "img_x": imgx,
+                    "img_y": imgy,
+                    "tile_x_deg": tdegx,
+                    "tile_y_deg": tdegy,
+                    "raw_votes": float(raw_map.get((i, t), 0.0)),
+                    "eff_votes": float(pair_counts_sel[rr]) if pair_counts_sel is not None and rr < int(len(pair_counts_sel)) and np.isfinite(float(pair_counts_sel[rr])) else None,
+                    "support_sample": vote_supports.get((i, t), []),
+                })
+
+            if rows:
+                img_arr = np.asarray([[r["img_x"], r["img_y"]] for r in rows], dtype=np.float64)
+                tile_arr = np.asarray([[r["tile_x_deg"], r["tile_y_deg"]] for r in rows], dtype=np.float64)
+                ic = np.median(img_arr, axis=0)
+                tc = np.median(tile_arr, axis=0)
+                rimg = np.hypot(img_arr[:, 0] - ic[0], img_arr[:, 1] - ic[1])
+                rtile = np.hypot(tile_arr[:, 0] - tc[0], tile_arr[:, 1] - tc[1])
+                ratio = rtile / np.maximum(rimg, 1e-9)
+                ratio_vals = ratio[np.isfinite(ratio)]
+                for k in range(int(min(len(rows), len(ratio)))):
+                    if np.isfinite(ratio[k]):
+                        rows[k]["ratio_deg_per_px"] = float(ratio[k])
+
+            ratio_summary = None
+            if isinstance(ratio_vals, np.ndarray) and ratio_vals.size > 0:
+                ratio_summary = {
+                    "median_deg_per_px": float(np.median(ratio_vals)),
+                    "p10_deg_per_px": float(np.percentile(ratio_vals, 10)),
+                    "p90_deg_per_px": float(np.percentile(ratio_vals, 90)),
+                }
+                if approx_scale is not None and approx_scale > 0.0:
+                    ratio_summary["approx_deg_per_px"] = float(approx_scale / 3600.0)
+                try:
+                    b = globals().get("_A2V_COLLECT_DUMP_SCALE_BOUNDS_ARCSEC", None)
+                    if isinstance(b, (tuple, list)) and len(b) >= 2:
+                        lo_b = float(b[0]) / 3600.0
+                        hi_b = float(b[1]) / 3600.0
+                        inb = np.isfinite(ratio_vals) & (ratio_vals >= lo_b) & (ratio_vals <= hi_b)
+                        ratio_summary["in_bounds_count"] = int(np.count_nonzero(inb))
+                        ratio_summary["in_bounds_frac"] = float(np.count_nonzero(inb) / max(1, ratio_vals.size))
+                        ratio_summary["bounds_deg_per_px"] = [float(lo_b), float(hi_b)]
+                except Exception:
+                    pass
+
+            entry = {
+                "schema_event": "collect_exact",
+                "stage": str(stage),
+                "tile_index": int(tile_index),
+                "levels": [str(v) for v in levels],
+                "saturated_skip_count": int(saturated_skip_count),
+                "saturated_skip_examples": list(saturated_skip_examples),
+                "hash_span_skip_count": int(hash_span_skip_count),
+                "hash_span_skip_examples": list(hash_span_skip_examples),
+                "prefer_unsat_votes_used": bool(prefer_unsat_votes_used),
+                "vote_mass_before_unsat": int(vote_mass_before_unsat),
+                "vote_mass_after_unsat": int(vote_mass_after_unsat),
+                "saturated_vote_mass": int(saturated_vote_mass),
+                "unsaturated_vote_mass": int(unsaturated_vote_mass),
+                "unsaturated_pair_count_pre": int(unsaturated_pair_count_pre),
+                "votes_total": int(len(votes)),
+                "pairs_selected": int(np.asarray(pair_idx_sel).shape[0]),
+                "bucket_limit": int(bucket_limit),
+                "vote_percentile": int(vote_percentile),
+                "context": context if isinstance(context, dict) else {},
+                "ratio_summary": ratio_summary,
+                "rows": rows,
+            }
+            if approx_scale is not None:
+                entry["approx_scale_arcsec"] = float(approx_scale)
+
+            dp = Path(dump_path)
+            obj = {"schema": "zeblind.collect_matches_exact_dump.v1", "entries": []}
+            if dp.exists():
+                try:
+                    prev = json.loads(dp.read_text(encoding="utf-8"))
+                    if isinstance(prev, dict) and isinstance(prev.get("entries"), list):
+                        obj = prev
+                except Exception:
+                    pass
+            obj.setdefault("entries", []).append(entry)
+            if len(obj["entries"]) > int(max_entries):
+                obj["entries"] = obj["entries"][-int(max_entries):]
+            dp.parent.mkdir(parents=True, exist_ok=True)
+            dp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _uniformize_pair_idx(pair_idx: np.ndarray) -> np.ndarray:
+        if pair_idx.size == 0:
+            return pair_idx
+        grid = float(uniformize_grid_px)
+        max_per = int(uniformize_max_per_cell)
+        if (not np.isfinite(grid)) or grid <= 0.0 or max_per <= 0:
+            return pair_idx
+        min_keep = float(uniformize_min_keep_ratio)
+        if (not np.isfinite(min_keep)) or min_keep <= 0.0:
+            min_keep = 0.35
+        min_keep = min(1.0, max(0.05, min_keep))
+        cells: dict[tuple[int, int], int] = {}
+        keep_rows: list[int] = []
+        xs = np.asarray(image_positions[:, 0], dtype=np.float64)
+        ys = np.asarray(image_positions[:, 1], dtype=np.float64)
+        for ridx in range(int(pair_idx.shape[0])):
+            i = int(pair_idx[ridx, 0])
+            if i < 0 or i >= xs.shape[0]:
+                continue
+            cx = int(float(xs[i]) // grid)
+            cy = int(float(ys[i]) // grid)
+            key = (cx, cy)
+            cnt = cells.get(key, 0)
+            if cnt >= max_per:
+                continue
+            cells[key] = cnt + 1
+            keep_rows.append(ridx)
+        if not keep_rows:
+            return pair_idx
+        if len(keep_rows) < int(min_keep * float(pair_idx.shape[0])):
+            return pair_idx
+        return pair_idx[np.asarray(keep_rows, dtype=np.int64)]
+
+    def _enforce_spatial_diversity(pair_idx: np.ndarray, pair_counts: np.ndarray | None = None) -> np.ndarray:
+        # A2-v17: ensure candidate pairs span at least a minimal 2D footprint in image space.
+        if pair_idx.size == 0:
+            return pair_idx
+        n = int(pair_idx.shape[0])
+        if n < 12:
+            return pair_idx
+        if pair_counts is None or int(pair_counts.size) != n:
+            pair_counts = np.ones(n, dtype=np.float64)
+        img_ids = np.clip(pair_idx[:, 0].astype(np.int64, copy=False), 0, max(0, int(image_positions.shape[0]) - 1))
+        pts = np.asarray(image_positions[img_ids], dtype=np.float64)
+        if pts.size == 0:
+            return pair_idx
+        x = pts[:, 0]
+        y = pts[:, 1]
+        bw = float(np.nanmax(x) - np.nanmin(x)) if x.size else 0.0
+        bh = float(np.nanmax(y) - np.nanmin(y)) if y.size else 0.0
+        cov_x = bw / max(1.0, float(np.nanmax(x) - np.nanmin(x) + 1.0))
+        cov_y = bh / max(1.0, float(np.nanmax(y) - np.nanmin(y) + 1.0))
+        cov_area = float(cov_x * cov_y)
+        # If footprint already broad enough in normalized local box, keep as-is.
+        if cov_area >= 0.10:
+            return pair_idx
+
+        order = np.argsort(np.asarray(pair_counts, dtype=np.float64))[::-1]
+        k = min(max(12, n // 3), n)
+        top = order[:k]
+        # Add geometric extremes to force 2D span.
+        ex = np.argsort(x)
+        ey = np.argsort(y)
+        force = set(top.tolist())
+        force.update(ex[:max(3, k // 6)].tolist())
+        force.update(ex[-max(3, k // 6):].tolist())
+        force.update(ey[:max(3, k // 6)].tolist())
+        force.update(ey[-max(3, k // 6):].tolist())
+        idx = np.asarray(sorted(force), dtype=np.int64)
+        if idx.size < 12:
+            return pair_idx
+        return pair_idx[idx]
+
+    def _dedup_pair_idx(pair_idx: np.ndarray, pair_counts: np.ndarray | None = None) -> np.ndarray:
+        if pair_idx.size == 0 or not bool(dedup_pairs):
+            return pair_idx
+        min_keep = float(dedup_min_keep_ratio)
+        if (not np.isfinite(min_keep)) or min_keep <= 0.0:
+            min_keep = 0.45
+        min_keep = min(1.0, max(0.05, min_keep))
+        n = int(pair_idx.shape[0])
+        if pair_counts is None or pair_counts.size != n:
+            pair_counts = np.ones(n, dtype=np.float64)
+        order = np.argsort(np.asarray(pair_counts, dtype=np.float64))[::-1]
+        used_i: set[int] = set()
+        used_t: set[int] = set()
+        keep_rows: list[int] = []
+        for ridx in order:
+            i = int(pair_idx[ridx, 0])
+            t = int(pair_idx[ridx, 1])
+            if i in used_i or t in used_t:
+                continue
+            used_i.add(i)
+            used_t.add(t)
+            keep_rows.append(int(ridx))
+        if not keep_rows:
+            return pair_idx
+        if len(keep_rows) < int(min_keep * float(n)):
+            return pair_idx
+        keep_rows_arr = np.asarray(sorted(keep_rows), dtype=np.int64)
+        return pair_idx[keep_rows_arr]
+
     if use_vectorized:
         # Experimental vectorized path (same semantics, lower Python overhead in pair filtering).
-        vote_items = list(votes.items())
-        pair_idx = np.asarray([k for k, _ in vote_items], dtype=np.int64)
-        counts = np.asarray([int(c) for _, c in vote_items], dtype=np.int64)
+        pair_idx = np.asarray(pair_idx_all, dtype=np.int64)
+        counts = np.asarray(raw_counts_all, dtype=np.float64)
+        eff_counts = _effective_pair_counts(pair_idx, counts)
         percentile = min(95, max(5, vote_percentile))
-        thr = max(1, int(np.percentile(counts, percentile)))
-        keep = counts >= thr
+        thr = max(1e-6, float(np.percentile(eff_counts, percentile)))
+        keep = eff_counts >= thr
         if np.any(keep):
             sel = np.flatnonzero(keep)
-            sel = sel[np.argsort(counts[sel])[::-1]]
+            sel = sel[np.argsort(eff_counts[sel])[::-1]]
         else:
-            top_n = max(200, int(len(counts) * 0.1))
-            top_n = min(top_n, len(counts))
-            sel = np.argsort(counts)[-top_n:][::-1]
+            top_n = max(200, int(len(eff_counts) * 0.1))
+            top_n = min(top_n, len(eff_counts))
+            sel = np.argsort(eff_counts)[-top_n:][::-1]
 
         pair_idx = pair_idx[sel]
+        pair_counts = eff_counts[sel]
         img_cap = int(image_positions.shape[0])
         tile_cap = int(tile_positions.shape[0])
         if img_cap == 0 or tile_cap == 0:
@@ -511,42 +3901,71 @@ def _collect_tile_matches(
             empty = np.empty((0, 2), dtype=np.float32)
             if dropped:
                 logger.warning("discarded %d invalid vote pairs (image=%d, tile=%d)", dropped, img_cap, tile_cap)
+            _dump_collect_exact("vectorized_no_valid", np.empty((0, 2), dtype=np.int64), np.empty((0,), dtype=np.float64))
             return empty, empty, empty
         if dropped:
             logger.debug("discarded %d vote pairs outside valid ranges (image=%d, tile=%d)", dropped, img_cap, tile_cap)
 
         pair_idx = pair_idx[valid]
+        pair_counts = pair_counts[valid]
         cap = min(int(pair_idx.shape[0]), max(800, int(img_cap * 12)))
         if cap <= 0:
             empty = np.empty((0, 2), dtype=np.float32)
+            _dump_collect_exact("vectorized_cap_zero", np.empty((0, 2), dtype=np.int64), np.empty((0,), dtype=np.float64))
             return empty, empty, empty
         pair_idx = pair_idx[:cap]
+        pair_counts = pair_counts[:cap]
+        pair_idx = _dedup_pair_idx(pair_idx, pair_counts)
+        pair_idx = _uniformize_pair_idx(pair_idx)
+        pair_idx = _enforce_spatial_diversity(pair_idx, pair_counts)
+        pair_idx, pair_counts, _sf_used = _apply_collect_scale_filter(pair_idx, pair_counts)
+        if _sf_used:
+            _dump_collect_exact("vectorized_scale_filter_keep", pair_idx, pair_counts)
         img_ids = pair_idx[:, 0].astype(np.intp, copy=False)
         tile_ids = pair_idx[:, 1].astype(np.intp, copy=False)
         img_pts = np.asarray(image_positions[img_ids], dtype=np.float32)
         tile_pts = np.asarray(tile_positions[tile_ids], dtype=np.float32)
         world_pts = np.asarray(tile_world[tile_ids], dtype=np.float32)
+        try:
+            if int(tile_index) == int(globals().get("_A2V21_DEBUG_TILE_INDEX", -1)):
+                globals()["_A2V21_DEBUG_LAST"] = {
+                    "tile_index": int(tile_index),
+                    "use_vectorized": True,
+                    "pair_count": int(pair_idx.shape[0]),
+                    "pair_idx": np.asarray(pair_idx[:4000], dtype=np.int64),
+                    "pair_counts": np.asarray(pair_counts[:4000], dtype=np.float64),
+                }
+        except Exception:
+            pass
+        _dump_collect_exact("vectorized_final", pair_idx, pair_counts)
         return img_pts, tile_pts, world_pts
 
-    # Determine a minimal vote threshold adaptively; allow 1 to seed hypotheses.
-    counts = np.array(list(votes.values()), dtype=int)
-    # Use a moderate percentile to keep plausible pairs; too high discards signal.
+    # Determine a minimal vote threshold adaptively (with optional geometric pair scoring).
+    eff_counts_all = _effective_pair_counts(pair_idx_all, raw_counts_all)
     percentile = min(95, max(5, vote_percentile))
-    thr = max(1, int(np.percentile(counts, percentile)))
-    pairs = [(i, t, c) for (i, t), c in votes.items() if c >= thr]
-    if not pairs:
-        # fallback: keep top-N by votes
-        top = sorted(votes.items(), key=lambda kv: kv[1], reverse=True)[: max(200, int(len(votes) * 0.1))]
-        pairs = [(i, t, c) for (i, t), c in top]
-    pairs.sort(key=lambda itc: itc[2], reverse=True)
+    thr = max(1e-6, float(np.percentile(eff_counts_all, percentile)))
+    keep = eff_counts_all >= thr
+    if np.any(keep):
+        sel = np.flatnonzero(keep)
+        sel = sel[np.argsort(eff_counts_all[sel])[::-1]]
+    else:
+        top_n = max(200, int(len(eff_counts_all) * 0.1))
+        top_n = min(top_n, len(eff_counts_all))
+        sel = np.argsort(eff_counts_all)[-top_n:][::-1]
+
+    pair_idx_sel = pair_idx_all[sel]
+    pair_counts_sel = eff_counts_all[sel]
     img_cap = image_positions.shape[0]
     tile_cap = tile_positions.shape[0]
     if img_cap == 0 or tile_cap == 0:
         empty = np.empty((0, 2), dtype=np.float32)
         return empty, empty, empty
-    filtered: list[tuple[int, int, int]] = []
+    filtered: list[tuple[int, int, float]] = []
     dropped = 0
-    for i, t, c in pairs:
+    for ridx in range(int(pair_idx_sel.shape[0])):
+        i = int(pair_idx_sel[ridx, 0])
+        t = int(pair_idx_sel[ridx, 1])
+        c = float(pair_counts_sel[ridx])
         if 0 <= i < img_cap and 0 <= t < tile_cap:
             filtered.append((i, t, c))
         else:
@@ -555,17 +3974,60 @@ def _collect_tile_matches(
         empty = np.empty((0, 2), dtype=np.float32)
         if dropped:
             logger.warning("discarded %d invalid vote pairs (image=%d, tile=%d)", dropped, img_cap, tile_cap)
+        _dump_collect_exact("scalar_no_filtered", np.empty((0, 2), dtype=np.int64), np.empty((0,), dtype=np.float64))
         return empty, empty, empty
     if dropped:
         logger.debug("discarded %d vote pairs outside valid ranges (image=%d, tile=%d)", dropped, img_cap, tile_cap)
     # Cap pairs to bound runtime but keep enough support for RANSAC
     cap = min(len(filtered), max(800, int(img_cap * 12)))
     chosen = filtered[:cap]
-    img_pts = np.array([image_positions[i] for i, _, _ in chosen], dtype=np.float32)
-    tile_pts = np.array([tile_positions[t] for _, t, _ in chosen], dtype=np.float32)
-    world_pts = np.array([tile_world[t] for _, t, _ in chosen], dtype=np.float32)
+    pair_idx = np.asarray([(i, t) for i, t, _ in chosen], dtype=np.int64)
+    pair_counts = np.asarray([float(c) for _i, _t, c in chosen], dtype=np.float64)
+    pair_idx = _dedup_pair_idx(pair_idx, pair_counts)
+    pair_idx = _uniformize_pair_idx(pair_idx)
+    pair_idx = _enforce_spatial_diversity(pair_idx, pair_counts)
+    pair_idx, pair_counts, _sf_used = _apply_collect_scale_filter(pair_idx, pair_counts)
+    if _sf_used:
+        _dump_collect_exact("scalar_scale_filter_keep", pair_idx, pair_counts)
+    img_ids = pair_idx[:, 0].astype(np.intp, copy=False)
+    tile_ids = pair_idx[:, 1].astype(np.intp, copy=False)
+    img_pts = np.asarray(image_positions[img_ids], dtype=np.float32)
+    tile_pts = np.asarray(tile_positions[tile_ids], dtype=np.float32)
+    world_pts = np.asarray(tile_world[tile_ids], dtype=np.float32)
+    try:
+        if int(tile_index) == int(globals().get("_A2V21_DEBUG_TILE_INDEX", -1)):
+            globals()["_A2V21_DEBUG_LAST"] = {
+                "tile_index": int(tile_index),
+                "use_vectorized": False,
+                "pair_count": int(pair_idx.shape[0]),
+                "pair_idx": np.asarray(pair_idx[:4000], dtype=np.int64),
+                "pair_counts": np.asarray(pair_counts[:4000], dtype=np.float64),
+            }
+    except Exception:
+        pass
+    _dump_collect_exact("scalar_final", pair_idx, pair_counts)
     return img_pts, tile_pts, world_pts
 
+
+def _a2v22_shape_stats(points: np.ndarray) -> dict[str, float | int]:
+    try:
+        pts = np.asarray(points, dtype=np.float64)
+        n = int(pts.shape[0]) if pts.ndim == 2 else 0
+        if n <= 0:
+            return {"n": 0, "bw": 0.0, "bh": 0.0, "area": 0.0, "cond": float("nan")}
+        x = pts[:, 0]
+        y = pts[:, 1]
+        bw = float(np.nanmax(x) - np.nanmin(x)) if x.size else 0.0
+        bh = float(np.nanmax(y) - np.nanmin(y)) if y.size else 0.0
+        area = float(bw * bh)
+        cond = float("nan")
+        if n >= 4:
+            c = np.cov(pts.T)
+            ev = np.linalg.eigvalsh(c)
+            cond = float(max(ev) / max(min(ev), 1e-12))
+        return {"n": n, "bw": bw, "bh": bh, "area": area, "cond": cond}
+    except Exception:
+        return {"n": 0, "bw": 0.0, "bh": 0.0, "area": 0.0, "cond": float("nan")}
 
 def _build_matches_array(image_pts: np.ndarray, sky_pts: np.ndarray) -> np.ndarray:
     if image_pts.size == 0 or sky_pts.size == 0:
@@ -616,8 +4078,33 @@ def solve_blind(
     _depth_ladder_stage: int = 0,
     _depth_ladder_total: int = 0,
     _depth_ladder_caps: tuple[int, ...] | None = None,
+    _scale_ladder_internal: bool = False,
 ) -> WcsSolution:
     config = config or SolveConfig()
+    try:
+        globals()["_A2V_COLLECT_DUMP_PATH"] = str(getattr(config, "blind_collect_matches_exact_dump_path", "") or "").strip()
+        globals()["_A2V_COLLECT_DUMP_MAX_ENTRIES"] = int(getattr(config, "blind_collect_matches_exact_dump_max_entries", 400) or 400)
+        globals()["_A2V_COLLECT_DUMP_MAX_ROWS"] = int(getattr(config, "blind_collect_matches_exact_dump_max_rows", 48) or 48)
+        globals()["_A2V_COLLECT_SCALE_FILTER_ENABLED"] = bool(getattr(config, "blind_collect_scale_filter_enabled", True))
+        globals()["_A2V_COLLECT_SCALE_FILTER_MIN_PAIRS"] = int(getattr(config, "blind_collect_scale_filter_min_pairs", 6) or 6)
+        globals()["_A2V_COLLECT_SCALE_FILTER_MIN_KEEP_RATIO"] = float(getattr(config, "blind_collect_scale_filter_min_keep_ratio", 0.15) or 0.15)
+        globals()["_A2V_COLLECT_SKIP_SATURATED_HASHES_ENABLED"] = bool(getattr(config, "blind_collect_skip_saturated_hashes_enabled", False))
+        globals()["_A2V_COLLECT_OBS_HASH_SPAN_GATE_ENABLED"] = bool(getattr(config, "blind_collect_obs_hash_span_gate_enabled", False))
+        globals()["_A2V_COLLECT_OBS_HASH_SPAN_MAX_BUCKETS"] = int(getattr(config, "blind_collect_obs_hash_span_max_buckets", 20000) or 20000)
+        globals()["_A2V_COLLECT_OBS_HASH_SPAN_SATURATED_ONLY"] = bool(getattr(config, "blind_collect_obs_hash_span_saturated_only", True))
+        globals()["_A2V_COLLECT_PREFER_UNSAT_HASH_VOTES"] = bool(getattr(config, "blind_collect_prefer_unsaturated_hash_votes_enabled", True))
+    except Exception:
+        globals()["_A2V_COLLECT_DUMP_PATH"] = ""
+        globals()["_A2V_COLLECT_DUMP_MAX_ENTRIES"] = 400
+        globals()["_A2V_COLLECT_DUMP_MAX_ROWS"] = 48
+        globals()["_A2V_COLLECT_SCALE_FILTER_ENABLED"] = True
+        globals()["_A2V_COLLECT_SCALE_FILTER_MIN_PAIRS"] = 6
+        globals()["_A2V_COLLECT_SCALE_FILTER_MIN_KEEP_RATIO"] = 0.15
+        globals()["_A2V_COLLECT_SKIP_SATURATED_HASHES_ENABLED"] = False
+        globals()["_A2V_COLLECT_OBS_HASH_SPAN_GATE_ENABLED"] = False
+        globals()["_A2V_COLLECT_OBS_HASH_SPAN_MAX_BUCKETS"] = 20000
+        globals()["_A2V_COLLECT_OBS_HASH_SPAN_SATURATED_ONLY"] = True
+        globals()["_A2V_COLLECT_PREFER_UNSAT_HASH_VOTES"] = True
     _configure_tile_cache(getattr(config, "tile_cache_size", _TILE_CACHE_DEFAULT_CAPACITY))
     cap_overrides: dict[str, int] = {}
     for level_name, attr in (("S", "bucket_cap_S"), ("M", "bucket_cap_M"), ("L", "bucket_cap_L")):
@@ -625,6 +4112,32 @@ def solve_blind(
         if value > 0:
             cap_overrides[level_name] = value
     set_bucket_cap_overrides(cap_overrides or None)
+
+    fail_stage_counts: dict[str, int] = {
+        "pairing": 0,
+        "hypothesis": 0,
+        "verify_prob": 0,
+        "final_coherence": 0,
+        "unknown": 0,
+    }
+
+    def _mark_fail_stage(stage: str, n: int = 1) -> None:
+        key = str(stage or "unknown").strip().lower()
+        if key not in fail_stage_counts:
+            key = "unknown"
+        fail_stage_counts[key] = int(fail_stage_counts.get(key, 0) + max(1, int(n)))
+
+    def _infer_fail_stage_from_message(msg: str | None) -> str:
+        m = str(msg or "").lower()
+        if "final coherence failed" in m:
+            return "final_coherence"
+        if "probabilistic verify failed" in m or "accept-logodds" in m or "validation failed" in m:
+            return "verify_prob"
+        if "no stars" in m or "no quads" in m:
+            return "pairing"
+        if "no valid solution" in m:
+            return "hypothesis"
+        return "unknown"
 
     def _finish(result: WcsSolution) -> WcsSolution:
         if logger.isEnabledFor(logging.DEBUG):
@@ -642,6 +4155,40 @@ def solve_blind(
                 )
             else:
                 logger.debug("tile cache stats: 0 hits / 0 misses (capacity=%d)", capacity)
+
+        if not bool(result.success):
+            stats = dict(result.stats or {})
+            counts = {k: int(v) for k, v in fail_stage_counts.items()}
+            inferred = _infer_fail_stage_from_message(result.message)
+            if sum(counts.values()) <= 0:
+                counts[inferred] = int(counts.get(inferred, 0) + 1)
+            dominant = max(counts.items(), key=lambda kv: kv[1])[0] if counts else "unknown"
+            current = str(inferred or "unknown")
+            chosen = current if current != "unknown" else str(dominant)
+            stats["fail_stage_counts"] = counts
+            stats["fail_stage_dominant"] = str(dominant)
+            stats["fail_stage_current"] = str(current)
+            stats["fail_stage"] = str(chosen)
+            stage_export = stats.get("stage_by_stage")
+            if isinstance(stage_export, dict):
+                final_row = stage_export.get("final")
+                if not isinstance(final_row, dict):
+                    final_row = {}
+                final_row["success"] = False
+                final_row["message"] = str(result.message)
+                final_row["fail_stage"] = str(chosen)
+                final_row["fail_stage_dominant"] = str(dominant)
+                final_row["fail_stage_current"] = str(current)
+                stage_export["final"] = final_row
+                stats["stage_by_stage"] = stage_export
+            result = WcsSolution(
+                bool(result.success),
+                result.message,
+                result.wcs,
+                stats,
+                result.tile_key,
+                result.header_updates,
+            )
         return result
 
     if not _depth_ladder_internal and bool(getattr(config, "depth_ladder_enabled", False)):
@@ -662,6 +4209,8 @@ def solve_blind(
             ladder_rows: list[dict[str, Any]] = []
             last_fail: WcsSolution | None = None
             total_stages = len(ladder_caps)
+            global_hard_candidates_remaining = max(0, int(getattr(config, "hard_max_candidates_tried", 0) or 0))
+            global_hard_validations_remaining = max(0, int(getattr(config, "hard_max_validations", 0) or 0))
             for stage_idx, stage_max_stars in enumerate(ladder_caps, start=1):
                 if cancel_check and cancel_check():
                     return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
@@ -670,15 +4219,19 @@ def solve_blind(
                     max_stars=int(stage_max_stars),
                     depth_ladder_enabled=False,
                 )
+                stage_hard_candidates = int(stage_cfg.hard_max_candidates_tried or 0)
+                stage_hard_validations = int(stage_cfg.hard_max_validations or 0)
+                if global_hard_candidates_remaining > 0:
+                    stage_hard_candidates = global_hard_candidates_remaining if stage_hard_candidates <= 0 else min(stage_hard_candidates, global_hard_candidates_remaining)
+                if global_hard_validations_remaining > 0:
+                    stage_hard_validations = global_hard_validations_remaining if stage_hard_validations <= 0 else min(stage_hard_validations, global_hard_validations_remaining)
                 if stage_idx == 1 and total_stages > 1:
-                    stage_cfg = replace(
-                        stage_cfg,
-                        hard_max_candidates_tried=(
-                            min(int(stage_cfg.hard_max_candidates_tried), 96)
-                            if int(stage_cfg.hard_max_candidates_tried or 0) > 0
-                            else 96
-                        ),
-                    )
+                    stage_hard_candidates = min(stage_hard_candidates, 96) if stage_hard_candidates > 0 else 96
+                stage_cfg = replace(
+                    stage_cfg,
+                    hard_max_candidates_tried=max(0, int(stage_hard_candidates)),
+                    hard_max_validations=max(0, int(stage_hard_validations)),
+                )
                 stage_started = time.time()
                 logger.info(
                     "depth ladder stage %d/%d: max_stars=%d",
@@ -712,6 +4265,13 @@ def solve_blind(
                         "fail_validation_count": int(stage_stats.get("fail_validation_count", 0) or 0),
                     }
                 )
+                stage_tried = int(stage_stats.get("total_candidates_tried", 0) or 0)
+                stage_failed_validations = int(stage_stats.get("fail_validation_count", 0) or 0)
+                if global_hard_candidates_remaining > 0:
+                    global_hard_candidates_remaining = max(0, global_hard_candidates_remaining - max(0, stage_tried))
+                if global_hard_validations_remaining > 0:
+                    global_hard_validations_remaining = max(0, global_hard_validations_remaining - max(0, stage_failed_validations))
+
                 if stage_solution.success:
                     merged_stats = dict(stage_stats)
                     merged_stats["depth_ladder_enabled"] = True
@@ -727,6 +4287,12 @@ def solve_blind(
                         stage_solution.message = f"depth ladder success (stage {stage_idx}/{total_stages}, max_stars={int(stage_max_stars)})"
                     return _finish(stage_solution)
                 last_fail = stage_solution
+                if global_hard_candidates_remaining == 0 and int(getattr(config, "hard_max_candidates_tried", 0) or 0) > 0:
+                    logger.info("depth ladder stopped: global hard candidate budget exhausted")
+                    break
+                if global_hard_validations_remaining == 0 and int(getattr(config, "hard_max_validations", 0) or 0) > 0:
+                    logger.info("depth ladder stopped: global hard validation budget exhausted")
+                    break
             if last_fail is None:
                 return _finish(WcsSolution(False, "no valid solution", None, {}, None, {}))
             fail_stats = dict(last_fail.stats or {})
@@ -831,6 +4397,86 @@ def solve_blind(
             dec_hint = float(dec0)
     if tile_entries and ra_hint is not None and dec_hint is not None:
         preferred_tile_hint = _nearest_tile_key(tile_entries, ra_hint, dec_hint)
+
+    reuse_existing_wcs = bool(getattr(config, "blind_reuse_existing_solved_wcs", True))
+    dev_seed_enabled = bool(getattr(config, "blind_dev_existing_wcs_seed_enabled", False))
+    if (reuse_existing_wcs or dev_seed_enabled) and header is not None:
+        mode = "BLIND_DEV_SEED" if dev_seed_enabled else "BLIND_REUSE_HEADER"
+        require_solved = bool(
+            getattr(
+                config,
+                "blind_dev_existing_wcs_seed_require_solved" if dev_seed_enabled else "blind_reuse_existing_solved_wcs_require_solved",
+                True,
+            )
+        )
+        validate_seed = bool(
+            getattr(
+                config,
+                "blind_dev_existing_wcs_seed_validate" if dev_seed_enabled else "blind_reuse_existing_solved_wcs_validate",
+                True,
+            )
+        )
+        solved_kw = bool(header.get("SOLVED"))
+        ctype1 = str(header.get("CTYPE1") or "").upper()
+        ctype2 = str(header.get("CTYPE2") or "").upper()
+        has_celestial_tokens = ("RA" in ctype1) and ("DEC" in ctype2)
+        if (not require_solved) or solved_kw:
+            try:
+                seeded_wcs = WCS(header)
+                if bool(getattr(seeded_wcs, "has_celestial", False)) and has_celestial_tokens:
+                    zemo_ok = True
+                    zemo_reason = "ok"
+                    pixscal = float("nan")
+                    if validate_seed:
+                        zemo_ok, zemo_reason, pix_scale_arcsec = validate_wcs_for_zemosaic(seeded_wcs)
+                        if pix_scale_arcsec is not None:
+                            pixscal = float(pix_scale_arcsec)
+                    if not np.isfinite(pixscal):
+                        cd11 = float(header.get("CD1_1", float("nan")) or float("nan"))
+                        cd21 = float(header.get("CD2_1", float("nan")) or float("nan"))
+                        pixscal = float(header.get("PIXSCAL", float("nan")) or float("nan"))
+                        if not np.isfinite(pixscal):
+                            if np.isfinite(cd11) and np.isfinite(cd21):
+                                pixscal = 3600.0 * float(np.hypot(cd11, cd21))
+                    if zemo_ok:
+                        stats = {
+                            "quality": "GOOD",
+                            "success": True,
+                            "reason": "existing header wcs reused",
+                            "dev_seed_reason": str(zemo_reason),
+                            "inliers": int(header.get("INLIERS", 0) or 0),
+                            "rms_px": float(header.get("RMSPX", 0.0) or 0.0),
+                            "phase_perf": {},
+                        }
+                        header_updates = {
+                            "SOLVED": 1,
+                            "QUALITY": "GOOD",
+                            "SOLVER": "ZeSolver",
+                            "SOLVMODE": mode,
+                            "INLIERS": int(header.get("INLIERS", 0) or 0),
+                            "RMSPX": float(header.get("RMSPX", 0.0) or 0.0),
+                        }
+                        if np.isfinite(pixscal):
+                            header_updates["PIXSCAL"] = float(pixscal)
+                        logger.info("blind header reuse (%s): %s", mode.lower(), source_path.name)
+                        return _finish(
+                            WcsSolution(
+                                True,
+                                "solution reused from existing header WCS",
+                                seeded_wcs,
+                                stats,
+                                preferred_tile_hint,
+                                header_updates,
+                            )
+                        )
+                    logger.info(
+                        "blind header reuse rejected for %s by validation: %s",
+                        source_path.name,
+                        str(zemo_reason),
+                    )
+            except Exception as exc:
+                logger.debug("blind header reuse failed for %s: %s", source_path.name, exc)
+
     stage = time.time()
     if cancel_check and cancel_check():
         return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
@@ -855,6 +4501,7 @@ def solve_blind(
         if scale_arcsec:
             header_scale_arcsec = float(scale_arcsec)
     approx_scale_arcsec = _resolve_scale_arcsec(config, header_scale_arcsec)
+    scale_bounds_arcsec = _scale_bounds_arcsec(config, approx_scale_arcsec)
     approx_scale_deg = approx_scale_arcsec / 3600.0 if approx_scale_arcsec else None
     approx_fov_deg = None
     if approx_scale_deg is not None:
@@ -1013,6 +4660,25 @@ def solve_blind(
             prep_cache[cache_key] = cache_entry
         except Exception:
             pass
+
+    raw_star_count = int(stars.shape[0])
+    if bool(getattr(config, "blind_star_quality_filter", True)) and raw_star_count > 0:
+        stars, star_filter_stats = _filter_blind_input_stars(
+            stars,
+            image_shape=image.shape,
+            min_sep_px=float(getattr(config, "blind_star_min_sep_px", 0.0) or 0.0),
+        )
+        logger.info(
+            "blind star quality filter: kept=%d/%d removed=%d min_sep=%.2fpx",
+            int(star_filter_stats.get("kept", stars.shape[0])),
+            int(star_filter_stats.get("input", raw_star_count)),
+            int(star_filter_stats.get("removed", max(0, raw_star_count - stars.shape[0]))),
+            float(star_filter_stats.get("min_sep_px", 0.0)),
+        )
+        if stars.size == 0:
+            return _finish(WcsSolution(False, "no stars left after blind quality filter", None, {}, None, {}))
+        if config.max_stars and stars.size > config.max_stars:
+            stars = stars[: config.max_stars]
 
     logger.info(
         "detected %d stars (using top %d, downsample=%d)",
@@ -1176,10 +4842,528 @@ def solve_blind(
         int(base_hashes.size),
     )
 
+    # Exact observed-hash dump (pre-dedup diagnostics) for Astrometry-parity investigation.
+    obs_hash_dump_path = str(getattr(config, "blind_observed_hash_exact_dump_path", "") or "").strip()
+    if obs_hash_dump_path:
+        try:
+            h_all = np.asarray(base_bundle.get("hashes"), dtype=np.uint64)
+            q_all = np.asarray(base_bundle.get("indices"), dtype=np.uint16)
+            s_all = base_bundle.get("source_indices")
+            if isinstance(s_all, np.ndarray) and s_all.shape[0] == h_all.shape[0]:
+                mask_h = np.asarray(s_all, dtype=np.int64) < int(active_quads_n)
+                raw_h = h_all[mask_h]
+                raw_q = q_all[mask_h]
+                raw_src = np.asarray(s_all, dtype=np.int64)[mask_h]
+            else:
+                raw_h = h_all
+                raw_q = q_all
+                raw_src = np.arange(int(h_all.shape[0]), dtype=np.int64)
+
+            max_entries_oh = max(1, int(getattr(config, "blind_observed_hash_exact_dump_max_entries", 400) or 0))
+            uniq_h, inv_h, cnt_h = np.unique(raw_h, return_inverse=True, return_counts=True)
+            cnt_map = {int(h): int(c) for h, c in zip(np.asarray(uniq_h, dtype=np.uint64), np.asarray(cnt_h, dtype=np.int64))}
+
+            sat_mask = np.zeros(int(raw_h.shape[0]), dtype=bool)
+            rows_oh: list[dict[str, Any]] = []
+            order_h = np.argsort(np.asarray([cnt_map.get(int(v), 0) for v in raw_h], dtype=np.int64))[::-1]
+            take = order_h[: int(min(max_entries_oh, order_h.size))]
+            for rr, ii in enumerate(take):
+                hv = int(raw_h[int(ii)])
+                q1 = int((hv >> 48) & 0xFFFF)
+                q2 = int((hv >> 32) & 0xFFFF)
+                q3 = int((hv >> 16) & 0xFFFF)
+                par = int(hv & 0x1)
+                sat = bool(q1 in (0, 65535) or q2 in (0, 65535) or q3 in (0, 65535))
+                sat_mask[int(ii)] = sat
+                quad_idx = np.asarray(raw_q[int(ii)], dtype=np.int64)
+                quad_pts = None
+                quad_min_edge = None
+                quad_area_frac = None
+                quad_code = None
+                if np.all((quad_idx >= 0) & (quad_idx < int(image_positions.shape[0]))):
+                    try:
+                        quad_pts = np.asarray(image_positions[quad_idx], dtype=np.float64)
+                        qedge, qarea = _quad_min_edge_and_area_frac(quad_pts, image.shape)
+                        quad_min_edge = float(qedge)
+                        quad_area_frac = float(qarea)
+                        qcode = _quad_ratio_code(quad_pts)
+                        if qcode is not None and np.all(np.isfinite(qcode)):
+                            quad_code = [float(v) for v in np.asarray(qcode, dtype=np.float64).tolist()]
+                    except Exception:
+                        pass
+                rows_oh.append({
+                    "k": int(rr),
+                    "obs_hash": int(hv),
+                    "q": [int(q1), int(q2), int(q3)],
+                    "parity": int(par),
+                    "is_saturated": bool(sat),
+                    "hash_multiplicity": int(cnt_map.get(int(hv), 0)),
+                    "raw_source_quad_idx": int(raw_src[int(ii)]) if int(ii) < int(raw_src.shape[0]) else None,
+                    "quad_indices": [int(v) for v in quad_idx.tolist()],
+                    "quad_min_edge_px": quad_min_edge,
+                    "quad_area_frac": quad_area_frac,
+                    "quad_code": quad_code,
+                })
+
+            sat_all = 0
+            sat_uniq = 0
+            if raw_h.size > 0:
+                q1a = ((raw_h >> np.uint64(48)) & np.uint64(0xFFFF)).astype(np.int64)
+                q2a = ((raw_h >> np.uint64(32)) & np.uint64(0xFFFF)).astype(np.int64)
+                q3a = ((raw_h >> np.uint64(16)) & np.uint64(0xFFFF)).astype(np.int64)
+                sat_all_mask = (q1a == 0) | (q1a == 65535) | (q2a == 0) | (q2a == 65535) | (q3a == 0) | (q3a == 65535)
+                sat_all = int(np.count_nonzero(sat_all_mask))
+                uniq_q1 = ((uniq_h >> np.uint64(48)) & np.uint64(0xFFFF)).astype(np.int64)
+                uniq_q2 = ((uniq_h >> np.uint64(32)) & np.uint64(0xFFFF)).astype(np.int64)
+                uniq_q3 = ((uniq_h >> np.uint64(16)) & np.uint64(0xFFFF)).astype(np.int64)
+                sat_uniq_mask = (uniq_q1 == 0) | (uniq_q1 == 65535) | (uniq_q2 == 0) | (uniq_q2 == 65535) | (uniq_q3 == 0) | (uniq_q3 == 65535)
+                sat_uniq = int(np.count_nonzero(sat_uniq_mask))
+
+            payload_oh = {
+                "schema": "zeblind.observed_hash_exact_dump.v1",
+                "phase": "presearch",
+                "active_quads": int(active_quads_n),
+                "raw_hashes_total": int(raw_h.shape[0]),
+                "raw_hashes_unique": int(uniq_h.shape[0]),
+                "saturated_raw_count": int(sat_all),
+                "saturated_unique_count": int(sat_uniq),
+                "rows": rows_oh,
+            }
+            p_oh = Path(obs_hash_dump_path)
+            p_oh.parent.mkdir(parents=True, exist_ok=True)
+            p_oh.write_text(json.dumps(payload_oh, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
     thresholds = {"rms_px": config.quality_rms, "inliers": config.quality_inliers}
     fail_best_inliers_seen = -1
+    fail_best_reason = ""
+    fail_best_rms = float("nan")
+    fail_best_cov_area = float("nan")
+    fail_best_pairs = 0
+    fail_best_model_scale_arcsec = float("nan")
     fail_validation_count = 0
+    scale_prefilter_reject_count = 0
+    hard_scale_reject_count = 0
+    hard_filter_enabled_runtime = bool(getattr(config, "blind_hypothesis_scale_hard_filter_enabled", True))
+    scale_anchor_arcsec = float(approx_scale_arcsec) if approx_scale_arcsec is not None else None
+    scale_anchor_initial_arcsec = float(scale_anchor_arcsec) if scale_anchor_arcsec is not None else None
+    scale_anchor_samples: list[float] = []
+    first_transform_snapshot: dict[str, Any] | None = None
+    first_useful_reject: dict[str, Any] | None = None
+    top_hypotheses: list[dict[str, Any]] = []
+    top_rejected_hypotheses: list[dict[str, Any]] = []
+    fail_reason_class_counts: dict[str, int] = {}
     phases_attempted: list[str] = []
+
+    def _classify_reject_reason(reason: str | None) -> str:
+        rs = str(reason or "").strip().lower()
+        if not rs:
+            return "unknown"
+        if "pixel_scale" in rs or "scale prefilter" in rs or "scale guard" in rs or "hypothesis scale hard reject" in rs:
+            return "scale_mismatch"
+        if "probabilistic verify failed" in rs or "accept-logodds" in rs:
+            return "verify_prob"
+        if "geometric guard" in rs:
+            return "verify_geometry"
+        if "inlier guard" in rs:
+            return "verify_inliers"
+        if "too_few_inliers" in rs or "empty_inliers" in rs or "no transform" in rs:
+            return "hypothesis_support"
+        if "validation failed" in rs:
+            return "verify_generic"
+        return "other"
+
+    def _normalize_verify_reason_code(reason: str | None) -> str:
+        rs = str(reason or "").strip().lower()
+        if not rs:
+            return "unknown"
+        if rs.startswith("validation_failed["):
+            return "validation_failed"
+        if "blind scale prefilter failed" in rs:
+            return "scale_prefilter_failed"
+        if "blind hypothesis scale hard reject" in rs:
+            return "scale_hard_reject"
+        if "pixel_scale_out_of_range" in rs:
+            return "pixel_scale_out_of_range"
+        if "probabilistic verify failed" in rs:
+            return "verify_prob_failed"
+        if "accept-logodds" in rs:
+            return "accept_logodds_gate"
+        if "too_few_inliers" in rs:
+            return "too_few_inliers"
+        if "empty_inliers" in rs:
+            return "empty_inliers"
+        if "no transform" in rs:
+            return "no_transform"
+        return rs.replace(" ", "_")[:64]
+
+    def _record_failed_validation(
+        *,
+        reason: str,
+        inliers: int,
+        rms_px: float,
+        pairs: int,
+        cov_area: float = float("nan"),
+        model_scale_arcsec: float = float("nan"),
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        nonlocal fail_best_inliers_seen, fail_best_reason, fail_best_rms, fail_best_cov_area, fail_best_pairs, fail_best_model_scale_arcsec, first_useful_reject, top_rejected_hypotheses, fail_reason_class_counts, scale_anchor_arcsec, scale_anchor_samples
+        inl = int(max(0, int(inliers)))
+        rp = float(rms_px)
+        cp = float(cov_area)
+        pr = int(max(0, int(pairs)))
+        update = False
+        if inl > fail_best_inliers_seen:
+            update = True
+        elif inl == fail_best_inliers_seen:
+            if np.isfinite(rp):
+                if (not np.isfinite(fail_best_rms)) or rp < float(fail_best_rms):
+                    update = True
+        if update:
+            fail_best_inliers_seen = inl
+            fail_best_reason = str(reason or "")
+            fail_best_rms = rp
+            fail_best_cov_area = cp
+            fail_best_pairs = pr
+            fail_best_model_scale_arcsec = float(model_scale_arcsec)
+        if first_useful_reject is None and inl >= 4:
+            first_useful_reject = {
+                "reason": str(reason or ""),
+                "inliers": int(inl),
+                "rms_px": float(rp) if np.isfinite(float(rp)) else None,
+                "pairs": int(pr),
+                "cov_area": float(cp) if np.isfinite(float(cp)) else None,
+                "model_scale_arcsec": float(model_scale_arcsec) if np.isfinite(float(model_scale_arcsec)) else None,
+            }
+            if isinstance(context, dict):
+                for k in ("phase", "level", "parity", "tile"):
+                    if k in context:
+                        first_useful_reject[k] = context.get(k)
+
+        phase = str((context or {}).get("phase") or "")
+        level = str((context or {}).get("level") or "")
+        parity = str((context or {}).get("parity") or "")
+        tile = str((context or {}).get("tile") or "")
+        reason_txt = str(reason or "")
+        model_scale_value = float(model_scale_arcsec) if np.isfinite(float(model_scale_arcsec)) else None
+        scale_ratio_hint = None
+        if model_scale_value is not None and approx_scale_arcsec is not None:
+            try:
+                denom = float(approx_scale_arcsec)
+                if np.isfinite(denom) and denom > 0.0:
+                    scale_ratio_hint = float(model_scale_value / denom)
+            except Exception:
+                scale_ratio_hint = None
+
+        reason_class = _classify_reject_reason(reason_txt)
+        fail_reason_class_counts[reason_class] = int(fail_reason_class_counts.get(reason_class, 0) + 1)
+
+        if (
+            bool(getattr(config, "blind_scale_anchor_adapt_enabled", True))
+            and reason_class == "scale_mismatch"
+            and (not bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)))
+        ):
+            min_inl = max(1, int(getattr(config, "blind_scale_anchor_adapt_min_inliers", 3) or 1))
+            min_samples = max(1, int(getattr(config, "blind_scale_anchor_adapt_min_samples", 3) or 1))
+            after_vals = max(0, int(getattr(config, "blind_scale_anchor_adapt_after_validations", 0) or 0))
+            if inl >= min_inl and model_scale_value is not None and np.isfinite(float(model_scale_value)) and fail_validation_count >= after_vals:
+                s_val = float(model_scale_value)
+                clip_lo = max(0.05, float(getattr(config, "blind_scale_anchor_adapt_clip_min_arcsec", 0.2) or 0.2))
+                clip_hi = max(clip_lo + 1e-6, float(getattr(config, "blind_scale_anchor_adapt_clip_max_arcsec", 60.0) or 60.0))
+                if clip_lo <= s_val <= clip_hi:
+                    scale_anchor_samples.append(float(s_val))
+                    if len(scale_anchor_samples) > 32:
+                        del scale_anchor_samples[:-32]
+                    if len(scale_anchor_samples) >= min_samples:
+                        window = np.asarray(scale_anchor_samples[-8:], dtype=np.float64)
+                        cand_anchor = float(np.nanmedian(window)) if window.size else float("nan")
+                        if np.isfinite(cand_anchor) and cand_anchor > 0.0:
+                            max_ratio_initial = max(1.0, float(getattr(config, "blind_scale_anchor_adapt_max_ratio_from_initial", 12.0) or 1.0))
+                            if scale_anchor_initial_arcsec is not None and scale_anchor_initial_arcsec > 0.0:
+                                lo_i = float(scale_anchor_initial_arcsec) / max_ratio_initial
+                                hi_i = float(scale_anchor_initial_arcsec) * max_ratio_initial
+                                cand_anchor = float(min(hi_i, max(lo_i, cand_anchor)))
+                            scale_anchor_arcsec = float(cand_anchor)
+
+        row = {
+            "phase": phase,
+            "level": level,
+            "parity": parity,
+            "tile": tile,
+            "reason": reason_txt,
+            "reason_class": reason_class,
+            "reason_code": _normalize_verify_reason_code(reason_txt),
+            "inliers": int(inl),
+            "pairs": int(pr),
+            "rms_px": float(rp) if np.isfinite(float(rp)) else None,
+            "cov_area": float(cp) if np.isfinite(float(cp)) else None,
+            "model_scale_arcsec": model_scale_value,
+            "scale_ratio_hint": scale_ratio_hint,
+        }
+
+        def _reject_sort_key(item: dict[str, Any]) -> tuple[int, int, float]:
+            inl_s = int(max(0, int(item.get("inliers", 0) or 0)))
+            pair_s = int(max(0, int(item.get("pairs", 0) or 0)))
+            rms_v = item.get("rms_px")
+            rms_s = float(rms_v) if rms_v is not None and np.isfinite(float(rms_v)) else float("inf")
+            return (-inl_s, -pair_s, rms_s)
+
+        key = (phase, level, parity, tile, reason_txt)
+        replaced = False
+        for idx, existing in enumerate(top_rejected_hypotheses):
+            ekey = (
+                str(existing.get("phase") or ""),
+                str(existing.get("level") or ""),
+                str(existing.get("parity") or ""),
+                str(existing.get("tile") or ""),
+                str(existing.get("reason") or ""),
+            )
+            if ekey != key:
+                continue
+            if _reject_sort_key(row) < _reject_sort_key(existing):
+                top_rejected_hypotheses[idx] = row
+            replaced = True
+            break
+        if not replaced:
+            top_rejected_hypotheses.append(row)
+        top_rejected_hypotheses = sorted(top_rejected_hypotheses, key=_reject_sort_key)[:5]
+
+    def _record_hypothesis_probe(*, phase: str, level: str, parity: str, tile: str, score: int, pairs: int, inliers: int, model_scale_arcsec: float, status: str) -> None:
+        nonlocal top_hypotheses
+        row = {
+            "phase": str(phase),
+            "level": str(level),
+            "parity": str(parity),
+            "tile": str(tile),
+            "score": int(score),
+            "pairs": int(max(0, int(pairs))),
+            "inliers": int(max(0, int(inliers))),
+            "model_scale_arcsec": float(model_scale_arcsec) if np.isfinite(float(model_scale_arcsec)) else None,
+            "status": str(status),
+        }
+        top_hypotheses.append(row)
+        top_hypotheses = sorted(
+            top_hypotheses,
+            key=lambda r: (int(r.get("inliers", 0)), int(r.get("pairs", 0)), int(r.get("score", 0))),
+            reverse=True,
+        )[:5]
+
+    def _build_top_quasi_solutions() -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        if top_rejected_hypotheses:
+            for it in list(top_rejected_hypotheses)[:5]:
+                rows.append(
+                    {
+                        "phase": str(it.get("phase") or ""),
+                        "level": str(it.get("level") or ""),
+                        "parity": str(it.get("parity") or ""),
+                        "tile": str(it.get("tile") or ""),
+                        "reason": str(it.get("reason") or "validation rejected"),
+                        "reason_class": str(it.get("reason_class") or "unknown"),
+                        "inliers": it.get("inliers"),
+                        "pairs": it.get("pairs"),
+                        "rms_px": it.get("rms_px"),
+                        "model_scale_arcsec": it.get("model_scale_arcsec"),
+                        "scale_ratio_hint": it.get("scale_ratio_hint"),
+                        "source": "rejected",
+                    }
+                )
+            return rows
+
+        for it in list(top_hypotheses)[:5]:
+            model_scale = it.get("model_scale_arcsec")
+            ratio_hint = None
+            if model_scale is not None and approx_scale_arcsec is not None:
+                try:
+                    ms = float(model_scale)
+                    denom = float(approx_scale_arcsec)
+                    if np.isfinite(ms) and np.isfinite(denom) and denom > 0.0:
+                        ratio_hint = float(ms / denom)
+                except Exception:
+                    ratio_hint = None
+            rows.append(
+                {
+                    "phase": str(it.get("phase") or ""),
+                    "level": str(it.get("level") or ""),
+                    "parity": str(it.get("parity") or ""),
+                    "tile": str(it.get("tile") or ""),
+                    "reason": str(it.get("status") or "hypothesis candidate"),
+                    "reason_class": _classify_reject_reason(str(it.get("status") or "")),
+                    "inliers": it.get("inliers"),
+                    "pairs": it.get("pairs"),
+                    "rms_px": None,
+                    "model_scale_arcsec": model_scale,
+                    "scale_ratio_hint": ratio_hint,
+                    "source": "hypothesis",
+                }
+            )
+        return rows
+
+    def _build_stage_by_stage_export(*, final_success: bool, final_message: str) -> dict[str, Any]:
+        candidate_rows: list[dict[str, Any]] = []
+        for phase_name in sorted(phase_perf.keys()):
+            slot = phase_perf.get(phase_name) or {}
+            if not isinstance(slot, dict):
+                continue
+            candidate_rows.append(
+                {
+                    "phase": str(phase_name),
+                    "level_calls": int(slot.get("level_calls", 0) or 0),
+                    "candidates_seen": int(slot.get("candidates_seen", 0) or 0),
+                    "candidates_tried": int(slot.get("candidates_tried", 0) or 0),
+                    "failed_validations": int(slot.get("failed_validations", 0) or 0),
+                    "elapsed_s": float(slot.get("elapsed_s", 0.0) or 0.0),
+                }
+            )
+
+        hypothesis_rows: list[dict[str, Any]] = []
+        for it in list(top_hypotheses)[:16]:
+            hypothesis_rows.append(
+                {
+                    "phase": str(it.get("phase") or ""),
+                    "level": str(it.get("level") or ""),
+                    "parity": str(it.get("parity") or ""),
+                    "tile": str(it.get("tile") or ""),
+                    "status": str(it.get("status") or ""),
+                    "pairs": int(it.get("pairs", 0) or 0),
+                    "inliers": int(it.get("inliers", 0) or 0),
+                    "model_scale_arcsec": it.get("model_scale_arcsec"),
+                }
+            )
+
+        tweak_summary = {
+            "preinlier_relax_hits": int(sum(int((v or {}).get("preinlier_relax_hits", 0) or 0) for v in phase_perf.values() if isinstance(v, dict))),
+            "preinlier_refit_hits": int(sum(int((v or {}).get("preinlier_refit_hits", 0) or 0) for v in phase_perf.values() if isinstance(v, dict))),
+            "three_inlier_rescue_hits": int(sum(int((v or {}).get("three_inlier_rescue_hits", 0) or 0) for v in phase_perf.values() if isinstance(v, dict))),
+        }
+
+        verify_rows: list[dict[str, Any]] = []
+        for it in list(verify_trace)[:32]:
+            verify_rows.append(
+                {
+                    "phase": str(it.get("phase") or ""),
+                    "level": str(it.get("level") or ""),
+                    "parity": str(it.get("parity") or ""),
+                    "tile": str(it.get("tile") or ""),
+                    "inliers": int(it.get("inliers", 0) or 0),
+                    "pairs": int(it.get("pairs", 0) or 0),
+                    "rms_px": it.get("rms_px"),
+                    "reason": str(it.get("reason") or ""),
+                    "reason_class": str(it.get("reason_class") or "unknown"),
+                    "logodds_delta": it.get("logodds_delta"),
+                    "logodds_cum": it.get("logodds_cum"),
+                }
+            )
+
+        verify_hit_rows: list[dict[str, Any]] = []
+        for it in list(verify_hit_trace)[:64]:
+            verify_hit_rows.append(
+                {
+                    "stage": str(it.get("stage") or ""),
+                    "outcome": str(it.get("outcome") or ""),
+                    "phase": str(it.get("phase") or ""),
+                    "level": str(it.get("level") or ""),
+                    "parity": str(it.get("parity") or ""),
+                    "tile": str(it.get("tile") or ""),
+                    "quality": it.get("quality"),
+                    "reason": it.get("reason"),
+                    "inliers": it.get("inliers"),
+                    "rms_px": it.get("rms_px"),
+                    "accept_logodds": it.get("accept_logodds"),
+                }
+            )
+
+        return {
+            "schema": "zeblind.stage_by_stage.v1",
+            "candidate": candidate_rows,
+            "hypothesis": hypothesis_rows,
+            "tweak": tweak_summary,
+            "verify": verify_rows,
+            "verify_hit": verify_hit_rows,
+            "final": {
+                "success": bool(final_success),
+                "message": str(final_message or ""),
+            },
+        }
+
+    def _build_parity_diffable_export(*, final_success: bool, final_message: str) -> dict[str, Any]:
+        phase_slots = [v for v in phase_perf.values() if isinstance(v, dict)]
+
+        def _sum_key(key: str) -> int:
+            return int(sum(int((slot or {}).get(key, 0) or 0) for slot in phase_slots))
+
+        verify_reason_counts = Counter(str(it.get("reason_code") or _normalize_verify_reason_code(it.get("reason")) or "unknown") for it in verify_trace)
+        verify_class_counts = Counter(str(it.get("reason_class") or "unknown") for it in verify_trace)
+        verify_policy_counts = Counter(str(it.get("decision") or "unknown") for it in verify_policy_trace)
+        hyp_status_counts = Counter(str(it.get("status") or "unknown") for it in top_hypotheses)
+
+        permute = {
+            "perm_hash_gate_rejects": _sum_key("astrometry_perm_hash_gate_rejects"),
+            "try_perm_meanx_rejects": _sum_key("astrometry_try_perm_meanx_rejects"),
+            "try_perm_cxdx_rejects": _sum_key("astrometry_try_perm_cxdx_rejects"),
+            "quad_scale_gate_rejects": _sum_key("astrometry_quad_scale_gate_rejects"),
+            "accept_new_best_proxy": _sum_key("astrometry_resolve_hit_global_better"),
+        }
+
+        resolve = {
+            "resolve_hit_attempts": _sum_key("astrometry_resolve_hit_attempts"),
+            "resolve_hit_global_evals": _sum_key("astrometry_resolve_hit_global_evals"),
+            "resolve_hit_global_better": _sum_key("astrometry_resolve_hit_global_better"),
+            "resolve_hit_post_attempts": _sum_key("astrometry_post_resolve_attempts"),
+            "resolve_hit_post_hits": _sum_key("astrometry_post_resolve_hits"),
+            "resolve_hit_seed_fallback_used": _sum_key("astrometry_resolve_hit_seed_fallback_used"),
+        }
+
+        fit = {
+            "hypothesis_status_counts": {str(k): int(v) for k, v in sorted(hyp_status_counts.items())},
+            "fail_stage_counts": {str(k): int(v) for k, v in sorted(fail_stage_counts.items())},
+            "best_fail_reason": str(fail_best_reason or "") if str(fail_best_reason or "").strip() else str(""),
+            "best_fail_inliers": int(fail_best_inliers_seen) if int(fail_best_inliers_seen) >= 0 else None,
+        }
+
+        verify = {
+            "reason_code_counts": {str(k): int(v) for k, v in sorted(verify_reason_counts.items())},
+            "reason_class_counts": {str(k): int(v) for k, v in sorted(verify_class_counts.items())},
+            "policy_decision_counts": {str(k): int(v) for k, v in sorted(verify_policy_counts.items())},
+            "validation_count": int(fail_validation_count),
+            "verify_logodds_cum": float(verify_logodds_cum),
+        }
+
+        dominant_stage = max(fail_stage_counts.items(), key=lambda kv: kv[1])[0] if fail_stage_counts else "unknown"
+        top_verify_reason = None
+        if verify_reason_counts:
+            top_verify_reason = max(verify_reason_counts.items(), key=lambda kv: kv[1])[0]
+        top_perm_blocker = None
+        perm_candidates = {k: v for k, v in permute.items() if isinstance(v, int)}
+        if perm_candidates:
+            top_perm_blocker = max(perm_candidates.items(), key=lambda kv: kv[1])[0]
+
+        remaining_gaps: list[str] = []
+        if str(dominant_stage) == "hypothesis":
+            remaining_gaps.append("Dominant stage still hypothesis; verifier path underused.")
+        if str(dominant_stage) == "verify_prob":
+            remaining_gaps.append("Verifier reached; dominant losses now in verify_prob.")
+        if top_verify_reason is not None:
+            remaining_gaps.append(f"Top verify reason_code: {top_verify_reason}.")
+        if top_perm_blocker is not None:
+            remaining_gaps.append(f"Top permute blocker counter: {top_perm_blocker}.")
+
+        return {
+            "schema": "zeblind.parity_diffable.v1",
+            "success": bool(final_success),
+            "message": str(final_message or ""),
+            "permute": permute,
+            "resolve": resolve,
+            "fit": fit,
+            "verify": verify,
+            "summary": {
+                "dominant_fail_stage": str(dominant_stage),
+                "top_verify_reason_code": top_verify_reason,
+                "top_permute_blocker": top_perm_blocker,
+            },
+            "remaining_gaps": list(remaining_gaps),
+        }
 
     def _prioritize_candidates(
         candidates: list[tuple[str, int]],
@@ -1295,6 +5479,9 @@ def solve_blind(
     candidate_search_cache: dict[tuple[Any, ...], list[tuple[str, int]]] = {}
     level_lookup_cache: dict[tuple[str, bool], tuple[QuadIndex | None, list[slice] | None]] = {}
     collect_matches_cache: dict[tuple[Any, ...], tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+    collect_lookup_cache: dict[tuple[str, int], tuple[QuadIndex, list[slice]]] = {}
+    collect_index_obj_cache: dict[str, QuadIndex] = {}
+    tile_code_entry_cache: dict[tuple[str, int], tuple[np.ndarray, np.ndarray]] = {}
     allowed_tiles_sig_cache: dict[int, tuple[int, ...]] = {}
     phase_perf: dict[str, dict[str, Any]] = {}
     collect_metrics: dict[str, Any] = {
@@ -1315,11 +5502,48 @@ def solve_blind(
     verify_logodds_enabled = bool(getattr(config, "verify_logodds_enabled", False))
     verify_logodds_bail = float(getattr(config, "verify_logodds_bail", -24.0) or -24.0)
     verify_logodds_stoplooking = float(getattr(config, "verify_logodds_stoplooking", 24.0) or 24.0)
+    verify_logodds_accept = float(getattr(config, "verify_logodds_accept", 12.0) or 12.0)
     verify_logodds_min_validations = max(0, int(getattr(config, "verify_logodds_min_validations", 8) or 0))
     verify_logodds_cum = 0.0
     verify_logodds_last = 0.0
+    verify_trace: list[dict[str, Any]] = []
+    verify_hit_trace: list[dict[str, Any]] = []
+    verify_policy_trace: list[dict[str, Any]] = []
+    astrometry_match_objects: list[dict[str, Any]] = []
+    astrometry_numtries = 0
+    astrometry_nummatches = 0
+    astrometry_stop_reasons: list[dict[str, Any]] = []
     hard_max_candidates_tried = max(0, int(getattr(config, "hard_max_candidates_tried", 0) or 0))
     hard_max_validations = max(0, int(getattr(config, "hard_max_validations", 0) or 0))
+    strict_mode_effective = bool(getattr(config, "blind_astrometry_strict_disable_nonastrometry_fallbacks", True)) and bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True))
+    non_parity_mode_effective = bool(getattr(config, "blind_non_parity_mode_enabled", True)) and (not strict_mode_effective)
+
+    def _record_stop_reason(reason: str, *, phase: str | None = None, level: str | None = None) -> None:
+        nonlocal astrometry_stop_reasons
+        if len(astrometry_stop_reasons) >= 64:
+            return
+        rs = str(reason or "")
+        code = "other"
+        if rs.startswith("candidate_cap:"):
+            code = "candidate_cap"
+        elif "hard_budget candidates_tried>=" in rs:
+            code = "maxquads_reached"
+        elif "hard_budget validations>=" in rs:
+            code = "maxmatches_reached"
+        elif rs.startswith("fail_early:logodds_bail"):
+            code = "logodds_bail"
+        elif rs.startswith("fail_early:elapsed>"):
+            code = "weak_support_timeout"
+        elif rs.startswith("fail_early:"):
+            code = "fail_early"
+        row = {
+            "reason": rs,
+            "code": str(code),
+            "phase": str(phase or ""),
+            "level": str(level or ""),
+        }
+        if row not in astrometry_stop_reasons:
+            astrometry_stop_reasons.append(row)
 
     def _phase_slot(name: str) -> dict[str, Any]:
         slot = phase_perf.get(name)
@@ -1336,9 +5560,95 @@ def solve_blind(
                 "early_abort_reason": None,
                 "verify_logodds_cum": 0.0,
                 "verify_logodds_last": 0.0,
+                "verify_logodds_accept_reached": False,
+                "verify_logodds_stoplooking_reached": False,
+                "verify_policy_accept_hits": 0,
+                "verify_policy_stoplooking_hits": 0,
+                "verify_policy_bail_hits": 0,
+                "verify_match_total": 0,
+                "verify_conflict_total": 0,
+                "verify_distractor_total": 0,
+                "verify_conflict_pruned_total": 0,
+                "premodel_pruned_total": 0,
+                "quad_relax_total": 0,
+                "seed_hypothesis_hits": 0,
+                "hypothesis_rescue_attempts": 0,
+                "hypothesis_rescue_hits": 0,
+                "hypothesis_fail_no_transform": 0,
+                "hypothesis_fail_empty_inliers": 0,
+                "hypothesis_fail_too_few_inliers": 0,
+                "preinlier_relax_attempts": 0,
+                "preinlier_relax_hits": 0,
+                "preinlier_relax_promoted_total": 0,
+                "preinlier_refit_attempts": 0,
+                "preinlier_refit_hits": 0,
+                "preinlier_refit_promoted_total": 0,
+                "global_streak_limit_used": 0,
+                "scale_prefilter_rejects": 0,
+                "astrometry_inbox_hits": 0,
+                "astrometry_inbox_removed_total": 0,
+                "astrometry_code_near_hits": 0,
+                "astrometry_code_near_buckets_total": 0,
+                "astrometry_code_near_entries_total": 0,
+                "astrometry_code_continuous_hits": 0,
+                "astrometry_code_continuous_rejects": 0,
+                "astrometry_code_rangesearch_hits": 0,
+                "astrometry_code_rangesearch_neighbors_total": 0,
+                "astrometry_code_rangesearch_l2_activations": 0,
+                "astrometry_code_rangesearch_grid_activations": 0,
+                "astrometry_code_rangesearch_kdbox_activations": 0,
+                "astrometry_code_rangesearch_backend_forced_linf": 0,
+                "astrometry_code_hit_objects_total": 0,
+                "astrometry_code_hit_score_rejects": 0,
+                "astrometry_code_hit_geom_rejects": 0,
+                "astrometry_code_hit_only_mode_activations": 0,
+                "astrometry_code_hit_only_entries_total": 0,
+                "astrometry_hit_pipeline_first_activations": 0,
+                "astrometry_hit_pipeline_first_fallbacks": 0,
+                "astrometry_hit_pipeline_first_skips": 0,
+                "astrometry_hit_pipeline_dedicated_activations": 0,
+                "astrometry_hit_pipeline_dedicated_fallbacks": 0,
+                "astrometry_hit_pipeline_dedicated_skips": 0,
+                "astrometry_resolve_hit_global_evals": 0,
+                "astrometry_resolve_hit_global_better": 0,
+                "astrometry_resolve_hit_global_delta_best": -999999,
+                "astrometry_resolve_hit_global_delta_nonneg": 0,
+                "astrometry_resolve_hit_hybrid_evals": 0,
+                "astrometry_resolve_hit_hybrid_better": 0,
+                "astrometry_match_objects_total": 0,
             }
             phase_perf[name] = slot
         return slot
+
+    def _record_verify_policy(
+        *,
+        phase: str,
+        decision: str,
+        reason: str = "",
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        nonlocal verify_policy_trace, verify_logodds_cum, verify_logodds_last
+        if len(verify_policy_trace) >= 256:
+            return
+        row: dict[str, Any] = {
+            "phase": str(phase or ""),
+            "decision": str(decision or ""),
+            "reason": str(reason or ""),
+            "reason_code": _normalize_verify_reason_code(reason),
+            "validations": int(fail_validation_count),
+            "candidates": int(total_candidates_tried),
+            "best_inliers": int(fail_best_inliers_seen),
+            "logodds_cum": float(verify_logodds_cum),
+            "logodds_last": float(verify_logodds_last),
+            "accept_thr": float(verify_logodds_accept),
+            "stoplooking_thr": float(verify_logodds_stoplooking),
+            "bail_thr": float(verify_logodds_bail),
+        }
+        if isinstance(details, dict):
+            for k, v in details.items():
+                if k not in row:
+                    row[k] = v
+        verify_policy_trace.append(row)
 
     def _maybe_fail_early_abort(phase_name: str) -> bool:
         nonlocal fail_early_abort, fail_early_abort_reason, fail_early_abort_phase, verify_logodds_cum
@@ -1351,8 +5661,41 @@ def solve_blind(
             verify_logodds_enabled
             and verify_logodds_min_validations > 0
             and fail_validation_count >= verify_logodds_min_validations
+            and verify_logodds_cum >= verify_logodds_accept
+        ):
+            try:
+                slot = _phase_slot(phase_name)
+                slot["verify_logodds_accept_reached"] = True
+                if int(slot.get("verify_policy_accept_hits", 0) or 0) <= 0:
+                    slot["verify_policy_accept_hits"] = 1
+                    _record_verify_policy(
+                        phase=phase_name,
+                        decision="accept_threshold_reached",
+                        reason="accept-logodds threshold reached",
+                        details={"min_validations": int(verify_logodds_min_validations)},
+                    )
+            except Exception:
+                pass
+            return False
+        if (
+            verify_logodds_enabled
+            and verify_logodds_min_validations > 0
+            and fail_validation_count >= verify_logodds_min_validations
             and verify_logodds_cum >= verify_logodds_stoplooking
         ):
+            try:
+                slot = _phase_slot(phase_name)
+                slot["verify_logodds_stoplooking_reached"] = True
+                if int(slot.get("verify_policy_stoplooking_hits", 0) or 0) <= 0:
+                    slot["verify_policy_stoplooking_hits"] = 1
+                    _record_verify_policy(
+                        phase=phase_name,
+                        decision="stoplooking_threshold_reached",
+                        reason="stoplooking threshold reached",
+                        details={"min_validations": int(verify_logodds_min_validations)},
+                    )
+            except Exception:
+                pass
             return False
 
         def _set_abort(reason: str) -> bool:
@@ -1365,8 +5708,19 @@ def solve_blind(
                 slot["early_abort"] = True
                 slot["early_abort_reason"] = str(fail_early_abort_reason)
                 slot["verify_logodds_cum"] = float(verify_logodds_cum)
+                if str(reason).startswith("logodds_bail"):
+                    slot["verify_policy_bail_hits"] = int(slot.get("verify_policy_bail_hits", 0) + 1)
             except Exception:
                 pass
+            dec = "fail_early"
+            if str(reason).startswith("logodds_bail"):
+                dec = "bail"
+            elif str(reason).startswith("hard_budget"):
+                dec = "hard_budget"
+            elif str(reason).startswith("elapsed>"):
+                dec = "weak_support_timeout"
+            _record_verify_policy(phase=phase_name, decision=dec, reason=str(reason))
+            _record_stop_reason(f"fail_early:{reason}", phase=phase_name)
             logger.info(
                 "blind fail-early abort triggered in phase %s: %s",
                 phase_name,
@@ -1413,23 +5767,249 @@ def solve_blind(
             f" (best_inliers={fail_best_inliers_seen}, validations={fail_validation_count}, candidates={total_candidates_tried})"
         )
 
-    def _update_verify_logodds(*, phase_slot: dict[str, Any], inliers: int, rms_px: float) -> None:
-        nonlocal verify_logodds_cum, verify_logodds_last
+    def _update_verify_logodds(
+        *,
+        phase_slot: dict[str, Any],
+        inliers: int,
+        rms_px: float,
+        pairs: int = 0,
+        reason: str | None = None,
+        context: dict[str, Any] | None = None,
+        theta_counts: dict[str, int] | None = None,
+    ) -> None:
+        nonlocal verify_logodds_cum, verify_logodds_last, verify_trace
         if not verify_logodds_enabled:
             return
+
         safe_inliers = max(0, int(inliers))
+        safe_pairs = max(0, int(pairs))
+        if safe_pairs <= 0:
+            safe_pairs = max(1, safe_inliers)
         safe_rms = float(rms_px)
         if not np.isfinite(safe_rms) or safe_rms <= 0.0:
             safe_rms = max(float(getattr(config, "quality_rms", 1.2) or 1.2), 1.0) * 4.0
-        cand = math.log1p(float(safe_inliers)) - (1.35 * math.log(max(1e-6, safe_rms))) - 1.4
-        if safe_inliers <= 2:
+
+        # Astrometry-inspired bookkeeping: classify residual support into
+        # match/conflict/distractor buckets, then accumulate a log-odds increment.
+        if isinstance(theta_counts, dict):
+            matches = int(max(0, int(theta_counts.get("match", safe_inliers))))
+            conflicts = int(max(0, int(theta_counts.get("conflict", 0))))
+            distractors = int(max(0, int(theta_counts.get("distractor", 0))))
+            theta_filtered = int(max(0, int(theta_counts.get("filtered", 0))))
+            theta_bailed = int(max(0, int(theta_counts.get("bailedout", 0))))
+            theta_stopped = int(max(0, int(theta_counts.get("stoppedlooking", 0))))
+        else:
+            missing = max(0, safe_pairs - safe_inliers)
+            rs = str(reason or "").lower()
+            if "pixel_scale_out_of_range" in rs or "invalid" in rs:
+                conflicts = int(math.ceil(0.75 * missing))
+            elif "guard failed" in rs or "probabilistic" in rs:
+                conflicts = int(math.ceil(0.60 * missing))
+            else:
+                conflicts = int(math.ceil(0.45 * missing))
+            conflicts = max(0, min(missing, conflicts))
+            distractors = int(max(0, missing - conflicts))
+            matches = int(max(0, safe_inliers))
+            theta_filtered = 0
+            theta_bailed = 0
+            theta_stopped = 0
+
+        prior_match = float(getattr(config, "blind_prob_prior_match", 0.35) or 0.35)
+        # Convert prior-match to distractor-ish prior with robust bounds.
+        base_distractor = min(0.85, max(0.05, 1.0 - prior_match))
+        distractor_floor = float(getattr(config, "blind_verify_distractor_floor", 0.08) or 0.08)
+        distractor_ceil = float(getattr(config, "blind_verify_distractor_ceil", 0.85) or 0.85)
+        distractor_floor = min(0.95, max(0.01, distractor_floor))
+        distractor_ceil = min(0.99, max(distractor_floor + 0.02, distractor_ceil))
+        distractor_rate = float(min(distractor_ceil, max(distractor_floor, base_distractor)))
+
+        if bool(getattr(config, "blind_verify_adaptive_distractor_prior", True)):
+            # Astrometry-inspired: adapt distractor prior from observed weak support
+            # (smoothed conflict+distractor ratio over candidate pairs).
+            alpha = 1.0 + float(conflicts + distractors)
+            beta = 1.0 + float(matches)
+            obs_distractor = alpha / max(1e-6, alpha + beta)
+            blend = float(getattr(config, "blind_verify_distractor_blend", 0.45) or 0.0)
+            blend = min(1.0, max(0.0, blend))
+            distractor_rate = (1.0 - blend) * distractor_rate + blend * obs_distractor
+            distractor_rate = float(min(distractor_ceil, max(distractor_floor, distractor_rate)))
+
+        log_fg = math.log(max(1e-6, 1.0 - distractor_rate))
+        log_bg = math.log(max(1e-6, distractor_rate))
+
+        cand = (matches * (log_fg - log_bg))
+        cand -= 0.85 * float(conflicts)
+        cand -= 0.35 * float(distractors)
+        cand -= 0.55 * math.log(max(1e-6, safe_rms))
+
+        if matches <= 2:
             cand -= 0.9
-        elif safe_inliers >= max(8, int(0.5 * int(getattr(config, "quality_inliers", 40) or 40))):
+        elif matches >= max(8, int(0.5 * int(getattr(config, "quality_inliers", 40) or 40))):
             cand += 0.5
+
         verify_logodds_last = float(cand)
         verify_logodds_cum = float(verify_logodds_cum + cand)
         phase_slot["verify_logodds_last"] = float(verify_logodds_last)
         phase_slot["verify_logodds_cum"] = float(verify_logodds_cum)
+        phase_slot["verify_match_total"] = int(phase_slot.get("verify_match_total", 0) + matches)
+        phase_slot["verify_conflict_total"] = int(phase_slot.get("verify_conflict_total", 0) + conflicts)
+        phase_slot["verify_distractor_total"] = int(phase_slot.get("verify_distractor_total", 0) + distractors)
+        phase_slot["verify_theta_filtered_total"] = int(phase_slot.get("verify_theta_filtered_total", 0) + theta_filtered)
+        phase_slot["verify_theta_bailedout_total"] = int(phase_slot.get("verify_theta_bailedout_total", 0) + theta_bailed)
+        phase_slot["verify_theta_stoppedlooking_total"] = int(phase_slot.get("verify_theta_stoppedlooking_total", 0) + theta_stopped)
+        try:
+            _record_verify_policy(
+                phase=str((context or {}).get("phase") or ""),
+                decision="logodds_update",
+                reason=str(reason or ""),
+                details={
+                    "matches": int(matches),
+                    "conflicts": int(conflicts),
+                    "distractors": int(distractors),
+                    "pairs": int(safe_pairs),
+                    "rms_px": float(safe_rms),
+                    "reason_class": _classify_reject_reason(str(reason or "")),
+                    "theta_filtered": int(theta_filtered),
+                    "theta_bailedout": int(theta_bailed),
+                    "theta_stoppedlooking": int(theta_stopped),
+                },
+            )
+        except Exception:
+            pass
+        if len(verify_trace) < 256:
+            row: dict[str, Any] = {
+                "inliers": int(matches),
+                "pairs": int(safe_pairs),
+                "rms_px": float(safe_rms),
+                "reason": str(reason or ""),
+                "reason_class": _classify_reject_reason(str(reason or "")),
+                "reason_code": _normalize_verify_reason_code(str(reason or "")),
+                "logodds_delta": float(cand),
+                "logodds_cum": float(verify_logodds_cum),
+                "conflicts": int(conflicts),
+                "distractors": int(distractors),
+                "theta_filtered": int(theta_filtered),
+                "theta_bailedout": int(theta_bailed),
+                "theta_stoppedlooking": int(theta_stopped),
+            }
+            if isinstance(context, dict):
+                for k in ("phase", "level", "parity", "tile"):
+                    if k in context:
+                        row[k] = context.get(k)
+            verify_trace.append(row)
+
+    def _record_verify_hit_stage(
+        *,
+        stage: str,
+        outcome: str,
+        context: dict[str, Any] | None = None,
+        stats_obj: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        nonlocal verify_hit_trace
+        if len(verify_hit_trace) >= 512:
+            return
+        row: dict[str, Any] = {
+            "stage": str(stage or ""),
+            "outcome": str(outcome or ""),
+            "phase": str((context or {}).get("phase") or ""),
+            "level": str((context or {}).get("level") or ""),
+            "parity": str((context or {}).get("parity") or ""),
+            "tile": str((context or {}).get("tile") or ""),
+        }
+        st = stats_obj or {}
+        if isinstance(st, dict):
+            for k in (
+                "quality", "reason", "inliers", "rms_px", "pix_scale_arcsec", "model_scale_arcsec", "accept_logodds",
+                "prob_logodds", "prob_matches", "prob_conflicts", "prob_distractors",
+                "prob_steps", "prob_best_i", "prob_ibailed", "prob_istopped",
+                "prob_theta_match_total", "prob_theta_conflict_total", "prob_theta_distractor_total",
+                "prob_theta_filtered_total", "prob_theta_bailedout_total", "prob_theta_stoppedlooking_total", "prob_theta_total",
+            ):
+                if k in st:
+                    row[k] = st.get(k)
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                if k not in row:
+                    row[k] = v
+        reason_hit = str(row.get("reason") or "")
+        if reason_hit:
+            row["reason_class"] = _classify_reject_reason(reason_hit)
+            row["reason_code"] = _normalize_verify_reason_code(reason_hit)
+        verify_hit_trace.append(row)
+
+
+    def _record_astrometry_match_object(
+        *,
+        stage: str,
+        outcome: str,
+        context: dict[str, Any] | None = None,
+        stats_obj: dict[str, Any] | None = None,
+        source: str = "",
+        pairs: int = 0,
+        inlier_guess: int = 0,
+        model_scale_arcsec: float | None = None,
+        score: int | None = None,
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        nonlocal astrometry_match_objects
+        if len(astrometry_match_objects) >= 512:
+            return
+        row: dict[str, Any] = {
+            "id": int(len(astrometry_match_objects) + 1),
+            "stage": str(stage or ""),
+            "outcome": str(outcome or ""),
+            "phase": str((context or {}).get("phase") or ""),
+            "level": str((context or {}).get("level") or ""),
+            "parity": str((context or {}).get("parity") or ""),
+            "tile": str((context or {}).get("tile") or ""),
+            "source": str(source or ""),
+            "pairs": int(max(0, int(pairs))),
+            "inlier_guess": int(max(0, int(inlier_guess))),
+        }
+        if score is not None:
+            row["score"] = int(score)
+        if model_scale_arcsec is not None and np.isfinite(float(model_scale_arcsec)):
+            row["model_scale_arcsec"] = float(model_scale_arcsec)
+        st = stats_obj or {}
+        if isinstance(st, dict):
+            for k in (
+                "quality",
+                "reason",
+                "inliers",
+                "rms_px",
+                "pix_scale_arcsec",
+                "accept_logodds",
+                "prob_logodds",
+                "prob_match_ratio",
+                "prob_matches",
+                "prob_conflicts",
+                "prob_distractors",
+                "prob_steps",
+                "prob_best_i",
+                "prob_ibailed",
+                "prob_istopped",
+                "prob_theta_match_total",
+                "prob_theta_conflict_total",
+                "prob_theta_distractor_total",
+                "prob_theta_filtered_total",
+                "prob_theta_bailedout_total",
+                "prob_theta_stoppedlooking_total",
+                "prob_theta_total",
+            ):
+                if k in st:
+                    row[k] = st.get(k)
+        if isinstance(extra, dict):
+            for k, v in extra.items():
+                if k not in row:
+                    row[k] = v
+        astrometry_match_objects.append(row)
+        try:
+            _ps = _phase_slot(str(row.get("phase") or ""))
+            _ps["astrometry_match_objects_total"] = int(_ps.get("astrometry_match_objects_total", 0) + 1)
+        except Exception:
+            pass
+
 
     def _allowed_tiles_key(tiles: set[int] | None) -> tuple[Any, ...]:
         if tiles is None:
@@ -1440,6 +6020,32 @@ def solve_blind(
             sig = tuple(sorted(int(v) for v in tiles))
             allowed_tiles_sig_cache[key_id] = sig
         return ("tiles", sig)
+
+    def _hash_signature(arr: np.ndarray | None) -> tuple[int, int, int, int, int]:
+        if arr is None:
+            return (0, 0, 0, 0, 0)
+        vv = np.asarray(arr)
+        if vv.size == 0:
+            return (0, 0, 0, 0, 0)
+        flat = vv.reshape(-1).astype(np.uint64, copy=False)
+        step = max(1, int(flat.size) // 64)
+        sample = flat[::step]
+        if sample.size == 0:
+            sample = flat[:1]
+        sx = int(np.bitwise_xor.reduce(sample).item())
+        sm = int(np.sum(sample, dtype=np.uint64).item())
+        return (
+            int(flat.size),
+            int(sample[0]),
+            int(sample[-1]),
+            sx,
+            sm,
+        )
+
+    def _obs_hash_signature(hashes: np.ndarray, counts: np.ndarray | None = None) -> tuple[Any, ...]:
+        if counts is None:
+            return ("h", _hash_signature(hashes))
+        return ("hc", _hash_signature(hashes), _hash_signature(counts))
 
     def _collect_cache_key(
         lvl: str,
@@ -1471,7 +6077,7 @@ def solve_blind(
         agg_levels: Iterable[str] | None = None,
         early_exit_ratio: float | None = None,
     ) -> WcsSolution | None:
-        nonlocal fail_best_inliers_seen, fail_validation_count, total_candidates_tried
+        nonlocal fail_best_inliers_seen, fail_validation_count, scale_prefilter_reject_count, hard_scale_reject_count, hard_filter_enabled_runtime, first_transform_snapshot, total_candidates_tried, astrometry_numtries, astrometry_nummatches
         phase_slot = _phase_slot(phase_name)
         phase_slot["level_calls"] += 1
         if cancel_check and cancel_check():
@@ -1494,7 +6100,7 @@ def solve_blind(
             level_name,
             bool(use_px_spec),
             _allowed_tiles_key(active_allowed_tiles),
-            int(level_hashes.size),
+            _obs_hash_signature(level_hashes, level_counts),
         )
         cached_candidates = candidate_search_cache.get(cand_key)
         if cached_candidates is None:
@@ -1545,6 +6151,7 @@ def solve_blind(
             if filtered:
                 ordered = filtered
         global_mode = not bool(use_ra_filter)
+        astrometry_try_all_codes_mode = bool(getattr(config, "blind_astrometry_try_all_codes_mode", True))
         candidate_limit = max(1, int(config.max_candidates))
         low_support_streak = 0
         weak_validation_streak = 0
@@ -1554,56 +6161,74 @@ def solve_blind(
         global_budget_s = 0.0
         if global_mode:
             fast_global = bool(getattr(config, "fast_mode", True))
-            # Keep rescue breadth, tighten only fast/global probing.
-            if fast_global:
-                candidate_limit = min(candidate_limit, 18)
-            top_score = max(1, int(ordered[0][1])) if ordered else 1
-            score_floor = max(2, int(top_score * (0.06 if fast_global else 0.04)))
-            ordered_pruned = [(k, sc) for (k, sc) in ordered if int(sc) >= score_floor]
-            if len(ordered_pruned) >= max(8, candidate_limit):
-                ordered = ordered_pruned
-            # Additional gentle tail pruning when there is a clear front-runner.
-            # Keep this conservative to avoid dropping valid rescue candidates.
-            if len(ordered) >= 2:
-                runner_up = max(1, int(ordered[1][1]))
-                if top_score >= int(1.25 * runner_up):
-                    rel_floor = 0.10 if fast_global else 0.08
-                    score_floor2 = max(2, int(top_score * rel_floor))
-                    ordered_pruned2 = [(k, sc) for (k, sc) in ordered if int(sc) >= score_floor2]
-                    if len(ordered_pruned2) >= max(6, min(candidate_limit, 12)):
-                        ordered = ordered_pruned2
-                dominance = float(top_score) / float(max(1, runner_up))
+            if not astrometry_try_all_codes_mode:
+                # Legacy fast heuristics: tighten only fast/global probing.
                 if fast_global:
-                    if dominance >= 3.0:
-                        candidate_limit = min(candidate_limit, 10)
-                    elif dominance >= 2.0:
-                        candidate_limit = min(candidate_limit, 12)
-                    elif dominance >= 1.4:
-                        candidate_limit = min(candidate_limit, 14)
-            global_budget_s = float(
-                getattr(config, "global_budget_fast_s", 8.0)
-                if fast_global
-                else getattr(config, "global_budget_slow_s", 18.0)
-            )
-            if global_budget_s > 0.0:
-                if level_name == "M":
-                    global_budget_s *= 1.35
-                elif level_name == "L":
-                    global_budget_s *= 1.80
+                    candidate_limit = min(candidate_limit, 18)
+                top_score = max(1, int(ordered[0][1])) if ordered else 1
+                score_floor = max(2, int(top_score * (0.06 if fast_global else 0.04)))
+                ordered_pruned = [(k, sc) for (k, sc) in ordered if int(sc) >= score_floor]
+                if len(ordered_pruned) >= max(8, candidate_limit):
+                    ordered = ordered_pruned
+                # Additional gentle tail pruning when there is a clear front-runner.
+                # Keep this conservative to avoid dropping valid rescue candidates.
+                if len(ordered) >= 2:
+                    runner_up = max(1, int(ordered[1][1]))
+                    if top_score >= int(1.25 * runner_up):
+                        rel_floor = 0.10 if fast_global else 0.08
+                        score_floor2 = max(2, int(top_score * rel_floor))
+                        ordered_pruned2 = [(k, sc) for (k, sc) in ordered if int(sc) >= score_floor2]
+                        if len(ordered_pruned2) >= max(6, min(candidate_limit, 12)):
+                            ordered = ordered_pruned2
+                    dominance = float(top_score) / float(max(1, runner_up))
+                    if fast_global:
+                        if dominance >= 3.0:
+                            candidate_limit = min(candidate_limit, 10)
+                        elif dominance >= 2.0:
+                            candidate_limit = min(candidate_limit, 12)
+                        elif dominance >= 1.4:
+                            candidate_limit = min(candidate_limit, 14)
+                global_budget_s = float(
+                    getattr(config, "global_budget_fast_s", 8.0)
+                    if fast_global
+                    else getattr(config, "global_budget_slow_s", 18.0)
+                )
+                if global_budget_s > 0.0:
+                    if level_name == "M":
+                        global_budget_s *= 1.35
+                    elif level_name == "L":
+                        global_budget_s *= 1.80
 
         def _global_abort_now() -> bool:
             if not global_mode:
+                return False
+            if astrometry_try_all_codes_mode:
                 return False
             if best_support >= 4:
                 return False
             if global_budget_s > 0.0 and (time.time() - level_started) >= global_budget_s:
                 phase_slot["early_abort"] = True
                 phase_slot["early_abort_reason"] = f"time_budget>{global_budget_s:.1f}s"
+                _record_stop_reason(str(phase_slot["early_abort_reason"]), phase=phase_name, level=level_name)
                 return True
-            streak_limit = 12 if bool(getattr(config, "fast_mode", True)) else 28
+            streak_limit_base = 12 if bool(getattr(config, "fast_mode", True)) else 28
+            streak_limit = int(streak_limit_base)
+            if bool(getattr(config, "blind_global_streak_relax_enabled", True)):
+                relax_valid = max(0, int(getattr(config, "blind_global_streak_relax_validations", 6) or 0))
+                relax_inliers = max(0, int(getattr(config, "blind_global_streak_relax_inliers", 4) or 0))
+                relax_factor = max(1.0, float(getattr(config, "blind_global_streak_relax_factor", 3.0) or 1.0))
+                relax_logodds = float(getattr(config, "blind_global_streak_relax_logodds", 0.25) or 0.0)
+                if (
+                    fail_validation_count >= relax_valid
+                    or fail_best_inliers_seen >= relax_inliers
+                    or verify_logodds_cum >= relax_logodds
+                ):
+                    streak_limit = int(max(streak_limit, round(float(streak_limit_base) * relax_factor)))
+            phase_slot["global_streak_limit_used"] = int(max(int(phase_slot.get("global_streak_limit_used", 0) or 0), streak_limit))
             if low_support_streak >= streak_limit:
                 phase_slot["early_abort"] = True
                 phase_slot["early_abort_reason"] = f"low_support_streak>={streak_limit}"
+                _record_stop_reason(str(phase_slot["early_abort_reason"]), phase=phase_name, level=level_name)
                 return True
             return False
 
@@ -1623,14 +6248,129 @@ def solve_blind(
             level_lookup_cache[lookup_key] = (level_index, level_slices)
         top_candidate_score = max(1, int(ordered[0][1])) if ordered else 1
 
+        rerank_top_k = max(0, int(getattr(config, "blind_candidate_rerank_top_k", 0) or 0))
+        if rerank_top_k > 1 and len(ordered) > 1:
+            head_n = min(len(ordered), max(rerank_top_k, candidate_limit))
+            rr_entry = obs_by_level.get(level_name) if use_px_spec else None
+            if rr_entry is None:
+                rr_entry = (base_hashes, base_quads, base_counts)
+            rr_hashes, rr_quads, _ = rr_entry
+            rr_bucket_limit = max(24, min(int(bucket_limit), 96))
+            rr_percentile = min(90, max(20, int(vote_percentile)))
+            rr_trials = max(40, int(getattr(config, "blind_candidate_rerank_trials", 120) or 120))
+            scored_head: list[tuple[str, int, float, int, float]] = []
+            for rr_rank, (candidate_key, base_score) in enumerate(ordered[:head_n]):
+                tile_index = tile_map.get(candidate_key)
+                if tile_index is None:
+                    scored_head.append((candidate_key, int(base_score), -1e9, 0, float("inf")))
+                    continue
+                try:
+                    tile_entry = tile_entries[tile_index]
+                    tile_positions, tile_world = _load_tile_positions(index_root, tile_entry)
+                except Exception:
+                    scored_head.append((candidate_key, int(base_score), -1e9, 0, float("inf")))
+                    continue
+                ip, tp, _wp = _collect_tile_matches(
+                    index_root,
+                    (level_name,),
+                    tile_index,
+                    rr_hashes,
+                    rr_quads,
+                    image_positions,
+                    tile_positions,
+                    tile_world,
+                    rr_bucket_limit,
+                    rr_percentile,
+                    use_vectorized=bool(getattr(config, "collect_matches_vectorized_experimental", False)),
+                    index_lookup_cache=collect_lookup_cache,
+                    index_obj_cache=collect_index_obj_cache,
+                    uniformize_grid_px=(
+                        float(getattr(config, "blind_verify_uniform_grid_px", 48.0) or 0.0)
+                        if bool(getattr(config, "blind_verify_uniformize_pairs", True))
+                        else 0.0
+                    ),
+                    uniformize_max_per_cell=(
+                        int(getattr(config, "blind_verify_uniform_max_per_cell", 4) or 0)
+                        if bool(getattr(config, "blind_verify_uniformize_pairs", True))
+                        else 0
+                    ),
+                    uniformize_min_keep_ratio=float(getattr(config, "blind_verify_uniform_min_keep_ratio", 0.35) or 0.35),
+                    dedup_pairs=bool(getattr(config, "blind_verify_dedup_pairs", True)),
+                    dedup_min_keep_ratio=float(getattr(config, "blind_verify_dedup_min_keep_ratio", 0.45) or 0.45),
+                    pair_geom_scoring=bool(getattr(config, "blind_pair_geom_scoring", True)),
+                    pair_geom_weight=float(getattr(config, "blind_pair_geom_weight", 0.35) or 0.35),
+                    pair_geom_sigma=float(getattr(config, "blind_pair_geom_sigma", 0.45) or 0.45),
+                    pair_geom_angle_weight=float(getattr(config, "blind_pair_geom_angle_weight", 0.30) or 0.30),
+                    pair_geom_angle_sigma_deg=float(getattr(config, "blind_pair_geom_angle_sigma_deg", 42.0) or 42.0),
+                )
+                rseed = (
+                    ransac_seed_base
+                    ^ ((int(tile_index) + 1) * 0x9E3779B1)
+                    ^ ((ord(level_name[0]) if level_name else 0) << 24)
+                    ^ (1 if parity_label == "mirror" else 0)
+                    ^ ((rr_rank + 1) * 0x85EBCA6B)
+                ) & 0xFFFFFFFF
+                q_score, q_inl, q_rms = _quick_candidate_likelihood(
+                    img_points=ip,
+                    tile_points=tp,
+                    base_score=int(base_score),
+                    image_shape=image.shape,
+                    tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5),
+                    try_parity_flip=bool(getattr(config, "try_parity_flip", True)),
+                    approx_scale_deg=approx_scale_deg,
+                    trials=rr_trials,
+                    seed=int(rseed),
+                    prob_weight=float(getattr(config, "blind_candidate_rerank_prob_weight", 0.30) or 0.0),
+                    prob_prior_match=float(getattr(config, "blind_prob_prior_match", 0.35) or 0.35),
+                    prob_clip_delta=float(getattr(config, "blind_prob_clip_delta", 7.0) or 7.0),
+                )
+                scored_head.append((candidate_key, int(base_score), float(q_score), int(q_inl), float(q_rms)))
+            finite_scores = [row for row in scored_head if np.isfinite(float(row[2]))]
+            if len(finite_scores) >= 2:
+                scored_head.sort(key=lambda row: (float(row[2]), int(row[1])), reverse=True)
+                ordered = [(k, int(sc)) for (k, sc, _qs, _qi, _qr) in scored_head] + ordered[head_n:]
+                logger.debug(
+                    "candidate rerank applied: level=%s parity=%s head=%d best_lik=%.3f best_inliers=%d",
+                    level_name,
+                    parity_label,
+                    int(head_n),
+                    float(scored_head[0][2]),
+                    int(scored_head[0][3]),
+                )
+
+        top_candidate_score = max(1, int(ordered[0][1])) if ordered else 1
+
         logger.info(
             "level %s (parity=%s) candidate search returned %d candidate(s)",
             level_name,
             parity_label,
             len(candidates),
         )
-        phase_slot["candidates_considered"] += int(min(len(ordered), candidate_limit))
-        for candidate_key, score in ordered[: candidate_limit]:
+        # A2-v32/A2-v35: adaptive candidate diversification when risky rejects accumulate.
+        candidate_limit_runtime = int(candidate_limit)
+        try:
+            cov_rej = int(phase_slot.get("a2v28_inliermask_coverage_rejects", 0) or 0)
+            if cov_rej >= 1:
+                boost = min(16, 4 + 2 * cov_rej)
+                candidate_limit_runtime = min(len(ordered), max(candidate_limit_runtime, int(candidate_limit) + int(boost)))
+                phase_slot["a2v32_candidate_limit_boost"] = int(candidate_limit_runtime - int(candidate_limit))
+
+            scale_rej = int(phase_slot.get("a2v34_scale_plausibility_rejects", 0) or 0)
+            if scale_rej >= 1:
+                step_v35 = max(1, int(getattr(config, "blind_a2v35_scale_reject_candidate_boost_step", 4) or 1))
+                max_v35 = max(step_v35, int(getattr(config, "blind_a2v35_scale_reject_candidate_boost_max", 24) or step_v35))
+                boost_v35 = min(max_v35, step_v35 * scale_rej)
+                cand_prev = int(candidate_limit_runtime)
+                candidate_limit_runtime = min(len(ordered), max(candidate_limit_runtime, int(candidate_limit) + int(boost_v35)))
+                phase_slot["a2v35_candidate_limit_boost"] = int(max(0, int(candidate_limit_runtime) - int(candidate_limit)))
+                phase_slot["a2v35_candidate_limit_boost_delta"] = int(max(0, int(candidate_limit_runtime) - cand_prev))
+        except Exception:
+            candidate_limit_runtime = int(candidate_limit)
+
+        phase_slot["candidates_considered"] += int(min(len(ordered), candidate_limit_runtime))
+        if len(ordered) > candidate_limit_runtime:
+            _record_stop_reason(f"candidate_cap:{int(candidate_limit_runtime)}", phase=phase_name, level=level_name)
+        for candidate_key, score in ordered[: candidate_limit_runtime]:
             if cancel_check and cancel_check():
                 return None
             if _maybe_fail_early_abort(phase_name):
@@ -1643,12 +6383,28 @@ def solve_blind(
                 level_name,
                 parity_label,
             )
+            try:
+                globals()["_A2V_COLLECT_DUMP_CONTEXT"] = {
+                    "phase": str(phase_name),
+                    "level": str(level_name),
+                    "parity": str(parity_label),
+                    "tile": str(candidate_key),
+                    "score": int(score),
+                }
+                globals()["_A2V_COLLECT_DUMP_APPROX_SCALE_ARCSEC"] = float(approx_scale_arcsec) if (approx_scale_arcsec is not None and np.isfinite(float(approx_scale_arcsec))) else float("nan")
+                if scale_bounds_arcsec is not None:
+                    globals()["_A2V_COLLECT_DUMP_SCALE_BOUNDS_ARCSEC"] = (float(scale_bounds_arcsec[0]), float(scale_bounds_arcsec[1]))
+                else:
+                    globals()["_A2V_COLLECT_DUMP_SCALE_BOUNDS_ARCSEC"] = None
+            except Exception:
+                pass
             tile_index = tile_map.get(candidate_key)
             if tile_index is None:
                 continue
             if active_allowed_tiles is not None and tile_index not in active_allowed_tiles:
                 continue
             total_candidates_tried += 1
+            astrometry_numtries += 1
             phase_slot["candidates_tried"] += 1
             tile_entry = tile_entries[tile_index]
             try:
@@ -1688,6 +6444,26 @@ def solve_blind(
                         bucket_limit,
                         vote_percentile,
                         use_vectorized=bool(getattr(config, "collect_matches_vectorized_experimental", False)),
+                        index_lookup_cache=collect_lookup_cache,
+                        index_obj_cache=collect_index_obj_cache,
+                        uniformize_grid_px=(
+                            float(getattr(config, "blind_verify_uniform_grid_px", 48.0) or 0.0)
+                            if bool(getattr(config, "blind_verify_uniformize_pairs", True))
+                            else 0.0
+                        ),
+                        uniformize_max_per_cell=(
+                            int(getattr(config, "blind_verify_uniform_max_per_cell", 4) or 0)
+                            if bool(getattr(config, "blind_verify_uniformize_pairs", True))
+                            else 0
+                        ),
+                        uniformize_min_keep_ratio=float(getattr(config, "blind_verify_uniform_min_keep_ratio", 0.35) or 0.35),
+                        dedup_pairs=bool(getattr(config, "blind_verify_dedup_pairs", True)),
+                        dedup_min_keep_ratio=float(getattr(config, "blind_verify_dedup_min_keep_ratio", 0.45) or 0.45),
+                        pair_geom_scoring=bool(getattr(config, "blind_pair_geom_scoring", True)),
+                        pair_geom_weight=float(getattr(config, "blind_pair_geom_weight", 0.35) or 0.35),
+                        pair_geom_sigma=float(getattr(config, "blind_pair_geom_sigma", 0.45) or 0.45),
+                    pair_geom_angle_weight=float(getattr(config, "blind_pair_geom_angle_weight", 0.30) or 0.30),
+                    pair_geom_angle_sigma_deg=float(getattr(config, "blind_pair_geom_angle_sigma_deg", 42.0) or 42.0),
                     )
                     collect_metrics["compute_s"] += float(time.time() - _t0)
                     collect_matches_cache[ckey] = (ip, tp, wp)
@@ -1706,18 +6482,543 @@ def solve_blind(
                 img_points = np.empty((0, 2), dtype=np.float32)
                 tile_points = np.empty((0, 2), dtype=np.float32)
                 tile_world_matches = np.empty((0, 2), dtype=np.float32)
+
+            # A2-v5: targeted upstream rescue when pair support is critically low.
+            low_pairs_gate = max(6, int(getattr(config, "blind_hypothesis_resolve_matches_min_pairs", 12) or 0) // 2)
+            if non_parity_mode_effective and int(img_points.shape[0]) < int(low_pairs_gate):
+                try:
+                    phase_slot["upstream_pair_rescue_attempts"] = int(phase_slot.get("upstream_pair_rescue_attempts", 0) + 1)
+                    img_list_r: list[np.ndarray] = []
+                    tile_list_r: list[np.ndarray] = []
+                    world_list_r: list[np.ndarray] = []
+                    rescue_bucket_limit = int(max(int(bucket_limit), min(8192, int(bucket_limit) * 2)))
+                    rescue_vote_percentile = int(max(5, min(int(vote_percentile), 20)))
+                    for lvl in levels_to_use:
+                        if use_px_spec:
+                            lvl_entry = obs_by_level.get(lvl)
+                            if lvl_entry is None:
+                                lvl_entry = (base_hashes, base_quads, base_counts)
+                        else:
+                            lvl_entry = (base_hashes, base_quads, base_counts)
+                        ohashes_r, oquads_r, _ = lvl_entry
+                        ip_r, tp_r, wp_r = _collect_tile_matches(
+                            index_root,
+                            (lvl,),
+                            tile_index,
+                            ohashes_r,
+                            oquads_r,
+                            image_positions,
+                            tile_positions,
+                            tile_world,
+                            rescue_bucket_limit,
+                            rescue_vote_percentile,
+                            use_vectorized=bool(getattr(config, "collect_matches_vectorized_experimental", False)),
+                            index_lookup_cache=collect_lookup_cache,
+                            index_obj_cache=collect_index_obj_cache,
+                            uniformize_grid_px=0.0,
+                            uniformize_max_per_cell=0,
+                            uniformize_min_keep_ratio=0.0,
+                            dedup_pairs=False,
+                            dedup_min_keep_ratio=0.0,
+                            pair_geom_scoring=False,
+                            pair_geom_weight=float(getattr(config, "blind_pair_geom_weight", 0.35) or 0.35),
+                            pair_geom_sigma=float(getattr(config, "blind_pair_geom_sigma", 0.45) or 0.45),
+                            pair_geom_angle_weight=float(getattr(config, "blind_pair_geom_angle_weight", 0.30) or 0.30),
+                            pair_geom_angle_sigma_deg=float(getattr(config, "blind_pair_geom_angle_sigma_deg", 42.0) or 42.0),
+                        )
+                        if ip_r.size:
+                            img_list_r.append(ip_r)
+                            tile_list_r.append(tp_r)
+                            world_list_r.append(wp_r)
+                    if img_list_r:
+                        img_points_r = np.vstack(img_list_r)
+                        if int(img_points_r.shape[0]) > int(img_points.shape[0]):
+                            prev_pairs = int(img_points.shape[0])
+                            img_points = img_points_r
+                            tile_points = np.vstack(tile_list_r)
+                            tile_world_matches = np.vstack(world_list_r)
+                            phase_slot["upstream_pair_rescue_hits"] = int(phase_slot.get("upstream_pair_rescue_hits", 0) + 1)
+                            phase_slot["upstream_pair_rescue_pairs_gain"] = int(phase_slot.get("upstream_pair_rescue_pairs_gain", 0) + int(img_points_r.shape[0] - prev_pairs))
+                except Exception:
+                    pass
+            # Strict ISO pool-expand: widen candidate pair pool without enabling legacy rescues.
+            if strict_mode_effective and bool(getattr(config, "blind_astrometry_strict_pair_pool_expand_enabled", True)) and int(img_points.shape[0]) < int(low_pairs_gate):
+                try:
+                    phase_slot["astrometry_strict_pair_pool_expand_attempts"] = int(phase_slot.get("astrometry_strict_pair_pool_expand_attempts", 0) + 1)
+                    img_list_s: list[np.ndarray] = []
+                    tile_list_s: list[np.ndarray] = []
+                    world_list_s: list[np.ndarray] = []
+                    bf = max(1.0, float(getattr(config, "blind_astrometry_strict_pair_pool_expand_bucket_factor", 3.0) or 1.0))
+                    rescue_bucket_limit_s = int(max(int(bucket_limit), min(32768, int(round(float(bucket_limit) * bf)))))
+                    rescue_vote_percentile_s = int(max(1, min(35, int(getattr(config, "blind_astrometry_strict_pair_pool_expand_vote_percentile", 20) or 20))))
+                    rescue_max_pairs_s = int(max(8, int(getattr(config, "blind_astrometry_strict_pair_pool_expand_max_pairs", 256) or 8)))
+                    for lvl in levels_to_use:
+                        if use_px_spec:
+                            lvl_entry = obs_by_level.get(lvl)
+                            if lvl_entry is None:
+                                lvl_entry = (base_hashes, base_quads, base_counts)
+                        else:
+                            lvl_entry = (base_hashes, base_quads, base_counts)
+                        ohashes_s, oquads_s, _ = lvl_entry
+                        ip_s, tp_s, wp_s = _collect_tile_matches(
+                            index_root,
+                            (lvl,),
+                            tile_index,
+                            ohashes_s,
+                            oquads_s,
+                            image_positions,
+                            tile_positions,
+                            tile_world,
+                            rescue_bucket_limit_s,
+                            rescue_vote_percentile_s,
+                            use_vectorized=bool(getattr(config, "collect_matches_vectorized_experimental", False)),
+                            index_lookup_cache=collect_lookup_cache,
+                            index_obj_cache=collect_index_obj_cache,
+                            uniformize_grid_px=0.0,
+                            uniformize_max_per_cell=0,
+                            uniformize_min_keep_ratio=0.0,
+                            dedup_pairs=False,
+                            dedup_min_keep_ratio=0.0,
+                            pair_geom_scoring=False,
+                            pair_geom_weight=float(getattr(config, "blind_pair_geom_weight", 0.35) or 0.35),
+                            pair_geom_sigma=float(getattr(config, "blind_pair_geom_sigma", 0.45) or 0.45),
+                            pair_geom_angle_weight=float(getattr(config, "blind_pair_geom_angle_weight", 0.30) or 0.30),
+                            pair_geom_angle_sigma_deg=float(getattr(config, "blind_pair_geom_angle_sigma_deg", 42.0) or 42.0),
+                        )
+                        if ip_s.size:
+                            img_list_s.append(ip_s)
+                            tile_list_s.append(tp_s)
+                            world_list_s.append(wp_s)
+                    if img_list_s:
+                        img_points_s = np.vstack(img_list_s)
+                        if int(img_points_s.shape[0]) > int(rescue_max_pairs_s):
+                            img_points_s = img_points_s[: int(rescue_max_pairs_s)]
+                            tile_points_s = np.vstack(tile_list_s)[: int(rescue_max_pairs_s)]
+                            tile_world_matches_s = np.vstack(world_list_s)[: int(rescue_max_pairs_s)]
+                        else:
+                            tile_points_s = np.vstack(tile_list_s)
+                            tile_world_matches_s = np.vstack(world_list_s)
+                        if int(img_points_s.shape[0]) > int(img_points.shape[0]):
+                            prev_pairs_s = int(img_points.shape[0])
+                            img_points = img_points_s
+                            tile_points = tile_points_s
+                            tile_world_matches = tile_world_matches_s
+                            phase_slot["astrometry_strict_pair_pool_expand_hits"] = int(phase_slot.get("astrometry_strict_pair_pool_expand_hits", 0) + 1)
+                            phase_slot["astrometry_strict_pair_pool_expand_pairs_gain"] = int(phase_slot.get("astrometry_strict_pair_pool_expand_pairs_gain", 0) + int(img_points_s.shape[0] - prev_pairs_s))
+                except Exception:
+                    pass
+
+            # A2-v7: when upstream rescue inflated pair count, enforce a geometric one-to-one pass
+            # before normal pre-model matching to favor consistency over raw volume.
+            if int(phase_slot.get("upstream_pair_rescue_hits", 0) or 0) > 0 and int(img_points.shape[0]) >= 12:
+                try:
+                    pmr_img, pmr_tile, pmr_world, pmr_stats = _pre_model_bipartite_reassign(
+                        img_points,
+                        tile_points,
+                        tile_world_matches,
+                        min_keep_ratio=0.10,
+                        image_bin_px=max(1.8, float(getattr(config, "blind_pre_model_image_bin_px", 1.5) or 1.5) * 1.4),
+                        tile_bin_px=max(1.8, float(getattr(config, "blind_pre_model_tile_bin_px", 1.5) or 1.5) * 1.4),
+                    )
+                    phase_slot["a2v7_geom_repair_attempts"] = int(phase_slot.get("a2v7_geom_repair_attempts", 0) + 1)
+                    if int(pmr_img.shape[0]) >= 8 and int(pmr_img.shape[0]) <= int(img_points.shape[0]):
+                        if int(pmr_img.shape[0]) < int(img_points.shape[0]):
+                            phase_slot["a2v7_geom_repair_hits"] = int(phase_slot.get("a2v7_geom_repair_hits", 0) + 1)
+                            phase_slot["a2v7_geom_repair_removed_total"] = int(phase_slot.get("a2v7_geom_repair_removed_total", 0) + int(img_points.shape[0] - pmr_img.shape[0]))
+                        img_points, tile_points, tile_world_matches = pmr_img, pmr_tile, pmr_world
+                except Exception:
+                    pass
+
+            if (
+                bool(getattr(config, "blind_pre_model_matching", True))
+                and img_points.shape[0] >= max(8, int(getattr(config, "blind_pre_model_min_pairs", 24) or 0))
+            ):
+                img_pm, tile_pm, world_pm, pm_stats = _pre_model_bipartite_reassign(
+                    img_points,
+                    tile_points,
+                    tile_world_matches,
+                    min_keep_ratio=float(getattr(config, "blind_pre_model_min_keep_ratio", 0.25) or 0.25),
+                    image_bin_px=float(getattr(config, "blind_pre_model_image_bin_px", 1.5) or 1.5),
+                    tile_bin_px=float(getattr(config, "blind_pre_model_tile_bin_px", 1.5) or 1.5),
+                )
+                pm_removed = int(pm_stats.get("removed", 0) or 0)
+                if pm_removed > 0:
+                    img_points = img_pm
+                    tile_points = tile_pm
+                    tile_world_matches = world_pm
+                    phase_slot["premodel_pruned_total"] = int(phase_slot.get("premodel_pruned_total", 0) + pm_removed)
+
+            if (
+                bool(getattr(config, "blind_pair_scale_prefilter_enabled", True))
+                and img_points.shape[0] >= max(6, int(getattr(config, "blind_pair_scale_prefilter_min_pairs", 12) or 0))
+            ):
+                anchor_s_pf = None
+                try:
+                    if scale_anchor_arcsec is not None and np.isfinite(float(scale_anchor_arcsec)) and float(scale_anchor_arcsec) > 0.0:
+                        anchor_s_pf = float(scale_anchor_arcsec)
+                    elif approx_scale_arcsec is not None and np.isfinite(float(approx_scale_arcsec)) and float(approx_scale_arcsec) > 0.0:
+                        anchor_s_pf = float(approx_scale_arcsec)
+                except Exception:
+                    anchor_s_pf = None
+                if anchor_s_pf is not None:
+                    exp_scale = float(anchor_s_pf) / 3600.0
+                    width = max(1.05, float(getattr(config, "blind_pair_scale_prefilter_width", 6.0) or 1.0))
+                    lo_sc = float(exp_scale) / float(width)
+                    hi_sc = float(exp_scale) * float(width)
+                    img_cx = float(np.median(img_points[:, 0]))
+                    img_cy = float(np.median(img_points[:, 1]))
+                    tile_cx = float(np.median(tile_points[:, 0]))
+                    tile_cy = float(np.median(tile_points[:, 1]))
+                    r_img = np.hypot(img_points[:, 0] - img_cx, img_points[:, 1] - img_cy)
+                    r_tile = np.hypot(tile_points[:, 0] - tile_cx, tile_points[:, 1] - tile_cy)
+                    ratio = r_tile / np.maximum(r_img, 1e-6)
+                    keep_sc = np.isfinite(ratio) & (ratio >= lo_sc) & (ratio <= hi_sc)
+                    kept = int(np.count_nonzero(keep_sc))
+                    min_keep_ratio = max(0.05, float(getattr(config, "blind_pair_scale_prefilter_min_keep_ratio", 0.20) or 0.05))
+                    if kept >= 4 and (kept / max(1, int(img_points.shape[0]))) >= min_keep_ratio:
+                        removed = int(img_points.shape[0] - kept)
+                        if removed > 0:
+                            img_points = img_points[keep_sc]
+                            tile_points = tile_points[keep_sc]
+                            tile_world_matches = tile_world_matches[keep_sc]
+                            phase_slot["pair_scale_prefilter_removed_total"] = int(phase_slot.get("pair_scale_prefilter_removed_total", 0) + removed)
+                            phase_slot["pair_scale_prefilter_hits"] = int(phase_slot.get("pair_scale_prefilter_hits", 0) + 1)
+
+            if (
+                bool(getattr(config, "blind_astrometry_add_stars_inbox_enabled", True))
+                and img_points.shape[0] >= max(6, int(getattr(config, "blind_astrometry_add_stars_inbox_min_pairs", 12) or 0))
+            ):
+                img_ab, tile_ab, world_ab, ab_stats = _astrometry_add_stars_inbox_filter(
+                    img_points,
+                    tile_points,
+                    tile_world_matches,
+                    code_tol=float(getattr(config, "blind_astrometry_add_stars_inbox_code_tol", 0.08) or 0.08),
+                    min_edge_px=float(getattr(config, "blind_astrometry_add_stars_inbox_min_edge_px", 8.0) or 0.0),
+                    min_keep_ratio=float(getattr(config, "blind_astrometry_add_stars_inbox_min_keep_ratio", 0.20) or 0.20),
+                    max_ab_trials=int(getattr(config, "blind_astrometry_add_stars_inbox_max_ab_trials", 12) or 12),
+                    scale_anchor_arcsec=(float(scale_anchor_arcsec) if (scale_anchor_arcsec is not None and np.isfinite(float(scale_anchor_arcsec)) and float(scale_anchor_arcsec) > 0.0) else (float(approx_scale_arcsec) if (approx_scale_arcsec is not None and np.isfinite(float(approx_scale_arcsec)) and float(approx_scale_arcsec) > 0.0) else None)),
+                )
+                ab_removed = int(ab_stats.get("removed", 0) or 0)
+                if ab_removed > 0:
+                    img_points = img_ab
+                    tile_points = tile_ab
+                    tile_world_matches = world_ab
+                    phase_slot["astrometry_inbox_removed_total"] = int(phase_slot.get("astrometry_inbox_removed_total", 0) + ab_removed)
+                    phase_slot["astrometry_inbox_hits"] = int(phase_slot.get("astrometry_inbox_hits", 0) + 1)
+
+            if (not (bool(getattr(config, "blind_astrometry_strict_disable_nonastrometry_fallbacks", True)) and bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)))) and img_points.shape[0] < 4 and bool(getattr(config, "blind_hypothesis_rescue_enabled", True)):
+                phase_slot["hypothesis_rescue_attempts"] = int(phase_slot.get("hypothesis_rescue_attempts", 0) + 1)
+                rescue_img: list[np.ndarray] = []
+                rescue_tile: list[np.ndarray] = []
+                rescue_world: list[np.ndarray] = []
+                rescue_world: list[np.ndarray] = []
+                rescue_vote_pct = int(getattr(config, "blind_hypothesis_rescue_vote_percentile", 12) or 12)
+                rescue_vote_pct = min(40, max(5, rescue_vote_pct))
+                rescue_bucket_factor = float(getattr(config, "blind_hypothesis_rescue_bucket_factor", 2.0) or 1.0)
+                rescue_bucket_factor = min(4.0, max(1.0, rescue_bucket_factor))
+                rescue_bucket_limit = int(max(64, round(float(bucket_limit) * rescue_bucket_factor)))
+                rescue_uniform = bool(getattr(config, "blind_hypothesis_rescue_use_uniformize", False))
+                rescue_dedup = bool(getattr(config, "blind_hypothesis_rescue_use_dedup", False))
+
+                for lvl in levels_to_use:
+                    if use_px_spec:
+                        lvl_entry = obs_by_level.get(lvl)
+                        if lvl_entry is None:
+                            lvl_entry = (base_hashes, base_quads, base_counts)
+                    else:
+                        lvl_entry = (base_hashes, base_quads, base_counts)
+                    ohashes_r, oquads_r, _ = lvl_entry
+                    ip_r, tp_r, wp_r = _collect_tile_matches(
+                        index_root,
+                        (lvl,),
+                        tile_index,
+                        ohashes_r,
+                        oquads_r,
+                        image_positions,
+                        tile_positions,
+                        tile_world,
+                        rescue_bucket_limit,
+                        rescue_vote_pct,
+                        use_vectorized=bool(getattr(config, "collect_matches_vectorized_experimental", False)),
+                        index_lookup_cache=collect_lookup_cache,
+                        index_obj_cache=collect_index_obj_cache,
+                        uniformize_grid_px=(
+                            float(getattr(config, "blind_verify_uniform_grid_px", 48.0) or 0.0)
+                            if rescue_uniform
+                            else 0.0
+                        ),
+                        uniformize_max_per_cell=(
+                            int(getattr(config, "blind_verify_uniform_max_per_cell", 4) or 0)
+                            if rescue_uniform
+                            else 0
+                        ),
+                        uniformize_min_keep_ratio=float(getattr(config, "blind_verify_uniform_min_keep_ratio", 0.35) or 0.35),
+                        dedup_pairs=bool(rescue_dedup),
+                        dedup_min_keep_ratio=float(getattr(config, "blind_verify_dedup_min_keep_ratio", 0.45) or 0.45),
+                        pair_geom_scoring=bool(getattr(config, "blind_pair_geom_scoring", True)),
+                        pair_geom_weight=float(getattr(config, "blind_pair_geom_weight", 0.35) or 0.35),
+                        pair_geom_sigma=float(getattr(config, "blind_pair_geom_sigma", 0.45) or 0.45),
+                        pair_geom_angle_weight=float(getattr(config, "blind_pair_geom_angle_weight", 0.30) or 0.30),
+                        pair_geom_angle_sigma_deg=float(getattr(config, "blind_pair_geom_angle_sigma_deg", 42.0) or 42.0),
+                    )
+                    if ip_r.size:
+                        rescue_img.append(ip_r)
+                        rescue_tile.append(tp_r)
+                        rescue_world.append(wp_r)
+
+                if rescue_img:
+                    img_rescue = np.vstack(rescue_img)
+                    tile_rescue = np.vstack(rescue_tile)
+                    world_rescue = np.vstack(rescue_world)
+                    min_pairs = max(4, int(getattr(config, "blind_hypothesis_rescue_min_pairs", 6) or 0))
+                    if img_rescue.shape[0] >= min_pairs:
+                        img_points = img_rescue
+                        tile_points = tile_rescue
+                        tile_world_matches = world_rescue
+                        phase_slot["hypothesis_rescue_hits"] = int(phase_slot.get("hypothesis_rescue_hits", 0) + 1)
+
             if img_points.shape[0] < 4:
+                _mark_fail_stage("pairing")
+                phase_slot["a2v8_pairing_lt4"] = int(phase_slot.get("a2v8_pairing_lt4", 0) + 1)
                 if global_mode:
                     low_support_streak += 1
                     if _global_abort_now():
                         logger.debug("global early-stop: weak candidate support (tile=%s, level=%s, parity=%s)", candidate_key, level_name, parity_label)
                         break
                 continue
+
+            # A2-v8 instrumentation: snapshot raw pair support by phase/level.
+            try:
+                ps = int(img_points.shape[0])
+                phase_slot["a2v8_pair_support_samples"] = int(phase_slot.get("a2v8_pair_support_samples", 0) + 1)
+                phase_slot["a2v8_pair_support_sum"] = int(phase_slot.get("a2v8_pair_support_sum", 0) + ps)
+                phase_slot["a2v8_pair_support_max"] = int(max(int(phase_slot.get("a2v8_pair_support_max", 0) or 0), ps))
+                if ps < 8:
+                    phase_slot["a2v8_pairing_lt8"] = int(phase_slot.get("a2v8_pairing_lt8", 0) + 1)
+                elif ps < 12:
+                    phase_slot["a2v8_pairing_lt12"] = int(phase_slot.get("a2v8_pairing_lt12", 0) + 1)
+                else:
+                    phase_slot["a2v8_pairing_ge12"] = int(phase_slot.get("a2v8_pairing_ge12", 0) + 1)
+            except Exception:
+                pass
+            # A2-v16: anti-collinear pre-filter on candidate correspondences before hypothesis building.
+            if int(img_points.shape[0]) >= 12:
+                try:
+                    pts = np.asarray(img_points, dtype=np.float64)
+                    x = pts[:, 0]
+                    y = pts[:, 1]
+                    bw = float(np.nanmax(x) - np.nanmin(x)) if x.size else 0.0
+                    bh = float(np.nanmax(y) - np.nanmin(y)) if y.size else 0.0
+                    cov_x = bw / max(1.0, float(image.shape[1]))
+                    cov_y = bh / max(1.0, float(image.shape[0]))
+                    cov_area = float(cov_x * cov_y)
+                    min_area = max(8e-4, float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003) * 0.30)
+                    phase_slot["a2v16_prefilter_checks"] = int(phase_slot.get("a2v16_prefilter_checks", 0) + 1)
+                    if cov_area < min_area:
+                        # keep extreme points to force 2D spread if possible
+                        n = int(pts.shape[0])
+                        k = min(max(12, n // 3), n)
+                        idx = np.arange(n, dtype=np.int64)
+                        pick = set()
+                        try:
+                            pick.update(idx[np.argsort(x)[:k]].tolist())
+                            pick.update(idx[np.argsort(x)[-k:]].tolist())
+                            pick.update(idx[np.argsort(y)[:k]].tolist())
+                            pick.update(idx[np.argsort(y)[-k:]].tolist())
+                        except Exception:
+                            pass
+                        pick_idx = np.asarray(sorted(pick), dtype=np.int64)
+                        if pick_idx.size >= 12 and pick_idx.size < n:
+                            img_points = img_points[pick_idx]
+                            tile_points = tile_points[pick_idx]
+                            tile_world_matches = tile_world_matches[pick_idx]
+                            phase_slot["a2v16_prefilter_pruned"] = int(phase_slot.get("a2v16_prefilter_pruned", 0) + 1)
+                            phase_slot["a2v16_prefilter_removed_total"] = int(phase_slot.get("a2v16_prefilter_removed_total", 0) + int(n - pick_idx.size))
+                except Exception:
+                    pass
+
             # Try quad-based hypotheses first (local, stable scale) then fall back to RANSAC
+            def _hypothesis_quality_metric(
+                _inliers: int,
+                _rms_px: float,
+                _pairs: int,
+                _model_scale_arcsec: float | None = None,
+            ) -> float:
+                q = float(max(0, int(_inliers)))
+                if bool(getattr(config, "blind_hypothesis_rank_enabled", True)):
+                    ratio_w = max(0.0, float(getattr(config, "blind_hypothesis_rank_ratio_weight", 6.0) or 0.0))
+                    rms_w = max(0.0, float(getattr(config, "blind_hypothesis_rank_rms_weight", 0.75) or 0.0))
+                    pairs_v = max(1, int(_pairs))
+                    inl_ratio = float(max(0, int(_inliers))) / float(pairs_v)
+                    q += ratio_w * inl_ratio
+                    rms_v = float(_rms_px)
+                    if np.isfinite(rms_v):
+                        q -= rms_w * math.log1p(max(0.0, rms_v - 0.35))
+                    else:
+                        q -= rms_w * 2.5
+
+                if bool(getattr(config, "blind_hypothesis_scale_prior_enabled", True)):
+                    ms = float(_model_scale_arcsec) if _model_scale_arcsec is not None else float("nan")
+                    if np.isfinite(ms) and ms > 0.0:
+                        anchor_s = None
+                        try:
+                            if scale_anchor_arcsec is not None and np.isfinite(float(scale_anchor_arcsec)) and float(scale_anchor_arcsec) > 0.0:
+                                anchor_s = float(scale_anchor_arcsec)
+                            elif approx_scale_arcsec is not None and np.isfinite(float(approx_scale_arcsec)) and float(approx_scale_arcsec) > 0.0:
+                                anchor_s = float(approx_scale_arcsec)
+                        except Exception:
+                            anchor_s = None
+                        if anchor_s is not None and anchor_s > 0.0:
+                            s_prior = max(0.0, float(getattr(config, "blind_hypothesis_scale_prior_strength", 1.5) or 0.0))
+                            relax_after = max(0, int(getattr(config, "blind_hypothesis_scale_prior_relax_after_validations", 8) or 0))
+                            if int(fail_validation_count) >= relax_after:
+                                s_relaxed = max(0.0, float(getattr(config, "blind_hypothesis_scale_prior_relaxed_strength", 0.45) or 0.0))
+                                s_prior = min(s_prior, s_relaxed)
+                            ratio_s = float(ms) / float(anchor_s)
+                            if np.isfinite(ratio_s) and ratio_s > 0.0 and s_prior > 0.0:
+                                q -= float(s_prior) * abs(math.log(max(1e-6, ratio_s)))
+                return float(q)
+
+            # Pair-set scale trace before any hypothesis fitting.
+            if bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)) and approx_scale_arcsec is not None and int(img_points.shape[0]) >= 4:
+                try:
+                    img_span_ps = float(np.hypot(np.ptp(np.asarray(img_points[:, 0], dtype=np.float64)), np.ptp(np.asarray(img_points[:, 1], dtype=np.float64))))
+                    tile_span_ps = float(np.hypot(np.ptp(np.asarray(tile_points[:, 0], dtype=np.float64)), np.ptp(np.asarray(tile_points[:, 1], dtype=np.float64))))
+                    span_scale_ps = float(3600.0 * tile_span_ps / max(img_span_ps, 1e-12)) if np.isfinite(img_span_ps) and img_span_ps > 0.0 and np.isfinite(tile_span_ps) else float("nan")
+                    gate_lo_ps = float("nan")
+                    gate_hi_ps = float("nan")
+                    reject_pairset_scale = False
+                    if bool(getattr(config, "blind_pairset_scale_gate_enabled", True)) and scale_bounds_arcsec is not None and np.isfinite(span_scale_ps):
+                        gate_lo_ps = float(scale_bounds_arcsec[0])
+                        gate_hi_ps = float(scale_bounds_arcsec[1])
+                        reject_pairset_scale = (float(span_scale_ps) < float(gate_lo_ps)) or (float(span_scale_ps) > float(gate_hi_ps))
+
+                    recenter_used = False
+                    recenter_kept = 0
+                    recenter_total = int(img_points.shape[0])
+                    if reject_pairset_scale and bool(getattr(config, "blind_pairset_scale_recenter_enabled", True)) and np.isfinite(gate_lo_ps) and np.isfinite(gate_hi_ps):
+                        try:
+                            img_cx_rc = float(np.median(np.asarray(img_points[:, 0], dtype=np.float64)))
+                            img_cy_rc = float(np.median(np.asarray(img_points[:, 1], dtype=np.float64)))
+                            tile_cx_rc = float(np.median(np.asarray(tile_points[:, 0], dtype=np.float64)))
+                            tile_cy_rc = float(np.median(np.asarray(tile_points[:, 1], dtype=np.float64)))
+                            r_img_rc = np.hypot(np.asarray(img_points[:, 0], dtype=np.float64) - img_cx_rc, np.asarray(img_points[:, 1], dtype=np.float64) - img_cy_rc)
+                            r_tile_rc = np.hypot(np.asarray(tile_points[:, 0], dtype=np.float64) - tile_cx_rc, np.asarray(tile_points[:, 1], dtype=np.float64) - tile_cy_rc)
+                            ratio_rc = r_tile_rc / np.maximum(r_img_rc, 1e-9)
+                            lo_degpx = float(gate_lo_ps) / 3600.0
+                            hi_degpx = float(gate_hi_ps) / 3600.0
+                            keep_rc = np.isfinite(ratio_rc) & (ratio_rc >= lo_degpx) & (ratio_rc <= hi_degpx)
+                            recenter_kept = int(np.count_nonzero(keep_rc))
+                            min_pairs_rc = max(4, int(getattr(config, "blind_pairset_scale_recenter_min_pairs", 6) or 0))
+                            min_keep_ratio_rc = max(0.05, float(getattr(config, "blind_pairset_scale_recenter_min_keep_ratio", 0.20) or 0.05))
+                            if recenter_kept >= min_pairs_rc and (recenter_kept / max(1, recenter_total)) >= min_keep_ratio_rc:
+                                img_points = img_points[keep_rc]
+                                tile_points = tile_points[keep_rc]
+                                tile_world_matches = tile_world_matches[keep_rc]
+                                recenter_used = True
+                                reject_pairset_scale = False
+                                phase_slot["pairset_scale_recenter_hits"] = int(phase_slot.get("pairset_scale_recenter_hits", 0) + 1)
+                                phase_slot["pairset_scale_recenter_removed_total"] = int(phase_slot.get("pairset_scale_recenter_removed_total", 0) + int(recenter_total - recenter_kept))
+                        except Exception:
+                            pass
+
+                    ps_dump_path = str(getattr(config, "blind_pairset_scale_precheck_dump_path", "") or "").strip()
+                    if ps_dump_path:
+                        max_ps_entries = max(1, int(getattr(config, "blind_pairset_scale_precheck_dump_max_entries", 200) or 0))
+                        ratio_rows = []
+                        ratio_summary = None
+                        try:
+                            img_cx_ps = float(np.median(np.asarray(img_points[:, 0], dtype=np.float64)))
+                            img_cy_ps = float(np.median(np.asarray(img_points[:, 1], dtype=np.float64)))
+                            tile_cx_ps = float(np.median(np.asarray(tile_points[:, 0], dtype=np.float64)))
+                            tile_cy_ps = float(np.median(np.asarray(tile_points[:, 1], dtype=np.float64)))
+                            r_img_ps = np.hypot(np.asarray(img_points[:, 0], dtype=np.float64) - img_cx_ps, np.asarray(img_points[:, 1], dtype=np.float64) - img_cy_ps)
+                            r_tile_ps = np.hypot(np.asarray(tile_points[:, 0], dtype=np.float64) - tile_cx_ps, np.asarray(tile_points[:, 1], dtype=np.float64) - tile_cy_ps)
+                            ratio_ps = r_tile_ps / np.maximum(r_img_ps, 1e-9)
+                            fin_ps = ratio_ps[np.isfinite(ratio_ps)]
+                            if fin_ps.size > 0:
+                                ratio_summary = {
+                                    "median_deg_per_px": float(np.median(fin_ps)),
+                                    "p10_deg_per_px": float(np.percentile(fin_ps, 10)),
+                                    "p90_deg_per_px": float(np.percentile(fin_ps, 90)),
+                                }
+                            ord_ps = np.argsort(np.abs(ratio_ps - (float(approx_scale_arcsec) / 3600.0))) if np.isfinite(float(approx_scale_arcsec)) else np.arange(int(img_points.shape[0]))
+                            take = ord_ps[: int(min(32, len(ord_ps)))]
+                            for kk in take:
+                                ratio_rows.append({
+                                    "k": int(kk),
+                                    "img_x": float(img_points[int(kk), 0]),
+                                    "img_y": float(img_points[int(kk), 1]),
+                                    "tile_x_deg": float(tile_points[int(kk), 0]),
+                                    "tile_y_deg": float(tile_points[int(kk), 1]),
+                                    "r_img_px": float(r_img_ps[int(kk)]) if np.isfinite(r_img_ps[int(kk)]) else None,
+                                    "r_tile_deg": float(r_tile_ps[int(kk)]) if np.isfinite(r_tile_ps[int(kk)]) else None,
+                                    "ratio_deg_per_px": float(ratio_ps[int(kk)]) if np.isfinite(ratio_ps[int(kk)]) else None,
+                                })
+                        except Exception:
+                            ratio_rows = []
+                            ratio_summary = None
+
+                        ps_entry = {
+                            "phase": str(phase_name),
+                            "level": str(level_name),
+                            "parity": str(parity_label),
+                            "tile": str(candidate_key),
+                            "pairs": int(img_points.shape[0]),
+                            "approx_scale_arcsec": float(approx_scale_arcsec) if np.isfinite(float(approx_scale_arcsec)) else None,
+                            "img_span_px": float(img_span_ps) if np.isfinite(img_span_ps) else None,
+                            "tile_span_deg": float(tile_span_ps) if np.isfinite(tile_span_ps) else None,
+                            "span_implied_scale_arcsec": float(span_scale_ps) if np.isfinite(span_scale_ps) else None,
+                            "gate_bounds_arcsec": [float(gate_lo_ps), float(gate_hi_ps)] if np.isfinite(gate_lo_ps) and np.isfinite(gate_hi_ps) else None,
+                            "decision": ("recenter_keep" if recenter_used else ("reject_pairset_scale_gate" if reject_pairset_scale else "keep_pairset")),
+                            "ratio_summary": ratio_summary,
+                            "rows": ratio_rows,
+                            "recenter": {
+                                "used": bool(recenter_used),
+                                "kept": int(recenter_kept),
+                                "total": int(recenter_total),
+                            },
+                        }
+                        ps_path = Path(ps_dump_path)
+                        ps_obj = {"schema": "zeblind.pairset_scale_precheck_dump.v1", "entries": []}
+                        if ps_path.exists():
+                            try:
+                                prev_ps = json.loads(ps_path.read_text(encoding="utf-8"))
+                                if isinstance(prev_ps, dict) and isinstance(prev_ps.get("entries"), list):
+                                    ps_obj = prev_ps
+                            except Exception:
+                                pass
+                        ps_obj.setdefault("entries", []).append(ps_entry)
+                        if len(ps_obj["entries"]) > int(max_ps_entries):
+                            ps_obj["entries"] = ps_obj["entries"][-int(max_ps_entries):]
+                        ps_path.parent.mkdir(parents=True, exist_ok=True)
+                        ps_path.write_text(json.dumps(ps_obj, indent=2), encoding="utf-8")
+
+                    if reject_pairset_scale:
+                        phase_slot["pairset_scale_gate_rejects"] = int(phase_slot.get("pairset_scale_gate_rejects", 0) + 1)
+                        _record_failed_validation(
+                            reason="strict_pairset_scale_gate_reject",
+                            inliers=0,
+                            rms_px=float("inf"),
+                            pairs=int(max(1, int(img_points.shape[0]))),
+                            cov_area=float("nan"),
+                            model_scale_arcsec=float(span_scale_ps) if np.isfinite(span_scale_ps) else float("nan"),
+                            context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                        )
+                        _mark_fail_stage("pairing")
+                        fail_validation_count += 1
+                        phase_slot["failed_validations"] = int(phase_slot.get("failed_validations", 0) + 1)
+                        continue
+                except Exception:
+                    pass
+
             transform_result: tuple[SimilarityTransform, SimilarityStats] | None = None
+            transform_origin_meta: dict[str, Any] | None = None
             if level_index is not None and level_slices is not None:
                 best = None
+                best_meta: dict[str, Any] | None = None
                 best_inliers = -1
+                best_metric = -1e18
                 tested = 0
                 # Cap buckets per candidate tile to keep runtime reasonable.
                 # Give more budget to top-ranked candidates and less to tail candidates.
@@ -1733,67 +7034,1728 @@ def solve_blind(
                 elif rel_score <= 0.30:
                     max_buckets_f *= 0.70
                 max_buckets = int(max(160, min(1200, round(max_buckets_f))))
-                src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
-                dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
-                for idx2, slc in enumerate(level_slices):
+                strict_iso_global = bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True))
+                pool_mode = str(getattr(config, "blind_astrometry_resolve_hit_pool_mode", "field_index_all") or "field_index_all").strip().lower()
+                if strict_iso_global and pool_mode in {"field_index_all", "all_fieldstars", "global"}:
+                    src_all_c = (image_positions[:, 0] + 1j * image_positions[:, 1]).astype(np.complex128)
+                    dst_all_c = (tile_positions[:, 0] + 1j * tile_positions[:, 1]).astype(np.complex128)
+                    phase_slot["astrometry_verify_global_star_pool_used"] = int(phase_slot.get("astrometry_verify_global_star_pool_used", 0) + 1)
+                    resolve_hit_pool_mode_used = "field_index_all"
+                else:
+                    src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                    dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                    phase_slot["astrometry_verify_candidate_star_pool_used"] = int(phase_slot.get("astrometry_verify_candidate_star_pool_used", 0) + 1)
+                    resolve_hit_pool_mode_used = "candidate_pairs"
+                src_eval_c = src_all_c
+                dst_eval_c = dst_all_c
+                near_lookup_enabled = bool(getattr(config, "blind_astrometry_code_near_lookup_enabled", True))
+                near_max_abs_delta = max(0, int(getattr(config, "blind_astrometry_code_near_max_abs_delta", 640) or 0))
+                near_max_buckets = max(0, int(getattr(config, "blind_astrometry_code_near_max_buckets", 48) or 0))
+                near_max_probes = max(0, int(getattr(config, "blind_astrometry_code_near_max_probes_per_level", 24) or 0))
+                near_probe_count = 0
+                near_q1 = near_q2 = near_q3 = near_par = None
+                near_entry_hashes = None
+                if near_lookup_enabled and near_max_abs_delta > 0 and near_max_buckets > 0:
+                    try:
+                        eh = np.asarray(level_index.hashes, dtype=np.uint64)
+                        near_entry_hashes = eh
+                        near_q1 = ((eh >> np.uint64(48)) & np.uint64(0xFFFF)).astype(np.int32)
+                        near_q2 = ((eh >> np.uint64(32)) & np.uint64(0xFFFF)).astype(np.int32)
+                        near_q3 = ((eh >> np.uint64(16)) & np.uint64(0xFFFF)).astype(np.int32)
+                        near_par = (eh & np.uint64(0x1)).astype(np.int8)
+                    except Exception:
+                        near_q1 = near_q2 = near_q3 = near_par = None
+                        near_entry_hashes = None
+
+                code_rs_enabled = bool(getattr(config, "blind_astrometry_code_rangesearch_enabled", True))
+                code_rs_log_tol = max(0.0, float(getattr(config, "blind_astrometry_code_rangesearch_log_tol", 0.18) or 0.0))
+                code_rs_max_neighbors = max(0, int(getattr(config, "blind_astrometry_code_rangesearch_max_neighbors", 32) or 0))
+                if code_rs_enabled and bool(getattr(config, "blind_astrometry_code_rangesearch_adapt_disable_enabled", True)):
+                    rs_after_c = max(0, int(getattr(config, "blind_astrometry_code_rangesearch_adapt_disable_after_candidates", 12) or 0))
+                    rs_after_v = max(0, int(getattr(config, "blind_astrometry_code_rangesearch_adapt_disable_after_validations", 0) or 0))
+                    rs_best_max = max(-1, int(getattr(config, "blind_astrometry_code_rangesearch_adapt_disable_best_inliers_max", 0) or 0))
+                    if int(total_candidates_tried) >= rs_after_c and int(fail_validation_count) <= rs_after_v and int(fail_best_inliers_seen) <= rs_best_max:
+                        code_rs_enabled = False
+                        phase_slot["astrometry_code_rangesearch_auto_disabled"] = int(phase_slot.get("astrometry_code_rangesearch_auto_disabled", 0) + 1)
+                tile_code_entries = None
+                tile_code_values = None
+                tile_geom_values = None
+                tile_code_logs = None
+                tile_code_sort0 = None
+                tile_code_grid_map = None
+                tile_code_grid_bin = None
+                tile_code_kdtree = None
+
+                astrometry_trace_dump_path = str(getattr(config, "blind_astrometry_exact_trace_dump_path", "") or "").strip()
+                astrometry_trace_dump_max_entries = max(1, int(getattr(config, "blind_astrometry_exact_trace_dump_max_entries", 600) or 0))
+                astrometry_trace_seq = 0
+                resolve_hit_preresolve_dump_path = str(getattr(config, "blind_astrometry_resolve_hit_preresolve_dump_path", "") or "").strip()
+                resolve_hit_preresolve_dump_max_entries = max(1, int(getattr(config, "blind_astrometry_resolve_hit_preresolve_dump_max_entries", 400) or 0))
+                resolve_hit_preresolve_seq = 0
+
+                def _dump_astrometry_exact(entry: dict[str, Any]) -> None:
+                    nonlocal astrometry_trace_seq
+                    if not astrometry_trace_dump_path:
+                        return
+                    try:
+                        astrometry_trace_seq += 1
+                        payload = {
+                            "seq": int(astrometry_trace_seq),
+                            "phase": str(phase_name),
+                            "level": str(level_name),
+                            "parity": str(parity_label),
+                            "tile": str(candidate_key),
+                        }
+                        payload.update(entry)
+                        dp = Path(astrometry_trace_dump_path)
+                        obj = {"schema": "zeblind.astrometry_exact_trace.v1", "entries": []}
+                        if dp.exists():
+                            try:
+                                prev = json.loads(dp.read_text(encoding="utf-8"))
+                                if isinstance(prev, dict) and isinstance(prev.get("entries"), list):
+                                    obj = prev
+                            except Exception:
+                                pass
+                        obj.setdefault("entries", []).append(payload)
+                        if len(obj["entries"]) > int(astrometry_trace_dump_max_entries):
+                            obj["entries"] = obj["entries"][-int(astrometry_trace_dump_max_entries):]
+                        dp.parent.mkdir(parents=True, exist_ok=True)
+                        dp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+                        phase_slot["astrometry_exact_trace_dump_writes"] = int(phase_slot.get("astrometry_exact_trace_dump_writes", 0) + 1)
+                    except Exception:
+                        phase_slot["astrometry_exact_trace_dump_errors"] = int(phase_slot.get("astrometry_exact_trace_dump_errors", 0) + 1)
+
+                def _dump_resolve_hit_preresolve(entry: dict[str, Any]) -> None:
+                    nonlocal resolve_hit_preresolve_seq
+                    if not resolve_hit_preresolve_dump_path:
+                        return
+                    try:
+                        resolve_hit_preresolve_seq += 1
+                        payload = {
+                            "seq": int(resolve_hit_preresolve_seq),
+                            "phase": str(phase_name),
+                            "level": str(level_name),
+                            "parity": str(parity_label),
+                            "tile": str(candidate_key),
+                        }
+                        payload.update(entry)
+                        dp = Path(resolve_hit_preresolve_dump_path)
+                        obj = {"schema": "zeblind.resolve_hit_preresolve_dump.v1", "entries": []}
+                        if dp.exists():
+                            try:
+                                prev = json.loads(dp.read_text(encoding="utf-8"))
+                                if isinstance(prev, dict) and isinstance(prev.get("entries"), list):
+                                    obj = prev
+                            except Exception:
+                                pass
+                        obj.setdefault("entries", []).append(payload)
+                        if len(obj["entries"]) > int(resolve_hit_preresolve_dump_max_entries):
+                            obj["entries"] = obj["entries"][-int(resolve_hit_preresolve_dump_max_entries):]
+                        dp.parent.mkdir(parents=True, exist_ok=True)
+                        dp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+                        phase_slot["resolve_hit_preresolve_dump_writes"] = int(phase_slot.get("resolve_hit_preresolve_dump_writes", 0) + 1)
+                    except Exception:
+                        phase_slot["resolve_hit_preresolve_dump_errors"] = int(phase_slot.get("resolve_hit_preresolve_dump_errors", 0) + 1)
+                if code_rs_enabled and code_rs_log_tol > 0.0 and code_rs_max_neighbors > 0:
+                    cache_key = (str(level_name), int(tile_index))
+                    cached_codes = tile_code_entry_cache.get(cache_key)
+                    if cached_codes is None:
+                        idx_all = np.flatnonzero(np.asarray(level_index.tile_indices, dtype=np.int64) == int(tile_index))
+                        ent_list: list[int] = []
+                        code_list: list[np.ndarray] = []
+                        geom_list: list[np.ndarray] = []
+                        for bi in idx_all:
+                            try:
+                                tile_combo = level_index.quad_indices[int(bi)]
+                                if np.any(tile_combo < 0) or np.any(tile_combo >= tile_positions.shape[0]):
+                                    continue
+                                dst4 = tile_positions[tile_combo].astype(np.float64)
+                                cvec = _quad_ratio_code(dst4)
+                                gvec = _quad_edge_signature(dst4)
+                                if cvec is None or gvec is None or not np.all(np.isfinite(cvec)) or not np.all(np.isfinite(gvec)):
+                                    continue
+                                ent_list.append(int(bi))
+                                code_list.append(np.asarray(cvec, dtype=np.float64))
+                                geom_list.append(np.asarray(gvec, dtype=np.float64))
+                            except Exception:
+                                continue
+                        if ent_list and code_list and geom_list:
+                            ent_arr = np.asarray(ent_list, dtype=np.int64)
+                            code_arr = np.vstack(code_list).astype(np.float64, copy=False)
+                            geom_arr = np.vstack(geom_list).astype(np.float64, copy=False)
+                            log_arr = np.log(np.maximum(code_arr, 1e-12)).astype(np.float64, copy=False)
+                            sort0 = np.argsort(log_arr[:, 0]) if int(log_arr.shape[0]) > 0 else np.zeros(0, dtype=np.int64)
+                        else:
+                            ent_arr = np.zeros(0, dtype=np.int64)
+                            code_arr = np.zeros((0, 3), dtype=np.float64)
+                            geom_arr = np.zeros((0, 6), dtype=np.float64)
+                            log_arr = np.zeros((0, 3), dtype=np.float64)
+                            sort0 = np.zeros(0, dtype=np.int64)
+                        grid_bin = max(1e-4, float(getattr(config, "blind_astrometry_code_rangesearch_grid_bin", 0.12) or 0.12))
+                        grid_map: dict[tuple[int, int, int], np.ndarray] = {}
+                        if int(log_arr.shape[0]) > 0:
+                            q = np.floor(log_arr / float(grid_bin)).astype(np.int32)
+                            tmp: dict[tuple[int, int, int], list[int]] = {}
+                            for ii, qq in enumerate(q):
+                                keyq = (int(qq[0]), int(qq[1]), int(qq[2]))
+                                tmp.setdefault(keyq, []).append(int(ii))
+                            for kq, vv in tmp.items():
+                                grid_map[kq] = np.asarray(vv, dtype=np.int64)
+                        kd_tree = _build_code_kdtree(log_arr, leaf_size=32) if int(log_arr.shape[0]) > 0 else None
+                        cached_codes = (ent_arr, code_arr, geom_arr, log_arr, sort0, grid_map, float(grid_bin), kd_tree)
+                        tile_code_entry_cache[cache_key] = cached_codes
+                    if isinstance(cached_codes, tuple) and len(cached_codes) >= 8:
+                        tile_code_entries, tile_code_values, tile_geom_values, tile_code_logs, tile_code_sort0, tile_code_grid_map, tile_code_grid_bin, tile_code_kdtree = cached_codes
+                    elif isinstance(cached_codes, tuple) and len(cached_codes) >= 7:
+                        tile_code_entries, tile_code_values, tile_geom_values, tile_code_logs, tile_code_sort0, tile_code_grid_map, tile_code_grid_bin = cached_codes
+                        tile_code_kdtree = None
+                    elif isinstance(cached_codes, tuple) and len(cached_codes) >= 5:
+                        tile_code_entries, tile_code_values, tile_geom_values, tile_code_logs, tile_code_sort0 = cached_codes
+                        tile_code_grid_map = {}
+                        tile_code_grid_bin = max(1e-4, float(getattr(config, "blind_astrometry_code_rangesearch_grid_bin", 0.12) or 0.12))
+                        tile_code_kdtree = None
+                    elif isinstance(cached_codes, tuple) and len(cached_codes) >= 3:
+                        tile_code_entries, tile_code_values, tile_geom_values = cached_codes
+                        tile_code_logs = np.log(np.maximum(np.asarray(tile_code_values, dtype=np.float64), 1e-12)).astype(np.float64, copy=False) if tile_code_values is not None else None
+                        tile_code_sort0 = np.argsort(tile_code_logs[:, 0]) if (tile_code_logs is not None and int(tile_code_logs.shape[0]) > 0) else np.zeros(0, dtype=np.int64)
+                        tile_code_grid_map = {}
+                        tile_code_grid_bin = max(1e-4, float(getattr(config, "blind_astrometry_code_rangesearch_grid_bin", 0.12) or 0.12))
+                        tile_code_kdtree = None
+                    else:
+                        tile_code_entries, tile_code_values = cached_codes
+                        tile_geom_values = None
+                        tile_code_logs = np.log(np.maximum(np.asarray(tile_code_values, dtype=np.float64), 1e-12)).astype(np.float64, copy=False) if tile_code_values is not None else None
+                        tile_code_sort0 = np.argsort(tile_code_logs[:, 0]) if (tile_code_logs is not None and int(tile_code_logs.shape[0]) > 0) else np.zeros(0, dtype=np.int64)
+                        tile_code_grid_map = {}
+                        tile_code_grid_bin = max(1e-4, float(getattr(config, "blind_astrometry_code_rangesearch_grid_bin", 0.12) or 0.12))
+                        tile_code_kdtree = None
+
+                idx2_order = np.arange(int(len(level_slices)), dtype=np.int64)
+                if bool(getattr(config, "blind_astrometry_observed_unsaturated_first_enabled", True)) and int(idx2_order.shape[0]) > 1:
+                    try:
+                        sat_mask = np.zeros(int(idx2_order.shape[0]), dtype=bool)
+                        if level_hashes is not None and int(level_hashes.shape[0]) >= int(idx2_order.shape[0]):
+                            for _ii in range(int(idx2_order.shape[0])):
+                                _hh = int(level_hashes[int(_ii)])
+                                _q1 = int((_hh >> 48) & 0xFFFF)
+                                _q2 = int((_hh >> 32) & 0xFFFF)
+                                _q3 = int((_hh >> 16) & 0xFFFF)
+                                sat_mask[_ii] = (_q1 in (0, 0xFFFF)) or (_q2 in (0, 0xFFFF)) or (_q3 in (0, 0xFFFF))
+                            uns = idx2_order[~sat_mask]
+                            sat = idx2_order[sat_mask]
+                            if int(uns.shape[0]) > 0 and int(sat.shape[0]) > 0:
+                                idx2_order = np.concatenate([uns, sat]).astype(np.int64, copy=False)
+                                phase_slot["astrometry_obs_unsat_first_activations"] = int(phase_slot.get("astrometry_obs_unsat_first_activations", 0) + 1)
+                                phase_slot["astrometry_obs_unsat_count"] = int(phase_slot.get("astrometry_obs_unsat_count", 0) + int(uns.shape[0]))
+                                phase_slot["astrometry_obs_sat_count"] = int(phase_slot.get("astrometry_obs_sat_count", 0) + int(sat.shape[0]))
+                    except Exception:
+                        pass
+
+                for _ord_i in range(int(idx2_order.shape[0])):
+                    idx2 = int(idx2_order[_ord_i])
+                    slc = level_slices[idx2]
                     if cancel_check and cancel_check():
                         return None
-                    if slc.start == slc.stop:
-                        continue
                     if tested >= max_buckets:
                         break
+
+                    obs_slices: list[slice] = []
+                    seen_ranges: set[tuple[int, int]] = set()
+                    bypass_sat_seed = bool(getattr(config, "blind_astrometry_saturated_hash_seed_bypass_enabled", True))
+                    obs_hash_seed = None
+                    obs_q_seed = None
+                    obs_hash_sat_seed = False
+                    try:
+                        if int(idx2) < int(level_hashes.shape[0]):
+                            _hv_seed = int(level_hashes[int(idx2)])
+                            obs_hash_seed = int(_hv_seed)
+                            _q1_seed = int((_hv_seed >> 48) & 0xFFFF)
+                            _q2_seed = int((_hv_seed >> 32) & 0xFFFF)
+                            _q3_seed = int((_hv_seed >> 16) & 0xFFFF)
+                            obs_q_seed = [_q1_seed, _q2_seed, _q3_seed]
+                            obs_hash_sat_seed = (_q1_seed in (0, 0xFFFF)) or (_q2_seed in (0, 0xFFFF)) or (_q3_seed in (0, 0xFFFF))
+                    except Exception:
+                        obs_hash_seed = None
+                        obs_q_seed = None
+                        obs_hash_sat_seed = False
+                    if slc.start != slc.stop and not (bypass_sat_seed and obs_hash_sat_seed):
+                        obs_slices.append(slc)
+                        seen_ranges.add((int(slc.start), int(slc.stop)))
+                    elif slc.start != slc.stop and bypass_sat_seed and obs_hash_sat_seed:
+                        phase_slot["astrometry_sat_seed_hash_bypass"] = int(phase_slot.get("astrometry_sat_seed_hash_bypass", 0) + 1)
+
+                    if (
+                        slc.start == slc.stop
+                        and near_probe_count < near_max_probes
+                        and near_q1 is not None
+                        and near_q2 is not None
+                        and near_q3 is not None
+                        and near_par is not None
+                        and near_entry_hashes is not None
+                        and idx2 < int(level_hashes.shape[0])
+                        and not (bypass_sat_seed and obs_hash_sat_seed)
+                    ):
+                        near_probe_count += 1
+                        h = int(level_hashes[idx2])
+                        tq1 = (h >> 48) & 0xFFFF
+                        tq2 = (h >> 32) & 0xFFFF
+                        tq3 = (h >> 16) & 0xFFFF
+                        tp = h & 0x1
+
+                        q1_lo = max(0, int(tq1) - int(near_max_abs_delta))
+                        q1_hi = min(0xFFFF, int(tq1) + int(near_max_abs_delta))
+                        lo_hash = (np.uint64(q1_lo) << np.uint64(48))
+                        hi_hash = (np.uint64(q1_hi) << np.uint64(48)) | np.uint64((1 << 48) - 1)
+                        lo_idx = int(np.searchsorted(near_entry_hashes, lo_hash, side="left"))
+                        hi_idx = int(np.searchsorted(near_entry_hashes, hi_hash, side="right"))
+                        if hi_idx <= lo_idx:
+                            cand_idx = np.zeros(0, dtype=np.int64)
+                        else:
+                            sub = np.arange(lo_idx, hi_idx, dtype=np.int64)
+                            m = (
+                                (near_par[sub] == int(tp))
+                                & (np.abs(near_q1[sub] - int(tq1)) <= int(near_max_abs_delta))
+                                & (np.abs(near_q2[sub] - int(tq2)) <= int(near_max_abs_delta))
+                                & (np.abs(near_q3[sub] - int(tq3)) <= int(near_max_abs_delta))
+                            )
+                            cand_idx = sub[np.flatnonzero(m)]
+                        if cand_idx.size > 0:
+                            if cand_idx.size > int(near_max_buckets):
+                                dist = (
+                                    np.abs(near_q1[cand_idx] - int(tq1))
+                                    + np.abs(near_q2[cand_idx] - int(tq2))
+                                    + np.abs(near_q3[cand_idx] - int(tq3))
+                                )
+                                order = np.argsort(dist)
+                                cand_idx = cand_idx[order[: int(near_max_buckets)]]
+                            added = 0
+                            for bi in cand_idx:
+                                st = int(bi)
+                                en = int(bi + 1)
+                                key = (st, en)
+                                if key in seen_ranges:
+                                    continue
+                                seen_ranges.add(key)
+                                obs_slices.append(slice(st, en))
+                                added += 1
+                            if added > 0:
+                                phase_slot["astrometry_code_near_hits"] = int(phase_slot.get("astrometry_code_near_hits", 0) + 1)
+                                phase_slot["astrometry_code_near_buckets_total"] = int(phase_slot.get("astrometry_code_near_buckets_total", 0) + added)
+                                phase_slot["astrometry_code_near_entries_total"] = int(phase_slot.get("astrometry_code_near_entries_total", 0) + added)
+
                     obs_combo = level_quads[idx2]
-                    for b in range(slc.start, slc.stop):
-                        if cancel_check and cancel_check():
-                            return None
-                        if int(level_index.tile_indices[b]) != tile_index:
-                            continue
-                        tested += 1
+                    obs_src4 = image_positions[obs_combo].astype(np.float64)
+                    code_filter_enabled = bool(getattr(config, "blind_astrometry_code_continuous_filter_enabled", True))
+                    obs_code = _quad_ratio_code(obs_src4) if code_filter_enabled else None
+                    code_log_tol = max(0.0, float(getattr(config, "blind_astrometry_code_continuous_log_tol", 0.25) or 0.0))
+                    if code_filter_enabled and bool(getattr(config, "blind_astrometry_code_continuous_adapt_enabled", True)):
+                        adapt_after = max(0, int(getattr(config, "blind_astrometry_code_continuous_adapt_after_candidates", 18) or 0))
+                        adapt_best_max = max(-1, int(getattr(config, "blind_astrometry_code_continuous_adapt_best_inliers_max", 1) or 0))
+                        if int(total_candidates_tried) >= adapt_after and int(fail_best_inliers_seen) <= adapt_best_max:
+                            code_log_tol_relaxed = max(code_log_tol, float(getattr(config, "blind_astrometry_code_continuous_relaxed_log_tol", 0.55) or code_log_tol))
+                            if code_log_tol_relaxed > code_log_tol:
+                                code_log_tol = float(code_log_tol_relaxed)
+                                phase_slot["astrometry_code_continuous_relax_activations"] = int(phase_slot.get("astrometry_code_continuous_relax_activations", 0) + 1)
+                    if code_filter_enabled and obs_code is None:
+                        continue
+
+                    code_hit_map: dict[int, dict[str, float | int]] = {}
+                    code_hit_enabled = bool(getattr(config, "blind_astrometry_code_hit_object_enabled", True))
+                    code_hit_score_max = max(0.0, float(getattr(config, "blind_astrometry_code_hit_score_max", 0.48) or 0.0))
+                    code_hit_geom_gate = bool(getattr(config, "blind_astrometry_code_hit_geom_gate_enabled", True))
+                    code_hit_geom_tol = max(0.0, float(getattr(config, "blind_astrometry_code_hit_geom_log_tol", 0.16) or 0.0))
+                    code_rs_backend = str(getattr(config, "blind_astrometry_code_rangesearch_backend", "linf") or "linf").strip().lower()
+                    code_rs_l2_radius = max(0.0, float(getattr(config, "blind_astrometry_code_rangesearch_l2_radius", 0.26) or 0.0))
+                    code_rs_grid_bin = max(1e-4, float(getattr(config, "blind_astrometry_code_rangesearch_grid_bin", 0.12) or 0.12))
+                    code_rs_grid_rbins = max(0, int(getattr(config, "blind_astrometry_code_rangesearch_grid_radius_bins", 1) or 0))
+                    allow_exp_rs = bool(getattr(config, "blind_astrometry_code_rangesearch_allow_experimental_backends", False))
+                    if code_rs_backend in {"l2", "grid3d", "kdbox"} and not allow_exp_rs:
+                        code_rs_backend = "linf"
+                        phase_slot["astrometry_code_rangesearch_backend_forced_linf"] = int(phase_slot.get("astrometry_code_rangesearch_backend_forced_linf", 0) + 1)
+                    obs_geom_sig = _quad_edge_signature(obs_src4) if code_hit_geom_gate else None
+
+                    if (
+                        code_rs_enabled
+                        and obs_code is not None
+                        and tile_code_entries is not None
+                        and tile_code_values is not None
+                        and int(tile_code_entries.shape[0]) > 0
+                    ):
+                        eps = 1e-12
+                        try:
+                            cand = np.zeros(0, dtype=np.int64)
+                            rs_score = np.zeros(0, dtype=np.float64)
+                            obs_log = np.log(np.maximum(np.asarray(obs_code, dtype=np.float64), eps))
+                            if code_rs_backend == "grid3d" and tile_code_logs is not None and int(tile_code_logs.shape[0]) > 0:
+                                phase_slot["astrometry_code_rangesearch_grid_activations"] = int(phase_slot.get("astrometry_code_rangesearch_grid_activations", 0) + 1)
+                                gb = float(tile_code_grid_bin) if (tile_code_grid_bin is not None and np.isfinite(float(tile_code_grid_bin))) else float(code_rs_grid_bin)
+                                gb = max(1e-4, gb)
+                                q0 = np.floor(obs_log / gb).astype(np.int32)
+                                cand_list: list[np.ndarray] = []
+                                if isinstance(tile_code_grid_map, dict) and tile_code_grid_map:
+                                    rb = int(code_rs_grid_rbins)
+                                    for dx in range(-rb, rb + 1):
+                                        for dy in range(-rb, rb + 1):
+                                            for dz in range(-rb, rb + 1):
+                                                kk = (int(q0[0] + dx), int(q0[1] + dy), int(q0[2] + dz))
+                                                vv = tile_code_grid_map.get(kk)
+                                                if vv is not None and int(vv.shape[0]) > 0:
+                                                    cand_list.append(vv)
+                                if cand_list:
+                                    sub = np.unique(np.concatenate(cand_list).astype(np.int64, copy=False))
+                                else:
+                                    sub = np.zeros(0, dtype=np.int64)
+                                if sub.size > 0:
+                                    dlog = tile_code_logs[sub] - obs_log[None, :]
+                                    d2 = np.sqrt(np.sum(dlog * dlog, axis=1))
+                                    rad = float(code_rs_l2_radius) if code_rs_l2_radius > 0.0 else float(np.sqrt(3.0) * gb * (float(code_rs_grid_rbins) + 0.5))
+                                    m = np.isfinite(d2) & (d2 <= float(rad))
+                                    if np.any(m):
+                                        cand = sub[np.flatnonzero(m)]
+                                        rs_score = d2[np.flatnonzero(m)]
+                            elif code_rs_backend == "kdbox" and tile_code_logs is not None and int(tile_code_logs.shape[0]) > 0:
+                                phase_slot["astrometry_code_rangesearch_kdbox_activations"] = int(phase_slot.get("astrometry_code_rangesearch_kdbox_activations", 0) + 1)
+                                rad_box = float(max(1e-5, code_rs_log_tol))
+                                sub = _kdtree_box_query(tile_code_kdtree, obs_log, rad_box)
+                                if sub.size > 0:
+                                    dlog = tile_code_logs[sub] - obs_log[None, :]
+                                    d_inf = np.max(np.abs(dlog), axis=1)
+                                    m_inf = np.isfinite(d_inf) & (d_inf <= float(rad_box))
+                                    if np.any(m_inf):
+                                        sub = sub[np.flatnonzero(m_inf)]
+                                        dlog = dlog[np.flatnonzero(m_inf)]
+                                        d2 = np.sqrt(np.sum(dlog * dlog, axis=1))
+                                        if code_rs_l2_radius > 0.0:
+                                            m2 = np.isfinite(d2) & (d2 <= float(code_rs_l2_radius))
+                                            if np.any(m2):
+                                                cand = sub[np.flatnonzero(m2)]
+                                                rs_score = d2[np.flatnonzero(m2)]
+                                        else:
+                                            cand = sub
+                                            rs_score = d2
+                            elif code_rs_backend == "l2" and tile_code_logs is not None and int(tile_code_logs.shape[0]) > 0 and code_rs_l2_radius > 0.0:
+                                phase_slot["astrometry_code_rangesearch_l2_activations"] = int(phase_slot.get("astrometry_code_rangesearch_l2_activations", 0) + 1)
+                                if tile_code_sort0 is not None and int(np.asarray(tile_code_sort0).shape[0]) == int(tile_code_logs.shape[0]):
+                                    logs0 = tile_code_logs[np.asarray(tile_code_sort0, dtype=np.int64), 0]
+                                    lo = float(obs_log[0] - code_rs_l2_radius)
+                                    hi = float(obs_log[0] + code_rs_l2_radius)
+                                    i0 = int(np.searchsorted(logs0, lo, side="left"))
+                                    i1 = int(np.searchsorted(logs0, hi, side="right"))
+                                    if i1 > i0:
+                                        sub = np.asarray(tile_code_sort0, dtype=np.int64)[i0:i1]
+                                    else:
+                                        sub = np.zeros(0, dtype=np.int64)
+                                else:
+                                    sub = np.arange(tile_code_logs.shape[0], dtype=np.int64)
+                                if sub.size > 0:
+                                    dlog = tile_code_logs[sub] - obs_log[None, :]
+                                    d2 = np.sqrt(np.sum(dlog * dlog, axis=1))
+                                    m = np.isfinite(d2) & (d2 <= float(code_rs_l2_radius))
+                                    if np.any(m):
+                                        cand = sub[np.flatnonzero(m)]
+                                        rs_score = d2[np.flatnonzero(m)]
+                            else:
+                                d1 = np.abs(np.log((tile_code_values[:, 0] + eps) / (float(obs_code[0]) + eps)))
+                                m1 = np.isfinite(d1) & (d1 <= float(code_rs_log_tol))
+                                if np.any(m1):
+                                    cand = np.flatnonzero(m1)
+                                    dv = np.abs(np.log((tile_code_values[cand] + eps) / (obs_code[None, :] + eps)))
+                                    m2 = np.all(np.isfinite(dv), axis=1) & (np.max(dv, axis=1) <= float(code_rs_log_tol))
+                                    cand = cand[np.flatnonzero(m2)]
+                                    if cand.size > 0:
+                                        rs_score = np.sum(np.abs(np.log((tile_code_values[cand] + eps) / (obs_code[None, :] + eps))), axis=1)
+                            if cand.size > 0:
+                                ordx_all = np.argsort(rs_score)
+                                cand = cand[ordx_all]
+                                rs_score = rs_score[ordx_all]
+                                max_neighbors_eff = int(code_rs_max_neighbors)
+                                if strict_mode_effective and bool(getattr(config, "blind_astrometry_strict_pool_widen_enabled", True)):
+                                    widen_cap = max(max_neighbors_eff, int(getattr(config, "blind_astrometry_strict_pool_widen_max_neighbors", 96) or max_neighbors_eff))
+                                    if widen_cap > max_neighbors_eff:
+                                        max_neighbors_eff = int(widen_cap)
+                                        phase_slot["astrometry_strict_pool_widen_activations"] = int(phase_slot.get("astrometry_strict_pool_widen_activations", 0) + 1)
+                                if cand.size > int(max_neighbors_eff):
+                                    cand = cand[: int(max_neighbors_eff)]
+                                    rs_score = rs_score[: int(max_neighbors_eff)]
+                                added_rs = 0
+                                for rank_i, (ci, sc) in enumerate(zip(cand, rs_score)):
+                                    bidx = int(tile_code_entries[int(ci)])
+                                    score_f = float(sc)
+                                    if code_hit_geom_gate and obs_geom_sig is not None and tile_geom_values is not None and int(ci) < int(tile_geom_values.shape[0]):
+                                        gtile = tile_geom_values[int(ci)]
+                                        gdelta = np.abs(np.log((gtile + 1e-12) / (obs_geom_sig + 1e-12)))
+                                        if (not np.all(np.isfinite(gdelta))) or float(np.max(gdelta)) > float(code_hit_geom_tol):
+                                            phase_slot["astrometry_code_hit_geom_rejects"] = int(phase_slot.get("astrometry_code_hit_geom_rejects", 0) + 1)
+                                            continue
+                                    if code_hit_enabled:
+                                        code_hit_map[bidx] = {
+                                            "entry": int(bidx),
+                                            "score": float(score_f),
+                                            "rank": int(rank_i),
+                                            "metric": str(code_rs_backend),
+                                            "source": 1,
+                                        }
+                                        phase_slot["astrometry_code_hit_objects_total"] = int(phase_slot.get("astrometry_code_hit_objects_total", 0) + 1)
+                                    key = (bidx, bidx + 1)
+                                    if key in seen_ranges:
+                                        continue
+                                    seen_ranges.add(key)
+                                    obs_slices.append(slice(bidx, bidx + 1))
+                                    added_rs += 1
+                                if added_rs > 0:
+                                    phase_slot["astrometry_code_rangesearch_hits"] = int(phase_slot.get("astrometry_code_rangesearch_hits", 0) + 1)
+                                    phase_slot["astrometry_code_rangesearch_neighbors_total"] = int(phase_slot.get("astrometry_code_rangesearch_neighbors_total", 0) + added_rs)
+                        except Exception:
+                            pass
+
+                    code_hit_only_mode = bool(getattr(config, "blind_astrometry_code_hit_only_mode", False))
+                    code_hit_only_min_entries = max(1, int(getattr(config, "blind_astrometry_code_hit_only_min_entries", 4) or 0))
+                    hit_pipeline_first_enabled = bool(getattr(config, "blind_astrometry_hit_pipeline_first_enabled", False))
+                    hit_pipeline_first_fallback = bool(getattr(config, "blind_astrometry_hit_pipeline_first_fallback_enabled", True)) and non_parity_mode_effective
+
+                    ordered_hits = sorted(
+                        code_hit_map.items(),
+                        key=lambda kv: (int((kv[1] or {}).get("rank", 10**9) or 10**9), float((kv[1] or {}).get("score", 1e9) or 1e9)),
+                    ) if code_hit_map else []
+
+                    if code_hit_only_mode and len(code_hit_map) >= code_hit_only_min_entries:
+                        obs_slices = []
+                        seen_ranges = set()
+                        for bidx, _hit in ordered_hits:
+                            key = (int(bidx), int(bidx) + 1)
+                            if key in seen_ranges:
+                                continue
+                            seen_ranges.add(key)
+                            obs_slices.append(slice(int(bidx), int(bidx) + 1))
+                        if obs_slices:
+                            phase_slot["astrometry_code_hit_only_mode_activations"] = int(phase_slot.get("astrometry_code_hit_only_mode_activations", 0) + 1)
+                            phase_slot["astrometry_code_hit_only_entries_total"] = int(phase_slot.get("astrometry_code_hit_only_entries_total", 0) + int(len(obs_slices)))
+
+                    if hit_pipeline_first_enabled:
+                        if len(code_hit_map) >= code_hit_only_min_entries and ordered_hits:
+                            obs_slices = []
+                            seen_ranges = set()
+                            for bidx, _hit in ordered_hits:
+                                key = (int(bidx), int(bidx) + 1)
+                                if key in seen_ranges:
+                                    continue
+                                seen_ranges.add(key)
+                                obs_slices.append(slice(int(bidx), int(bidx) + 1))
+                            phase_slot["astrometry_hit_pipeline_first_activations"] = int(phase_slot.get("astrometry_hit_pipeline_first_activations", 0) + 1)
+                            phase_slot["astrometry_code_hit_only_entries_total"] = int(phase_slot.get("astrometry_code_hit_only_entries_total", 0) + int(len(obs_slices)))
+                        else:
+                            if hit_pipeline_first_fallback:
+                                phase_slot["astrometry_hit_pipeline_first_fallbacks"] = int(phase_slot.get("astrometry_hit_pipeline_first_fallbacks", 0) + 1)
+                            else:
+                                phase_slot["astrometry_hit_pipeline_first_skips"] = int(phase_slot.get("astrometry_hit_pipeline_first_skips", 0) + 1)
+                                if strict_mode_effective:
+                                    phase_slot["astrometry_hit_pipeline_first_strict_recover"] = int(phase_slot.get("astrometry_hit_pipeline_first_strict_recover", 0) + 1)
+                                else:
+                                    continue
+
+                    hit_pipeline_dedicated = bool(getattr(config, "blind_astrometry_hit_pipeline_dedicated_enabled", False))
+                    hit_pipeline_dedicated_fallback = bool(getattr(config, "blind_astrometry_hit_pipeline_dedicated_fallback_enabled", True)) and non_parity_mode_effective
+                    if hit_pipeline_dedicated:
+                        if len(code_hit_map) >= code_hit_only_min_entries and ordered_hits:
+                            obs_slices = []
+                            seen_ranges = set()
+                            for bidx, _hit in ordered_hits:
+                                key = (int(bidx), int(bidx) + 1)
+                                if key in seen_ranges:
+                                    continue
+                                seen_ranges.add(key)
+                                obs_slices.append(slice(int(bidx), int(bidx) + 1))
+                            phase_slot["astrometry_hit_pipeline_dedicated_activations"] = int(phase_slot.get("astrometry_hit_pipeline_dedicated_activations", 0) + 1)
+                        else:
+                            if hit_pipeline_dedicated_fallback:
+                                phase_slot["astrometry_hit_pipeline_dedicated_fallbacks"] = int(phase_slot.get("astrometry_hit_pipeline_dedicated_fallbacks", 0) + 1)
+                            else:
+                                phase_slot["astrometry_hit_pipeline_dedicated_skips"] = int(phase_slot.get("astrometry_hit_pipeline_dedicated_skips", 0) + 1)
+                                if strict_mode_effective:
+                                    phase_slot["astrometry_hit_pipeline_dedicated_strict_recover"] = int(phase_slot.get("astrometry_hit_pipeline_dedicated_strict_recover", 0) + 1)
+                                else:
+                                    continue
+
+                    if not obs_slices and strict_mode_effective:
+                        try:
+                            if (
+                                obs_code is not None
+                                and tile_code_entries is not None
+                                and tile_code_values is not None
+                                and int(tile_code_entries.shape[0]) > 0
+                                and int(tile_code_values.shape[0]) == int(tile_code_entries.shape[0])
+                            ):
+                                eps = 1e-12
+                                obs_code_np = np.asarray(obs_code, dtype=np.float64)
+                                tc = np.asarray(tile_code_values, dtype=np.float64)
+                                dlog = np.abs(np.log((tc + eps) / (obs_code_np[None, :] + eps)))
+                                score_vec = np.max(dlog, axis=1)
+                                score_vec[~np.isfinite(score_vec)] = np.inf
+                                if np.isfinite(np.min(score_vec)):
+                                    max_neighbors = max(1, int(getattr(config, "blind_astrometry_strict_hash_recover_max_neighbors", 24) or 1))
+                                    ordx = np.argsort(score_vec)
+                                    added = 0
+                                    seen_ranges_local: set[tuple[int, int]] = set()
+                                    for ii in ordx:
+                                        if added >= max_neighbors:
+                                            break
+                                        if not np.isfinite(float(score_vec[int(ii)])):
+                                            break
+                                        bidx = int(tile_code_entries[int(ii)])
+                                        key = (bidx, bidx + 1)
+                                        if key in seen_ranges_local:
+                                            continue
+                                        seen_ranges_local.add(key)
+                                        obs_slices.append(slice(bidx, bidx + 1))
+                                        added += 1
+                                    if added > 0:
+                                        phase_slot["astrometry_no_seed_strict_hash_recover"] = int(phase_slot.get("astrometry_no_seed_strict_hash_recover", 0) + 1)
+                                        phase_slot["astrometry_no_seed_strict_hash_recover_neighbors"] = int(phase_slot.get("astrometry_no_seed_strict_hash_recover_neighbors", 0) + int(added))
+                        except Exception:
+                            pass
+
+                    if not obs_slices:
+                        phase_slot["astrometry_no_seed_slices"] = int(phase_slot.get("astrometry_no_seed_slices", 0) + 1)
+                        if astrometry_trace_dump_path:
+                            _dump_astrometry_exact({
+                                "obs_quad_idx": int(idx2),
+                                "obs_hash": obs_hash_seed,
+                                "obs_q": obs_q_seed,
+                                "decision": "skip_no_seed_slices",
+                            })
+                        continue
+
+                    for slc_use in obs_slices:
                         if tested >= max_buckets:
                             break
-                        tile_combo = level_index.quad_indices[b]
-                        if np.any(obs_combo < 0) or np.any(obs_combo >= image_positions.shape[0]):
-                            logger.debug("skipping quad with invalid image indices (level=%s)", level_name)
-                            continue
-                        if np.any(tile_combo < 0) or np.any(tile_combo >= tile_positions.shape[0]):
-                            logger.debug(
-                                "skipping quad with invalid tile indices (tile=%s, level=%s)",
-                                tile_index,
-                                level_name,
-                            )
-                            continue
-                        src4 = image_positions[obs_combo].astype(np.float64)
-                        dst4 = tile_positions[tile_combo].astype(np.float64)
-                        hyp = _derive_similarity(src4, dst4)
-                        if hyp is None:
-                            continue
-                        rot_scale, translation = hyp
-                        scale = abs(rot_scale)
-                        # Accept only plausible scales (deg/px)
-                        if not (1e-5 <= scale <= 1e-2):
-                            continue
-                        pred = rot_scale * src_all_c + translation
-                        err_deg = np.abs(pred - dst_all_c)
-                        tol_deg = max(1e-6, float(config.pixel_tolerance) * scale)
-                        inliers_mask = err_deg <= tol_deg
-                        inliers = int(np.sum(inliers_mask))
-                        if inliers <= best_inliers:
-                            continue
-                        rms_px = float(np.sqrt(np.mean((err_deg[inliers_mask] / max(scale, 1e-12)) ** 2))) if inliers else float("inf")
-                        tr = SimilarityTransform(
-                            scale=float(scale),
-                            rotation=float(np.angle(rot_scale)),
-                            translation=(float(translation.real), float(translation.imag)),
-                        )
-                        st = SimilarityStats(rms_px=rms_px, inliers=inliers)
-                        best = (tr, st)
-                        best_inliers = inliers
-                        if inliers >= config.quality_inliers and rms_px <= config.quality_rms:
-                            break
+                        for b in range(slc_use.start, slc_use.stop):
+                            if cancel_check and cancel_check():
+                                return None
+                            if int(level_index.tile_indices[b]) != tile_index:
+                                continue
+                            if code_hit_enabled:
+                                hit_obj = code_hit_map.get(int(b))
+                                if hit_obj is not None:
+                                    hscore = float(hit_obj.get("score", 0.0) or 0.0)
+                                    if hscore > float(code_hit_score_max):
+                                        phase_slot["astrometry_code_hit_score_rejects"] = int(phase_slot.get("astrometry_code_hit_score_rejects", 0) + 1)
+                                        continue
+                            tested += 1
+                            if tested >= max_buckets:
+                                break
+                            tile_combo = level_index.quad_indices[b]
+                            obs_hash_parity_bit = None
+                            tile_hash_parity_bit = None
+                            parity_xor_bit = None
+                            try:
+                                if int(idx2) < int(level_hashes.shape[0]):
+                                    obs_hash_parity_bit = int(int(level_hashes[int(idx2)]) & 0x1)
+                                if int(b) < int(level_index.hashes.shape[0]):
+                                    tile_hash_parity_bit = int(int(level_index.hashes[int(b)]) & 0x1)
+                                if obs_hash_parity_bit is not None and tile_hash_parity_bit is not None:
+                                    parity_xor_bit = int(obs_hash_parity_bit ^ tile_hash_parity_bit)
+                            except Exception:
+                                obs_hash_parity_bit = None
+                                tile_hash_parity_bit = None
+                                parity_xor_bit = None
+                            if np.any(obs_combo < 0) or np.any(obs_combo >= image_positions.shape[0]):
+                                logger.debug("skipping quad with invalid image indices (level=%s)", level_name)
+                                continue
+                            if np.any(tile_combo < 0) or np.any(tile_combo >= tile_positions.shape[0]):
+                                logger.debug(
+                                    "skipping quad with invalid tile indices (tile=%s, level=%s)",
+                                    tile_index,
+                                    level_name,
+                                )
+                                continue
+                            src4 = obs_src4
+                            dst4 = tile_positions[tile_combo].astype(np.float64)
+                            tile_hash64 = None
+                            tile_q_triplet = None
+                            try:
+                                if int(b) < int(level_index.hashes.shape[0]):
+                                    tile_hash64 = int(level_index.hashes[int(b)])
+                                    tile_q_triplet = _hash_q_triplet(tile_hash64)
+                            except Exception:
+                                tile_hash64 = None
+                                tile_q_triplet = None
+                            if code_filter_enabled:
+                                dst_code = _quad_ratio_code(dst4)
+                                if dst_code is None:
+                                    phase_slot["astrometry_code_continuous_rejects"] = int(phase_slot.get("astrometry_code_continuous_rejects", 0) + 1)
+                                    continue
+                                log_delta = np.abs(np.log((dst_code + 1e-12) / (obs_code + 1e-12)))
+                                if not np.all(np.isfinite(log_delta)) or float(np.max(log_delta)) > float(code_log_tol):
+                                    phase_slot["astrometry_code_continuous_rejects"] = int(phase_slot.get("astrometry_code_continuous_rejects", 0) + 1)
+                                    continue
+                                phase_slot["astrometry_code_continuous_hits"] = int(phase_slot.get("astrometry_code_continuous_hits", 0) + 1)
+                            quad_min_edge_px, quad_area_frac = _quad_min_edge_and_area_frac(src4, image.shape)
+    
+                            edge_thr = float(getattr(config, "blind_quad_min_edge_px", 12.0) or 0.0)
+                            area_thr = float(getattr(config, "blind_quad_min_area_frac", 0.0015) or 0.0)
+                            if bool(getattr(config, "blind_quad_relax_enabled", True)):
+                                relax_after = max(0, int(getattr(config, "blind_quad_relax_after_candidates", 120) or 0))
+                                relax_best_max = max(0, int(getattr(config, "blind_quad_relax_best_inliers_max", 8) or 0))
+                                if total_candidates_tried >= relax_after and fail_best_inliers_seen <= relax_best_max:
+                                    edge_fac = float(getattr(config, "blind_quad_relax_edge_factor", 0.55) or 1.0)
+                                    area_fac = float(getattr(config, "blind_quad_relax_area_factor", 0.30) or 1.0)
+                                    edge_fac = min(1.0, max(0.20, edge_fac))
+                                    area_fac = min(1.0, max(0.05, area_fac))
+                                    edge_thr = max(4.0, edge_thr * edge_fac)
+                                    area_thr = max(0.00005, area_thr * area_fac)
+                                    phase_slot["quad_relax_total"] = int(phase_slot.get("quad_relax_total", 0) + 1)
+    
+                            if quad_min_edge_px < edge_thr:
+                                continue
+                            if quad_area_frac < area_thr:
+                                continue
+                            permute_mode = bool(getattr(config, "blind_astrometry_try_permutations_on_quad_matches", True))
+                            perm_max = max(1, int(getattr(config, "blind_astrometry_try_permutations_max", 12) or 1))
+                            use_cxdx = bool(getattr(config, "blind_astrometry_cxdx_meanx_checks", True))
+                            perm_margin = max(1e-6, float(getattr(config, "blind_astrometry_cxdx_margin", 0.12) or 0.12))
+                            perm_orders = [np.array([0, 1, 2, 3], dtype=np.int64)]
+                            perm_stats = {"cxdx_rejects": 0, "meanx_rejects": 0, "invalid_code": 0}
+                            if permute_mode:
+                                if use_cxdx:
+                                    perm_orders, perm_stats = _astrometry_try_permutations_orders(
+                                        src4,
+                                        max_orders=perm_max,
+                                        margin=perm_margin,
+                                        include_backbone_swap=True,
+                                    )
+                                else:
+                                    perm_orders = _astrometry_permutation_orders(perm_max)
+                            phase_slot["astrometry_try_perm_total"] = int(phase_slot.get("astrometry_try_perm_total", 0) + len(perm_orders))
+                            if use_cxdx:
+                                phase_slot["astrometry_try_perm_cxdx_rejects"] = int(phase_slot.get("astrometry_try_perm_cxdx_rejects", 0) + int(perm_stats.get("cxdx_rejects", 0) or 0))
+                                phase_slot["astrometry_try_perm_meanx_rejects"] = int(phase_slot.get("astrometry_try_perm_meanx_rejects", 0) + int(perm_stats.get("meanx_rejects", 0) or 0))
+                                phase_slot["astrometry_try_perm_invalid_code"] = int(phase_slot.get("astrometry_try_perm_invalid_code", 0) + int(perm_stats.get("invalid_code", 0) or 0))
+
+                            for po in perm_orders:
+                                po_arr = np.asarray(po, dtype=np.int64)
+                                src4p = src4[po_arr]
+                                src4p_inv = src4[np.argsort(po_arr)] if int(po_arr.size) == 4 else src4p
+                                dst4p = dst4
+                                obs_perm_hash64 = _hash_from_ordered_quad_points(src4p)
+                                obs_perm_q_triplet = _hash_q_triplet(obs_perm_hash64)
+                                perm_hash_qmax_abs_delta = None
+                                perm_hash_parity_xor = None
+                                try:
+                                    if obs_perm_hash64 is not None and tile_hash64 is not None and obs_perm_q_triplet is not None and tile_q_triplet is not None:
+                                        dq = [abs(int(obs_perm_q_triplet[i]) - int(tile_q_triplet[i])) for i in range(3)]
+                                        perm_hash_qmax_abs_delta = int(max(dq))
+                                        perm_hash_parity_xor = int((int(obs_perm_hash64) & 0x1) ^ (int(tile_hash64) & 0x1))
+                                except Exception:
+                                    perm_hash_qmax_abs_delta = None
+                                    perm_hash_parity_xor = None
+                                if bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)) and bool(getattr(config, "blind_astrometry_strict_require_perm_hash_match_enabled", True)):
+                                    max_qdelta = max(0, int(getattr(config, "blind_astrometry_strict_perm_hash_max_qdelta", 1536) or 0))
+                                    if perm_hash_qmax_abs_delta is None or int(perm_hash_qmax_abs_delta) > int(max_qdelta):
+                                        phase_slot["astrometry_perm_hash_gate_rejects"] = int(phase_slot.get("astrometry_perm_hash_gate_rejects", 0) + 1)
+                                        continue
+                                dst_slot_perm = np.asarray([0, 1, 2, 3], dtype=np.int64)
+                                dst_slot_err = None
+                                if bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)) and bool(getattr(config, "blind_astrometry_strict_slot_align_enabled", False)):
+                                    try:
+                                        dst4_aligned, dst_slot_perm, dst_slot_err = _align_dst4_by_slot_code(
+                                            src4p,
+                                            dst4,
+                                            parity_flip01=bool((parity_xor_bit is not None) and (int(parity_xor_bit) == 1)),
+                                        )
+                                        if dst4_aligned is not None and np.asarray(dst4_aligned, dtype=np.float64).shape == (4, 2):
+                                            dst4p = np.asarray(dst4_aligned, dtype=np.float64)
+                                    except Exception:
+                                        dst_slot_perm = np.asarray([0, 1, 2, 3], dtype=np.int64)
+                                        dst_slot_err = None
+                                src4_flipab = np.asarray(src4p, dtype=np.float64).copy()
+                                if int(src4_flipab.shape[0]) >= 2:
+                                    src4_flipab[[0, 1]] = src4_flipab[[1, 0]]
+
+                                if bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)) and bool(getattr(config, "blind_astrometry_strict_quad_inbox_gate_enabled", False)):
+                                    code_tol_strict = float(getattr(config, "blind_astrometry_add_stars_inbox_code_tol", 0.08) or 0.08)
+                                    src_inbox_ok = _quad_code_space_inbox_ok(src4p, code_tol=code_tol_strict, min_edge_px=float(getattr(config, "blind_quad_min_edge_px", 12.0) or 12.0))
+                                    dst_inbox_ok = _quad_code_space_inbox_ok(dst4p, code_tol=code_tol_strict, min_edge_px=0.0)
+                                    if not src_inbox_ok:
+                                        phase_slot["astrometry_quad_inbox_src_rejects"] = int(phase_slot.get("astrometry_quad_inbox_src_rejects", 0) + 1)
+                                        continue
+                                    if not dst_inbox_ok:
+                                        phase_slot["astrometry_quad_inbox_dst_rejects"] = int(phase_slot.get("astrometry_quad_inbox_dst_rejects", 0) + 1)
+                                        continue
+                                    phase_slot["astrometry_quad_inbox_pass"] = int(phase_slot.get("astrometry_quad_inbox_pass", 0) + 1)
+
+                                obs_slots_perm = _quad_slots_code(src4p)
+                                obs_slots_inv = _quad_slots_code(src4p_inv)
+                                obs_slots_flipab = _quad_slots_code(src4_flipab)
+                                tile_slots_base = _quad_slots_code(dst4p)
+
+                                def _slot_l2(a: np.ndarray | None, b: np.ndarray | None) -> float | None:
+                                    try:
+                                        if a is None or b is None:
+                                            return None
+                                        aa = np.asarray(a, dtype=np.float64)
+                                        bb = np.asarray(b, dtype=np.float64)
+                                        if aa.shape != bb.shape or aa.size <= 0:
+                                            return None
+                                        dd = aa - bb
+                                        return float(np.sqrt(np.mean(np.sum(dd * dd, axis=1))))
+                                    except Exception:
+                                        return None
+
+                                def _slot_l2_flip01(a: np.ndarray | None, b: np.ndarray | None) -> float | None:
+                                    try:
+                                        if a is None or b is None:
+                                            return None
+                                        aa = np.asarray(a, dtype=np.float64)
+                                        bb = np.asarray(b, dtype=np.float64)
+                                        if aa.shape != bb.shape or aa.size <= 0:
+                                            return None
+                                        aa_flip = 1.0 - aa
+                                        dd = aa_flip - bb
+                                        return float(np.sqrt(np.mean(np.sum(dd * dd, axis=1))))
+                                    except Exception:
+                                        return None
+
+                                slot_l2_perm = _slot_l2(obs_slots_perm, tile_slots_base)
+                                slot_l2_perm_flip01 = _slot_l2_flip01(obs_slots_perm, tile_slots_base)
+                                slot_l2_inv = _slot_l2(obs_slots_inv, tile_slots_base)
+                                slot_l2_inv_flip01 = _slot_l2_flip01(obs_slots_inv, tile_slots_base)
+                                slot_l2_flipab = _slot_l2(obs_slots_flipab, tile_slots_base)
+                                slot_l2_flipab_flip01 = _slot_l2_flip01(obs_slots_flipab, tile_slots_base)
+
+                                phase_slot["astrometry_try_perm_cxdx_pass"] = int(phase_slot.get("astrometry_try_perm_cxdx_pass", 0) + 1)
+
+                                quad_scale_est_arcsec = float("nan")
+                                ab_scale_est_arcsec = float("nan")
+                                try:
+                                    src0_q = np.asarray(src4p, dtype=np.float64) - np.mean(np.asarray(src4p, dtype=np.float64), axis=0, keepdims=True)
+                                    dst0_q = np.asarray(dst4p, dtype=np.float64) - np.mean(np.asarray(dst4p, dtype=np.float64), axis=0, keepdims=True)
+                                    den_q = float(np.sum(src0_q * src0_q))
+                                    if den_q > 0.0 and np.isfinite(den_q):
+                                        num_q = float(np.sum(dst0_q * dst0_q))
+                                        sc_q = math.sqrt(max(num_q, 0.0) / den_q)
+                                        if np.isfinite(sc_q) and sc_q > 0.0:
+                                            quad_scale_est_arcsec = float(3600.0 * sc_q)
+                                except Exception:
+                                    quad_scale_est_arcsec = float("nan")
+                                try:
+                                    src_ab = np.asarray(src4p, dtype=np.float64)
+                                    dst_ab = np.asarray(dst4p, dtype=np.float64)
+                                    d_src = float(np.hypot(float(src_ab[1, 0] - src_ab[0, 0]), float(src_ab[1, 1] - src_ab[0, 1])))
+                                    d_dst = float(np.hypot(float(dst_ab[1, 0] - dst_ab[0, 0]), float(dst_ab[1, 1] - dst_ab[0, 1])))
+                                    if np.isfinite(d_src) and np.isfinite(d_dst) and d_src > 0.0 and d_dst > 0.0:
+                                        ab_scale_est_arcsec = float(3600.0 * (d_dst / d_src))
+                                except Exception:
+                                    ab_scale_est_arcsec = float("nan")
+
+                                gate_scale_arcsec = float(ab_scale_est_arcsec) if np.isfinite(float(ab_scale_est_arcsec)) else float(quad_scale_est_arcsec)
+                                reflected_hyp = bool(parity_label == "mirror")
+                                hyp = _derive_similarity(src4p, dst4p, reflected=reflected_hyp)
+                                hyp_alt = _derive_similarity(src4p, dst4p, reflected=(not reflected_hyp))
+
+                                if (
+                                    bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True))
+                                    and scale_bounds_arcsec is not None
+                                    and np.isfinite(float(gate_scale_arcsec))
+                                ):
+                                    qlo = float(scale_bounds_arcsec[0])
+                                    qhi = float(scale_bounds_arcsec[1])
+                                    gate_oob = bool(float(gate_scale_arcsec) < qlo or float(gate_scale_arcsec) > qhi)
+                                    model_scale_arcsec_raw_gate = float("nan")
+                                    try:
+                                        hyp_gate = hyp if hyp is not None else hyp_alt
+                                        if hyp_gate is not None:
+                                            rs_g, _tr_g = hyp_gate
+                                            model_scale_arcsec_raw_gate = float(3600.0 * max(abs(complex(rs_g)), 1e-12))
+                                    except Exception:
+                                        model_scale_arcsec_raw_gate = float("nan")
+                                    model_in_range = bool(np.isfinite(float(model_scale_arcsec_raw_gate)) and (qlo <= float(model_scale_arcsec_raw_gate) <= qhi))
+                                    if gate_oob and (not model_in_range):
+                                        _obs_hash_gate = None
+                                        _obs_q_gate = None
+                                        try:
+                                            if int(idx2) < int(level_hashes.shape[0]):
+                                                _hv_g = int(level_hashes[int(idx2)])
+                                                _obs_hash_gate = int(_hv_g)
+                                                _obs_q_gate = [int((_hv_g >> 48) & 0xFFFF), int((_hv_g >> 32) & 0xFFFF), int((_hv_g >> 16) & 0xFFFF)]
+                                        except Exception:
+                                            _obs_hash_gate = None
+                                            _obs_q_gate = None
+                                        if bool(getattr(config, "blind_astrometry_quad_scale_guard_enabled", False)):
+                                            phase_slot["astrometry_quad_scale_gate_rejects"] = int(phase_slot.get("astrometry_quad_scale_gate_rejects", 0) + 1)
+                                            _dump_astrometry_exact({
+                                                "bucket": int(b),
+                                                "obs_quad_idx": int(idx2),
+                                                "obs_hash": _obs_hash_gate,
+                                                "obs_q": _obs_q_gate,
+                                                "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                                                "tile_combo": [int(v) for v in np.asarray(tile_combo, dtype=np.int64).tolist()],
+                                                "perm": [int(v) for v in np.asarray(po, dtype=np.int64).tolist()],
+                                                "source": "astrometry_quad",
+                                                "quad_scale_est_arcsec": float(quad_scale_est_arcsec),
+                                                "ab_scale_est_arcsec": float(ab_scale_est_arcsec) if np.isfinite(float(ab_scale_est_arcsec)) else None,
+                                                "gate_scale_arcsec": float(gate_scale_arcsec) if np.isfinite(float(gate_scale_arcsec)) else None,
+                                                "model_scale_arcsec_raw_gate": float(model_scale_arcsec_raw_gate) if np.isfinite(float(model_scale_arcsec_raw_gate)) else None,
+                                                "scale_bounds_arcsec": [float(qlo), float(qhi)],
+                                                "decision": "reject_quad_scale_gate",
+                                            })
+                                            continue
+                                        else:
+                                            phase_slot["astrometry_quad_scale_gate_flagged"] = int(phase_slot.get("astrometry_quad_scale_gate_flagged", 0) + 1)
+                                            _dump_astrometry_exact({
+                                                "bucket": int(b),
+                                                "obs_quad_idx": int(idx2),
+                                                "obs_hash": _obs_hash_gate,
+                                                "obs_q": _obs_q_gate,
+                                                "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                                                "tile_combo": [int(v) for v in np.asarray(tile_combo, dtype=np.int64).tolist()],
+                                                "perm": [int(v) for v in np.asarray(po, dtype=np.int64).tolist()],
+                                                "source": "astrometry_quad",
+                                                "quad_scale_est_arcsec": float(quad_scale_est_arcsec),
+                                                "ab_scale_est_arcsec": float(ab_scale_est_arcsec) if np.isfinite(float(ab_scale_est_arcsec)) else None,
+                                                "gate_scale_arcsec": float(gate_scale_arcsec) if np.isfinite(float(gate_scale_arcsec)) else None,
+                                                "model_scale_arcsec_raw_gate": float(model_scale_arcsec_raw_gate) if np.isfinite(float(model_scale_arcsec_raw_gate)) else None,
+                                                "scale_bounds_arcsec": [float(qlo), float(qhi)],
+                                                "decision": "flag_quad_scale_gate_out_of_bounds",
+                                            })
+                                hyp_inv = _derive_similarity(src4p_inv, dst4p, reflected=reflected_hyp)
+                                hyp_inv_alt = _derive_similarity(src4p_inv, dst4p, reflected=(not reflected_hyp))
+                                hyp_flipab = _derive_similarity(src4_flipab, dst4p, reflected=reflected_hyp)
+                                hyp_flipab_alt = _derive_similarity(src4_flipab, dst4p, reflected=(not reflected_hyp))
+                                quad_fit_rms_primary = float("inf")
+                                quad_fit_rms_alt = float("inf")
+                                quad_fit_rms_inv = float("inf")
+                                quad_fit_rms_inv_alt = float("inf")
+                                quad_fit_rms_flipab = float("inf")
+                                quad_fit_rms_flipab_alt = float("inf")
+                                use_inverse_perm = False
+                                use_flipab_backbone = False
+                                try:
+                                    if hyp is not None:
+                                        rs0, tr0 = hyp
+                                        sc0 = float(max(abs(rs0), 1e-12))
+                                        e0 = np.abs(rs0 * (src4p[:, 0] + 1j * src4p[:, 1]) + tr0 - (dst4p[:, 0] + 1j * dst4p[:, 1])) / sc0
+                                        if e0.size > 0 and np.any(np.isfinite(e0)):
+                                            quad_fit_rms_primary = float(np.sqrt(np.mean(np.square(e0[np.isfinite(e0)]))))
+                                    if hyp_alt is not None:
+                                        rs1, tr1 = hyp_alt
+                                        sc1 = float(max(abs(rs1), 1e-12))
+                                        e1 = np.abs(rs1 * (src4p[:, 0] + 1j * src4p[:, 1]) + tr1 - (dst4p[:, 0] + 1j * dst4p[:, 1])) / sc1
+                                        if e1.size > 0 and np.any(np.isfinite(e1)):
+                                            quad_fit_rms_alt = float(np.sqrt(np.mean(np.square(e1[np.isfinite(e1)]))))
+                                    if hyp_inv is not None:
+                                        rs2, tr2 = hyp_inv
+                                        sc2 = float(max(abs(rs2), 1e-12))
+                                        e2 = np.abs(rs2 * (src4p_inv[:, 0] + 1j * src4p_inv[:, 1]) + tr2 - (dst4p[:, 0] + 1j * dst4p[:, 1])) / sc2
+                                        if e2.size > 0 and np.any(np.isfinite(e2)):
+                                            quad_fit_rms_inv = float(np.sqrt(np.mean(np.square(e2[np.isfinite(e2)]))))
+                                    if hyp_inv_alt is not None:
+                                        rs3, tr3 = hyp_inv_alt
+                                        sc3 = float(max(abs(rs3), 1e-12))
+                                        e3 = np.abs(rs3 * (src4p_inv[:, 0] + 1j * src4p_inv[:, 1]) + tr3 - (dst4p[:, 0] + 1j * dst4p[:, 1])) / sc3
+                                        if e3.size > 0 and np.any(np.isfinite(e3)):
+                                            quad_fit_rms_inv_alt = float(np.sqrt(np.mean(np.square(e3[np.isfinite(e3)]))))
+                                    if hyp_flipab is not None:
+                                        rs4, tr4 = hyp_flipab
+                                        sc4 = float(max(abs(rs4), 1e-12))
+                                        e4 = np.abs(rs4 * (src4_flipab[:, 0] + 1j * src4_flipab[:, 1]) + tr4 - (dst4p[:, 0] + 1j * dst4p[:, 1])) / sc4
+                                        if e4.size > 0 and np.any(np.isfinite(e4)):
+                                            quad_fit_rms_flipab = float(np.sqrt(np.mean(np.square(e4[np.isfinite(e4)]))))
+                                    if hyp_flipab_alt is not None:
+                                        rs5, tr5 = hyp_flipab_alt
+                                        sc5 = float(max(abs(rs5), 1e-12))
+                                        e5 = np.abs(rs5 * (src4_flipab[:, 0] + 1j * src4_flipab[:, 1]) + tr5 - (dst4p[:, 0] + 1j * dst4p[:, 1])) / sc5
+                                        if e5.size > 0 and np.any(np.isfinite(e5)):
+                                            quad_fit_rms_flipab_alt = float(np.sqrt(np.mean(np.square(e5[np.isfinite(e5)]))))
+                                except Exception:
+                                    pass
+                                best_candidates = []
+                                strict_iso_mode = bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True))
+                                src4_used = src4p
+                                if strict_iso_mode:
+                                    # Astrometry parity path: keep only the current (permuted) field ordering
+                                    # and current parity branch. No inverse/local alternative hypotheses.
+                                    use_inverse_perm = False
+                                    use_flipab_backbone = False
+                                    if hyp is None:
+                                        continue
+                                else:
+                                    if hyp is not None:
+                                        best_candidates.append((quad_fit_rms_primary, hyp, reflected_hyp, False, False))
+                                    if hyp_alt is not None:
+                                        best_candidates.append((quad_fit_rms_alt, hyp_alt, (not reflected_hyp), False, False))
+                                    if hyp_inv is not None:
+                                        best_candidates.append((quad_fit_rms_inv, hyp_inv, reflected_hyp, True, False))
+                                    if hyp_inv_alt is not None:
+                                        best_candidates.append((quad_fit_rms_inv_alt, hyp_inv_alt, (not reflected_hyp), True, False))
+                                    if hyp_flipab is not None:
+                                        best_candidates.append((quad_fit_rms_flipab, hyp_flipab, reflected_hyp, False, True))
+                                    if hyp_flipab_alt is not None:
+                                        best_candidates.append((quad_fit_rms_flipab_alt, hyp_flipab_alt, (not reflected_hyp), False, True))
+                                    if not best_candidates:
+                                        continue
+                                    best_candidates.sort(key=lambda t: float(t[0]))
+                                    _r, _h, _ref, _inv, _flipab = best_candidates[0]
+                                    hyp = _h
+                                    reflected_hyp = bool(_ref)
+                                    use_inverse_perm = bool(_inv)
+                                    use_flipab_backbone = bool(_flipab)
+                                    src4_used = src4_flipab if use_flipab_backbone else (src4p_inv if use_inverse_perm else src4p)
+                                    if hyp is None:
+                                        continue
+                                rot_scale, translation = hyp
+                                if bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)) and bool(getattr(config, "blind_astrometry_strict_translation_reanchor_enabled", False)):
+                                    try:
+                                        # Re-anchor translation on current candidate pool centroid
+                                        # to reduce degree-scale drift before resolve_hit.
+                                        if int(src_all_c.shape[0]) > 0 and int(dst_all_c.shape[0]) > 0:
+                                            src_ctr = np.mean(src_all_c)
+                                            dst_ctr = np.mean(dst_all_c)
+                                            translation = complex(dst_ctr - complex(rot_scale) * src_ctr)
+                                    except Exception:
+                                        pass
+                                scale = abs(rot_scale)
+                                # Accept only plausible scales (deg/px)
+                                if not (1e-5 <= scale <= 1e-2):
+                                    continue
+                                pred = rot_scale * src_all_c + translation
+                                tol_deg = max(1e-6, float(config.pixel_tolerance) * scale)
+                                if int(pred.shape[0]) == int(dst_all_c.shape[0]):
+                                    err_deg = np.abs(pred - dst_all_c)
+                                else:
+                                    if pred.size > 0 and dst_all_c.size > 0:
+                                        dmat0 = np.abs(pred[:, None] - dst_all_c[None, :])
+                                        err_deg = np.min(dmat0, axis=1)
+                                    else:
+                                        err_deg = np.zeros(0, dtype=np.float64)
+                                inliers_mask = err_deg <= tol_deg
+                                inliers = int(np.sum(inliers_mask))
+                                rms_px = float(np.sqrt(np.mean((err_deg[inliers_mask] / max(scale, 1e-12)) ** 2))) if inliers else float("inf")
+                                inliers_raw = int(inliers)
+                                rms_px_raw = float(rms_px)
+                                model_scale_arcsec_raw = float(3600.0 * max(float(scale), 1e-12))
+                                quad_self_rms_px = float("nan")
+                                quad_self_err_med_px = float("nan")
+                                try:
+                                    pred4 = rot_scale * (src4_used[:, 0] + 1j * src4_used[:, 1]) + translation
+                                    err4 = np.abs(pred4 - (dst4p[:, 0] + 1j * dst4p[:, 1])) / max(scale, 1e-12)
+                                    if err4.size > 0 and np.any(np.isfinite(err4)):
+                                        quad_self_rms_px = float(np.sqrt(np.mean(np.square(err4[np.isfinite(err4)]))))
+                                        quad_self_err_med_px = float(np.median(err4[np.isfinite(err4)]))
+                                except Exception:
+                                    pass
+                                reassign_diag_out = None
+                                resolve_hit_diag_out = None
+
+                                if bool(getattr(config, "blind_astrometry_reassign_eval_enabled", True)):
+                                    in_re, rms_re, re_diag = _score_transform_with_reassignment(
+                                        src_eval_c,
+                                        dst_eval_c,
+                                        rot_scale=complex(rot_scale),
+                                        translation=complex(translation),
+                                        tol_deg=float(tol_deg),
+                                        max_points=max(24, int(getattr(config, "blind_astrometry_reassign_eval_max_points", 256) or 0)),
+                                        max_pairs=max(8, int(getattr(config, "blind_astrometry_reassign_eval_max_pairs", 256) or 0)),
+                                    )
+                                    phase_slot["astrometry_reassign_eval_attempts"] = int(phase_slot.get("astrometry_reassign_eval_attempts", 0) + 1)
+                                    if in_re > 0:
+                                        phase_slot["astrometry_reassign_eval_inliers_total"] = int(phase_slot.get("astrometry_reassign_eval_inliers_total", 0) + int(in_re))
+                                    reassign_diag_out = {
+                                        "inliers": int(in_re),
+                                        "rms_px": float(rms_re),
+                                        "candidate_count": int(re_diag.get("candidate_count", 0) or 0) if isinstance(re_diag, dict) else None,
+                                    }
+                                    if (in_re > inliers) or (in_re == inliers and rms_re < rms_px):
+                                        inliers = int(in_re)
+                                        rms_px = float(rms_re)
+                                        phase_slot["astrometry_reassign_eval_better"] = int(phase_slot.get("astrometry_reassign_eval_better", 0) + 1)
+
+                                if bool(getattr(config, "blind_astrometry_resolve_hit_enabled", True)):
+                                    phase_slot["astrometry_resolve_hit_attempts"] = int(phase_slot.get("astrometry_resolve_hit_attempts", 0) + 1)
+                                    rh_tol = float(tol_deg) * float(max(0.6, getattr(config, "blind_astrometry_resolve_hit_tol_factor", 3.0) or 3.0))
+                                    _dump_resolve_hit_preresolve({
+                                        "source": "astrometry_quad",
+                                        "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                                        "tile_combo": [int(v) for v in np.asarray(tile_combo, dtype=np.int64).tolist()],
+                                        "tile_combo_aligned": [int(v) for v in np.asarray(np.asarray(tile_combo, dtype=np.int64)[np.asarray(dst_slot_perm, dtype=np.int64)], dtype=np.int64).tolist()] if dst_slot_perm is not None else None,
+                                        "dst_slot_perm": [int(v) for v in np.asarray(dst_slot_perm, dtype=np.int64).tolist()] if dst_slot_perm is not None else None,
+                                        "dst_slot_err": float(dst_slot_err) if dst_slot_err is not None else None,
+                                        "perm": [int(v) for v in np.asarray(po, dtype=np.int64).tolist()],
+                                        "quad_scale_est_arcsec": float(quad_scale_est_arcsec) if np.isfinite(float(quad_scale_est_arcsec)) else None,
+                                        "ab_scale_est_arcsec": float(ab_scale_est_arcsec) if np.isfinite(float(ab_scale_est_arcsec)) else None,
+                                        "gate_scale_arcsec": float(gate_scale_arcsec) if np.isfinite(float(gate_scale_arcsec)) else None,
+                                        "scale_bounds_arcsec": [float(scale_bounds_arcsec[0]), float(scale_bounds_arcsec[1])] if scale_bounds_arcsec is not None else None,
+                                        "model_scale_arcsec_raw": float(model_scale_arcsec_raw) if np.isfinite(float(model_scale_arcsec_raw)) else None,
+                                        "inliers_raw": int(inliers_raw),
+                                        "rms_px_raw": float(rms_px_raw) if np.isfinite(float(rms_px_raw)) else None,
+                                        "tol_deg": float(rh_tol),
+                                        "strict_iso_mode": bool(strict_iso_mode),
+                                        "obs_perm_hash": int(obs_perm_hash64) if obs_perm_hash64 is not None else None,
+                                        "tile_hash": int(tile_hash64) if tile_hash64 is not None else None,
+                                        "obs_perm_q": [int(v) for v in obs_perm_q_triplet] if obs_perm_q_triplet is not None else None,
+                                        "tile_q": [int(v) for v in tile_q_triplet] if tile_q_triplet is not None else None,
+                                        "perm_hash_qmax_abs_delta": int(perm_hash_qmax_abs_delta) if perm_hash_qmax_abs_delta is not None else None,
+                                        "perm_hash_parity_xor": int(perm_hash_parity_xor) if perm_hash_parity_xor is not None else None,
+                                        "obs_code_slots_perm": [[float(vv) for vv in row] for row in np.asarray(obs_slots_perm, dtype=np.float64).tolist()] if obs_slots_perm is not None else None,
+                                        "obs_code_slots_inv": [[float(vv) for vv in row] for row in np.asarray(obs_slots_inv, dtype=np.float64).tolist()] if obs_slots_inv is not None else None,
+                                        "obs_code_slots_flipab": [[float(vv) for vv in row] for row in np.asarray(obs_slots_flipab, dtype=np.float64).tolist()] if obs_slots_flipab is not None else None,
+                                        "tile_code_slots": [[float(vv) for vv in row] for row in np.asarray(tile_slots_base, dtype=np.float64).tolist()] if tile_slots_base is not None else None,
+                                        "slot_l2_perm": float(slot_l2_perm) if slot_l2_perm is not None else None,
+                                        "slot_l2_perm_flip01": float(slot_l2_perm_flip01) if slot_l2_perm_flip01 is not None else None,
+                                        "slot_l2_inv": float(slot_l2_inv) if slot_l2_inv is not None else None,
+                                        "slot_l2_inv_flip01": float(slot_l2_inv_flip01) if slot_l2_inv_flip01 is not None else None,
+                                        "slot_l2_flipab": float(slot_l2_flipab) if slot_l2_flipab is not None else None,
+                                        "slot_l2_flipab_flip01": float(slot_l2_flipab_flip01) if slot_l2_flipab_flip01 is not None else None,
+                                        "decision": "pre_resolve_hit",
+                                    })
+                                    rh_max_points = max(24, int(getattr(config, "blind_astrometry_resolve_hit_max_points", 192) or 0))
+                                    rh_max_pairs = max(8, int(getattr(config, "blind_astrometry_resolve_hit_max_pairs", 64) or 0))
+                                    rh_nn_med = None
+                                    rh_nn_p10 = None
+                                    rh_nn_min = None
+                                    rh_n_eval = None
+                                    try:
+                                        n_keep_dbg = int(max(8, min(rh_max_points, int(src_all_c.shape[0]), int(dst_all_c.shape[0]))))
+                                        src_idx_dbg = np.arange(int(src_all_c.shape[0]), dtype=np.int64)[:n_keep_dbg]
+                                        dst_idx_dbg = np.arange(int(dst_all_c.shape[0]), dtype=np.int64)[:n_keep_dbg]
+                                        pred_dbg = complex(rot_scale) * src_all_c[src_idx_dbg] + complex(translation)
+                                        dst_dbg = dst_all_c[dst_idx_dbg]
+                                        rh_n_eval = int(pred_dbg.shape[0])
+                                        if pred_dbg.size > 0 and dst_dbg.size > 0:
+                                            dmat_dbg = np.abs(pred_dbg[:, None] - dst_dbg[None, :])
+                                            if dmat_dbg.size > 0:
+                                                nn_dbg = np.min(dmat_dbg, axis=1)
+                                                nn_dbg = nn_dbg[np.isfinite(nn_dbg)]
+                                                if nn_dbg.size > 0:
+                                                    rh_nn_med = float(np.median(nn_dbg))
+                                                    rh_nn_p10 = float(np.percentile(nn_dbg, 10))
+                                                    rh_nn_min = float(np.min(nn_dbg))
+                                    except Exception:
+                                        pass
+                                    rh = _resolve_hit_correspondences(
+                                        src_all_c,
+                                        dst_all_c,
+                                        rot_scale=complex(rot_scale),
+                                        translation=complex(translation),
+                                        tol_deg=float(rh_tol),
+                                        max_points=rh_max_points,
+                                        max_pairs=rh_max_pairs,
+                                        astrometry_iso=bool(strict_iso_mode),
+                                        strict_subset_mode=str(getattr(config, "blind_astrometry_strict_resolve_hit_subset_mode", "nn_radius") or "nn_radius"),
+                                        strict_relaxed_retry=bool(getattr(config, "blind_astrometry_strict_resolve_hit_relaxed_retry_enabled", True)),
+                                        strict_relaxed_retry_tol_factor=float(max(1.0, getattr(config, "blind_astrometry_strict_resolve_hit_relaxed_retry_tol_factor", 10.0) or 10.0)),
+                                        strict_relaxed_retry_max_pairs_factor=int(max(1, getattr(config, "blind_astrometry_strict_resolve_hit_relaxed_retry_max_pairs_factor", 3) or 3)),
+                                        strict_prune_enabled=bool(getattr(config, "blind_astrometry_strict_resolve_hit_prune_enabled", True)),
+                                        strict_prune_tol_factor=float(max(1.0, getattr(config, "blind_astrometry_strict_resolve_hit_prune_tol_factor", 2.5) or 2.5)),
+                                    )
+                                    rh_seed_fallback_used = False
+                                    rh_none_diag = None
+                                    if rh is None:
+                                        try:
+                                            n_keep_dbg = int(max(8, min(rh_max_points, int(src_all_c.shape[0]), int(dst_all_c.shape[0]))))
+                                            src_idx_dbg = np.arange(int(src_all_c.shape[0]), dtype=np.int64)[:n_keep_dbg]
+                                            dst_idx_dbg = np.arange(int(dst_all_c.shape[0]), dtype=np.int64)[:n_keep_dbg]
+                                            pred_dbg = complex(rot_scale) * src_all_c[src_idx_dbg] + complex(translation)
+                                            dst_dbg = dst_all_c[dst_idx_dbg]
+                                            dmat_dbg = np.abs(pred_dbg[:, None] - dst_dbg[None, :]) if pred_dbg.size > 0 and dst_dbg.size > 0 else np.zeros((0, 0), dtype=np.float64)
+                                            if dmat_dbg.size > 0:
+                                                nn_dbg = np.min(dmat_dbg, axis=1)
+                                                nn_dbg = nn_dbg[np.isfinite(nn_dbg)]
+                                                if nn_dbg.size > 0:
+                                                    rh_none_diag = {
+                                                        "nn_med_deg": float(np.median(nn_dbg)),
+                                                        "nn_p10_deg": float(np.percentile(nn_dbg, 10)),
+                                                        "nn_min_deg": float(np.min(nn_dbg)),
+                                                        "center_offset_deg": float(abs((complex(rot_scale) * complex(np.mean(src_all_c.real[src_idx_dbg]), np.mean(src_all_c.imag[src_idx_dbg])) + complex(translation)) - complex(np.mean(dst_all_c.real[dst_idx_dbg]), np.mean(dst_all_c.imag[dst_idx_dbg])))),
+                                                        "n_eval": int(n_keep_dbg),
+                                                    }
+                                        except Exception:
+                                            rh_none_diag = None
+                                    if rh is None and bool(strict_iso_mode) and bool(getattr(config, "blind_astrometry_strict_resolve_hit_seed_fallback_enabled", True)):
+                                        try:
+                                            src_seed = np.asarray(src4_used, dtype=np.float64)
+                                            dst_seed = np.asarray(dst4p, dtype=np.float64)
+                                            if int(src_seed.shape[0]) >= 4 and int(dst_seed.shape[0]) == int(src_seed.shape[0]):
+                                                rh = (
+                                                    src_seed,
+                                                    dst_seed,
+                                                    {
+                                                        "kept": int(src_seed.shape[0]),
+                                                        "n_src": int(src_all_c.shape[0]),
+                                                        "n_dst": int(dst_all_c.shape[0]),
+                                                        "n_eval": int(src_seed.shape[0]),
+                                                        "mutual_kept": int(src_seed.shape[0]),
+                                                        "median_match_dist_deg": float(np.median(np.abs((complex(rot_scale) * (src_seed[:, 0] + 1j * src_seed[:, 1]) + complex(translation)) - (dst_seed[:, 0] + 1j * dst_seed[:, 1])))),
+                                                        "tol_deg": float(rh_tol),
+                                                        "src_indices": np.asarray(obs_combo, dtype=np.int64),
+                                                        "dst_indices": np.asarray(tile_combo, dtype=np.int64),
+                                                        "source": "resolve_hit_seed_fallback_strict",
+                                                    },
+                                                )
+                                                rh_seed_fallback_used = True
+                                                phase_slot["astrometry_resolve_hit_seed_fallback_used"] = int(phase_slot.get("astrometry_resolve_hit_seed_fallback_used", 0) + 1)
+                                        except Exception:
+                                            rh = None
+                                    if rh is None:
+                                        phase_slot["astrometry_resolve_hit_nohit"] = int(phase_slot.get("astrometry_resolve_hit_nohit", 0) + 1)
+                                        resolve_hit_tol_eff = float(hit_diag.get("tol_deg", float(tol_deg)) or float(tol_deg)) if isinstance(hit_diag, dict) else float(tol_deg)
+                                        if not np.isfinite(resolve_hit_tol_eff) or resolve_hit_tol_eff <= 0.0:
+                                            resolve_hit_tol_eff = float(tol_deg)
+                                        _dump_resolve_hit_preresolve({
+                                            "source": "astrometry_quad",
+                                            "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                                            "tile_combo": [int(v) for v in np.asarray(tile_combo, dtype=np.int64).tolist()],
+                                            "tile_combo_aligned": [int(v) for v in np.asarray(np.asarray(tile_combo, dtype=np.int64)[np.asarray(dst_slot_perm, dtype=np.int64)], dtype=np.int64).tolist()] if dst_slot_perm is not None else None,
+                                            "dst_slot_perm": [int(v) for v in np.asarray(dst_slot_perm, dtype=np.int64).tolist()] if dst_slot_perm is not None else None,
+                                            "dst_slot_err": float(dst_slot_err) if dst_slot_err is not None else None,
+                                            "perm": [int(v) for v in np.asarray(po, dtype=np.int64).tolist()],
+                                            "quad_scale_est_arcsec": float(quad_scale_est_arcsec) if np.isfinite(float(quad_scale_est_arcsec)) else None,
+                                            "scale_bounds_arcsec": [float(scale_bounds_arcsec[0]), float(scale_bounds_arcsec[1])] if scale_bounds_arcsec is not None else None,
+                                            "model_scale_arcsec_raw": float(model_scale_arcsec_raw) if np.isfinite(float(model_scale_arcsec_raw)) else None,
+                                            "quad_self_rms_px": float(quad_self_rms_px) if np.isfinite(float(quad_self_rms_px)) else None,
+                                            "quad_self_err_med_px": float(quad_self_err_med_px) if np.isfinite(float(quad_self_err_med_px)) else None,
+                                            "quad_fit_rms_primary_px": float(quad_fit_rms_primary) if np.isfinite(float(quad_fit_rms_primary)) else None,
+                                            "quad_fit_rms_alt_px": float(quad_fit_rms_alt) if np.isfinite(float(quad_fit_rms_alt)) else None,
+                                            "quad_fit_rms_inv_px": float(quad_fit_rms_inv) if np.isfinite(float(quad_fit_rms_inv)) else None,
+                                            "quad_fit_rms_inv_alt_px": float(quad_fit_rms_inv_alt) if np.isfinite(float(quad_fit_rms_inv_alt)) else None,
+                                            "quad_fit_rms_flipab_px": float(quad_fit_rms_flipab) if np.isfinite(float(quad_fit_rms_flipab)) else None,
+                                            "quad_fit_rms_flipab_alt_px": float(quad_fit_rms_flipab_alt) if np.isfinite(float(quad_fit_rms_flipab_alt)) else None,
+                                            "reflected_hyp_used": bool(reflected_hyp),
+                                            "inverse_perm_used": bool(use_inverse_perm),
+                                            "flipab_backbone_used": bool(use_flipab_backbone),
+                                            "resolve_hit_pool": str(resolve_hit_pool_mode_used),
+                                            "obs_code_slots_perm": [[float(vv) for vv in row] for row in np.asarray(obs_slots_perm, dtype=np.float64).tolist()] if obs_slots_perm is not None else None,
+                                            "obs_code_slots_inv": [[float(vv) for vv in row] for row in np.asarray(obs_slots_inv, dtype=np.float64).tolist()] if obs_slots_inv is not None else None,
+                                            "obs_code_slots_flipab": [[float(vv) for vv in row] for row in np.asarray(obs_slots_flipab, dtype=np.float64).tolist()] if obs_slots_flipab is not None else None,
+                                            "tile_code_slots": [[float(vv) for vv in row] for row in np.asarray(tile_slots_base, dtype=np.float64).tolist()] if tile_slots_base is not None else None,
+                                            "slot_l2_perm": float(slot_l2_perm) if slot_l2_perm is not None else None,
+                                            "slot_l2_perm_flip01": float(slot_l2_perm_flip01) if slot_l2_perm_flip01 is not None else None,
+                                            "slot_l2_inv": float(slot_l2_inv) if slot_l2_inv is not None else None,
+                                            "slot_l2_inv_flip01": float(slot_l2_inv_flip01) if slot_l2_inv_flip01 is not None else None,
+                                            "slot_l2_flipab": float(slot_l2_flipab) if slot_l2_flipab is not None else None,
+                                            "slot_l2_flipab_flip01": float(slot_l2_flipab_flip01) if slot_l2_flipab_flip01 is not None else None,
+                                            "tol_deg": float(rh_tol),
+                                            "obs_perm_hash": int(obs_perm_hash64) if obs_perm_hash64 is not None else None,
+                                            "tile_hash": int(tile_hash64) if tile_hash64 is not None else None,
+                                            "obs_perm_q": [int(v) for v in obs_perm_q_triplet] if obs_perm_q_triplet is not None else None,
+                                            "tile_q": [int(v) for v in tile_q_triplet] if tile_q_triplet is not None else None,
+                                            "perm_hash_qmax_abs_delta": int(perm_hash_qmax_abs_delta) if perm_hash_qmax_abs_delta is not None else None,
+                                            "perm_hash_parity_xor": int(perm_hash_parity_xor) if perm_hash_parity_xor is not None else None,
+                                            "n_eval": int(rh_n_eval) if rh_n_eval is not None else None,
+                                            "nn_med_deg": float(rh_nn_med) if rh_nn_med is not None else None,
+                                            "nn_p10_deg": float(rh_nn_p10) if rh_nn_p10 is not None else None,
+                                            "nn_min_deg": float(rh_nn_min) if rh_nn_min is not None else None,
+                                            "hyp_translation_deg": [float(complex(translation).real), float(complex(translation).imag)],
+                                            "hyp_rotation_rad": float(np.angle(complex(rot_scale))),
+                                            "hyp_scale_arcsec": float(3600.0 * abs(complex(rot_scale))),
+                                            "pred_center_deg": [float(np.mean(np.real(complex(rot_scale) * src_all_c + complex(translation)))), float(np.mean(np.imag(complex(rot_scale) * src_all_c + complex(translation))))],
+                                            "dst_center_deg": [float(np.mean(np.real(dst_all_c))), float(np.mean(np.imag(dst_all_c)))],
+                                            "center_offset_deg": float(abs((np.mean(complex(rot_scale) * src_all_c + complex(translation))) - np.mean(dst_all_c))),
+                                            "obs_hash_parity_bit": int(obs_hash_parity_bit) if obs_hash_parity_bit is not None else None,
+                                            "tile_hash_parity_bit": int(tile_hash_parity_bit) if tile_hash_parity_bit is not None else None,
+                                            "parity_xor_bit": int(parity_xor_bit) if parity_xor_bit is not None else None,
+                                            "strict_iso_mode": bool(strict_iso_mode),
+                                            "decision": "resolve_hit_no_pairs",
+                                        })
+                                    else:
+                                        src_hit, dst_hit, hit_diag = rh
+                                        resolve_hit_diag_out = {
+                                            "kept": int(hit_diag.get("kept", 0) or 0),
+                                            "median_match_dist_deg": float(hit_diag.get("median_match_dist_deg", float("nan")) or float("nan")),
+                                            "tol_deg": float(hit_diag.get("tol_deg", float("nan")) or float("nan")),
+                                            "src_indices": [int(v) for v in np.asarray(hit_diag.get("src_indices", np.zeros(0, dtype=np.int64)), dtype=np.int64).tolist()[:256]],
+                                            "dst_indices": [int(v) for v in np.asarray(hit_diag.get("dst_indices", np.zeros(0, dtype=np.int64)), dtype=np.int64).tolist()[:256]],
+                                        }
+                                        _hit_scale_arcsec = None
+                                        try:
+                                            if int(src_hit.shape[0]) >= 4 and int(dst_hit.shape[0]) == int(src_hit.shape[0]):
+                                                s0 = np.asarray(src_hit, dtype=np.float64) - np.mean(np.asarray(src_hit, dtype=np.float64), axis=0, keepdims=True)
+                                                d0 = np.asarray(dst_hit, dtype=np.float64) - np.mean(np.asarray(dst_hit, dtype=np.float64), axis=0, keepdims=True)
+                                                den0 = float(np.sum(s0 * s0))
+                                                if den0 > 0.0 and np.isfinite(den0):
+                                                    num0 = float(np.sum(d0 * d0))
+                                                    sc0 = math.sqrt(max(num0, 0.0) / den0)
+                                                    if np.isfinite(sc0) and sc0 > 0.0:
+                                                        _hit_scale_arcsec = float(3600.0 * sc0)
+                                        except Exception:
+                                            _hit_scale_arcsec = None
+                                        resolve_hit_tol_eff = float(hit_diag.get("tol_deg", float(tol_deg)) or float(tol_deg)) if isinstance(hit_diag, dict) else float(tol_deg)
+                                        if (not np.isfinite(resolve_hit_tol_eff)) or resolve_hit_tol_eff <= 0.0:
+                                            resolve_hit_tol_eff = float(tol_deg)
+                                        _dump_resolve_hit_preresolve({
+                                            "source": "astrometry_quad",
+                                            "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                                            "tile_combo": [int(v) for v in np.asarray(tile_combo, dtype=np.int64).tolist()],
+                                            "perm": [int(v) for v in np.asarray(po, dtype=np.int64).tolist()],
+                                            "quad_scale_est_arcsec": float(quad_scale_est_arcsec) if np.isfinite(float(quad_scale_est_arcsec)) else None,
+                                            "scale_bounds_arcsec": [float(scale_bounds_arcsec[0]), float(scale_bounds_arcsec[1])] if scale_bounds_arcsec is not None else None,
+                                            "model_scale_arcsec_raw": float(model_scale_arcsec_raw) if np.isfinite(float(model_scale_arcsec_raw)) else None,
+                                            "resolve_hit_pairs": int(hit_diag.get("kept", 0) or 0),
+                                            "resolve_hit_median_match_dist_deg": float(hit_diag.get("median_match_dist_deg", float("nan")) or float("nan")),
+                                            "resolve_hit_scale_arcsec": float(_hit_scale_arcsec) if _hit_scale_arcsec is not None else None,
+                                            "resolve_hit_tol_deg_effective": float(hit_diag.get("tol_deg", float("nan")) or float("nan")),
+                                            "resolve_hit_tol_used_for_global_eval": float(resolve_hit_tol_eff),
+                                            "resolve_hit_source": str(hit_diag.get("source", "resolve_hit")) if isinstance(hit_diag, dict) else "resolve_hit",
+                                            "resolve_hit_seed_fallback_used": bool(rh_seed_fallback_used),
+                                            "nn_med_deg": float(rh_none_diag.get("nn_med_deg")) if isinstance(rh_none_diag, dict) and np.isfinite(float(rh_none_diag.get("nn_med_deg", float("nan")))) else None,
+                                            "nn_p10_deg": float(rh_none_diag.get("nn_p10_deg")) if isinstance(rh_none_diag, dict) and np.isfinite(float(rh_none_diag.get("nn_p10_deg", float("nan")))) else None,
+                                            "nn_min_deg": float(rh_none_diag.get("nn_min_deg")) if isinstance(rh_none_diag, dict) and np.isfinite(float(rh_none_diag.get("nn_min_deg", float("nan")))) else None,
+                                            "center_offset_deg": float(rh_none_diag.get("center_offset_deg")) if isinstance(rh_none_diag, dict) and np.isfinite(float(rh_none_diag.get("center_offset_deg", float("nan")))) else None,
+                                            "n_eval": int(rh_none_diag.get("n_eval")) if isinstance(rh_none_diag, dict) and rh_none_diag.get("n_eval") is not None else None,
+                                            "strict_iso_mode": bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)),
+                                            "decision": "post_resolve_hit",
+                                        })
+                                        phase_slot["astrometry_resolve_hit_candidates_total"] = int(phase_slot.get("astrometry_resolve_hit_candidates_total", 0) + int(hit_diag.get("kept", 0) or 0))
+                                        med_hit = float(hit_diag.get("median_match_dist_deg", float("nan")) or float("nan"))
+                                        quality_ratio = max(1.0, float(getattr(config, "blind_astrometry_resolve_hit_quality_max_median_tol_ratio", 12.0) or 1.0))
+                                        quality_ok = True
+                                        quality_gate_enabled = bool(getattr(config, "blind_astrometry_resolve_hit_quality_gate_enabled", False))
+                                        if quality_gate_enabled and np.isfinite(med_hit) and med_hit > (float(tol_deg) * quality_ratio):
+                                            phase_slot["astrometry_resolve_hit_quality_rejects"] = int(phase_slot.get("astrometry_resolve_hit_quality_rejects", 0) + 1)
+                                            quality_ok = False
+                                        min_pairs_hit = max(4, int(getattr(config, "blind_astrometry_resolve_hit_min_pairs", 4) or 0))
+                                        if quality_ok and int(src_hit.shape[0]) >= min_pairs_hit:
+                                            phase_slot["astrometry_resolve_hit_minpairs_hits"] = int(phase_slot.get("astrometry_resolve_hit_minpairs_hits", 0) + 1)
+                                            try:
+                                                hyp_hit_main = _derive_similarity(
+                                                    src_hit.astype(np.float64),
+                                                    dst_hit.astype(np.float64),
+                                                    reflected=bool(parity_label == "mirror"),
+                                                )
+                                                if hyp_hit_main is not None:
+                                                    rs_hm, tr_hm = hyp_hit_main
+                                                    rot_scale = complex(rs_hm)
+                                                    translation = complex(tr_hm)
+                                                    scale = abs(rot_scale)
+                                            except Exception:
+                                                pass
+                                            hyp_hit = _derive_similarity(
+                                                src_hit.astype(np.float64),
+                                                dst_hit.astype(np.float64),
+                                                reflected=bool(parity_label == "mirror"),
+                                            )
+                                            if hyp_hit is not None:
+                                                rs_h, tr_h = hyp_hit
+                                                phase_slot["astrometry_resolve_hit_global_evals"] = int(phase_slot.get("astrometry_resolve_hit_global_evals", 0) + 1)
+                                                phase_slot["astrometry_resolve_hit_global_evals_minpairs"] = int(phase_slot.get("astrometry_resolve_hit_global_evals_minpairs", 0) + 1)
+                                                if bool(parity_label == "mirror"):
+                                                    phase_slot["astrometry_resolve_hit_mirror_evals"] = int(phase_slot.get("astrometry_resolve_hit_mirror_evals", 0) + 1)
+                                                in_h_all, rms_h_all, _rhdiag = _score_transform_with_reassignment(
+                                                    src_all_c if (bool(strict_iso_mode) and bool(getattr(config, "blind_astrometry_strict_resolve_hit_global_eval_use_all_enabled", True)) and int(src_all_c.shape[0]) == int(dst_all_c.shape[0]) and int(src_all_c.shape[0]) > 0) else src_eval_c,
+                                                    dst_all_c if (bool(strict_iso_mode) and bool(getattr(config, "blind_astrometry_strict_resolve_hit_global_eval_use_all_enabled", True)) and int(src_all_c.shape[0]) == int(dst_all_c.shape[0]) and int(src_all_c.shape[0]) > 0) else dst_eval_c,
+                                                    rot_scale=complex(rs_h),
+                                                    translation=complex(tr_h),
+                                                    tol_deg=float(resolve_hit_tol_eff),
+                                                    max_points=max(24, int(getattr(config, "blind_astrometry_reassign_eval_max_points", 256) or 0)),
+                                                    max_pairs=max(8, int(getattr(config, "blind_astrometry_reassign_eval_max_pairs", 256) or 0)),
+                                                )
+                                                best_rs_eval = rs_h
+                                                best_tr_eval = tr_h
+                                                best_in_eval = int(in_h_all)
+                                                best_rms_eval = float(rms_h_all)
+
+                                                if bool(getattr(config, "blind_astrometry_resolve_hit_hybrid_refit_enabled", True)):
+                                                    try:
+                                                        keep0 = np.flatnonzero(inliers_mask)
+                                                        max_mix = max(8, int(getattr(config, "blind_astrometry_resolve_hit_hybrid_max_pairs", 96) or 0))
+                                                        if keep0.size <= 0:
+                                                            try:
+                                                                ord0 = np.argsort(err_deg)
+                                                                keep0 = ord0[:max_mix]
+                                                            except Exception:
+                                                                keep0 = np.zeros(0, dtype=np.int64)
+                                                        if keep0.size > 0:
+                                                            keep0 = keep0[:max_mix]
+                                                            src0 = np.column_stack((src_all_c[keep0].real, src_all_c[keep0].imag)).astype(np.float64)
+                                                            dst0 = np.column_stack((dst_all_c[keep0].real, dst_all_c[keep0].imag)).astype(np.float64)
+                                                            src_mix = np.vstack((src_hit.astype(np.float64), src0))
+                                                            dst_mix = np.vstack((dst_hit.astype(np.float64), dst0))
+                                                            if int(src_mix.shape[0]) >= 4:
+                                                                hyp_mix = _derive_similarity(
+                                                                    src_mix,
+                                                                    dst_mix,
+                                                                    reflected=bool(parity_label == "mirror"),
+                                                                )
+                                                                if hyp_mix is not None:
+                                                                    rs_m, tr_m = hyp_mix
+                                                                    phase_slot["astrometry_resolve_hit_hybrid_evals"] = int(phase_slot.get("astrometry_resolve_hit_hybrid_evals", 0) + 1)
+                                                                    in_m_all, rms_m_all, _rmdiag = _score_transform_with_reassignment(
+                                                                        src_all_c,
+                                                                        dst_all_c,
+                                                                        rot_scale=complex(rs_m),
+                                                                        translation=complex(tr_m),
+                                                                        tol_deg=float(resolve_hit_tol_eff),
+                                                                        max_points=max(24, int(getattr(config, "blind_astrometry_reassign_eval_max_points", 256) or 0)),
+                                                                        max_pairs=max(8, int(getattr(config, "blind_astrometry_reassign_eval_max_pairs", 256) or 0)),
+                                                                    )
+                                                                    if (in_m_all > best_in_eval) or (in_m_all == best_in_eval and rms_m_all < best_rms_eval):
+                                                                        best_rs_eval = rs_m
+                                                                        best_tr_eval = tr_m
+                                                                        best_in_eval = int(in_m_all)
+                                                                        best_rms_eval = float(rms_m_all)
+                                                                        phase_slot["astrometry_resolve_hit_hybrid_better"] = int(phase_slot.get("astrometry_resolve_hit_hybrid_better", 0) + 1)
+                                                    except Exception:
+                                                        pass
+
+                                                delta_in = int(best_in_eval - inliers)
+                                                phase_slot["astrometry_resolve_hit_global_delta_best"] = int(max(int(phase_slot.get("astrometry_resolve_hit_global_delta_best", -999999) or -999999), int(delta_in)))
+                                                if delta_in >= 0:
+                                                    phase_slot["astrometry_resolve_hit_global_delta_nonneg"] = int(phase_slot.get("astrometry_resolve_hit_global_delta_nonneg", 0) + 1)
+                                                if (best_in_eval > inliers) or (best_in_eval == inliers and best_rms_eval < rms_px):
+                                                    rot_scale = best_rs_eval
+                                                    translation = best_tr_eval
+                                                    scale = abs(rot_scale)
+                                                    inliers = int(best_in_eval)
+                                                    rms_px = float(best_rms_eval)
+                                                    try:
+                                                        tol_deg = float(max(float(tol_deg), float(resolve_hit_tol_eff)))
+                                                    except Exception:
+                                                        pass
+                                                    phase_slot["astrometry_resolve_hit_refine_hits"] = int(phase_slot.get("astrometry_resolve_hit_refine_hits", 0) + 1)
+                                                    phase_slot["astrometry_resolve_hit_global_better"] = int(phase_slot.get("astrometry_resolve_hit_global_better", 0) + 1)
+                                                    phase_slot["astrometry_resolve_hit_pairs_total"] = int(phase_slot.get("astrometry_resolve_hit_pairs_total", 0) + int(hit_diag.get("kept", 0) or 0))
+                                        elif quality_ok:
+                                            phase_slot["astrometry_resolve_hit_lowpairs"] = int(phase_slot.get("astrometry_resolve_hit_lowpairs", 0) + 1)
+                                            _dump_resolve_hit_preresolve({
+                                                "source": "astrometry_quad",
+                                                "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                                                "tile_combo": [int(v) for v in np.asarray(tile_combo, dtype=np.int64).tolist()],
+                                                "perm": [int(v) for v in np.asarray(po, dtype=np.int64).tolist()],
+                                                "quad_scale_est_arcsec": float(quad_scale_est_arcsec) if np.isfinite(float(quad_scale_est_arcsec)) else None,
+                                                "scale_bounds_arcsec": [float(scale_bounds_arcsec[0]), float(scale_bounds_arcsec[1])] if scale_bounds_arcsec is not None else None,
+                                                "model_scale_arcsec_raw": float(model_scale_arcsec_raw) if np.isfinite(float(model_scale_arcsec_raw)) else None,
+                                                "resolve_hit_pairs": int(src_hit.shape[0]),
+                                                "resolve_hit_median_match_dist_deg": float(hit_diag.get("median_match_dist_deg", float("nan")) or float("nan")),
+                                                "resolve_hit_tol_deg_effective": float(hit_diag.get("tol_deg", float("nan")) or float("nan")),
+                                                "strict_iso_mode": bool(strict_iso_mode),
+                                                "decision": "resolve_hit_low_pairs",
+                                            })
+                                            hyp_hit = _derive_similarity(
+                                                src_hit.astype(np.float64),
+                                                dst_hit.astype(np.float64),
+                                                reflected=bool(parity_label == "mirror"),
+                                            )
+                                            if hyp_hit is not None:
+                                                rs_h, tr_h = hyp_hit
+                                                phase_slot["astrometry_resolve_hit_global_evals"] = int(phase_slot.get("astrometry_resolve_hit_global_evals", 0) + 1)
+                                                if bool(parity_label == "mirror"):
+                                                    phase_slot["astrometry_resolve_hit_mirror_evals"] = int(phase_slot.get("astrometry_resolve_hit_mirror_evals", 0) + 1)
+                                                in_h_all, rms_h_all, _rhdiag = _score_transform_with_reassignment(
+                                                    src_all_c if (bool(strict_iso_mode) and bool(getattr(config, "blind_astrometry_strict_resolve_hit_global_eval_use_all_enabled", True)) and int(src_all_c.shape[0]) == int(dst_all_c.shape[0]) and int(src_all_c.shape[0]) > 0) else src_eval_c,
+                                                    dst_all_c if (bool(strict_iso_mode) and bool(getattr(config, "blind_astrometry_strict_resolve_hit_global_eval_use_all_enabled", True)) and int(src_all_c.shape[0]) == int(dst_all_c.shape[0]) and int(src_all_c.shape[0]) > 0) else dst_eval_c,
+                                                    rot_scale=complex(rs_h),
+                                                    translation=complex(tr_h),
+                                                    tol_deg=float(resolve_hit_tol_eff),
+                                                    max_points=max(24, int(getattr(config, "blind_astrometry_reassign_eval_max_points", 256) or 0)),
+                                                    max_pairs=max(8, int(getattr(config, "blind_astrometry_reassign_eval_max_pairs", 256) or 0)),
+                                                )
+                                                best_rs_eval = rs_h
+                                                best_tr_eval = tr_h
+                                                best_in_eval = int(in_h_all)
+                                                best_rms_eval = float(rms_h_all)
+
+                                                if bool(getattr(config, "blind_astrometry_resolve_hit_hybrid_refit_enabled", True)):
+                                                    try:
+                                                        keep0 = np.flatnonzero(inliers_mask)
+                                                        max_mix = max(8, int(getattr(config, "blind_astrometry_resolve_hit_hybrid_max_pairs", 96) or 0))
+                                                        if keep0.size <= 0:
+                                                            try:
+                                                                ord0 = np.argsort(err_deg)
+                                                                keep0 = ord0[:max_mix]
+                                                            except Exception:
+                                                                keep0 = np.zeros(0, dtype=np.int64)
+                                                        if keep0.size > 0:
+                                                            keep0 = keep0[:max_mix]
+                                                            src0 = np.column_stack((src_all_c[keep0].real, src_all_c[keep0].imag)).astype(np.float64)
+                                                            dst0 = np.column_stack((dst_all_c[keep0].real, dst_all_c[keep0].imag)).astype(np.float64)
+                                                            src_mix = np.vstack((src_hit.astype(np.float64), src0))
+                                                            dst_mix = np.vstack((dst_hit.astype(np.float64), dst0))
+                                                            if int(src_mix.shape[0]) >= 4:
+                                                                hyp_mix = _derive_similarity(
+                                                                    src_mix,
+                                                                    dst_mix,
+                                                                    reflected=bool(parity_label == "mirror"),
+                                                                )
+                                                                if hyp_mix is not None:
+                                                                    rs_m, tr_m = hyp_mix
+                                                                    phase_slot["astrometry_resolve_hit_hybrid_evals"] = int(phase_slot.get("astrometry_resolve_hit_hybrid_evals", 0) + 1)
+                                                                    in_m_all, rms_m_all, _rmdiag = _score_transform_with_reassignment(
+                                                                        src_all_c,
+                                                                        dst_all_c,
+                                                                        rot_scale=complex(rs_m),
+                                                                        translation=complex(tr_m),
+                                                                        tol_deg=float(resolve_hit_tol_eff),
+                                                                        max_points=max(24, int(getattr(config, "blind_astrometry_reassign_eval_max_points", 256) or 0)),
+                                                                        max_pairs=max(8, int(getattr(config, "blind_astrometry_reassign_eval_max_pairs", 256) or 0)),
+                                                                    )
+                                                                    if (in_m_all > best_in_eval) or (in_m_all == best_in_eval and rms_m_all < best_rms_eval):
+                                                                        best_rs_eval = rs_m
+                                                                        best_tr_eval = tr_m
+                                                                        best_in_eval = int(in_m_all)
+                                                                        best_rms_eval = float(rms_m_all)
+                                                                        phase_slot["astrometry_resolve_hit_hybrid_better"] = int(phase_slot.get("astrometry_resolve_hit_hybrid_better", 0) + 1)
+                                                    except Exception:
+                                                        pass
+
+                                                delta_in = int(best_in_eval - inliers)
+                                                phase_slot["astrometry_resolve_hit_global_delta_best"] = int(max(int(phase_slot.get("astrometry_resolve_hit_global_delta_best", -999999) or -999999), int(delta_in)))
+                                                if delta_in >= 0:
+                                                    phase_slot["astrometry_resolve_hit_global_delta_nonneg"] = int(phase_slot.get("astrometry_resolve_hit_global_delta_nonneg", 0) + 1)
+                                                if (best_in_eval > inliers) or (best_in_eval == inliers and best_rms_eval < rms_px):
+                                                    rot_scale = best_rs_eval
+                                                    translation = best_tr_eval
+                                                    scale = abs(rot_scale)
+                                                    inliers = int(best_in_eval)
+                                                    rms_px = float(best_rms_eval)
+                                                    try:
+                                                        tol_deg = float(max(float(tol_deg), float(resolve_hit_tol_eff)))
+                                                    except Exception:
+                                                        pass
+                                                    phase_slot["astrometry_resolve_hit_refine_hits"] = int(phase_slot.get("astrometry_resolve_hit_refine_hits", 0) + 1)
+                                                    phase_slot["astrometry_resolve_hit_global_better"] = int(phase_slot.get("astrometry_resolve_hit_global_better", 0) + 1)
+                                                    phase_slot["astrometry_resolve_hit_pairs_total"] = int(phase_slot.get("astrometry_resolve_hit_pairs_total", 0) + int(hit_diag.get("kept", 0) or 0))
+
+                                model_scale_arcsec_h = 3600.0 * float(max(scale, 1e-12))
+                                obs_hash_trace = None
+                                obs_q_trace = None
+                                try:
+                                    if int(idx2) < int(level_hashes.shape[0]):
+                                        hv_t = int(level_hashes[int(idx2)])
+                                        obs_hash_trace = int(hv_t)
+                                        obs_q_trace = [int((hv_t >> 48) & 0xFFFF), int((hv_t >> 32) & 0xFFFF), int((hv_t >> 16) & 0xFFFF)]
+                                except Exception:
+                                    obs_hash_trace = None
+                                    obs_q_trace = None
+                                trace_entry = {
+                                    "bucket": int(b),
+                                    "obs_quad_idx": int(idx2),
+                                    "obs_hash": obs_hash_trace,
+                                    "obs_q": obs_q_trace,
+                                    "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                                    "tile_combo": [int(v) for v in np.asarray(tile_combo, dtype=np.int64).tolist()],
+                                    "perm": [int(v) for v in np.asarray(po, dtype=np.int64).tolist()],
+                                    "source": "astrometry_quad",
+                                    "inliers_raw": int(inliers_raw),
+                                    "rms_px_raw": float(rms_px_raw),
+                                    "model_scale_arcsec_raw": float(model_scale_arcsec_raw),
+                                    "inliers_final": int(inliers),
+                                    "rms_px_final": float(rms_px),
+                                    "model_scale_arcsec_final": float(model_scale_arcsec_h),
+                                    "tol_deg": float(tol_deg),
+                                    "reassign": reassign_diag_out,
+                                    "resolve_hit": resolve_hit_diag_out,
+                                }
+                                if bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)) and int(inliers) <= 0:
+                                    phase_slot["astrometry_zero_inlier_hyp_skips"] = int(phase_slot.get("astrometry_zero_inlier_hyp_skips", 0) + 1)
+                                    trace_entry["decision"] = "skip_zero_inliers"
+                                    _dump_astrometry_exact(trace_entry)
+                                    continue
+                                hyp_metric = _hypothesis_quality_metric(
+                                    inliers,
+                                    rms_px,
+                                    int(img_points.shape[0]),
+                                    model_scale_arcsec_h,
+                                )
+                                trace_entry["hyp_metric"] = float(hyp_metric)
+                                if (hyp_metric < best_metric) or (hyp_metric == best_metric and inliers <= best_inliers):
+                                    trace_entry["decision"] = "reject_not_better_than_best"
+                                    trace_entry["best_metric_before"] = float(best_metric)
+                                    trace_entry["best_inliers_before"] = int(best_inliers)
+                                    _dump_astrometry_exact(trace_entry)
+                                    continue
+                                tr = SimilarityTransform(
+                                    scale=float(scale),
+                                    rotation=float(np.angle(rot_scale)),
+                                    translation=(float(translation.real), float(translation.imag)),
+                                )
+                                st = SimilarityStats(rms_px=rms_px, inliers=inliers)
+                                best = (tr, st)
+                                best_inliers = inliers
+                                best_metric = float(hyp_metric)
+                                try:
+                                    best_meta = {
+                                        "source": "astrometry",
+                                        "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                                        "tile_combo": [int(v) for v in np.asarray(tile_combo, dtype=np.int64).tolist()],
+                                        "perm": [int(v) for v in np.asarray(po, dtype=np.int64).tolist()],
+                                        "inliers": int(inliers),
+                                        "rms_px": float(rms_px),
+                                        "hyp_metric": float(hyp_metric),
+                                    }
+                                    try:
+                                        if isinstance(resolve_hit_diag_out, dict):
+                                            _rhs = np.asarray(resolve_hit_diag_out.get("src_indices", []), dtype=np.int64)
+                                            _rhd = np.asarray(resolve_hit_diag_out.get("dst_indices", []), dtype=np.int64)
+                                            if int(_rhs.size) >= 4 and int(_rhd.size) == int(_rhs.size):
+                                                best_meta["resolve_hit_src_indices"] = [int(v) for v in _rhs.tolist()[:256]]
+                                                best_meta["resolve_hit_dst_indices"] = [int(v) for v in _rhd.tolist()[:256]]
+                                                _rtol = float(resolve_hit_diag_out.get("tol_deg", float("nan")) or float("nan"))
+                                                if np.isfinite(_rtol) and _rtol > 0.0:
+                                                    best_meta["resolve_hit_tol_deg"] = float(_rtol)
+                                    except Exception:
+                                        pass
+                                except Exception:
+                                    best_meta = {
+                                        "source": "astrometry",
+                                        "inliers": int(inliers),
+                                        "rms_px": float(rms_px),
+                                        "hyp_metric": float(hyp_metric),
+                                    }
+                                trace_entry["decision"] = "accept_new_best"
+                                trace_entry["best_metric_after"] = float(best_metric)
+                                trace_entry["best_inliers_after"] = int(best_inliers)
+                                _dump_astrometry_exact(trace_entry)
+                                if inliers >= config.quality_inliers and rms_px <= config.quality_rms:
+                                    break
                     if best_inliers >= config.quality_inliers:
                         break
                 transform_result = best
+                if best_meta is not None:
+                    transform_origin_meta = dict(best_meta)
+                if (
+                    bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True))
+                    and transform_result is not None
+                    and isinstance(transform_origin_meta, dict)
+                    and int(transform_origin_meta.get("inliers", 0) or 0) <= 0
+                ):
+                    phase_slot["astrometry_zero_inlier_rejects"] = int(phase_slot.get("astrometry_zero_inlier_rejects", 0) + 1)
+                    transform_result = None
+                    transform_origin_meta = {
+                        "source": "astrometry_rejected_zero_inliers",
+                        "inliers": int(best_inliers),
+                        "rms_px": float((best[1].rms_px if best is not None else float("inf"))),
+                    }
+
+            seed_result = None
+            seed_enabled = bool(getattr(config, "blind_seed_hypothesis_enabled", False))
+            strict_astrometry_no_fallback = bool(strict_mode_effective)
+            non_parity_mode = bool(non_parity_mode_effective)
+            seed_allowed_here = (
+                transform_result is None
+                and non_parity_mode
+                and seed_enabled
+                and img_points.shape[0] >= 12
+                and (level_name in {"M", "L"} or fail_validation_count >= 4)
+            )
+            if seed_allowed_here:
+                seed_result = _seeded_similarity_from_pairs(
+                    img_points,
+                    tile_points,
+                    tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5),
+                    allow_reflection=bool(getattr(config, "try_parity_flip", True)),
+                    trials=max(80, int(getattr(config, "blind_seed_hypothesis_trials", 400) or 0)),
+                    top_n=max(8, int(getattr(config, "blind_seed_hypothesis_top_n", 96) or 0)),
+                )
+                if seed_result is not None:
+                    phase_slot["seed_hypothesis_hits"] = int(phase_slot.get("seed_hypothesis_hits", 0) + 1)
+
             if transform_result is None:
+                transform_result = seed_result
+                if seed_result is not None:
+                    tr_seed0, st_seed0 = seed_result
+                    transform_origin_meta = {
+                        "source": "seed",
+                        "inliers": int(getattr(st_seed0, "inliers", 0) or 0),
+                        "rms_px": float(getattr(st_seed0, "rms_px", float("inf"))),
+                    }
+
+            if transform_result is not None and seed_result is not None:
+                tr_cur, st_cur = transform_result
+                tr_seed, st_seed = seed_result
+                q_cur = _hypothesis_quality_metric(
+                    int(getattr(st_cur, "inliers", 0) or 0),
+                    float(getattr(st_cur, "rms_px", float("inf"))),
+                    int(img_points.shape[0]),
+                    3600.0 * float(max(getattr(tr_cur, "scale", 0.0) or 0.0, 1e-12)),
+                )
+                q_seed = _hypothesis_quality_metric(
+                    int(getattr(st_seed, "inliers", 0) or 0),
+                    float(getattr(st_seed, "rms_px", float("inf"))),
+                    int(img_points.shape[0]),
+                    3600.0 * float(max(getattr(tr_seed, "scale", 0.0) or 0.0, 1e-12)),
+                )
+                if q_seed > (q_cur + 0.35):
+                    transform_result = (tr_seed, st_seed)
+                    transform_origin_meta = {
+                        "source": "seed_override",
+                        "inliers": int(getattr(st_seed, "inliers", 0) or 0),
+                        "rms_px": float(getattr(st_seed, "rms_px", float("inf"))),
+                        "q_seed": float(q_seed),
+                        "q_cur": float(q_cur),
+                    }
+
+            if transform_result is None and non_parity_mode and bool(getattr(config, "blind_hypothesis_permutation_rescue_enabled", True)):
+                phase_slot["perm_rescue_attempts"] = int(phase_slot.get("perm_rescue_attempts", 0) + 1)
+                perm_seed = (
+                    ransac_seed_base
+                    ^ ((int(tile_index) + 1) * 0x9E3779B1)
+                    ^ ((ord(level_name[0]) if level_name else 0) << 24)
+                    ^ (1 if parity_label == "mirror" else 0)
+                    ^ 0xC2B2AE35
+                ) & 0xFFFFFFFF
+
+                top_pairs_eff = int(getattr(config, "blind_hypothesis_permutation_rescue_top_pairs", 14) or 14)
+                max_quads_eff = int(getattr(config, "blind_hypothesis_permutation_rescue_max_quads", 140) or 140)
+                perm_adapt_used = False
+                if bool(getattr(config, "blind_hypothesis_permutation_rescue_adapt_enabled", True)):
+                    adapt_after = max(0, int(getattr(config, "blind_hypothesis_permutation_rescue_adapt_after_validations", 2) or 0))
+                    adapt_best_max = max(0, int(getattr(config, "blind_hypothesis_permutation_rescue_adapt_best_inliers_max", 8) or 0))
+                    adapt_after_candidates = max(0, int(getattr(config, "blind_hypothesis_permutation_rescue_adapt_after_candidates", 18) or 0))
+                    adapt_cond = (
+                        (int(fail_validation_count) >= adapt_after and int(fail_best_inliers_seen) <= adapt_best_max)
+                        or (int(total_candidates_tried) >= adapt_after_candidates and int(fail_best_inliers_seen) <= max(adapt_best_max, 10))
+                    )
+                    if adapt_cond:
+                        tp_fac = max(1.0, float(getattr(config, "blind_hypothesis_permutation_rescue_adapt_top_pairs_factor", 1.5) or 1.0))
+                        tp_cap = max(top_pairs_eff, int(getattr(config, "blind_hypothesis_permutation_rescue_adapt_max_top_pairs", 24) or top_pairs_eff))
+                        mq_fac = max(1.0, float(getattr(config, "blind_hypothesis_permutation_rescue_adapt_max_quads_factor", 2.0) or 1.0))
+                        mq_cap = max(max_quads_eff, int(getattr(config, "blind_hypothesis_permutation_rescue_adapt_max_max_quads", 320) or max_quads_eff))
+                        top_pairs_eff = min(tp_cap, max(top_pairs_eff, int(round(float(top_pairs_eff) * tp_fac))))
+                        max_quads_eff = min(mq_cap, max(max_quads_eff, int(round(float(max_quads_eff) * mq_fac))))
+                        perm_adapt_used = (top_pairs_eff > int(getattr(config, "blind_hypothesis_permutation_rescue_top_pairs", 14) or 14)) or (max_quads_eff > int(getattr(config, "blind_hypothesis_permutation_rescue_max_quads", 140) or 140))
+                if perm_adapt_used:
+                    phase_slot["perm_rescue_adapt_used"] = int(phase_slot.get("perm_rescue_adapt_used", 0) + 1)
+
+                perm_bounds = _scale_gate_bounds_arcsec(
+                    config,
+                    scale_anchor_arcsec,
+                    scale_bounds_arcsec,
+                    gate="hard",
+                    fail_validation_count=fail_validation_count,
+                    fail_best_inliers_seen=fail_best_inliers_seen,
+                )
+                if perm_bounds is not None:
+                    lo_perm, hi_perm, _meta_perm = perm_bounds
+                else:
+                    lo_perm, hi_perm = float("nan"), float("nan")
+                perm_result = _permutation_hypothesis_rescue_ladder(
+                    img_points,
+                    tile_points,
+                    tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5) * float(getattr(config, "blind_hypothesis_permutation_rescue_tol_factor", 1.25) or 1.0),
+                    allow_reflection=bool(getattr(config, "try_parity_flip", True)),
+                    top_pairs=int(top_pairs_eff),
+                    max_quads=int(max_quads_eff),
+                    min_inliers=int(getattr(config, "blind_hypothesis_permutation_rescue_min_inliers", 6) or 6),
+                    code_tol=float(getattr(config, "blind_hypothesis_permutation_rescue_code_tol", 0.08) or 0.08),
+                    min_edge_px=float(getattr(config, "blind_hypothesis_permutation_rescue_min_edge_px", 8.0) or 0.0),
+                    scale_arcsec_min=float(lo_perm) if np.isfinite(float(lo_perm)) else None,
+                    scale_arcsec_max=float(hi_perm) if np.isfinite(float(hi_perm)) else None,
+                    scale_anchor_arcsec=float(scale_anchor_arcsec) if (scale_anchor_arcsec is not None and np.isfinite(float(scale_anchor_arcsec))) else (float(approx_scale_arcsec) if (approx_scale_arcsec is not None and np.isfinite(float(approx_scale_arcsec))) else None),
+                    scale_prior_strength=float(getattr(config, "blind_hypothesis_permutation_scale_prior_strength", 0.35) or 0.0),
+                    random_state=int(perm_seed),
+                    config=config,
+                    astrometry_order=bool(getattr(config, "blind_hypothesis_permutation_astrometry_order", True)),
+                )
+                if perm_result is not None:
+                    transform_result = perm_result
+                    tr_pr, st_pr = perm_result
+                    transform_origin_meta = {
+                        "source": "perm_rescue",
+                        "inliers": int(getattr(st_pr, "inliers", 0) or 0),
+                        "rms_px": float(getattr(st_pr, "rms_px", float("inf"))),
+                    }
+                    phase_slot["perm_rescue_hits"] = int(phase_slot.get("perm_rescue_hits", 0) + 1)
+
+            if transform_result is None and non_parity_mode:
                 if cancel_check and cancel_check():
                     return None
                 ransac_seed = (
@@ -1802,17 +8764,261 @@ def solve_blind(
                     ^ ((ord(level_name[0]) if level_name else 0) << 24)
                     ^ (1 if parity_label == "mirror" else 0)
                 ) & 0xFFFFFFFF
-                transform_result = estimate_similarity_RANSAC(
-                    img_points,
-                    tile_points,
-                    trials=1200,
-                    tol_px=config.pixel_tolerance,
-                    min_inliers=4,
-                    allow_reflection=bool(config.try_parity_flip),
-                    early_stop_inliers=int(getattr(config, "quality_inliers", 60) or 60),
-                    random_state=ransac_seed,
+                if bool(getattr(config, "blind_multitol_ransac_enabled", True)):
+                    transform_result = _estimate_similarity_multitolerance(
+                        img_points,
+                        tile_points,
+                        base_tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5),
+                        allow_reflection=bool(config.try_parity_flip),
+                        random_state=int(ransac_seed),
+                        base_trials=1200,
+                        quality_inliers=int(getattr(config, "quality_inliers", 60) or 60),
+                        tol_scales=tuple(getattr(config, "blind_multitol_ransac_scales", (1.0, 1.4, 2.0)) or (1.0, 1.4, 2.0)),
+                    )
+                else:
+                    transform_result = estimate_similarity_RANSAC(
+                        img_points,
+                        tile_points,
+                        trials=1200,
+                        tol_px=config.pixel_tolerance,
+                        min_inliers=4,
+                        allow_reflection=bool(config.try_parity_flip),
+                        early_stop_inliers=int(getattr(config, "quality_inliers", 60) or 60),
+                        random_state=ransac_seed,
+                    )
+                if transform_result is not None and transform_origin_meta is None:
+                    tr_rt, st_rt = transform_result
+                    transform_origin_meta = {
+                        "source": "multitol_ransac" if bool(getattr(config, "blind_multitol_ransac_enabled", True)) else "estimate_similarity_ransac",
+                        "inliers": int(getattr(st_rt, "inliers", 0) or 0),
+                        "rms_px": float(getattr(st_rt, "rms_px", float("inf"))),
+                    }
+            if transform_result is None and non_parity_mode and bool(getattr(config, "blind_hypothesis_rescue_enabled", True)):
+                phase_slot["hypothesis_rescue_attempts"] = int(phase_slot.get("hypothesis_rescue_attempts", 0) + 1)
+                rescue_img: list[np.ndarray] = []
+                rescue_tile: list[np.ndarray] = []
+                rescue_world: list[np.ndarray] = []
+                rescue_vote_pct = int(getattr(config, "blind_hypothesis_rescue_vote_percentile", 12) or 12)
+                rescue_vote_pct = min(40, max(5, rescue_vote_pct))
+                rescue_bucket_factor = float(getattr(config, "blind_hypothesis_rescue_bucket_factor", 2.0) or 1.0)
+                rescue_bucket_factor = min(4.0, max(1.0, rescue_bucket_factor))
+                rescue_bucket_limit = int(max(64, round(float(bucket_limit) * rescue_bucket_factor)))
+                rescue_uniform = bool(getattr(config, "blind_hypothesis_rescue_use_uniformize", False))
+                rescue_dedup = bool(getattr(config, "blind_hypothesis_rescue_use_dedup", False))
+                for lvl in levels_to_use:
+                    if use_px_spec:
+                        lvl_entry = obs_by_level.get(lvl)
+                        if lvl_entry is None:
+                            lvl_entry = (base_hashes, base_quads, base_counts)
+                    else:
+                        lvl_entry = (base_hashes, base_quads, base_counts)
+                    ohashes_r, oquads_r, _ = lvl_entry
+                    ip_r, tp_r, wp_r = _collect_tile_matches(
+                        index_root,
+                        (lvl,),
+                        tile_index,
+                        ohashes_r,
+                        oquads_r,
+                        image_positions,
+                        tile_positions,
+                        tile_world,
+                        rescue_bucket_limit,
+                        rescue_vote_pct,
+                        use_vectorized=bool(getattr(config, "collect_matches_vectorized_experimental", False)),
+                        index_lookup_cache=collect_lookup_cache,
+                        index_obj_cache=collect_index_obj_cache,
+                        uniformize_grid_px=(
+                            float(getattr(config, "blind_verify_uniform_grid_px", 48.0) or 0.0)
+                            if rescue_uniform
+                            else 0.0
+                        ),
+                        uniformize_max_per_cell=(
+                            int(getattr(config, "blind_verify_uniform_max_per_cell", 4) or 0)
+                            if rescue_uniform
+                            else 0
+                        ),
+                        uniformize_min_keep_ratio=float(getattr(config, "blind_verify_uniform_min_keep_ratio", 0.35) or 0.35),
+                        dedup_pairs=bool(rescue_dedup),
+                        dedup_min_keep_ratio=float(getattr(config, "blind_verify_dedup_min_keep_ratio", 0.45) or 0.45),
+                        pair_geom_scoring=bool(getattr(config, "blind_pair_geom_scoring", True)),
+                        pair_geom_weight=float(getattr(config, "blind_pair_geom_weight", 0.35) or 0.35),
+                        pair_geom_sigma=float(getattr(config, "blind_pair_geom_sigma", 0.45) or 0.45),
+                        pair_geom_angle_weight=float(getattr(config, "blind_pair_geom_angle_weight", 0.30) or 0.30),
+                        pair_geom_angle_sigma_deg=float(getattr(config, "blind_pair_geom_angle_sigma_deg", 42.0) or 42.0),
+                    )
+                    if ip_r.size:
+                        rescue_img.append(ip_r)
+                        rescue_tile.append(tp_r)
+                        rescue_world.append(wp_r)
+
+                if rescue_img:
+                    img_rescue = np.vstack(rescue_img)
+                    tile_rescue = np.vstack(rescue_tile)
+                    world_rescue = np.vstack(rescue_world)
+                    min_pairs = max(4, int(getattr(config, "blind_hypothesis_rescue_min_pairs", 6) or 0))
+                    if img_rescue.shape[0] >= min_pairs:
+                        ransac_seed_r = (
+                            ransac_seed_base
+                            ^ ((int(tile_index) + 1) * 0x9E3779B1)
+                            ^ ((ord(level_name[0]) if level_name else 0) << 24)
+                            ^ (1 if parity_label == "mirror" else 0)
+                            ^ 0x85EBCA6B
+                        ) & 0xFFFFFFFF
+                        transform_result = _estimate_similarity_multitolerance(
+                            img_rescue,
+                            tile_rescue,
+                            base_tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5),
+                            allow_reflection=bool(config.try_parity_flip),
+                            random_state=int(ransac_seed_r),
+                            base_trials=900,
+                            quality_inliers=int(getattr(config, "quality_inliers", 60) or 60),
+                            tol_scales=tuple(getattr(config, "blind_multitol_ransac_scales", (1.0, 1.4, 2.0)) or (1.0, 1.4, 2.0)),
+                        )
+                        if transform_result is not None:
+                            img_points = img_rescue
+                            tile_points = tile_rescue
+                            tile_world_matches = world_rescue
+                            tr_hr, st_hr = transform_result
+                            transform_origin_meta = {
+                                "source": "hypothesis_rescue_multitol",
+                                "inliers": int(getattr(st_hr, "inliers", 0) or 0),
+                                "rms_px": float(getattr(st_hr, "rms_px", float("inf"))),
+                            }
+                            phase_slot["hypothesis_rescue_hits"] = int(phase_slot.get("hypothesis_rescue_hits", 0) + 1)
+
+            if transform_result is None and non_parity_mode and bool(getattr(config, "blind_hypothesis_ransac_escape_enabled", False)):
+                esc_after_v = max(0, int(getattr(config, "blind_hypothesis_ransac_escape_after_validations", 2) or 0))
+                esc_after_c = max(0, int(getattr(config, "blind_hypothesis_ransac_escape_after_candidates", 18) or 0))
+                esc_cond = (
+                    int(fail_validation_count) >= esc_after_v
+                    or int(total_candidates_tried) >= esc_after_c
                 )
+                attempts_esc = int(phase_slot.get("hypothesis_ransac_escape_attempts", 0) or 0)
+                max_esc = max(1, int(getattr(config, "blind_hypothesis_ransac_escape_max_attempts_per_phase", 12) or 1))
+                allow_esc_phase = (str(level_name) in {"M", "L"}) or (int(fail_validation_count) >= 3)
+                if esc_cond and allow_esc_phase and attempts_esc < max_esc and int(img_points.shape[0]) >= 6:
+                    phase_slot["hypothesis_ransac_escape_attempts"] = int(phase_slot.get("hypothesis_ransac_escape_attempts", 0) + 1)
+                    ransac_seed_e = (
+                        ransac_seed_base
+                        ^ ((int(tile_index) + 1) * 0x9E3779B1)
+                        ^ ((ord(level_name[0]) if level_name else 0) << 24)
+                        ^ (1 if parity_label == "mirror" else 0)
+                        ^ 0x27D4EB2F
+                    ) & 0xFFFFFFFF
+                    esc_result = _estimate_similarity_multitolerance(
+                        img_points,
+                        tile_points,
+                        base_tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5),
+                        allow_reflection=bool(config.try_parity_flip),
+                        random_state=int(ransac_seed_e),
+                        base_trials=max(400, int(getattr(config, "blind_hypothesis_ransac_escape_trials", 1600) or 1600)),
+                        quality_inliers=max(4, int(getattr(config, "blind_hypothesis_permutation_rescue_min_inliers", 6) or 6)),
+                        tol_scales=tuple(getattr(config, "blind_hypothesis_ransac_escape_tol_scales", (2.5, 3.5, 5.0)) or (2.5, 3.5, 5.0)),
+                    )
+                    if esc_result is not None:
+                        transform_result = esc_result
+                        tr_es, st_es = esc_result
+                        transform_origin_meta = {
+                            "source": "hypothesis_ransac_escape",
+                            "inliers": int(getattr(st_es, "inliers", 0) or 0),
+                            "rms_px": float(getattr(st_es, "rms_px", float("inf"))),
+                        }
+                        phase_slot["hypothesis_ransac_escape_hits"] = int(phase_slot.get("hypothesis_ransac_escape_hits", 0) + 1)
+
+            if (
+                transform_result is not None
+                and bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True))
+                and approx_scale_arcsec is not None
+                and scale_bounds_arcsec is not None
+            ):
+                try:
+                    tr_chk, st_chk = transform_result
+                    model_scale_chk = 3600.0 * float(max(getattr(tr_chk, "scale", 0.0) or 0.0, 1e-12))
+                    hard_chk = _scale_gate_bounds_arcsec(
+                        config,
+                        scale_anchor_arcsec,
+                        scale_bounds_arcsec,
+                        gate="hard",
+                        fail_validation_count=fail_validation_count,
+                        fail_best_inliers_seen=fail_best_inliers_seen,
+                    )
+                    if hard_chk is not None and np.isfinite(model_scale_chk):
+                        lo_chk, hi_chk, _meta_chk = hard_chk
+                        if (model_scale_chk < float(lo_chk)) or (model_scale_chk > float(hi_chk)):
+                            phase_slot["strict_transform_scale_precheck_rejects"] = int(phase_slot.get("strict_transform_scale_precheck_rejects", 0) + 1)
+                            _record_failed_validation(
+                                reason="strict_transform_scale_precheck_reject",
+                                inliers=int(getattr(st_chk, "inliers", 0) or 0),
+                                rms_px=float(getattr(st_chk, "rms_px", float("inf"))),
+                                pairs=int(max(1, int(img_points.shape[0]))),
+                                cov_area=float("nan"),
+                                model_scale_arcsec=float(model_scale_chk),
+                                context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                            )
+                            p_dump_path_raw = str(getattr(config, "blind_transform_scale_precheck_dump_path", "") or "").strip()
+                            if p_dump_path_raw:
+                                try:
+                                    max_p_entries = max(1, int(getattr(config, "blind_transform_scale_precheck_dump_max_entries", 200) or 0))
+                                    try:
+                                        img_span_px = float(np.hypot(np.ptp(np.asarray(img_points[:, 0], dtype=np.float64)), np.ptp(np.asarray(img_points[:, 1], dtype=np.float64)))) if int(img_points.shape[0]) > 0 else float("nan")
+                                        tile_span_deg = float(np.hypot(np.ptp(np.asarray(tile_points[:, 0], dtype=np.float64)), np.ptp(np.asarray(tile_points[:, 1], dtype=np.float64)))) if int(tile_points.shape[0]) > 0 else float("nan")
+                                        span_scale_arcsec = float(3600.0 * tile_span_deg / max(img_span_px, 1e-12)) if np.isfinite(img_span_px) and img_span_px > 0.0 and np.isfinite(tile_span_deg) else float("nan")
+                                    except Exception:
+                                        img_span_px = float("nan")
+                                        tile_span_deg = float("nan")
+                                        span_scale_arcsec = float("nan")
+                                    p_entry = {
+                                        "phase": str(phase_name),
+                                        "level": str(level_name),
+                                        "parity": str(parity_label),
+                                        "tile": str(candidate_key),
+                                        "reason": "strict_transform_scale_precheck_reject",
+                                        "source": str(locals().get("reassign_source", "")),
+                                        "model_scale_arcsec": float(model_scale_chk),
+                                        "hard_lo_arcsec": float(lo_chk) if np.isfinite(float(lo_chk)) else None,
+                                        "hard_hi_arcsec": float(hi_chk) if np.isfinite(float(hi_chk)) else None,
+                                        "inliers": int(getattr(st_chk, "inliers", 0) or 0),
+                                        "rms_px": float(getattr(st_chk, "rms_px", float("inf"))),
+                                        "img_span_px": float(img_span_px) if np.isfinite(img_span_px) else None,
+                                        "tile_span_deg": float(tile_span_deg) if np.isfinite(tile_span_deg) else None,
+                                        "span_implied_scale_arcsec": float(span_scale_arcsec) if np.isfinite(span_scale_arcsec) else None,
+                                        "origin_meta": dict(transform_origin_meta) if isinstance(transform_origin_meta, dict) else None,
+                                    }
+                                    p_path = Path(p_dump_path_raw)
+                                    pobj = {"schema": "zeblind.transform_scale_precheck_dump.v1", "entries": []}
+                                    if p_path.exists():
+                                        try:
+                                            prev_p = json.loads(p_path.read_text(encoding="utf-8"))
+                                            if isinstance(prev_p, dict) and isinstance(prev_p.get("entries"), list):
+                                                pobj = prev_p
+                                        except Exception:
+                                            pass
+                                    pobj.setdefault("entries", []).append(p_entry)
+                                    if len(pobj["entries"]) > int(max_p_entries):
+                                        pobj["entries"] = pobj["entries"][-int(max_p_entries):]
+                                    p_path.parent.mkdir(parents=True, exist_ok=True)
+                                    p_path.write_text(json.dumps(pobj, indent=2), encoding="utf-8")
+                                    phase_slot["transform_scale_precheck_dump_writes"] = int(phase_slot.get("transform_scale_precheck_dump_writes", 0) + 1)
+                                except Exception:
+                                    phase_slot["transform_scale_precheck_dump_errors"] = int(phase_slot.get("transform_scale_precheck_dump_errors", 0) + 1)
+                            transform_result = None
+                except Exception:
+                    pass
+
             if transform_result is None:
+                _record_hypothesis_probe(
+                    phase=str(phase_name),
+                    level=str(level_name),
+                    parity=str(parity_label),
+                    tile=str(candidate_key),
+                    score=int(score),
+                    pairs=int(img_points.shape[0]),
+                    inliers=0,
+                    model_scale_arcsec=float("nan"),
+                    status="no_transform",
+                )
+                _mark_fail_stage("verify_prob" if int(fail_validation_count) > 0 else "hypothesis")
+                phase_slot["hypothesis_fail_no_transform"] = int(phase_slot.get("hypothesis_fail_no_transform", 0) + 1)
                 if global_mode:
                     low_support_streak += 1
                     if _global_abort_now():
@@ -1821,6 +9027,277 @@ def solve_blind(
                 continue
             # Build localized inliers and refit similarity on that subset
             transform, _stats0 = transform_result
+
+            if non_parity_mode and bool(getattr(config, "blind_hypothesis_permutation_rescue_enabled", True)) and img_points.shape[0] >= 8:
+                cur_inl = int(getattr(_stats0, "inliers", 0) or 0)
+                weak_gate = max(4, int(getattr(config, "blind_hypothesis_permutation_rescue_min_inliers", 6) or 6) - 1)
+                max_perm_attempts = max(1, int(getattr(config, "blind_hypothesis_permutation_rescue_max_attempts_per_level", 16) or 1))
+                attempts_so_far = int(phase_slot.get("perm_rescue_attempts", 0) or 0)
+                allow_phase = (str(level_name) in {"M", "L"}) or (int(fail_validation_count) >= 3)
+                if cur_inl <= weak_gate and allow_phase and attempts_so_far < max_perm_attempts:
+                    phase_slot["perm_rescue_attempts"] = int(phase_slot.get("perm_rescue_attempts", 0) + 1)
+                    perm_seed2 = (
+                        ransac_seed_base
+                        ^ ((int(tile_index) + 1) * 0x9E3779B1)
+                        ^ ((ord(level_name[0]) if level_name else 0) << 24)
+                        ^ (1 if parity_label == "mirror" else 0)
+                        ^ 0xD1B54A32
+                    ) & 0xFFFFFFFF
+                    top_pairs_eff2 = int(getattr(config, "blind_hypothesis_permutation_rescue_top_pairs", 14) or 14)
+                    max_quads_eff2 = int(getattr(config, "blind_hypothesis_permutation_rescue_max_quads", 140) or 140)
+                    perm_adapt_used2 = False
+                    if bool(getattr(config, "blind_hypothesis_permutation_rescue_adapt_enabled", True)):
+                        adapt_after2 = max(0, int(getattr(config, "blind_hypothesis_permutation_rescue_adapt_after_validations", 2) or 0))
+                        adapt_best_max2 = max(0, int(getattr(config, "blind_hypothesis_permutation_rescue_adapt_best_inliers_max", 8) or 0))
+                        adapt_after_candidates2 = max(0, int(getattr(config, "blind_hypothesis_permutation_rescue_adapt_after_candidates", 18) or 0))
+                        adapt_cond2 = (
+                            (int(fail_validation_count) >= adapt_after2 and int(fail_best_inliers_seen) <= adapt_best_max2)
+                            or (int(total_candidates_tried) >= adapt_after_candidates2 and int(fail_best_inliers_seen) <= max(adapt_best_max2, 10))
+                        )
+                        if adapt_cond2:
+                            tp_fac2 = max(1.0, float(getattr(config, "blind_hypothesis_permutation_rescue_adapt_top_pairs_factor", 1.5) or 1.0))
+                            tp_cap2 = max(top_pairs_eff2, int(getattr(config, "blind_hypothesis_permutation_rescue_adapt_max_top_pairs", 24) or top_pairs_eff2))
+                            mq_fac2 = max(1.0, float(getattr(config, "blind_hypothesis_permutation_rescue_adapt_max_quads_factor", 2.0) or 1.0))
+                            mq_cap2 = max(max_quads_eff2, int(getattr(config, "blind_hypothesis_permutation_rescue_adapt_max_max_quads", 320) or max_quads_eff2))
+                            top_pairs_eff2 = min(tp_cap2, max(top_pairs_eff2, int(round(float(top_pairs_eff2) * tp_fac2))))
+                            max_quads_eff2 = min(mq_cap2, max(max_quads_eff2, int(round(float(max_quads_eff2) * mq_fac2))))
+                            perm_adapt_used2 = (top_pairs_eff2 > int(getattr(config, "blind_hypothesis_permutation_rescue_top_pairs", 14) or 14)) or (max_quads_eff2 > int(getattr(config, "blind_hypothesis_permutation_rescue_max_quads", 140) or 140))
+                    if perm_adapt_used2:
+                        phase_slot["perm_rescue_adapt_used"] = int(phase_slot.get("perm_rescue_adapt_used", 0) + 1)
+
+                    perm_bounds2 = _scale_gate_bounds_arcsec(
+                        config,
+                        scale_anchor_arcsec,
+                        scale_bounds_arcsec,
+                        gate="hard",
+                        fail_validation_count=fail_validation_count,
+                        fail_best_inliers_seen=fail_best_inliers_seen,
+                    )
+                    if perm_bounds2 is not None:
+                        lo_perm2, hi_perm2, _meta_perm2 = perm_bounds2
+                    else:
+                        lo_perm2, hi_perm2 = float("nan"), float("nan")
+                    perm_refine = _permutation_hypothesis_rescue_ladder(
+                        img_points,
+                        tile_points,
+                        tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5) * float(getattr(config, "blind_hypothesis_permutation_rescue_tol_factor", 1.25) or 1.0),
+                        allow_reflection=bool(getattr(config, "try_parity_flip", True)),
+                        top_pairs=int(top_pairs_eff2),
+                        max_quads=int(max_quads_eff2),
+                        min_inliers=int(getattr(config, "blind_hypothesis_permutation_rescue_min_inliers", 6) or 6),
+                        code_tol=float(getattr(config, "blind_hypothesis_permutation_rescue_code_tol", 0.08) or 0.08),
+                        min_edge_px=float(getattr(config, "blind_hypothesis_permutation_rescue_min_edge_px", 8.0) or 0.0),
+                        scale_arcsec_min=float(lo_perm2) if np.isfinite(float(lo_perm2)) else None,
+                        scale_arcsec_max=float(hi_perm2) if np.isfinite(float(hi_perm2)) else None,
+                        scale_anchor_arcsec=float(scale_anchor_arcsec) if (scale_anchor_arcsec is not None and np.isfinite(float(scale_anchor_arcsec))) else (float(approx_scale_arcsec) if (approx_scale_arcsec is not None and np.isfinite(float(approx_scale_arcsec))) else None),
+                        scale_prior_strength=float(getattr(config, "blind_hypothesis_permutation_scale_prior_strength", 0.35) or 0.0),
+                        random_state=int(perm_seed2),
+                        config=config,
+                        astrometry_order=bool(getattr(config, "blind_hypothesis_permutation_astrometry_order", True)),
+                    )
+                    if perm_refine is not None:
+                        tr_p, st_p = perm_refine
+                        inl_p = int(getattr(st_p, "inliers", 0) or 0)
+                        rms_p = float(getattr(st_p, "rms_px", float("inf")) or float("inf"))
+                        inl_c = int(getattr(_stats0, "inliers", 0) or 0)
+                        rms_c = float(getattr(_stats0, "rms_px", float("inf")) or float("inf"))
+                        if (inl_p > inl_c) or (inl_p == inl_c and rms_p < rms_c):
+                            transform_result = perm_refine
+                            transform, _stats0 = transform_result
+                            transform_origin_meta = {
+                                "source": "perm_rescue_refine",
+                                "inliers": int(inl_p),
+                                "rms_px": float(rms_p),
+                            }
+                            phase_slot["perm_rescue_hits"] = int(phase_slot.get("perm_rescue_hits", 0) + 1)
+
+            if bool(getattr(config, "blind_hypothesis_resolve_matches_enabled", True)) and int(img_points.shape[0]) >= max(6, int(getattr(config, "blind_hypothesis_resolve_matches_min_pairs", 12) or 0)):
+                img_rm, tile_rm, world_rm, rm_stats = _resolve_verify_conflicts(
+                    img_points,
+                    tile_points,
+                    tile_world_matches,
+                    transform,
+                    min_keep_ratio=float(getattr(config, "blind_hypothesis_resolve_matches_min_keep_ratio", 0.20) or 0.20),
+                    image_bin_px=float(getattr(config, "blind_hypothesis_resolve_matches_image_bin_px", 1.8) or 1.8),
+                    tile_bin_px=float(getattr(config, "blind_hypothesis_resolve_matches_tile_bin_px", 1.8) or 1.8),
+                )
+                rm_removed = int(rm_stats.get("removed", 0) or 0)
+                if rm_removed > 0:
+                    img_points = img_rm
+                    tile_points = tile_rm
+                    tile_world_matches = world_rm
+                    phase_slot["hypothesis_resolve_matches_removed_total"] = int(phase_slot.get("hypothesis_resolve_matches_removed_total", 0) + rm_removed)
+                    phase_slot["hypothesis_resolve_matches_hits"] = int(phase_slot.get("hypothesis_resolve_matches_hits", 0) + 1)
+                    hyp_rm = _derive_similarity(
+                        img_points.astype(np.float64),
+                        tile_points.astype(np.float64),
+                        reflected=(getattr(transform, "parity", 1) < 0),
+                    )
+                    if hyp_rm is not None:
+                        rs_rm, tr_rm = hyp_rm
+                        transform = SimilarityTransform(
+                            scale=float(abs(rs_rm)),
+                            rotation=float(np.angle(rs_rm)),
+                            translation=(float(tr_rm.real), float(tr_rm.imag)),
+                            parity=-1 if getattr(transform, "parity", 1) < 0 else 1,
+                        )
+
+            if (
+                bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True))
+                and isinstance(transform_origin_meta, dict)
+                and str(transform_origin_meta.get("source", "")) == "astrometry_rejected_zero_inliers"
+                and str(locals().get("reassign_source", "")) in {"inlier_mask", "resolve_hit", "reassign_eval", ""}
+            ):
+                _record_failed_validation(
+                    reason="strict_zero_inlier_origin_block",
+                    inliers=int(max(0, int(getattr(_stats0, "inliers", 0) or 0))),
+                    rms_px=float(getattr(_stats0, "rms_px", float("inf"))),
+                    pairs=int(max(1, int(img_points.shape[0]))),
+                    cov_area=float("nan"),
+                    model_scale_arcsec=float(3600.0 * max(getattr(transform, "scale", 0.0) or 0.0, 1e-12)),
+                    context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                )
+                # Dump strict blocker to keep step-by-step traceability.
+                z_dump_path_raw = str(getattr(config, "blind_zero_inlier_origin_block_dump_path", "") or "").strip()
+                if z_dump_path_raw:
+                    try:
+                        max_z_entries = max(1, int(getattr(config, "blind_zero_inlier_origin_block_dump_max_entries", 200) or 0))
+                        z_entry = {
+                            "phase": str(phase_name),
+                            "level": str(level_name),
+                            "parity": str(parity_label),
+                            "tile": str(candidate_key),
+                            "reason": "strict_zero_inlier_origin_block",
+                            "source": str(locals().get("reassign_source", "")),
+                            "path_tag": str(locals().get("reassign_path_tag", "none")),
+                            "model_scale_arcsec": float(3600.0 * max(getattr(transform, "scale", 0.0) or 0.0, 1e-12)),
+                            "pairs": int(max(0, int(img_points.shape[0]))),
+                            "inliers": int(max(0, int(getattr(_stats0, "inliers", 0) or 0))),
+                            "origin_meta": dict(transform_origin_meta) if isinstance(transform_origin_meta, dict) else None,
+                        }
+                        z_path = Path(z_dump_path_raw)
+                        z_obj = {"schema": "zeblind.zero_inlier_origin_block_dump.v1", "entries": []}
+                        if z_path.exists():
+                            try:
+                                prev_z = json.loads(z_path.read_text(encoding="utf-8"))
+                                if isinstance(prev_z, dict) and isinstance(prev_z.get("entries"), list):
+                                    z_obj = prev_z
+                            except Exception:
+                                pass
+                        z_obj.setdefault("entries", []).append(z_entry)
+                        if len(z_obj["entries"]) > int(max_z_entries):
+                            z_obj["entries"] = z_obj["entries"][-int(max_z_entries):]
+                        z_path.parent.mkdir(parents=True, exist_ok=True)
+                        z_path.write_text(json.dumps(z_obj, indent=2), encoding="utf-8")
+                        phase_slot["zero_inlier_origin_block_dump_writes"] = int(phase_slot.get("zero_inlier_origin_block_dump_writes", 0) + 1)
+                    except Exception:
+                        phase_slot["zero_inlier_origin_block_dump_errors"] = int(phase_slot.get("zero_inlier_origin_block_dump_errors", 0) + 1)
+
+                _mark_fail_stage("hypothesis")
+                fail_validation_count += 1
+                phase_slot["failed_validations"] += 1
+                phase_slot["strict_zero_inlier_origin_blocks"] = int(phase_slot.get("strict_zero_inlier_origin_blocks", 0) + 1)
+                continue
+
+            if hard_filter_enabled_runtime and approx_scale_arcsec is not None:
+                model_scale_arcsec_pre = 3600.0 * float(max(getattr(transform, "scale", 0.0) or 0.0, 1e-12))
+                hard_bounds_pre = _scale_gate_bounds_arcsec(
+                    config,
+                    scale_anchor_arcsec,
+                    scale_bounds_arcsec,
+                    gate="hard",
+                    fail_validation_count=fail_validation_count,
+                    fail_best_inliers_seen=fail_best_inliers_seen,
+                )
+                if np.isfinite(model_scale_arcsec_pre) and hard_bounds_pre is not None:
+                    lo_h_pre, hi_h_pre, meta_h_pre = hard_bounds_pre
+                    ratio_pre = float(model_scale_arcsec_pre) / float(max(1e-9, float(meta_h_pre.get("approx_scale_arcsec", approx_scale_arcsec or 1.0))))
+                    if float(model_scale_arcsec_pre) < float(lo_h_pre) or float(model_scale_arcsec_pre) > float(hi_h_pre):
+                        _record_hypothesis_probe(
+                            phase=str(phase_name),
+                            level=str(level_name),
+                            parity=str(parity_label),
+                            tile=str(candidate_key),
+                            score=int(score),
+                            pairs=int(img_points.shape[0]),
+                            inliers=int(getattr(_stats0, "inliers", 0) or 0),
+                            model_scale_arcsec=float(model_scale_arcsec_pre),
+                            status="scale_hard_reject_pre",
+                        )
+                        inl_pre = int(max(0, int(getattr(_stats0, "inliers", 0) or 0)))
+                        _record_failed_validation(
+                            reason="blind hypothesis scale hard reject",
+                            inliers=inl_pre,
+                            rms_px=float(getattr(_stats0, "rms_px", float("inf"))),
+                            pairs=int(max(1, int(img_points.shape[0]))),
+                            cov_area=float("nan"),
+                            model_scale_arcsec=float(model_scale_arcsec_pre),
+                            context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                        )
+                        _mark_fail_stage("verify_prob")
+                        fail_validation_count += 1
+                        phase_slot["failed_validations"] += 1
+                        phase_slot["hypothesis_scale_hard_reject_pre"] = int(phase_slot.get("hypothesis_scale_hard_reject_pre", 0) + 1)
+                        _update_verify_logodds(
+                            phase_slot=phase_slot,
+                            inliers=inl_pre,
+                            rms_px=float(getattr(_stats0, "rms_px", float("inf"))),
+                            pairs=int(max(1, int(img_points.shape[0]))),
+                            reason="blind hypothesis scale hard reject",
+                            context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                        )
+                        # Dump hard-reject blockers for upstream traceability.
+                        hard_dump_path_raw = str(getattr(config, "blind_scale_hard_reject_dump_path", "") or "").strip()
+                        if hard_dump_path_raw:
+                            try:
+                                max_hr_entries = max(1, int(getattr(config, "blind_scale_hard_reject_dump_max_entries", 200) or 0))
+                                hard_entry = {
+                                    "phase": str(phase_name),
+                                    "level": str(level_name),
+                                    "parity": str(parity_label),
+                                    "tile": str(candidate_key),
+                                    "reason": "blind hypothesis scale hard reject",
+                                    "source": str(reassign_source),
+                                    "path_tag": str(reassign_path_tag),
+                                    "model_scale_arcsec": float(model_scale_arcsec_pre) if np.isfinite(float(model_scale_arcsec_pre)) else None,
+                                    "hard_lo_arcsec": float(lo_h_pre) if np.isfinite(float(lo_h_pre)) else None,
+                                    "hard_hi_arcsec": float(hi_h_pre) if np.isfinite(float(hi_h_pre)) else None,
+                                    "ratio_vs_anchor": float(ratio_pre) if np.isfinite(float(ratio_pre)) else None,
+                                    "approx_scale_arcsec": float(approx_scale_arcsec) if (approx_scale_arcsec is not None and np.isfinite(float(approx_scale_arcsec))) else None,
+                                    "anchor_scale_arcsec": float(scale_anchor_arcsec) if (scale_anchor_arcsec is not None and np.isfinite(float(scale_anchor_arcsec))) else None,
+                                    "pairs": int(max(0, int(img_points.shape[0]))),
+                                    "inliers": int(inl_pre),
+                                    "origin_meta": dict(transform_origin_meta) if isinstance(transform_origin_meta, dict) else None,
+                                }
+                                hard_path = Path(hard_dump_path_raw)
+                                hard_obj = {"schema": "zeblind.scale_hard_reject_dump.v1", "entries": []}
+                                if hard_path.exists():
+                                    try:
+                                        prev_h = json.loads(hard_path.read_text(encoding="utf-8"))
+                                        if isinstance(prev_h, dict) and isinstance(prev_h.get("entries"), list):
+                                            hard_obj = prev_h
+                                    except Exception:
+                                        pass
+                                hard_obj.setdefault("entries", []).append(hard_entry)
+                                if len(hard_obj["entries"]) > int(max_hr_entries):
+                                    hard_obj["entries"] = hard_obj["entries"][-int(max_hr_entries):]
+                                hard_path.parent.mkdir(parents=True, exist_ok=True)
+                                hard_path.write_text(json.dumps(hard_obj, indent=2), encoding="utf-8")
+                                phase_slot["scale_hard_reject_dump_writes"] = int(phase_slot.get("scale_hard_reject_dump_writes", 0) + 1)
+                            except Exception:
+                                phase_slot["scale_hard_reject_dump_errors"] = int(phase_slot.get("scale_hard_reject_dump_errors", 0) + 1)
+
+                        if global_mode:
+                            low_support_streak += 1
+                            if _global_abort_now():
+                                logger.debug(
+                                    "global early-stop: scale hard reject pre-refit (ratio=%.3f, model=%.3f, expected=%.3f)",
+                                    float(ratio_pre),
+                                    float(model_scale_arcsec_pre),
+                                    float(approx_scale_arcsec),
+                                )
+                                break
+                        continue
             scale = float(transform.scale)
             src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
             dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
@@ -1832,24 +9309,1267 @@ def solve_blind(
             err_deg = np.abs(pred - dst_all_c)
             tol_deg = max(1e-6, float(config.pixel_tolerance) * max(scale, 1e-12))
             inliers_mask = err_deg <= tol_deg
-            if not inliers_mask.any():
+            inlier_count = int(np.count_nonzero(inliers_mask))
+
+            # P0.4: seed inliers from astrometry resolve_hit correspondences when index-locked mask is empty.
+            if inlier_count <= 0 and isinstance(transform_origin_meta, dict) and str(transform_origin_meta.get("source", "")) == "astrometry":
+                try:
+                    src_m = np.asarray(transform_origin_meta.get("resolve_hit_src_indices", []), dtype=np.int64)
+                    dst_m = np.asarray(transform_origin_meta.get("resolve_hit_dst_indices", []), dtype=np.int64)
+                    if src_m.size >= 4 and dst_m.size == src_m.size:
+                        src_m = np.clip(src_m, 0, img_points.shape[0] - 1)
+                        dst_m = np.clip(dst_m, 0, tile_points.shape[0] - 1)
+                        reflected_m = bool(getattr(transform, "parity", 1) < 0)
+                        hyp_m = _derive_similarity(
+                            img_points[src_m].astype(np.float64),
+                            tile_points[dst_m].astype(np.float64),
+                            reflected=reflected_m,
+                        )
+                        if hyp_m is not None:
+                            rs_m, tr_m = hyp_m
+                            transform = SimilarityTransform(
+                                scale=float(max(abs(complex(rs_m)), 1e-12)),
+                                rotation=float(np.angle(complex(rs_m))),
+                                translation=(float(complex(tr_m).real), float(complex(tr_m).imag)),
+                                parity=-1 if reflected_m else 1,
+                            )
+                            scale = float(transform.scale)
+                            rot_scale = scale * np.exp(1j * transform.rotation)
+                            translation = complex(*transform.translation)
+                            src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                            if reflected_m:
+                                src_all_c = np.conj(src_all_c)
+                            dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                            pred = rot_scale * src_all_c + translation
+                            err_deg = np.abs(pred - dst_all_c)
+                            tol_meta = float(transform_origin_meta.get("resolve_hit_tol_deg", float("nan")) or float("nan"))
+                            if np.isfinite(tol_meta) and tol_meta > 0.0:
+                                tol_deg = float(max(float(tol_deg), tol_meta))
+                            inliers_mask = np.zeros(src_all_c.shape[0], dtype=bool)
+                            inliers_mask[src_m] = True
+                            inlier_count = int(src_m.size)
+                            phase_slot["astrometry_meta_seed_inliers_hits"] = int(phase_slot.get("astrometry_meta_seed_inliers_hits", 0) + 1)
+                            phase_slot["astrometry_meta_seed_inliers_pairs_total"] = int(phase_slot.get("astrometry_meta_seed_inliers_pairs_total", 0) + int(src_m.size))
+                except Exception:
+                    pass
+
+            # M1.4: index-locked refit bootstrap (Astrometry-like pair-order coherence)
+            # to recover when global one-to-one pairing stays too sparse.
+            if int(inlier_count) < 4 and int(img_points.shape[0]) >= 8:
+                phase_slot["astrometry_index_refit_attempts"] = int(phase_slot.get("astrometry_index_refit_attempts", 0) + 1)
+                try:
+                    reflected_idx = bool(getattr(transform, "parity", 1) < 0)
+                    n_idx = int(img_points.shape[0])
+                    keep_n = int(max(8, min(n_idx, 96)))
+                    src_idx_boot = np.asarray(img_points[:keep_n], dtype=np.float64)
+                    dst_idx_boot = np.asarray(tile_points[:keep_n], dtype=np.float64)
+                    hyp_idx = _derive_similarity(src_idx_boot, dst_idx_boot, reflected=reflected_idx)
+                    if hyp_idx is not None:
+                        rs_i, tr_i = hyp_idx
+                        src_i_c = (src_idx_boot[:, 0] + 1j * src_idx_boot[:, 1]).astype(np.complex128)
+                        if reflected_idx:
+                            src_i_c = np.conj(src_i_c)
+                        dst_i_c = (dst_idx_boot[:, 0] + 1j * dst_idx_boot[:, 1]).astype(np.complex128)
+                        err_i = np.abs((complex(rs_i) * src_i_c + complex(tr_i)) - dst_i_c)
+                        fin_i = np.isfinite(err_i)
+                        if np.any(fin_i):
+                            efin = err_i[fin_i]
+                            thr_i = float(max(float(tol_deg) * 1.35, np.percentile(efin, 45)))
+                            km_i = fin_i & (err_i <= thr_i)
+                            if int(np.count_nonzero(km_i)) >= 4:
+                                hyp_idx2 = _derive_similarity(src_idx_boot[km_i], dst_idx_boot[km_i], reflected=reflected_idx)
+                                if hyp_idx2 is not None:
+                                    rs_i2, tr_i2 = hyp_idx2
+                                    scale_i2 = float(max(abs(complex(rs_i2)), 1e-12))
+                                    src_all_eval = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                                    if reflected_idx:
+                                        src_all_eval = np.conj(src_all_eval)
+                                    dst_all_eval = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                                    # M1.4 behavior: keep simple index-refit acceptance (improves entry into post-resolve).
+                                    rs_use = complex(rs_i2)
+                                    tr_use = complex(tr_i2)
+                                    scale_use = float(max(abs(rs_use), 1e-12))
+
+                                    pred_i2 = rs_use * src_all_eval + tr_use
+                                    err_i2 = np.abs(pred_i2 - dst_all_eval)
+                                    tol_i2 = max(1e-6, float(config.pixel_tolerance) * max(scale_use, 1e-12))
+                                    inl_i2 = np.isfinite(err_i2) & (err_i2 <= tol_i2)
+                                    cnt_i2 = int(np.count_nonzero(inl_i2))
+                                    if cnt_i2 > 0:
+                                        rms_i2 = float(np.sqrt(np.mean((err_i2[inl_i2] / max(scale_use, 1e-12)) ** 2)))
+                                        phase_slot["astrometry_index_refit_candidate_rms_sum"] = float(phase_slot.get("astrometry_index_refit_candidate_rms_sum", 0.0) + float(rms_i2))
+                                    else:
+                                        rms_i2 = float("inf")
+
+                                    if cnt_i2 > int(inlier_count):
+                                        transform = SimilarityTransform(
+                                            scale=float(scale_use),
+                                            rotation=float(np.angle(rs_use)),
+                                            translation=(float(tr_use.real), float(tr_use.imag)),
+                                            parity=-1 if reflected_idx else 1,
+                                        )
+                                        scale = float(transform.scale)
+                                        src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                                        if reflected_idx:
+                                            src_all_c = np.conj(src_all_c)
+                                        dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                                        rot_scale = scale * np.exp(1j * transform.rotation)
+                                        translation = complex(*transform.translation)
+                                        pred = rot_scale * src_all_c + translation
+                                        err_deg = np.abs(pred - dst_all_c)
+                                        tol_deg = max(1e-6, float(config.pixel_tolerance) * max(scale, 1e-12))
+                                        inliers_mask = np.isfinite(err_deg) & (err_deg <= tol_deg)
+                                        inlier_count = int(np.count_nonzero(inliers_mask))
+                                        phase_slot["astrometry_index_refit_hits"] = int(phase_slot.get("astrometry_index_refit_hits", 0) + 1)
+                                        phase_slot["astrometry_index_refit_rms_px_sum"] = float(phase_slot.get("astrometry_index_refit_rms_px_sum", 0.0) + float(rms_i2))
+                                    phase_slot["astrometry_index_refit_last_inliers"] = int(cnt_i2)
+                except Exception:
+                    pass
+
+            if str(candidate_key) == "d50_0819":
+                try:
+                    tr = globals().get("_A2V22_TRACE", {})
+                    err_px = np.asarray(err_deg / max(scale, 1e-12), dtype=np.float64)
+                    finite = np.isfinite(err_px)
+                    ef = err_px[finite]
+                    tr["inliermask_tol_px"] = float(tol_deg / max(scale, 1e-12))
+                    tr["inliermask_count"] = int(inlier_count)
+                    tr["inliermask_err_px_p50"] = float(np.percentile(ef, 50)) if ef.size else float("nan")
+                    tr["inliermask_err_px_p90"] = float(np.percentile(ef, 90)) if ef.size else float("nan")
+                    tr["inliermask_err_px_p99"] = float(np.percentile(ef, 99)) if ef.size else float("nan")
+                    if inlier_count >= 4:
+                        pts0 = img_points[inliers_mask]
+                        st0 = _a2v22_shape_stats(np.asarray(pts0, dtype=np.float64))
+                        tr["inliermask_shape"] = st0
+                        cov_x0 = float(st0.get("bw", 0.0)) / max(1.0, float(image.shape[1]))
+                        cov_y0 = float(st0.get("bh", 0.0)) / max(1.0, float(image.shape[0]))
+                        tr["inliermask_cov_x"] = cov_x0
+                        tr["inliermask_cov_y"] = cov_y0
+                        tr["inliermask_cov_area"] = float(cov_x0 * cov_y0)
+                    globals()["_A2V22_TRACE"] = tr
+                except Exception:
+                    pass
+            reassign_src_idx = None
+            reassign_dst_idx = None
+            reassign_source = "inlier_mask"
+            reassign_path_tag = "none"
+            if bool(getattr(config, "blind_astrometry_reassign_eval_enabled", True)):
+                in_re0, rms_re0, re_diag0 = _score_transform_with_reassignment(
+                    src_all_c,
+                    dst_all_c,
+                    rot_scale=complex(rot_scale),
+                    translation=complex(translation),
+                    tol_deg=float(tol_deg),
+                    max_points=max(24, int(getattr(config, "blind_astrometry_reassign_eval_max_points", 256) or 0)),
+                    max_pairs=max(8, int(getattr(config, "blind_astrometry_reassign_eval_max_pairs", 256) or 0)),
+                )
+                phase_slot["astrometry_reassign_eval_attempts"] = int(phase_slot.get("astrometry_reassign_eval_attempts", 0) + 1)
+                if in_re0 > 0:
+                    phase_slot["astrometry_reassign_eval_inliers_total"] = int(phase_slot.get("astrometry_reassign_eval_inliers_total", 0) + int(in_re0))
+                if str(candidate_key) == "d50_0819":
+                    try:
+                        tr = globals().get("_A2V22_TRACE", {})
+                        tr["reassign_eval_in_re0"] = int(in_re0)
+                        tr["reassign_eval_rms_re0"] = float(rms_re0)
+                        tr["reassign_eval_input"] = _a2v22_shape_stats(np.asarray(img_points[inliers_mask], dtype=np.float64))
+                        globals()["_A2V22_TRACE"] = tr
+                    except Exception:
+                        pass
+                if (in_re0 > inlier_count) or (in_re0 == inlier_count and rms_re0 < (float(np.sqrt(np.mean((err_deg[inliers_mask] / max(scale, 1e-12)) ** 2))) if inlier_count else float("inf"))):
+                    reassign_src_idx = np.asarray(re_diag0.get("src_indices", np.zeros(0, dtype=np.int64)), dtype=np.int64)
+                    reassign_dst_idx = np.asarray(re_diag0.get("dst_indices", np.zeros(0, dtype=np.int64)), dtype=np.int64)
+                    if reassign_src_idx.size > 0 and reassign_dst_idx.size == reassign_src_idx.size:
+                        accept_reassign_eval = True
+                        try:
+                            pts_src = img_points[np.clip(reassign_src_idx, 0, img_points.shape[0]-1)]
+                            if int(pts_src.shape[0]) >= 4:
+                                st = _a2v22_shape_stats(np.asarray(pts_src, dtype=np.float64))
+                                cov_x = float(st.get("bw", 0.0)) / max(1.0, float(image.shape[1]))
+                                cov_y = float(st.get("bh", 0.0)) / max(1.0, float(image.shape[0]))
+                                cov_area = float(cov_x * cov_y)
+                                min_span = max(0.02, float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08) * 0.45)
+                                min_area = max(2e-4, float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003) * 0.12)
+                                if (max(cov_x, cov_y) < min_span) or (cov_area < min_area):
+                                    accept_reassign_eval = False
+                                    phase_slot["a2v26_reassign_eval_reject_footprint"] = int(phase_slot.get("a2v26_reassign_eval_reject_footprint", 0) + 1)
+                                    phase_slot["a2v26_reassign_eval_cov_area_last"] = float(cov_area)
+                        except Exception:
+                            pass
+                        if str(candidate_key) == "d50_0819":
+                            try:
+                                tr = globals().get("_A2V22_TRACE", {})
+                                pts_src = img_points[np.clip(reassign_src_idx, 0, img_points.shape[0]-1)]
+                                tr["reassign_eval_output"] = _a2v22_shape_stats(np.asarray(pts_src, dtype=np.float64))
+                                tr["reassign_eval_src_count"] = int(reassign_src_idx.size)
+                                tr["reassign_eval_dst_count"] = int(reassign_dst_idx.size)
+                                tr["reassign_eval_accept"] = bool(accept_reassign_eval)
+                                globals()["_A2V22_TRACE"] = tr
+                            except Exception:
+                                pass
+                        if accept_reassign_eval:
+                            inlier_count = int(reassign_src_idx.size)
+                            inliers_mask = np.zeros(src_all_c.shape[0], dtype=bool)
+                            inliers_mask[np.clip(reassign_src_idx, 0, src_all_c.shape[0]-1)] = True
+                            reassign_source = "reassign_eval"
+                            reassign_path_tag = "reassign_eval_main"
+                            phase_slot["astrometry_reassign_eval_better"] = int(phase_slot.get("astrometry_reassign_eval_better", 0) + 1)
+
+            if str(candidate_key) == "d50_0819":
+                try:
+                    if reassign_src_idx is not None and int(getattr(reassign_src_idx, "size", 0)) >= 4:
+                        pts_re = img_points[np.clip(np.asarray(reassign_src_idx, dtype=np.int64),0,img_points.shape[0]-1)]
+                    else:
+                        pts_re = img_points[inliers_mask]
+                    tr = globals().get("_A2V22_TRACE", {})
+                    tr["post_reassign"] = _a2v22_shape_stats(np.asarray(pts_re, dtype=np.float64))
+                    globals()["_A2V22_TRACE"] = tr
+                except Exception:
+                    pass
+
+            if first_transform_snapshot is None:
+                first_transform_snapshot = {
+                    "phase": str(phase_name),
+                    "level": str(level_name),
+                    "parity": str(parity_label),
+                    "tile": str(candidate_key),
+                    "model_scale_arcsec": float(3600.0 * max(scale, 1e-12)),
+                    "initial_inliers": int(inlier_count),
+                    "pairs": int(img_points.shape[0]),
+                }
+
+            # A2-v18: targeted candidate debug for persistent quasi-solution tile
+            if str(candidate_key) == "d50_0819":
+                try:
+                    # A2-v18b: hard-skip known degenerate target candidate after repeated low-coverage hits.
+                    if int(phase_slot.get("a2v18_target_lowcov_hits", 0) or 0) >= 1:
+                        phase_slot["a2v18_target_forced_skip"] = int(phase_slot.get("a2v18_target_forced_skip", 0) + 1)
+                        _mark_fail_stage("hypothesis")
+                        continue
+                    phase_slot["a2v18_target_tile_seen"] = int(phase_slot.get("a2v18_target_tile_seen", 0) + 1)
+                    try:
+                        globals()["_A2V21_D50819_SNAPSHOT"] = {
+                            "pairs": int(img_points.shape[0]),
+                            "img_points": np.asarray(img_points[:4000], dtype=np.float32),
+                            "tile_points": np.asarray(tile_points[:4000], dtype=np.float32),
+                        }
+                        _tr0 = globals().get("_A2V22_TRACE", {})
+                        _tr0["raw"] = _a2v22_shape_stats(np.asarray(img_points, dtype=np.float64))
+                        globals()["_A2V22_TRACE"] = _tr0
+                    except Exception:
+                        pass
+                    if inlier_count > 0:
+                        if reassign_src_idx is not None and int(getattr(reassign_src_idx, "size", 0)) >= 4:
+                            dbg_idx = np.clip(np.asarray(reassign_src_idx, dtype=np.int64), 0, img_points.shape[0]-1)
+                            dbg_pts = img_points[dbg_idx]
+                        else:
+                            dbg_pts = img_points[inliers_mask]
+                        if int(dbg_pts.shape[0]) >= 4:
+                            dx = np.asarray(dbg_pts[:, 0], dtype=np.float64)
+                            dy = np.asarray(dbg_pts[:, 1], dtype=np.float64)
+                            bw = float(np.nanmax(dx) - np.nanmin(dx)) if dx.size else 0.0
+                            bh = float(np.nanmax(dy) - np.nanmin(dy)) if dy.size else 0.0
+                            cov_x = bw / max(1.0, float(image.shape[1]))
+                            cov_y = bh / max(1.0, float(image.shape[0]))
+                            cov_area = float(cov_x * cov_y)
+                            phase_slot["a2v18_target_cov_area_last"] = float(cov_area)
+                            phase_slot["a2v18_target_cov_x_last"] = float(cov_x)
+                            phase_slot["a2v18_target_cov_y_last"] = float(cov_y)
+                            if cov_area < 5e-4:
+                                phase_slot["a2v18_target_lowcov_hits"] = int(phase_slot.get("a2v18_target_lowcov_hits", 0) + 1)
+                except Exception:
+                    pass
+
+            if bool(getattr(config, "blind_astrometry_resolve_hit_enabled", True)) and int(img_points.shape[0]) >= 4:
+                try:
+                    phase_slot["astrometry_post_resolve_attempts"] = int(phase_slot.get("astrometry_post_resolve_attempts", 0) + 1)
+                    rh_tol_factor = float(max(0.6, getattr(config, "blind_astrometry_resolve_hit_tol_factor", 3.0) or 3.0))
+                    rh_post = _resolve_hit_correspondences(
+                        src_all_c,
+                        dst_all_c,
+                        rot_scale=complex(rot_scale),
+                        translation=complex(translation),
+                        tol_deg=float(tol_deg) * rh_tol_factor,
+                        max_points=max(24, int(getattr(config, "blind_astrometry_resolve_hit_max_points", 192) or 0)),
+                        max_pairs=max(8, int(getattr(config, "blind_astrometry_resolve_hit_max_pairs", 64) or 0)),
+                        astrometry_iso=bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)),
+                    )
+                    if rh_post is None:
+                        if int(phase_slot.get("upstream_pair_rescue_hits", 0) or 0) <= 0:
+                            phase_slot["astrometry_post_resolve_relaxed_forced"] = int(phase_slot.get("astrometry_post_resolve_relaxed_forced", 0) + 1)
+                        phase_slot["astrometry_post_resolve_relaxed_attempts"] = int(phase_slot.get("astrometry_post_resolve_relaxed_attempts", 0) + 1)
+                        rh_post = _resolve_hit_correspondences(
+                            src_all_c,
+                            dst_all_c,
+                            rot_scale=complex(rot_scale),
+                            translation=complex(translation),
+                            tol_deg=float(tol_deg) * max(rh_tol_factor * 2.0, rh_tol_factor + 1.0),
+                            max_points=max(32, int(getattr(config, "blind_astrometry_resolve_hit_max_points", 192) or 0)),
+                            max_pairs=max(16, int(getattr(config, "blind_astrometry_resolve_hit_max_pairs", 64) or 0) * 2),
+                            astrometry_iso=bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)),
+                        )
+                        if rh_post is not None:
+                            phase_slot["astrometry_post_resolve_relaxed_hits"] = int(phase_slot.get("astrometry_post_resolve_relaxed_hits", 0) + 1)
+                    if rh_post is not None:
+                        _src_hit_post, _dst_hit_post, _diag_post = rh_post
+                        src_idx_post = np.asarray(_diag_post.get("src_indices", np.zeros(0, dtype=np.int64)), dtype=np.int64)
+                        dst_idx_post = np.asarray(_diag_post.get("dst_indices", np.zeros(0, dtype=np.int64)), dtype=np.int64)
+                        min_pairs_post = max(4, int(getattr(config, "blind_astrometry_resolve_hit_min_pairs", 4) or 0))
+                        if src_idx_post.size >= min_pairs_post and dst_idx_post.size == src_idx_post.size:
+                            src_idx_post = np.clip(src_idx_post, 0, img_points.shape[0] - 1)
+                            dst_idx_post = np.clip(dst_idx_post, 0, tile_points.shape[0] - 1)
+
+                            # A2-v14: require minimal 2D footprint for post-resolve correspondences.
+                            accept_post = True
+                            try:
+                                pts_post = img_points[src_idx_post]
+                                if int(pts_post.shape[0]) >= 4:
+                                    gx = np.asarray(pts_post[:, 0], dtype=np.float64)
+                                    gy = np.asarray(pts_post[:, 1], dtype=np.float64)
+                                    bw = float(np.nanmax(gx) - np.nanmin(gx)) if gx.size else 0.0
+                                    bh = float(np.nanmax(gy) - np.nanmin(gy)) if gy.size else 0.0
+                                    cov_x = bw / max(1.0, float(image.shape[1]))
+                                    cov_y = bh / max(1.0, float(image.shape[0]))
+                                    cov_area = float(cov_x * cov_y)
+                                    min_span = max(0.03, float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08) * 0.6)
+                                    min_area = max(5e-4, float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003) * 0.25)
+                                    if (max(cov_x, cov_y) < min_span) or (cov_area < min_area):
+                                        accept_post = False
+                                        phase_slot["a2v14_postresolve_reject_footprint"] = int(phase_slot.get("a2v14_postresolve_reject_footprint", 0) + 1)
+                                        phase_slot["a2v14_postresolve_cov_area_min"] = float(min(
+                                            float(phase_slot.get("a2v14_postresolve_cov_area_min", 1.0) or 1.0),
+                                            cov_area,
+                                        ))
+                            except Exception:
+                                pass
+
+                            if accept_post:
+                                reassign_src_idx = src_idx_post
+                                reassign_dst_idx = dst_idx_post
+                                reassign_source = "resolve_hit"
+                                reassign_path_tag = "resolve_hit_direct"
+                                inlier_count = int(src_idx_post.size)
+                                inliers_mask = np.zeros(src_all_c.shape[0], dtype=bool)
+                                inliers_mask[src_idx_post] = True
+                                phase_slot["astrometry_post_resolve_hits"] = int(phase_slot.get("astrometry_post_resolve_hits", 0) + 1)
+                                if reassign_src_idx.size > 0:
+                                    _record_verify_hit_stage(
+                                        stage="hit_resolve_chain",
+                                        outcome="resolve",
+                                        context={"phase": str(phase_name), "level": str(level_name), "parity": str(parity_label), "tile": str(candidate_key)},
+                                        extra={
+                                            "pairs": int(reassign_src_idx.size),
+                                            "median_match_dist_deg": float(_diag_post.get("median_match_dist_deg", float("nan")) or float("nan")),
+                                            "resolver": "post_hypothesis",
+                                        },
+                                    )
+                    else:
+                        try:
+                            li_dbg, lj_dbg, ld_dbg, _mk_dbg = _greedy_global_pairing(
+                                pred,
+                                dst_all_c,
+                                thr=float(tol_deg) * float(max(0.6, getattr(config, "blind_astrometry_resolve_hit_tol_factor", 3.0) or 3.0)),
+                                max_pairs=max(8, int(getattr(config, "blind_astrometry_resolve_hit_max_pairs", 64) or 0)),
+                            )
+                            try:
+                                dmat_dbg = np.abs(pred[:, None] - dst_all_c[None, :])
+                                if dmat_dbg.size > 0:
+                                    nn_dbg = np.min(dmat_dbg, axis=1)
+                                    nn_dbg = nn_dbg[np.isfinite(nn_dbg)]
+                                    if nn_dbg.size > 0:
+                                        phase_slot["astrometry_post_resolve_nn_med_deg_sum"] = float(phase_slot.get("astrometry_post_resolve_nn_med_deg_sum", 0.0) + float(np.median(nn_dbg)))
+                                        phase_slot["astrometry_post_resolve_nn_p10_deg_sum"] = float(phase_slot.get("astrometry_post_resolve_nn_p10_deg_sum", 0.0) + float(np.percentile(nn_dbg, 10)))
+                                        phase_slot["astrometry_post_resolve_nn_samples"] = int(phase_slot.get("astrometry_post_resolve_nn_samples", 0) + 1)
+                            except Exception:
+                                pass
+                            min_pairs_boot = max(4, int(getattr(config, "blind_astrometry_resolve_hit_min_pairs", 4) or 0))
+                            # M1.1b: if strict post-resolve pairing is too sparse, try one relaxed bootstrap pass.
+                            if non_parity_mode_effective and bool(getattr(config, "blind_astrometry_post_resolve_bootstrap_enabled", True)) and int(li_dbg.size) < int(min_pairs_boot):
+                                try:
+                                    rel_fac = max(
+                                        float(max(0.6, getattr(config, "blind_astrometry_resolve_hit_tol_factor", 3.0) or 3.0)) + 1.0,
+                                        float(getattr(config, "blind_astrometry_post_resolve_bootstrap_relaxed_tol_factor", 9.0) or 9.0),
+                                    )
+                                    li_rel, lj_rel, ld_rel, _mk_rel = _greedy_global_pairing(
+                                        pred,
+                                        dst_all_c,
+                                        thr=float(tol_deg) * float(rel_fac),
+                                        max_pairs=max(16, int(getattr(config, "blind_astrometry_resolve_hit_max_pairs", 64) or 0) * 3),
+                                    )
+                                    phase_slot["astrometry_post_resolve_bootstrap_relaxed_attempts"] = int(phase_slot.get("astrometry_post_resolve_bootstrap_relaxed_attempts", 0) + 1)
+                                    if int(li_rel.size) > int(li_dbg.size):
+                                        li_dbg, lj_dbg, ld_dbg = li_rel, lj_rel, ld_rel
+                                        phase_slot["astrometry_post_resolve_bootstrap_relaxed_improved"] = int(phase_slot.get("astrometry_post_resolve_bootstrap_relaxed_improved", 0) + 1)
+                                except Exception:
+                                    pass
+                            if (
+                                non_parity_mode_effective
+                                and bool(getattr(config, "blind_astrometry_post_resolve_bootstrap_enabled", True))
+                                and int(li_dbg.size) >= 2
+                                and int(lj_dbg.size) == int(li_dbg.size)
+                            ):
+                                src_boot = np.clip(np.asarray(li_dbg, dtype=np.int64), 0, img_points.shape[0] - 1)
+                                dst_boot = np.clip(np.asarray(lj_dbg, dtype=np.int64), 0, tile_points.shape[0] - 1)
+                                boot_ok = False
+                                # Try to expand from sparse greedy pairs into a full inlier mask.
+                                try:
+                                    reflected_boot = getattr(transform, "parity", 1) < 0
+                                    hyp_boot = _derive_similarity(
+                                        img_points[src_boot].astype(np.float64),
+                                        tile_points[dst_boot].astype(np.float64),
+                                        reflected=reflected_boot,
+                                    )
+                                    if hyp_boot is not None:
+                                        rs_b, tr_b = hyp_boot
+                                        trf_b = SimilarityTransform(
+                                            scale=float(abs(rs_b)),
+                                            rotation=float(np.angle(rs_b)),
+                                            translation=(float(tr_b.real), float(tr_b.imag)),
+                                            parity=-1 if reflected_boot else 1,
+                                        )
+                                        sc_b = float(max(getattr(trf_b, "scale", 0.0) or 0.0, 1e-12))
+                                        src_b = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                                        if getattr(trf_b, "parity", 1) < 0:
+                                            src_b = np.conj(src_b)
+                                        dst_b = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                                        rs_c_b = sc_b * np.exp(1j * float(getattr(trf_b, "rotation", 0.0) or 0.0))
+                                        tr_c_b = complex(*getattr(trf_b, "translation", (0.0, 0.0)))
+                                        err_b = np.abs(rs_c_b * src_b + tr_c_b - dst_b)
+                                        tol_b = max(1e-6, float(tol_deg) * 1.35)
+                                        inl_b = np.isfinite(err_b) & (err_b <= tol_b)
+                                        cnt_b = int(np.count_nonzero(inl_b))
+                                        phase_slot["astrometry_post_resolve_bootstrap_refit_inliers_max"] = int(max(int(phase_slot.get("astrometry_post_resolve_bootstrap_refit_inliers_max", 0) or 0), int(cnt_b)))
+                                        if cnt_b >= int(min_pairs_boot):
+                                            transform = trf_b
+                                            inliers_mask = inl_b
+                                            inlier_count = int(cnt_b)
+                                            reassign_src_idx = np.where(inl_b)[0].astype(np.int64)
+                                            reassign_dst_idx = reassign_src_idx.copy()
+                                            reassign_source = "resolve_hit_bootstrap_refit"
+                                            reassign_path_tag = "resolve_hit_bootstrap_refit"
+                                            boot_ok = True
+                                            phase_slot["astrometry_post_resolve_bootstrap_refit_hits"] = int(phase_slot.get("astrometry_post_resolve_bootstrap_refit_hits", 0) + 1)
+                                except Exception:
+                                    boot_ok = False
+
+                                if not boot_ok and int(src_boot.size) >= int(min_pairs_boot):
+                                    reassign_src_idx = src_boot
+                                    reassign_dst_idx = dst_boot
+                                    reassign_source = "resolve_hit_bootstrap"
+                                    reassign_path_tag = "resolve_hit_bootstrap_greedy"
+                                    inlier_count = int(src_boot.size)
+                                    inliers_mask = np.zeros(src_all_c.shape[0], dtype=bool)
+                                    inliers_mask[src_boot] = True
+                                    boot_ok = True
+                                    phase_slot["astrometry_post_resolve_bootstrap_direct_hits"] = int(phase_slot.get("astrometry_post_resolve_bootstrap_direct_hits", 0) + 1)
+
+                                if boot_ok:
+                                    phase_slot["astrometry_post_resolve_bootstrap_hits"] = int(phase_slot.get("astrometry_post_resolve_bootstrap_hits", 0) + 1)
+                                    _record_verify_hit_stage(
+                                        stage="hit_resolve_chain",
+                                        outcome="bootstrap",
+                                        context={"phase": str(phase_name), "level": str(level_name), "parity": str(parity_label), "tile": str(candidate_key)},
+                                        extra={"pairs": int(max(0, inlier_count)), "resolver": str(reassign_path_tag)},
+                                    )
+                                else:
+                                    phase_slot["astrometry_post_resolve_fail_too_few_pairs"] = int(phase_slot.get("astrometry_post_resolve_fail_too_few_pairs", 0) + 1)
+                                    phase_slot["astrometry_post_resolve_fail_pairs_total"] = int(phase_slot.get("astrometry_post_resolve_fail_pairs_total", 0) + int(li_dbg.size))
+                                    phase_slot["astrometry_post_resolve_fail_pairs_max"] = int(max(int(phase_slot.get("astrometry_post_resolve_fail_pairs_max", 0) or 0), int(li_dbg.size)))
+                                    if int(li_dbg.size) >= 2:
+                                        phase_slot["astrometry_post_resolve_fail_pairs_ge2"] = int(phase_slot.get("astrometry_post_resolve_fail_pairs_ge2", 0) + 1)
+                                    if int(li_dbg.size) >= 3:
+                                        phase_slot["astrometry_post_resolve_fail_pairs_ge3"] = int(phase_slot.get("astrometry_post_resolve_fail_pairs_ge3", 0) + 1)
+                                    if ld_dbg.size > 0:
+                                        phase_slot["astrometry_post_resolve_fail_median_dist_sum"] = float(phase_slot.get("astrometry_post_resolve_fail_median_dist_sum", 0.0) + float(np.median(ld_dbg)))
+                                        phase_slot["astrometry_post_resolve_fail_with_dist"] = int(phase_slot.get("astrometry_post_resolve_fail_with_dist", 0) + 1)
+                            else:
+                                phase_slot["astrometry_post_resolve_fail_too_few_pairs"] = int(phase_slot.get("astrometry_post_resolve_fail_too_few_pairs", 0) + 1)
+                                phase_slot["astrometry_post_resolve_fail_pairs_total"] = int(phase_slot.get("astrometry_post_resolve_fail_pairs_total", 0) + int(li_dbg.size))
+                                phase_slot["astrometry_post_resolve_fail_pairs_max"] = int(max(int(phase_slot.get("astrometry_post_resolve_fail_pairs_max", 0) or 0), int(li_dbg.size)))
+                                if int(li_dbg.size) >= 2:
+                                    phase_slot["astrometry_post_resolve_fail_pairs_ge2"] = int(phase_slot.get("astrometry_post_resolve_fail_pairs_ge2", 0) + 1)
+                                if int(li_dbg.size) >= 3:
+                                    phase_slot["astrometry_post_resolve_fail_pairs_ge3"] = int(phase_slot.get("astrometry_post_resolve_fail_pairs_ge3", 0) + 1)
+                                if ld_dbg.size > 0:
+                                    phase_slot["astrometry_post_resolve_fail_median_dist_sum"] = float(phase_slot.get("astrometry_post_resolve_fail_median_dist_sum", 0.0) + float(np.median(ld_dbg)))
+                                    phase_slot["astrometry_post_resolve_fail_with_dist"] = int(phase_slot.get("astrometry_post_resolve_fail_with_dist", 0) + 1)
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+            # A2-v13: early geometric degeneracy guard on provisional inliers
+            # to avoid spending validation budget on near-collinear/zero-footprint fits.
+            if inlier_count >= 8:
+                try:
+                    if reassign_src_idx is not None and int(getattr(reassign_src_idx, "size", 0)) >= 4:
+                        src_idx_guard = np.clip(np.asarray(reassign_src_idx, dtype=np.int64), 0, img_points.shape[0]-1)
+                        img_guard = img_points[src_idx_guard]
+                    else:
+                        img_guard = img_points[inliers_mask]
+                    geo_ok_early, geo_early = _blind_geometric_guardrails(
+                        img_guard,
+                        image.shape,
+                        sparse_min_span=float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08),
+                        sparse_min_area=float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003),
+                        dense_min_span=float(getattr(config, "blind_geo_dense_min_span", 0.10) or 0.10),
+                        dense_min_area=float(getattr(config, "blind_geo_dense_min_area", 0.005) or 0.005),
+                        dense_max_cond=float(getattr(config, "blind_geo_dense_max_cond", 2.0e4) or 2.0e4),
+                    )
+                    phase_slot["a2v13_geo_early_checks"] = int(phase_slot.get("a2v13_geo_early_checks", 0) + 1)
+                    if not geo_ok_early:
+                        phase_slot["a2v13_geo_early_rejects"] = int(phase_slot.get("a2v13_geo_early_rejects", 0) + 1)
+                        _mark_fail_stage("hypothesis")
+                        _record_hypothesis_probe(
+                            phase=str(phase_name),
+                            level=str(level_name),
+                            parity=str(parity_label),
+                            tile=str(candidate_key),
+                            score=int(score),
+                            pairs=int(max(1, int(img_points.shape[0]))),
+                            inliers=int(inlier_count),
+                            model_scale_arcsec=float(model_scale_arcsec) if np.isfinite(float(model_scale_arcsec)) else float("nan"),
+                            status="geo_early_reject",
+                        )
+                        if global_mode:
+                            low_support_streak += 1
+                            if _global_abort_now():
+                                break
+                        continue
+                except Exception:
+                    pass
+
+            # A2-v15: enforce minimal 2D footprint on currently selected inliers,
+            # regardless of source (inlier_mask / reassign_eval / resolve_hit).
+            if inlier_count >= 8:
+                try:
+                    if reassign_src_idx is not None and int(getattr(reassign_src_idx, "size", 0)) >= 4:
+                        src_idx_fp = np.clip(np.asarray(reassign_src_idx, dtype=np.int64), 0, img_points.shape[0]-1)
+                        pts_fp = img_points[src_idx_fp]
+                    else:
+                        pts_fp = img_points[inliers_mask]
+                    if int(pts_fp.shape[0]) >= 4:
+                        gx = np.asarray(pts_fp[:, 0], dtype=np.float64)
+                        gy = np.asarray(pts_fp[:, 1], dtype=np.float64)
+                        bw = float(np.nanmax(gx) - np.nanmin(gx)) if gx.size else 0.0
+                        bh = float(np.nanmax(gy) - np.nanmin(gy)) if gy.size else 0.0
+                        cov_x = bw / max(1.0, float(image.shape[1]))
+                        cov_y = bh / max(1.0, float(image.shape[0]))
+                        cov_area = float(cov_x * cov_y)
+                        min_span = max(0.03, float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08) * 0.6)
+                        min_area = max(5e-4, float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003) * 0.25)
+                        phase_slot["a2v15_inlier_footprint_checks"] = int(phase_slot.get("a2v15_inlier_footprint_checks", 0) + 1)
+
+                        # A2-v19: try global hypothesis-side recovery by forcing spatial spread
+                        # before rejecting for low footprint.
+                        if (max(cov_x, cov_y) < min_span) or (cov_area < min_area):
+                            phase_slot["a2v19_spread_repair_attempts"] = int(phase_slot.get("a2v19_spread_repair_attempts", 0) + 1)
+                            try:
+                                n_all = int(img_points.shape[0])
+                                if n_all >= 12:
+                                    x_all = np.asarray(img_points[:, 0], dtype=np.float64)
+                                    y_all = np.asarray(img_points[:, 1], dtype=np.float64)
+                                    idx_all = np.arange(n_all, dtype=np.int64)
+                                    force = set()
+                                    k = min(max(12, n_all // 4), n_all)
+                                    force.update(idx_all[np.argsort(x_all)[:k]].tolist())
+                                    force.update(idx_all[np.argsort(x_all)[-k:]].tolist())
+                                    force.update(idx_all[np.argsort(y_all)[:k]].tolist())
+                                    force.update(idx_all[np.argsort(y_all)[-k:]].tolist())
+                                    pick = np.asarray(sorted(force), dtype=np.int64)
+                                    if pick.size >= 12:
+                                        pick = np.clip(pick, 0, n_all - 1)
+                                        img_rep = img_points[pick]
+                                        tile_rep = tile_points[pick]
+                                        if int(img_rep.shape[0]) >= 8:
+                                            rseed_rep = (
+                                                ransac_seed_base
+                                                ^ ((int(tile_index) + 1) * 0x9E3779B1)
+                                                ^ ((ord(level_name[0]) if level_name else 0) << 24)
+                                                ^ (1 if parity_label == "mirror" else 0)
+                                                ^ 0xA2191901
+                                            ) & 0xFFFFFFFF
+                                            tr_rep = estimate_similarity_RANSAC(
+                                                img_rep,
+                                                tile_rep,
+                                                trials=900,
+                                                tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5),
+                                                min_inliers=4,
+                                                allow_reflection=bool(config.try_parity_flip),
+                                                early_stop_inliers=max(8, int(getattr(config, "quality_inliers", 60) or 60) // 2),
+                                                random_state=int(rseed_rep),
+                                            )
+                                            if tr_rep is not None:
+                                                transform, _stats0 = tr_rep
+                                                scale = float(transform.scale)
+                                                src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                                                dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                                                rot_scale = scale * np.exp(1j * transform.rotation)
+                                                translation = complex(*transform.translation)
+                                                if getattr(transform, "parity", 1) < 0:
+                                                    src_all_c = np.conj(src_all_c)
+                                                pred = rot_scale * src_all_c + translation
+                                                err_deg = np.abs(pred - dst_all_c)
+                                                tol_deg = max(1e-6, float(config.pixel_tolerance) * max(scale, 1e-12))
+                                                inliers_mask = err_deg <= tol_deg
+                                                inlier_count = int(np.count_nonzero(inliers_mask))
+                                                if inlier_count >= 8:
+                                                    pts2 = img_points[inliers_mask]
+                                                    if int(pts2.shape[0]) >= 4:
+                                                        x2 = np.asarray(pts2[:, 0], dtype=np.float64)
+                                                        y2 = np.asarray(pts2[:, 1], dtype=np.float64)
+                                                        bw2 = float(np.nanmax(x2) - np.nanmin(x2)) if x2.size else 0.0
+                                                        bh2 = float(np.nanmax(y2) - np.nanmin(y2)) if y2.size else 0.0
+                                                        cov_x2 = bw2 / max(1.0, float(image.shape[1]))
+                                                        cov_y2 = bh2 / max(1.0, float(image.shape[0]))
+                                                        cov_area2 = float(cov_x2 * cov_y2)
+                                                        if (max(cov_x2, cov_y2) >= min_span) and (cov_area2 >= min_area):
+                                                            phase_slot["a2v19_spread_repair_hits"] = int(phase_slot.get("a2v19_spread_repair_hits", 0) + 1)
+                                                            reassign_src_idx = None
+                                                            reassign_dst_idx = None
+                                                            reassign_source = "spread_repair"
+                                                            cov_x, cov_y, cov_area = cov_x2, cov_y2, cov_area2
+                            except Exception:
+                                pass
+
+                        if (max(cov_x, cov_y) < min_span) or (cov_area < min_area):
+                            phase_slot["a2v15_inlier_footprint_rejects"] = int(phase_slot.get("a2v15_inlier_footprint_rejects", 0) + 1)
+                            _mark_fail_stage("hypothesis")
+                            _record_hypothesis_probe(
+                                phase=str(phase_name),
+                                level=str(level_name),
+                                parity=str(parity_label),
+                                tile=str(candidate_key),
+                                score=int(score),
+                                pairs=int(max(1, int(img_points.shape[0]))),
+                                inliers=int(inlier_count),
+                                model_scale_arcsec=float(model_scale_arcsec) if np.isfinite(float(model_scale_arcsec)) else float("nan"),
+                                status="inlier_footprint_reject",
+                            )
+                            if global_mode:
+                                low_support_streak += 1
+                                if _global_abort_now():
+                                    break
+                            continue
+                except Exception:
+                    pass
+
+            if non_parity_mode and bool(getattr(config, "blind_preinlier_relax_enabled", True)) and inlier_count < 4 and err_deg.size >= 4:
+                phase_slot["preinlier_relax_attempts"] = int(phase_slot.get("preinlier_relax_attempts", 0) + 1)
+                err_px_all = err_deg / max(scale, 1e-12)
+                finite_mask = np.isfinite(err_px_all)
+                finite_count = int(np.count_nonzero(finite_mask))
+                target_inliers = max(4, int(getattr(config, "blind_preinlier_relax_target_inliers", 4) or 4))
+                target_inliers = min(target_inliers, finite_count)
+                if target_inliers >= 4:
+                    err_px_fin = err_px_all[finite_mask]
+                    kth_err_px = float(np.partition(err_px_fin, target_inliers - 1)[target_inliers - 1])
+                    base_tol_px = max(0.1, float(getattr(config, "pixel_tolerance", 2.5) or 2.5))
+                    tol_max_factor = max(1.0, float(getattr(config, "blind_preinlier_relax_max_factor", 2.4) or 1.0))
+                    tol_max_px = max(base_tol_px, float(getattr(config, "blind_preinlier_relax_max_px", 7.5) or base_tol_px))
+                    tol_cap_px = min(base_tol_px * tol_max_factor, tol_max_px)
+                    q_scale = max(1.0, float(getattr(config, "blind_preinlier_relax_quantile_scale", 1.08) or 1.0))
+                    tol_relaxed_px = min(tol_cap_px, max(base_tol_px, q_scale * kth_err_px))
+                    if tol_relaxed_px > base_tol_px * (1.0 + 1e-9):
+                        inliers_relaxed = finite_mask & (err_px_all <= tol_relaxed_px)
+                        relaxed_count = int(np.count_nonzero(inliers_relaxed))
+                        if relaxed_count >= 4 and relaxed_count > inlier_count:
+                            promoted = max(0, relaxed_count - inlier_count)
+                            inliers_mask = inliers_relaxed
+                            inlier_count = relaxed_count
+                            phase_slot["preinlier_relax_hits"] = int(phase_slot.get("preinlier_relax_hits", 0) + 1)
+                            phase_slot["preinlier_relax_promoted_total"] = int(phase_slot.get("preinlier_relax_promoted_total", 0) + promoted)
+
+            if non_parity_mode and bool(getattr(config, "blind_preinlier_refit_enabled", True)) and inlier_count < 4 and err_deg.size >= 6:
+                phase_slot["preinlier_refit_attempts"] = int(phase_slot.get("preinlier_refit_attempts", 0) + 1)
+                err_px_all = err_deg / max(scale, 1e-12)
+                finite_idx = np.flatnonzero(np.isfinite(err_px_all))
+                if finite_idx.size >= 6:
+                    top_n = max(6, int(getattr(config, "blind_preinlier_refit_top_n", 14) or 14))
+                    top_n = min(top_n, int(finite_idx.size))
+                    rank_local = np.argsort(err_px_all[finite_idx])
+                    seed_idx = finite_idx[rank_local[:top_n]]
+                    if seed_idx.size >= 4:
+                        reflected_seed = getattr(transform, "parity", 1) < 0
+                        sigma_seed = max(0.25, float(getattr(config, "blind_preinlier_refit_sigma_px", 1.8) or 1.8))
+                        w_seed = np.exp(-0.5 * (err_px_all[seed_idx] / sigma_seed) ** 2) + 1e-3
+                        hyp_seed = _derive_similarity_weighted(
+                            img_points[seed_idx].astype(np.float64),
+                            tile_points[seed_idx].astype(np.float64),
+                            w_seed.astype(np.float64),
+                            reflected=reflected_seed,
+                        )
+                        if hyp_seed is not None:
+                            rs_seed, tr_seed = hyp_seed
+                            transform_seed = SimilarityTransform(
+                                scale=float(abs(rs_seed)),
+                                rotation=float(np.angle(rs_seed)),
+                                translation=(float(tr_seed.real), float(tr_seed.imag)),
+                                parity=-1 if reflected_seed else 1,
+                            )
+                            src_seed_all = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                            if reflected_seed:
+                                src_seed_all = np.conj(src_seed_all)
+                            dst_seed_all = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                            pred_seed = rs_seed * src_seed_all + tr_seed
+                            err_seed_deg = np.abs(pred_seed - dst_seed_all)
+                            tol_seed_deg = max(1e-6, float(getattr(config, "pixel_tolerance", 2.5) or 2.5) * max(float(abs(rs_seed)), 1e-12))
+                            inliers_seed = np.isfinite(err_seed_deg) & (err_seed_deg <= tol_seed_deg)
+                            seed_count = int(np.count_nonzero(inliers_seed))
+                            if seed_count >= 4 and seed_count > inlier_count:
+                                promoted = max(0, seed_count - inlier_count)
+                                transform = transform_seed
+                                scale = float(max(transform.scale, 1e-12))
+                                src_all_c = src_seed_all
+                                dst_all_c = dst_seed_all
+                                pred = pred_seed
+                                err_deg = err_seed_deg
+                                inliers_mask = inliers_seed
+                                inlier_count = seed_count
+                                phase_slot["preinlier_refit_hits"] = int(phase_slot.get("preinlier_refit_hits", 0) + 1)
+                                phase_slot["preinlier_refit_promoted_total"] = int(phase_slot.get("preinlier_refit_promoted_total", 0) + promoted)
+
+            if non_parity_mode and bool(getattr(config, "blind_three_inlier_rescue_enabled", True)) and inlier_count == 3 and err_deg.size >= 4:
+                phase_slot["three_inlier_rescue_attempts"] = int(phase_slot.get("three_inlier_rescue_attempts", 0) + 1)
+                finite_mask = np.isfinite(err_deg)
+                inlier_idx = np.flatnonzero(inliers_mask & finite_mask)
+                if inlier_idx.size == 3:
+                    out_idx = np.flatnonzero((~inliers_mask) & finite_mask)
+                    if out_idx.size > 0:
+                        err_px_all = err_deg / max(scale, 1e-12)
+                        rank_out = out_idx[np.argsort(err_px_all[out_idx])]
+                        max_extra = max(1, int(getattr(config, "blind_three_inlier_rescue_max_extra", 3) or 3))
+                        base_tol_factor = max(1.0, float(getattr(config, "blind_three_inlier_rescue_tol_factor", 1.15) or 1.0))
+                        tol_factors = [float(base_tol_factor)]
+                        if bool(getattr(config, "blind_three_inlier_rescue_aggressive_on_zero_validation", True)) and int(fail_validation_count) <= 0:
+                            tol_factors.append(max(base_tol_factor, float(getattr(config, "blind_three_inlier_rescue_aggressive_tol_factor", 2.0) or base_tol_factor)))
+                        # keep deterministic order and avoid duplicates
+                        seen_tol: set[float] = set()
+                        tol_factors_sorted: list[float] = []
+                        for tf in sorted(tol_factors):
+                            key = round(float(tf), 6)
+                            if key in seen_tol:
+                                continue
+                            seen_tol.add(key)
+                            tol_factors_sorted.append(float(tf))
+
+                        base_tol_px = max(0.1, float(getattr(config, "pixel_tolerance", 2.5) or 2.5))
+                        reflected_seed = getattr(transform, "parity", 1) < 0
+                        rescued = False
+                        for tol_factor in tol_factors_sorted:
+                            tol_rescue_px = base_tol_px * float(tol_factor)
+                            for cand_idx in rank_out[:max_extra]:
+                                seed_idx = np.concatenate([inlier_idx, np.asarray([int(cand_idx)], dtype=np.int64)])
+                                hyp_seed = _derive_similarity_weighted(
+                                    img_points[seed_idx].astype(np.float64),
+                                    tile_points[seed_idx].astype(np.float64),
+                                    np.ones(seed_idx.size, dtype=np.float64),
+                                    reflected=reflected_seed,
+                                )
+                                if hyp_seed is None:
+                                    continue
+                                rs_seed, tr_seed = hyp_seed
+                                src_seed_all = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                                if reflected_seed:
+                                    src_seed_all = np.conj(src_seed_all)
+                                dst_seed_all = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                                pred_seed = rs_seed * src_seed_all + tr_seed
+                                err_seed_deg = np.abs(pred_seed - dst_seed_all)
+                                tol_seed_deg = max(1e-6, float(tol_rescue_px) * max(float(abs(rs_seed)), 1e-12))
+                                inliers_seed = np.isfinite(err_seed_deg) & (err_seed_deg <= tol_seed_deg)
+                                seed_count = int(np.count_nonzero(inliers_seed))
+                                if seed_count >= 4:
+                                    transform = SimilarityTransform(
+                                        scale=float(abs(rs_seed)),
+                                        rotation=float(np.angle(rs_seed)),
+                                        translation=(float(tr_seed.real), float(tr_seed.imag)),
+                                        parity=-1 if reflected_seed else 1,
+                                    )
+                                    scale = float(max(transform.scale, 1e-12))
+                                    src_all_c = src_seed_all
+                                    dst_all_c = dst_seed_all
+                                    pred = pred_seed
+                                    err_deg = err_seed_deg
+                                    inliers_mask = inliers_seed
+                                    inlier_count = seed_count
+                                    phase_slot["three_inlier_rescue_hits"] = int(phase_slot.get("three_inlier_rescue_hits", 0) + 1)
+                                    phase_slot["three_inlier_rescue_promoted_total"] = int(phase_slot.get("three_inlier_rescue_promoted_total", 0) + max(0, seed_count - 3))
+                                    phase_slot["three_inlier_rescue_hit_tol_factor"] = float(tol_factor)
+                                    rescued = True
+                                    break
+                            if rescued:
+                                break
+                        if not rescued:
+                            phase_slot["three_inlier_rescue_miss"] = int(phase_slot.get("three_inlier_rescue_miss", 0) + 1)
+
+            if inlier_count <= 0 and int(img_points.shape[0]) >= 6:
+                # A2-v3: bootstrap a coarse seed from best residual pairs, then re-evaluate nominal inliers.
+                try:
+                    finite = np.isfinite(err_deg)
+                    if np.any(finite):
+                        idx = np.where(finite)[0]
+                        order = np.argsort(err_deg[idx])
+                        idx = idx[order]
+                        take = int(min(max(4, int(getattr(config, "blind_astrometry_resolve_hit_min_pairs", 4) or 4)), idx.size, 8))
+                        if take >= 4:
+                            pick = idx[:take]
+                            src_seed_pts = np.column_stack((src_all_c[pick].real, src_all_c[pick].imag)).astype(np.float64)
+                            dst_seed_pts = np.column_stack((dst_all_c[pick].real, dst_all_c[pick].imag)).astype(np.float64)
+                            reflected_seed = getattr(transform, "parity", 1) < 0
+                            hyp_seed = _derive_similarity(src_seed_pts, dst_seed_pts, reflected=reflected_seed)
+                            if hyp_seed is not None:
+                                rs_seed, tr_seed = hyp_seed
+                                transform = SimilarityTransform(
+                                    scale=float(abs(rs_seed)),
+                                    rotation=float(np.angle(rs_seed)),
+                                    translation=(float(tr_seed.real), float(tr_seed.imag)),
+                                    parity=-1 if reflected_seed else 1,
+                                )
+                                scale = float(max(transform.scale, 1e-12))
+                                src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                                if reflected_seed:
+                                    src_all_c = np.conj(src_all_c)
+                                dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                                rot_scale = scale * np.exp(1j * transform.rotation)
+                                translation = complex(*transform.translation)
+                                pred = rot_scale * src_all_c + translation
+                                err_deg = np.abs(pred - dst_all_c)
+                                tol_deg = max(1e-6, float(config.pixel_tolerance) * max(scale, 1e-12))
+                                inliers_mask = np.isfinite(err_deg) & (err_deg <= tol_deg)
+                                inlier_count = int(np.count_nonzero(inliers_mask))
+                                phase_slot["astrometry_seed_best4_attempts"] = int(phase_slot.get("astrometry_seed_best4_attempts", 0) + 1)
+                                if inlier_count > 0:
+                                    phase_slot["astrometry_seed_best4_hits"] = int(phase_slot.get("astrometry_seed_best4_hits", 0) + 1)
+                except Exception:
+                    pass
+
+            if inlier_count <= 0 and bool(getattr(config, "blind_astrometry_resolve_hit_enabled", True)) and int(img_points.shape[0]) >= 6:
+                try:
+                    phase_slot["astrometry_seed_rescue_attempts"] = int(phase_slot.get("astrometry_seed_rescue_attempts", 0) + 1)
+                    tol_seed_deg = max(float(tol_deg) * 5.0, 24.0 * max(float(scale), 1e-12))
+                    rh_seed = _resolve_hit_correspondences(
+                        src_all_c,
+                        dst_all_c,
+                        rot_scale=complex(rot_scale),
+                        translation=complex(translation),
+                        tol_deg=float(tol_seed_deg),
+                        max_points=max(48, int(getattr(config, "blind_astrometry_resolve_hit_max_points", 192) or 0)),
+                        max_pairs=max(24, int(getattr(config, "blind_astrometry_resolve_hit_max_pairs", 64) or 0) * 3),
+                        astrometry_iso=bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)),
+                    )
+                    if rh_seed is not None:
+                        src_seed_pts, dst_seed_pts, seed_diag = rh_seed
+                        if int(src_seed_pts.shape[0]) >= 4 and int(dst_seed_pts.shape[0]) == int(src_seed_pts.shape[0]):
+                            reflected_seed = getattr(transform, "parity", 1) < 0
+                            hyp_seed = _derive_similarity(
+                                src_seed_pts.astype(np.float64),
+                                dst_seed_pts.astype(np.float64),
+                                reflected=reflected_seed,
+                            )
+                            if hyp_seed is not None:
+                                rs_seed, tr_seed = hyp_seed
+                                transform = SimilarityTransform(
+                                    scale=float(abs(rs_seed)),
+                                    rotation=float(np.angle(rs_seed)),
+                                    translation=(float(tr_seed.real), float(tr_seed.imag)),
+                                    parity=-1 if reflected_seed else 1,
+                                )
+                                scale = float(max(transform.scale, 1e-12))
+                                src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                                if reflected_seed:
+                                    src_all_c = np.conj(src_all_c)
+                                dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                                rot_scale = scale * np.exp(1j * transform.rotation)
+                                translation = complex(*transform.translation)
+                                pred = rot_scale * src_all_c + translation
+                                err_deg = np.abs(pred - dst_all_c)
+                                tol_deg = max(1e-6, float(config.pixel_tolerance) * max(scale, 1e-12))
+                                inliers_mask = np.isfinite(err_deg) & (err_deg <= tol_deg)
+                                inlier_count = int(np.count_nonzero(inliers_mask))
+                                if inlier_count > 0:
+                                    phase_slot["astrometry_seed_rescue_hits"] = int(phase_slot.get("astrometry_seed_rescue_hits", 0) + 1)
+                                    _record_verify_hit_stage(
+                                        stage="seed_rescue",
+                                        outcome="hit",
+                                        context={"phase": str(phase_name), "level": str(level_name), "parity": str(parity_label), "tile": str(candidate_key)},
+                                        extra={
+                                            "pairs": int(src_seed_pts.shape[0]),
+                                            "median_match_dist_deg": float(seed_diag.get("median_match_dist_deg", float("nan")) or float("nan")),
+                                        },
+                                    )
+                except Exception:
+                    pass
+
+            # A2-v36: for scale-plausible hypotheses, try a guided tolerance expansion before failing early.
+            try:
+                if non_parity_mode and inlier_count < 4 and bool(getattr(config, "blind_a2v36_guided_inlier_expand_enabled", True)):
+                    model_scale_arcsec_a2v36 = 3600.0 * float(max(scale, 1e-12))
+                    if (
+                        np.isfinite(float(model_scale_arcsec_a2v36))
+                        and (scale_anchor_arcsec is not None)
+                        and np.isfinite(float(scale_anchor_arcsec))
+                        and float(scale_anchor_arcsec) > 0.0
+                    ):
+                        ratio_a2v36 = float(model_scale_arcsec_a2v36) / float(max(1e-9, float(scale_anchor_arcsec)))
+                        rmin_a2v36 = max(1e-3, float(getattr(config, "blind_a2v36_guided_inlier_expand_min_ratio", 0.60) or 1e-3))
+                        rmax_a2v36 = max(rmin_a2v36 + 1e-6, float(getattr(config, "blind_a2v36_guided_inlier_expand_max_ratio", 1.80) or (rmin_a2v36 + 1e-6)))
+                        phase_slot["a2v36_guided_expand_attempts"] = int(phase_slot.get("a2v36_guided_expand_attempts", 0) + 1)
+                        phase_slot["a2v36_guided_expand_ratio_last"] = float(ratio_a2v36)
+                        if rmin_a2v36 <= ratio_a2v36 <= rmax_a2v36:
+                            tol_fac_a2v36 = max(1.0, float(getattr(config, "blind_a2v36_guided_inlier_expand_tol_factor", 1.75) or 1.0))
+                            tol_deg_a2v36 = max(1e-6, float(getattr(config, "pixel_tolerance", 2.5) or 2.5) * tol_fac_a2v36 * max(scale, 1e-12))
+                            inliers_guided = np.isfinite(err_deg) & (err_deg <= tol_deg_a2v36)
+                            cnt_guided = int(np.count_nonzero(inliers_guided))
+                            min_inl_a2v36 = max(4, int(getattr(config, "blind_a2v36_guided_inlier_expand_min_inliers", 4) or 4))
+                            if cnt_guided >= min_inl_a2v36:
+                                # keep a basic footprint guard to avoid reintroducing colinear collapses
+                                img_g = img_points[inliers_guided]
+                                st_g = _a2v22_shape_stats(np.asarray(img_g, dtype=np.float64))
+                                cov_x_g = float(st_g.get("bw", 0.0)) / max(1.0, float(image.shape[1]))
+                                cov_y_g = float(st_g.get("bh", 0.0)) / max(1.0, float(image.shape[0]))
+                                cov_area_g = float(cov_x_g * cov_y_g)
+                                min_span_g = max(0.025, float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08) * 0.45)
+                                min_area_g = max(3e-4, float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003) * 0.12)
+                                if (max(cov_x_g, cov_y_g) >= min_span_g) and (cov_area_g >= min_area_g):
+                                    inliers_mask = inliers_guided
+                                    inlier_count = int(cnt_guided)
+                                    phase_slot["a2v36_guided_expand_hits"] = int(phase_slot.get("a2v36_guided_expand_hits", 0) + 1)
+                                    phase_slot["a2v36_guided_expand_cov_area_last"] = float(cov_area_g)
+                                else:
+                                    phase_slot["a2v36_guided_expand_cov_rejects"] = int(phase_slot.get("a2v36_guided_expand_cov_rejects", 0) + 1)
+                            else:
+                                phase_slot["a2v36_guided_expand_low_inliers"] = int(phase_slot.get("a2v36_guided_expand_low_inliers", 0) + 1)
+                        else:
+                            phase_slot["a2v36_guided_expand_ratio_rejects"] = int(phase_slot.get("a2v36_guided_expand_ratio_rejects", 0) + 1)
+            except Exception:
+                pass
+
+            # A2-v37: for plausible scale ratios with low inliers, build a compact best-residual seed and refit.
+            try:
+                if non_parity_mode and inlier_count < 4 and bool(getattr(config, "blind_a2v37_seed_refit_enabled", True)):
+                    model_scale_arcsec_a2v37 = 3600.0 * float(max(scale, 1e-12))
+                    if (
+                        np.isfinite(float(model_scale_arcsec_a2v37))
+                        and (scale_anchor_arcsec is not None)
+                        and np.isfinite(float(scale_anchor_arcsec))
+                        and float(scale_anchor_arcsec) > 0.0
+                    ):
+                        ratio_a2v37 = float(model_scale_arcsec_a2v37) / float(max(1e-9, float(scale_anchor_arcsec)))
+                        rmin_a2v37 = max(1e-3, float(getattr(config, "blind_a2v37_seed_refit_min_ratio", 0.70) or 1e-3))
+                        rmax_a2v37 = max(rmin_a2v37 + 1e-6, float(getattr(config, "blind_a2v37_seed_refit_max_ratio", 1.55) or (rmin_a2v37 + 1e-6)))
+                        phase_slot["a2v37_seed_refit_attempts"] = int(phase_slot.get("a2v37_seed_refit_attempts", 0) + 1)
+                        phase_slot["a2v37_seed_refit_ratio_last"] = float(ratio_a2v37)
+                        if rmin_a2v37 <= ratio_a2v37 <= rmax_a2v37:
+                            tol_fac_a2v37 = max(1.0, float(getattr(config, "blind_a2v37_seed_refit_tol_factor", 2.20) or 1.0))
+                            tol_deg_seed = max(1e-6, float(getattr(config, "pixel_tolerance", 2.5) or 2.5) * tol_fac_a2v37 * max(scale, 1e-12))
+                            valid_seed = np.isfinite(err_deg)
+                            idx_seed = np.where(valid_seed)[0]
+                            if idx_seed.size >= 4:
+                                order_seed = np.argsort(err_deg[idx_seed])
+                                idx_seed = idx_seed[order_seed]
+                                within_seed = idx_seed[err_deg[idx_seed] <= tol_deg_seed]
+                                if within_seed.size >= 4:
+                                    max_seed_pts = max(4, int(getattr(config, "blind_a2v37_seed_refit_max_seed_points", 8) or 4))
+                                    sel_seed = within_seed[: min(max_seed_pts, int(within_seed.size))]
+                                    # ensure basic spatial spread
+                                    st_seed = _a2v22_shape_stats(np.asarray(img_points[sel_seed], dtype=np.float64))
+                                    cov_x_seed = float(st_seed.get("bw", 0.0)) / max(1.0, float(image.shape[1]))
+                                    cov_y_seed = float(st_seed.get("bh", 0.0)) / max(1.0, float(image.shape[0]))
+                                    cov_area_seed = float(cov_x_seed * cov_y_seed)
+                                    if max(cov_x_seed, cov_y_seed) >= 0.02 and cov_area_seed >= 2.5e-4:
+                                        refl_seed = getattr(transform, "parity", 1) < 0
+                                        hyp_seed2 = _derive_similarity(
+                                            img_points[sel_seed].astype(np.float64),
+                                            tile_points[sel_seed].astype(np.float64),
+                                            reflected=refl_seed,
+                                        )
+                                        if hyp_seed2 is not None:
+                                            rs_s2, tr_s2 = hyp_seed2
+                                            trf_s2 = SimilarityTransform(
+                                                scale=float(abs(rs_s2)),
+                                                rotation=float(np.angle(rs_s2)),
+                                                translation=(float(tr_s2.real), float(tr_s2.imag)),
+                                                parity=-1 if refl_seed else 1,
+                                            )
+                                            sc_s2 = float(max(getattr(trf_s2, "scale", 0.0) or 0.0, 1e-12))
+                                            src_s2 = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                                            if getattr(trf_s2, "parity", 1) < 0:
+                                                src_s2 = np.conj(src_s2)
+                                            dst_s2 = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                                            rs_c2 = sc_s2 * np.exp(1j * float(getattr(trf_s2, "rotation", 0.0) or 0.0))
+                                            tr_c2 = complex(*getattr(trf_s2, "translation", (0.0, 0.0)))
+                                            err2 = np.abs(rs_c2 * src_s2 + tr_c2 - dst_s2)
+                                            tol2 = max(1e-6, float(getattr(config, "pixel_tolerance", 2.5) or 2.5) * 1.35 * sc_s2)
+                                            inliers2 = np.isfinite(err2) & (err2 <= tol2)
+                                            cnt2 = int(np.count_nonzero(inliers2))
+                                            if cnt2 >= 4:
+                                                img2 = img_points[inliers2]
+                                                st2 = _a2v22_shape_stats(np.asarray(img2, dtype=np.float64))
+                                                cov_x2 = float(st2.get("bw", 0.0)) / max(1.0, float(image.shape[1]))
+                                                cov_y2 = float(st2.get("bh", 0.0)) / max(1.0, float(image.shape[0]))
+                                                cov_area2 = float(cov_x2 * cov_y2)
+                                                min_span2 = max(0.025, float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08) * 0.45)
+                                                min_area2 = max(3e-4, float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003) * 0.12)
+                                                if (max(cov_x2, cov_y2) >= min_span2) and (cov_area2 >= min_area2):
+                                                    transform = trf_s2
+                                                    inliers_mask = inliers2
+                                                    inlier_count = int(cnt2)
+                                                    phase_slot["a2v37_seed_refit_hits"] = int(phase_slot.get("a2v37_seed_refit_hits", 0) + 1)
+                                                    phase_slot["a2v37_seed_refit_cov_area_last"] = float(cov_area2)
+                                                else:
+                                                    phase_slot["a2v37_seed_refit_cov_rejects"] = int(phase_slot.get("a2v37_seed_refit_cov_rejects", 0) + 1)
+                                            else:
+                                                phase_slot["a2v37_seed_refit_low_inliers"] = int(phase_slot.get("a2v37_seed_refit_low_inliers", 0) + 1)
+                                    else:
+                                        phase_slot["a2v37_seed_refit_seed_cov_rejects"] = int(phase_slot.get("a2v37_seed_refit_seed_cov_rejects", 0) + 1)
+                        else:
+                            phase_slot["a2v37_seed_refit_ratio_rejects"] = int(phase_slot.get("a2v37_seed_refit_ratio_rejects", 0) + 1)
+            except Exception:
+                pass
+
+            if inlier_count <= 0:
+                _record_hypothesis_probe(
+                    phase=str(phase_name),
+                    level=str(level_name),
+                    parity=str(parity_label),
+                    tile=str(candidate_key),
+                    score=int(score),
+                    pairs=int(img_points.shape[0]),
+                    inliers=0,
+                    model_scale_arcsec=float(3600.0 * max(scale, 1e-12)),
+                    status="empty_inliers",
+                )
+                _mark_fail_stage("verify_prob" if int(fail_validation_count) > 0 else "hypothesis")
+                phase_slot["hypothesis_fail_empty_inliers"] = int(phase_slot.get("hypothesis_fail_empty_inliers", 0) + 1)
                 if global_mode:
                     low_support_streak += 1
                     if _global_abort_now():
                         logger.debug("global early-stop: empty inlier masks (level=%s, parity=%s)", level_name, parity_label)
                         break
                 continue
-            inlier_count = int(np.count_nonzero(inliers_mask))
             if inlier_count < 4:
-                if global_mode:
-                    low_support_streak += 1
-                    if _global_abort_now():
-                        logger.debug("global early-stop: too few preliminary inliers (%d) (level=%s, parity=%s)", inlier_count, level_name, parity_label)
-                        break
-                continue
-            img_in = img_points[inliers_mask]
-            tile_in = tile_points[inliers_mask]
-            world_in = tile_world_matches[inliers_mask]
+                if non_parity_mode and bool(getattr(config, "blind_hypothesis_ransac_escape_enabled", False)) and int(img_points.shape[0]) >= 6:
+                    esc_after_v2 = max(0, int(getattr(config, "blind_hypothesis_ransac_escape_after_validations", 2) or 0))
+                    esc_after_c2 = max(0, int(getattr(config, "blind_hypothesis_ransac_escape_after_candidates", 18) or 0))
+                    esc_cond2 = (
+                        int(fail_validation_count) >= esc_after_v2
+                        or int(total_candidates_tried) >= esc_after_c2
+                    )
+                    attempts_esc2 = int(phase_slot.get("hypothesis_ransac_escape_attempts", 0) or 0)
+                    max_esc2 = max(1, int(getattr(config, "blind_hypothesis_ransac_escape_max_attempts_per_phase", 12) or 1))
+                    allow_esc_phase2 = (str(level_name) in {"M", "L"}) or (int(fail_validation_count) >= 3)
+                    if esc_cond2 and allow_esc_phase2 and attempts_esc2 < max_esc2:
+                        phase_slot["hypothesis_ransac_escape_attempts"] = int(phase_slot.get("hypothesis_ransac_escape_attempts", 0) + 1)
+                        ransac_seed_e2 = (
+                            ransac_seed_base
+                            ^ ((int(tile_index) + 1) * 0x9E3779B1)
+                            ^ ((ord(level_name[0]) if level_name else 0) << 24)
+                            ^ (1 if parity_label == "mirror" else 0)
+                            ^ 0xA24BAED4
+                        ) & 0xFFFFFFFF
+                        esc_result2 = _estimate_similarity_multitolerance(
+                            img_points,
+                            tile_points,
+                            base_tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5),
+                            allow_reflection=bool(config.try_parity_flip),
+                            random_state=int(ransac_seed_e2),
+                            base_trials=max(400, int(getattr(config, "blind_hypothesis_ransac_escape_trials", 1600) or 1600)),
+                            quality_inliers=4,
+                            tol_scales=tuple(getattr(config, "blind_hypothesis_ransac_escape_tol_scales", (2.5, 3.5, 5.0)) or (2.5, 3.5, 5.0)),
+                        )
+                        if esc_result2 is not None:
+                            transform, _stats_esc2 = esc_result2
+                            scale = float(max(getattr(transform, "scale", 0.0) or 0.0, 1e-12))
+                            src_all_c = (img_points[:, 0].astype(np.float64) + 1j * img_points[:, 1].astype(np.float64))
+                            if getattr(transform, "parity", 1) < 0:
+                                src_all_c = np.conj(src_all_c)
+                            dst_all_c = tile_points[:, 0].astype(np.float64) + 1j * tile_points[:, 1].astype(np.float64)
+                            rot_scale = scale * np.exp(1j * float(getattr(transform, "rotation", 0.0) or 0.0))
+                            translation = complex(*getattr(transform, "translation", (0.0, 0.0)))
+                            pred = rot_scale * src_all_c + translation
+                            err_deg = np.abs(pred - dst_all_c)
+                            esc_scales = tuple(getattr(config, "blind_hypothesis_ransac_escape_tol_scales", (2.5, 3.5, 5.0)) or (2.5, 3.5, 5.0))
+                            esc_scale_max = max(float(s) for s in esc_scales if np.isfinite(float(s))) if esc_scales else 1.0
+                            tol_deg = max(1e-6, float(getattr(config, "pixel_tolerance", 2.5) or 2.5) * max(1.0, esc_scale_max) * scale)
+                            inliers_mask = np.isfinite(err_deg) & (err_deg <= tol_deg)
+                            inlier_count = int(np.count_nonzero(inliers_mask))
+                            if inlier_count >= 4:
+                                phase_slot["hypothesis_ransac_escape_hits"] = int(phase_slot.get("hypothesis_ransac_escape_hits", 0) + 1)
+
+                if inlier_count < 4:
+                    _record_hypothesis_probe(
+                        phase=str(phase_name),
+                        level=str(level_name),
+                        parity=str(parity_label),
+                        tile=str(candidate_key),
+                        score=int(score),
+                        pairs=int(img_points.shape[0]),
+                        inliers=int(inlier_count),
+                        model_scale_arcsec=float(3600.0 * max(scale, 1e-12)),
+                        status="too_few_inliers",
+                    )
+                    _mark_fail_stage("verify_prob" if int(fail_validation_count) > 0 else "hypothesis")
+                    phase_slot["hypothesis_fail_too_few_inliers"] = int(phase_slot.get("hypothesis_fail_too_few_inliers", 0) + 1)
+                    if global_mode:
+                        low_support_streak += 1
+                        if _global_abort_now():
+                            logger.debug("global early-stop: too few preliminary inliers (%d) (level=%s, parity=%s)", inlier_count, level_name, parity_label)
+                            break
+                    continue
+            if reassign_src_idx is not None and reassign_dst_idx is not None and reassign_src_idx.size >= 4 and reassign_dst_idx.size == reassign_src_idx.size:
+                src_sel = np.clip(reassign_src_idx, 0, img_points.shape[0]-1)
+                dst_sel = np.clip(reassign_dst_idx, 0, tile_points.shape[0]-1)
+                img_in = img_points[src_sel]
+                tile_in = tile_points[dst_sel]
+                world_in = tile_world_matches[dst_sel]
+            else:
+                img_in = img_points[inliers_mask]
+                tile_in = tile_points[inliers_mask]
+                world_in = tile_world_matches[inliers_mask]
+            strict_astrometry_path = bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True))
+            if strict_astrometry_path and str(reassign_source).startswith("resolve_hit"):
+                phase_slot["astrometry_strict_verify_path_hits"] = int(phase_slot.get("astrometry_strict_verify_path_hits", 0) + 1)
+            if str(candidate_key) == "d50_0819":
+                try:
+                    tr = globals().get("_A2V22_TRACE", {})
+                    tr["pre_validate_inlier_mask"] = _a2v22_shape_stats(np.asarray(img_in, dtype=np.float64))
+                    tr["pre_validate_source"] = str(reassign_source)
+                    tr["pre_validate_path_tag"] = str(reassign_path_tag)
+                    if reassign_src_idx is not None:
+                        tr["pre_validate_reassign_src_count"] = int(np.asarray(reassign_src_idx).size)
+                    globals()["_A2V22_TRACE"] = tr
+                except Exception:
+                    pass
+            # A2-v28: coverage guard on inlier_mask/img_in before deeper validation chain.
+            if not strict_astrometry_path:
+                try:
+                    if int(img_in.shape[0]) >= 4:
+                        st_in = _a2v22_shape_stats(np.asarray(img_in, dtype=np.float64))
+                    cov_x_in = float(st_in.get("bw", 0.0)) / max(1.0, float(image.shape[1]))
+                    cov_y_in = float(st_in.get("bh", 0.0)) / max(1.0, float(image.shape[0]))
+                    cov_area_in = float(cov_x_in * cov_y_in)
+                    min_span_in = max(0.03, float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08) * 0.60)
+                    min_area_in = max(5e-4, float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003) * 0.20)
+                    if (max(cov_x_in, cov_y_in) < min_span_in) or (cov_area_in < min_area_in):
+                        phase_slot["a2v28_inliermask_coverage_rejects"] = int(phase_slot.get("a2v28_inliermask_coverage_rejects", 0) + 1)
+                        phase_slot["a2v28_inliermask_cov_area_last"] = float(cov_area_in)
+                        rescued = False
+                        # A2-v30: local diversified retry before abandoning this candidate.
+                        try:
+                            if int(img_points.shape[0]) >= 10:
+                                x = np.asarray(img_points[:, 0], dtype=np.float64)
+                                y = np.asarray(img_points[:, 1], dtype=np.float64)
+                                idx_pool = np.unique(np.asarray([
+                                    int(np.argmin(x)), int(np.argmax(x)), int(np.argmin(y)), int(np.argmax(y)),
+                                    int(np.argmin(x + y)), int(np.argmax(x + y)), int(np.argmin(x - y)), int(np.argmax(x - y)),
+                                ], dtype=np.int64))
+                                if idx_pool.size >= 4:
+                                    refl_local = getattr(transform, "parity", 1) < 0
+                                    hyp_r = _derive_similarity(
+                                        img_points[idx_pool].astype(np.float64),
+                                        tile_points[idx_pool].astype(np.float64),
+                                        reflected=refl_local,
+                                    )
+                                    if hyp_r is not None:
+                                        rs_r, tr_r = hyp_r
+                                        trsf_r = SimilarityTransform(
+                                            scale=float(abs(rs_r)),
+                                            rotation=float(np.angle(rs_r)),
+                                            translation=(float(tr_r.real), float(tr_r.imag)),
+                                            parity=-1 if refl_local else 1,
+                                        )
+                                        refined_r = _robust_refine_similarity(
+                                            img_points.astype(np.float64),
+                                            tile_points.astype(np.float64),
+                                            trsf_r,
+                                            tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5),
+                                            max_iters=max(1, int(getattr(config, "blind_refit_irls_iters", 3) or 3)),
+                                        )
+                                        if refined_r is not None:
+                                            trf_r, km_r, _rms_r = refined_r
+                                            if km_r is not None and int(np.count_nonzero(km_r)) >= 6:
+                                                img_r = img_points[km_r]
+                                                tile_r = tile_points[km_r]
+                                                world_r = tile_world_matches[km_r]
+                                                st_r = _a2v22_shape_stats(np.asarray(img_r, dtype=np.float64))
+                                                cov_x_r = float(st_r.get("bw", 0.0)) / max(1.0, float(image.shape[1]))
+                                                cov_y_r = float(st_r.get("bh", 0.0)) / max(1.0, float(image.shape[0]))
+                                                cov_area_r = float(cov_x_r * cov_y_r)
+                                                if (max(cov_x_r, cov_y_r) >= min_span_in) and (cov_area_r >= min_area_in):
+                                                    # A2-v31: plausibility gate for local rescue before verify.
+                                                    sc_r = float(max(getattr(trf_r, "scale", 0.0) or 0.0, 1e-12))
+                                                    src_r = (img_r[:, 0] + 1j * img_r[:, 1]).astype(np.complex128)
+                                                    if getattr(trf_r, "parity", 1) < 0:
+                                                        src_r = np.conj(src_r)
+                                                    dst_r = (tile_r[:, 0] + 1j * tile_r[:, 1]).astype(np.complex128)
+                                                    rs_r_c = sc_r * np.exp(1j * float(getattr(trf_r, "rotation", 0.0) or 0.0))
+                                                    tr_r_c = complex(*getattr(trf_r, "translation", (0.0, 0.0)))
+                                                    err_r_px = np.abs(rs_r_c * src_r + tr_r_c - dst_r) / max(sc_r, 1e-12)
+                                                    rms_r_px = float(np.sqrt(np.mean(np.square(np.asarray(err_r_px, dtype=np.float64))))) if err_r_px.size else float("inf")
+                                                    rms_gate = max(6.0, float(getattr(config, "quality_rms", 1.4) or 1.4) * 4.0)
+                                                    plausible = bool(np.isfinite(rms_r_px) and (rms_r_px <= rms_gate))
+                                                    if plausible:
+                                                        transform = trf_r
+                                                        img_in = img_r
+                                                        tile_in = tile_r
+                                                        world_in = world_r
+                                                        rescued = True
+                                                        phase_slot["a2v30_local_retry_rescues"] = int(phase_slot.get("a2v30_local_retry_rescues", 0) + 1)
+                                                    else:
+                                                        phase_slot["a2v31_local_retry_reject_rms"] = int(phase_slot.get("a2v31_local_retry_reject_rms", 0) + 1)
+                                                        phase_slot["a2v31_local_retry_rms_last"] = float(rms_r_px)
+                        except Exception:
+                            pass
+                        if str(candidate_key) == "d50_0819":
+                            try:
+                                tr = globals().get("_A2V22_TRACE", {})
+                                tr["a2v28_reject"] = True
+                                tr["a2v28_cov_x"] = cov_x_in
+                                tr["a2v28_cov_y"] = cov_y_in
+                                tr["a2v28_cov_area"] = cov_area_in
+                                tr["a2v30_local_retry_rescued"] = bool(rescued)
+                                try:
+                                    tr["a2v31_local_retry_reject_rms"] = int(phase_slot.get("a2v31_local_retry_reject_rms", 0) or 0)
+                                    tr["a2v31_local_retry_rms_last"] = float(phase_slot.get("a2v31_local_retry_rms_last", float("nan")) or float("nan"))
+                                except Exception:
+                                    pass
+                                globals()["_A2V22_TRACE"] = tr
+                            except Exception:
+                                pass
+                        if not rescued:
+                            _mark_fail_stage("hypothesis")
+                            # A2-v29: fallback policy — do not consume global low-support abort budget on coverage rejects.
+                            # Keep exploring alternative candidates instead of terminating the phase early.
+                            phase_slot["a2v29_coverage_reject_fallback_continue"] = int(phase_slot.get("a2v29_coverage_reject_fallback_continue", 0) + 1)
+                            continue
+                except Exception:
+                    pass
+
+            img_in_global = img_in
+            tile_in_global = tile_in
+            world_in_global = world_in
+            # Safety realignment: keep pred/inliers_mask shapes consistent before local clustering.
+            try:
+                pred_n = int(np.asarray(pred).shape[0])
+                mask_n = int(np.asarray(inliers_mask).shape[0])
+            except Exception:
+                pred_n = -1
+                mask_n = -2
+            if pred_n <= 0 or mask_n != pred_n:
+                try:
+                    src_tmp = (np.asarray(img_points[:, 0], dtype=np.float64) + 1j * np.asarray(img_points[:, 1], dtype=np.float64)).astype(np.complex128)
+                    if getattr(transform, "parity", 1) < 0:
+                        src_tmp = np.conj(src_tmp)
+                    dst_tmp = (np.asarray(tile_points[:, 0], dtype=np.float64) + 1j * np.asarray(tile_points[:, 1], dtype=np.float64)).astype(np.complex128)
+                    sc_tmp = float(max(getattr(transform, "scale", 0.0) or 0.0, 1e-12))
+                    rs_tmp = sc_tmp * np.exp(1j * float(getattr(transform, "rotation", 0.0) or 0.0))
+                    tr_tmp = complex(*getattr(transform, "translation", (0.0, 0.0)))
+                    pred = rs_tmp * src_tmp + tr_tmp
+                    tol_tmp = max(1e-6, float(getattr(config, "pixel_tolerance", 2.5) or 2.5) * sc_tmp)
+                    inliers_mask = np.isfinite(np.abs(pred - dst_tmp)) & (np.abs(pred - dst_tmp) <= tol_tmp)
+                    phase_slot["pred_mask_realign_hits"] = int(phase_slot.get("pred_mask_realign_hits", 0) + 1)
+                except Exception:
+                    phase_slot["pred_mask_realign_errors"] = int(phase_slot.get("pred_mask_realign_errors", 0) + 1)
+
             # Cluster locally around the median predicted position
             pred_in = pred[inliers_mask]
             cx = float(np.median(pred_in.real))
@@ -1877,6 +10597,543 @@ def solve_blind(
                     translation=(float(translation2.real), float(translation2.imag)),
                     parity=-1 if reflected else 1,
                 )
+
+            irls_iters = max(0, int(getattr(config, "blind_refit_irls_iters", 3) or 0))
+            if irls_iters > 0 and img_in.shape[0] >= 6:
+                refined = _robust_refine_similarity(
+                    img_in.astype(np.float64),
+                    tile_in.astype(np.float64),
+                    transform,
+                    tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5),
+                    max_iters=irls_iters,
+                )
+                if refined is not None:
+                    transform_refined, keep_mask_refined, refit_rms = refined
+                    if keep_mask_refined is not None and int(np.count_nonzero(keep_mask_refined)) >= 4:
+                        img_in = img_in[keep_mask_refined]
+                        tile_in = tile_in[keep_mask_refined]
+                        world_in = world_in[keep_mask_refined]
+                    transform = transform_refined
+                else:
+                    refit_rms = float("inf")
+            else:
+                refit_rms = float("nan")
+
+            if bool(getattr(config, "blind_refit_include_global_inliers", True)) and img_in_global.shape[0] > img_in.shape[0] and img_in_global.shape[0] >= 8:
+                src_all_c_ref = (img_in_global[:, 0] + 1j * img_in_global[:, 1]).astype(np.complex128)
+                if getattr(transform, "parity", 1) < 0:
+                    src_all_c_ref = np.conj(src_all_c_ref)
+                dst_all_c_ref = (tile_in_global[:, 0] + 1j * tile_in_global[:, 1]).astype(np.complex128)
+                rs_ref = float(getattr(transform, "scale", 0.0) or 0.0) * np.exp(1j * float(getattr(transform, "rotation", 0.0) or 0.0))
+                tr_ref = complex(*getattr(transform, "translation", (0.0, 0.0)))
+                err_ref_px = np.abs(rs_ref * src_all_c_ref + tr_ref - dst_all_c_ref) / max(1e-12, float(abs(rs_ref)))
+                relax_tol = max(float(getattr(config, "pixel_tolerance", 2.5) or 2.5) * 1.40, 2.0)
+                keep_ref = np.isfinite(err_ref_px) & (err_ref_px <= relax_tol)
+                if int(np.count_nonzero(keep_ref)) >= max(8, int(img_in.shape[0]) + 2):
+                    refined_g = _robust_refine_similarity(
+                        img_in_global[keep_ref].astype(np.float64),
+                        tile_in_global[keep_ref].astype(np.float64),
+                        transform,
+                        tol_px=float(getattr(config, "pixel_tolerance", 2.5) or 2.5),
+                        max_iters=max(1, int(getattr(config, "blind_refit_irls_iters", 3) or 3) - 1),
+                    )
+                    if refined_g is not None:
+                        tr_g, mask_g, rms_g = refined_g
+                        if mask_g is not None and int(np.count_nonzero(mask_g)) >= 4:
+                            cand_img = img_in_global[keep_ref][mask_g]
+                            cand_tile = tile_in_global[keep_ref][mask_g]
+                            cand_world = world_in_global[keep_ref][mask_g]
+                        else:
+                            cand_img = img_in_global[keep_ref]
+                            cand_tile = tile_in_global[keep_ref]
+                            cand_world = world_in_global[keep_ref]
+                        rms_old = float(refit_rms) if np.isfinite(refit_rms) else float("inf")
+                        if np.isfinite(float(rms_g)) and float(rms_g) <= (1.10 * rms_old):
+                            transform = tr_g
+                            img_in = cand_img
+                            tile_in = cand_tile
+                            world_in = cand_world
+                            refit_rms = float(rms_g)
+
+            tweak_iters = max(0, int(getattr(config, "blind_tweak_iterations", 2) or 0))
+            tweak_expand = max(1.0, float(getattr(config, "blind_tweak_expand_factor", 1.25) or 1.0))
+            if tweak_iters > 0 and img_points.shape[0] >= 6:
+                for _ti in range(tweak_iters):
+                    sc_t = float(max(getattr(transform, "scale", 0.0) or 0.0, 1e-12))
+                    src_all_t = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                    if getattr(transform, "parity", 1) < 0:
+                        src_all_t = np.conj(src_all_t)
+                    dst_all_t = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                    rs_t = sc_t * np.exp(1j * float(getattr(transform, "rotation", 0.0) or 0.0))
+                    tr_t = complex(*getattr(transform, "translation", (0.0, 0.0)))
+                    err_t_px = np.abs(rs_t * src_all_t + tr_t - dst_all_t) / max(sc_t, 1e-12)
+                    base_tol_t = max(0.5, float(getattr(config, "pixel_tolerance", 2.5) or 2.5))
+                    tol_t = base_tol_t * (tweak_expand ** float(_ti + 1))
+                    keep_t = np.isfinite(err_t_px) & (err_t_px <= tol_t)
+                    cnt_t = int(np.count_nonzero(keep_t))
+                    if cnt_t < max(6, int(img_in.shape[0])):
+                        continue
+                    refl_t = getattr(transform, "parity", 1) < 0
+                    hyp_t = _derive_similarity(
+                        img_points[keep_t].astype(np.float64),
+                        tile_points[keep_t].astype(np.float64),
+                        reflected=refl_t,
+                    )
+                    if hyp_t is None:
+                        continue
+                    rs2, tr2 = hyp_t
+                    cand_t = SimilarityTransform(
+                        scale=float(abs(rs2)),
+                        rotation=float(np.angle(rs2)),
+                        translation=(float(tr2.real), float(tr2.imag)),
+                        parity=-1 if refl_t else 1,
+                    )
+                    if hard_filter_enabled_runtime and approx_scale_arcsec is not None:
+                        cand_scale_arcsec = 3600.0 * float(max(getattr(cand_t, "scale", 0.0) or 0.0, 1e-12))
+                        hard_bounds_cand = _scale_gate_bounds_arcsec(
+                            config,
+                            approx_scale_arcsec,
+                            scale_bounds_arcsec,
+                            gate="hard",
+                            fail_validation_count=fail_validation_count,
+                            fail_best_inliers_seen=fail_best_inliers_seen,
+                        )
+                        if np.isfinite(cand_scale_arcsec) and hard_bounds_cand is not None:
+                            lo_h_cand, hi_h_cand, _meta_h_cand = hard_bounds_cand
+                            if float(cand_scale_arcsec) < float(lo_h_cand) or float(cand_scale_arcsec) > float(hi_h_cand):
+                                phase_slot["tweak_scale_hard_skip"] = int(phase_slot.get("tweak_scale_hard_skip", 0) + 1)
+                                continue
+                    refined_t = _robust_refine_similarity(
+                        img_points[keep_t].astype(np.float64),
+                        tile_points[keep_t].astype(np.float64),
+                        cand_t,
+                        tol_px=base_tol_t,
+                        max_iters=max(1, int(getattr(config, "blind_refit_irls_iters", 3) or 3) - 1),
+                    )
+                    if refined_t is not None:
+                        trf_t, mask_t, rms_t = refined_t
+                        if mask_t is not None and int(np.count_nonzero(mask_t)) >= 4:
+                            img_t = img_points[keep_t][mask_t]
+                            tile_t = tile_points[keep_t][mask_t]
+                            world_t = tile_world_matches[keep_t][mask_t]
+                        else:
+                            img_t = img_points[keep_t]
+                            tile_t = tile_points[keep_t]
+                            world_t = tile_world_matches[keep_t]
+                        if int(img_t.shape[0]) >= int(img_in.shape[0]):
+                            if hard_filter_enabled_runtime and approx_scale_arcsec is not None:
+                                trf_scale_arcsec = 3600.0 * float(max(getattr(trf_t, "scale", 0.0) or 0.0, 1e-12))
+                                hard_bounds_trf = _scale_gate_bounds_arcsec(
+                                    config,
+                                    approx_scale_arcsec,
+                                    scale_bounds_arcsec,
+                                    gate="hard",
+                                    fail_validation_count=fail_validation_count,
+                                    fail_best_inliers_seen=fail_best_inliers_seen,
+                                )
+                                if np.isfinite(trf_scale_arcsec) and hard_bounds_trf is not None:
+                                    lo_h_trf, hi_h_trf, _meta_h_trf = hard_bounds_trf
+                                    if float(trf_scale_arcsec) < float(lo_h_trf) or float(trf_scale_arcsec) > float(hi_h_trf):
+                                        phase_slot["tweak_scale_hard_skip"] = int(phase_slot.get("tweak_scale_hard_skip", 0) + 1)
+                                        continue
+                            transform = trf_t
+                            img_in = img_t
+                            tile_in = tile_t
+                            world_in = world_t
+                            refit_rms = float(rms_t)
+
+            model_scale_arcsec = 3600.0 * float(getattr(transform, "scale", float("nan")) or float("nan"))
+            if hard_filter_enabled_runtime and approx_scale_arcsec is not None and np.isfinite(model_scale_arcsec):
+                hard_bounds = _scale_gate_bounds_arcsec(
+                    config,
+                    scale_anchor_arcsec,
+                    scale_bounds_arcsec,
+                    gate="hard",
+                    fail_validation_count=fail_validation_count,
+                    fail_best_inliers_seen=fail_best_inliers_seen,
+                )
+                if hard_bounds is not None:
+                    lo_hard, hi_hard, meta_hard = hard_bounds
+                    ratio_hard = float(model_scale_arcsec) / float(max(1e-9, float(meta_hard.get("approx_scale_arcsec", approx_scale_arcsec or 1.0))))
+                else:
+                    lo_hard, hi_hard = float("-inf"), float("inf")
+                    ratio_hard = float("nan")
+                if float(model_scale_arcsec) < float(lo_hard) or float(model_scale_arcsec) > float(hi_hard):
+                    _record_hypothesis_probe(
+                        phase=str(phase_name),
+                        level=str(level_name),
+                        parity=str(parity_label),
+                        tile=str(candidate_key),
+                        score=int(score),
+                        pairs=int(img_points.shape[0]),
+                        inliers=int(img_in.shape[0]),
+                        model_scale_arcsec=float(model_scale_arcsec),
+                        status="scale_hard_reject",
+                    )
+                    inl = int(max(0, int(img_in.shape[0])))
+                    _record_failed_validation(
+                        reason="blind hypothesis scale hard reject",
+                        inliers=inl,
+                        rms_px=float(refit_rms),
+                        pairs=int(max(1, int(img_in.shape[0]))),
+                        cov_area=float("nan"),
+                        model_scale_arcsec=float(model_scale_arcsec),
+                        context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                    )
+                    _mark_fail_stage("verify_prob")
+                    fail_validation_count += 1
+                    phase_slot["failed_validations"] += 1
+                    _update_verify_logodds(
+                        phase_slot=phase_slot,
+                        inliers=inl,
+                        rms_px=float(refit_rms),
+                        pairs=int(max(1, int(img_in.shape[0]))),
+                        reason="blind hypothesis scale hard reject",
+                        context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                    )
+                    hard_scale_reject_count += 1
+                    if global_mode:
+                        low_support_streak += 1
+                        if _global_abort_now():
+                            logger.debug(
+                                "global early-stop: scale hard reject (ratio=%.3f, model=%.3f, expected=%.3f)",
+                                float(ratio_hard),
+                                float(model_scale_arcsec),
+                                float(approx_scale_arcsec),
+                            )
+                            break
+                    continue
+
+            _record_hypothesis_probe(
+                phase=str(phase_name),
+                level=str(level_name),
+                parity=str(parity_label),
+                tile=str(candidate_key),
+                score=int(score),
+                pairs=int(img_points.shape[0]),
+                inliers=int(img_in.shape[0]),
+                model_scale_arcsec=float(model_scale_arcsec),
+                status="prevalidate",
+            )
+            if hard_filter_enabled_runtime and bool(getattr(config, "blind_hypothesis_scale_hard_auto_disable", True)):
+                hard_after = max(1, int(getattr(config, "blind_hypothesis_scale_hard_auto_disable_after", 24) or 24))
+                if hard_scale_reject_count >= hard_after:
+                    hard_filter_enabled_runtime = False
+            scale_prefilter_enabled = bool(getattr(config, "blind_scale_prefilter_enabled", True))
+            if scale_prefilter_enabled and bool(getattr(config, "blind_scale_prefilter_auto_disable", True)):
+                auto_after = max(1, int(getattr(config, "blind_scale_prefilter_auto_disable_after", 8) or 8))
+                if scale_prefilter_reject_count >= auto_after:
+                    scale_prefilter_enabled = False
+            if scale_prefilter_enabled and scale_bounds_arcsec is not None and np.isfinite(model_scale_arcsec):
+                strict_prefilter = bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True))
+                if strict_prefilter:
+                    # Astrometry-like strict prefilter: use direct hint bounds, no adaptive widening.
+                    try:
+                        lo_e = float(scale_bounds_arcsec[0])
+                        hi_e = float(scale_bounds_arcsec[1])
+                        pre_meta = {
+                            "strict_exact": True,
+                            "base_lo": float(lo_e),
+                            "base_hi": float(hi_e),
+                            "margin": 1.0,
+                            "escape_used": False,
+                        }
+                    except Exception:
+                        lo_e, hi_e, pre_meta = float("-inf"), float("inf"), {"strict_exact": True}
+                else:
+                    prefilter_bounds = _scale_gate_bounds_arcsec(
+                        config,
+                        scale_anchor_arcsec,
+                        scale_bounds_arcsec,
+                        gate="prefilter",
+                        fail_validation_count=fail_validation_count,
+                        fail_best_inliers_seen=fail_best_inliers_seen,
+                    )
+                    if prefilter_bounds is not None:
+                        lo_e, hi_e, pre_meta = prefilter_bounds
+                    else:
+                        lo_e, hi_e, pre_meta = float("-inf"), float("inf"), {}
+                if not (float(lo_e) <= float(model_scale_arcsec) <= float(hi_e)):
+                    logger.info(
+                        "blind scale prefilter failed: tile=%s level=%s parity=%s model=%.3f not in [%.3f, %.3f] (base=[%.3f, %.3f], margin=%.2f, escape=%s)",
+                        candidate_key,
+                        level_name,
+                        parity_label,
+                        float(model_scale_arcsec),
+                        float(lo_e),
+                        float(hi_e),
+                        float(pre_meta.get("base_lo", float('nan'))),
+                        float(pre_meta.get("base_hi", float('nan'))),
+                        float(pre_meta.get("margin", float('nan'))),
+                        str(bool(pre_meta.get("escape_used", False))).lower(),
+                    )
+                    inl = int(max(0, int(img_in.shape[0])))
+                    _record_failed_validation(
+                        reason="blind scale prefilter failed",
+                        inliers=inl,
+                        rms_px=float("inf"),
+                        pairs=int(max(1, int(img_in.shape[0]))),
+                        cov_area=float("nan"),
+                        model_scale_arcsec=float(model_scale_arcsec),
+                        context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                    )
+                    _mark_fail_stage("verify_prob")
+                    fail_validation_count += 1
+                    scale_prefilter_reject_count += 1
+                    phase_slot["failed_validations"] += 1
+                    phase_slot["scale_prefilter_rejects"] = int(phase_slot.get("scale_prefilter_rejects", 0) + 1)
+                    _update_verify_logodds(
+                        phase_slot=phase_slot,
+                        inliers=inl,
+                        rms_px=float("inf"),
+                        pairs=int(max(1, int(img_in.shape[0]))),
+                        reason="blind scale prefilter failed",
+                        context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                    )
+                    # Dump blocking prefilter rejects for strict step-by-step diagnosis.
+                    sp_dump_path_raw = str(getattr(config, "blind_scale_prefilter_dump_path", "") or "").strip()
+                    if sp_dump_path_raw:
+                        try:
+                            max_sp_entries = max(1, int(getattr(config, "blind_scale_prefilter_dump_max_entries", 200) or 0))
+                            # Detailed upstream trace for prefilter blockers.
+                            def _idx_map_sp(ref_pts: np.ndarray, sub_pts: np.ndarray) -> np.ndarray:
+                                mp: dict[tuple[float, float], list[int]] = {}
+                                for ii, pt in enumerate(np.asarray(ref_pts, dtype=np.float64)):
+                                    key = (round(float(pt[0]), 10), round(float(pt[1]), 10))
+                                    mp.setdefault(key, []).append(int(ii))
+                                out = np.full((int(sub_pts.shape[0]),), -1, dtype=np.int64)
+                                for jj, pt in enumerate(np.asarray(sub_pts, dtype=np.float64)):
+                                    key = (round(float(pt[0]), 10), round(float(pt[1]), 10))
+                                    lst = mp.get(key)
+                                    if lst:
+                                        out[jj] = int(lst.pop(0))
+                                return out
+
+                            src_idx_sp = _idx_map_sp(np.asarray(img_points, dtype=np.float64), np.asarray(img_in, dtype=np.float64)) if int(img_in.shape[0]) > 0 else np.zeros(0, dtype=np.int64)
+                            dst_idx_sp = _idx_map_sp(np.asarray(tile_points, dtype=np.float64), np.asarray(tile_in, dtype=np.float64)) if int(tile_in.shape[0]) > 0 else np.zeros(0, dtype=np.int64)
+
+                            pair_err_px_sp: list[float] = []
+                            pair_rows_sp: list[dict[str, Any]] = []
+                            try:
+                                sc_sp = float(max(getattr(transform, "scale", 0.0) or 0.0, 1e-12))
+                                rs_sp = sc_sp * np.exp(1j * float(getattr(transform, "rotation", 0.0) or 0.0))
+                                tr_sp = complex(*getattr(transform, "translation", (0.0, 0.0)))
+                                src_sp = (img_in[:, 0] + 1j * img_in[:, 1]).astype(np.complex128)
+                                if getattr(transform, "parity", 1) < 0:
+                                    src_sp = np.conj(src_sp)
+                                dst_sp = (tile_in[:, 0] + 1j * tile_in[:, 1]).astype(np.complex128)
+                                err_sp = np.abs(rs_sp * src_sp + tr_sp - dst_sp) / max(sc_sp, 1e-12)
+                                pair_err_px_sp = [float(v) for v in np.asarray(err_sp, dtype=np.float64)]
+                                for kk in range(int(min(32, img_in.shape[0]))):
+                                    pair_rows_sp.append({
+                                        "k": int(kk),
+                                        "src_idx": int(src_idx_sp[kk]) if kk < src_idx_sp.size else -1,
+                                        "dst_idx": int(dst_idx_sp[kk]) if kk < dst_idx_sp.size else -1,
+                                        "img_x": float(img_in[kk, 0]),
+                                        "img_y": float(img_in[kk, 1]),
+                                        "tile_x_deg": float(tile_in[kk, 0]),
+                                        "tile_y_deg": float(tile_in[kk, 1]),
+                                        "err_px": float(err_sp[kk]) if kk < err_sp.size and np.isfinite(err_sp[kk]) else None,
+                                    })
+                            except Exception:
+                                pair_err_px_sp = []
+                                pair_rows_sp = []
+
+                            origin_quad_diag = None
+                            try:
+                                if isinstance(transform_origin_meta, dict):
+                                    obs_c = np.asarray(transform_origin_meta.get("obs_combo", []), dtype=np.int64)
+                                    tile_c = np.asarray(transform_origin_meta.get("tile_combo", []), dtype=np.int64)
+                                    perm_c = np.asarray(transform_origin_meta.get("perm", []), dtype=np.int64)
+                                    origin_quad_diag = {
+                                        "obs_combo": [int(v) for v in obs_c.tolist()] if obs_c.size else None,
+                                        "tile_combo_raw": [int(v) for v in tile_c.tolist()] if tile_c.size else None,
+                                        "tile_combo_permuted": None,
+                                        "derived_scale_arcsec": None,
+                                        "reason": None,
+                                    }
+                                    if obs_c.size == 4 and tile_c.size == 4 and perm_c.size == 4:
+                                        tile_cp = tile_c[perm_c]
+                                        origin_quad_diag["tile_combo_permuted"] = [int(v) for v in tile_cp.tolist()]
+                                        if np.all((obs_c >= 0) & (obs_c < int(image_positions.shape[0]))) and np.all((tile_cp >= 0) & (tile_cp < int(tile_positions.shape[0]))):
+                                            obs_q = np.asarray(image_positions[obs_c], dtype=np.float64)
+                                            tile_q = np.asarray(tile_positions[tile_cp], dtype=np.float64)
+                                            origin_quad_diag["obs_quad_px"] = [[float(vv) for vv in row] for row in obs_q.tolist()]
+                                            origin_quad_diag["tile_quad_deg"] = [[float(vv) for vv in row] for row in tile_q.tolist()]
+                                            # robust fallback estimate of similarity scale from centered norms
+                                            obs0 = obs_q - np.mean(obs_q, axis=0, keepdims=True)
+                                            tile0 = tile_q - np.mean(tile_q, axis=0, keepdims=True)
+                                            den = float(np.sum(obs0 * obs0))
+                                            if den > 0.0 and np.isfinite(den):
+                                                num = float(np.sum(tile0 * tile0))
+                                                sc = math.sqrt(max(num, 0.0) / den)
+                                                if np.isfinite(sc) and sc > 0.0:
+                                                    origin_quad_diag["derived_scale_arcsec"] = float(3600.0 * sc)
+                                            if origin_quad_diag.get("derived_scale_arcsec") is None:
+                                                origin_quad_diag["reason"] = "scale_estimation_failed"
+                                        else:
+                                            origin_quad_diag["reason"] = "origin_indices_out_of_range"
+                                            origin_quad_diag["bounds"] = {
+                                                "image_positions_n": int(image_positions.shape[0]),
+                                                "img_points_n": int(img_points.shape[0]),
+                                                "tile_positions_n": int(tile_positions.shape[0]),
+                                                "tile_points_n": int(tile_points.shape[0]),
+                                                "obs_max": int(np.max(obs_c)) if obs_c.size else None,
+                                                "tile_perm_max": int(np.max(tile_cp)) if tile_cp.size else None,
+                                            }
+                                    else:
+                                        origin_quad_diag["reason"] = "origin_combo_missing_or_not4"
+                            except Exception as ex:
+                                origin_quad_diag = {"reason": f"exception:{type(ex).__name__}"}
+
+                            entry_sp = {
+                                "phase": str(phase_name),
+                                "level": str(level_name),
+                                "parity": str(parity_label),
+                                "tile": str(candidate_key),
+                                "source": str(reassign_source),
+                                "path_tag": str(reassign_path_tag),
+                                "model_scale_arcsec": float(model_scale_arcsec) if np.isfinite(float(model_scale_arcsec)) else None,
+                                "anchor_scale_arcsec": float(scale_anchor_arcsec) if (scale_anchor_arcsec is not None and np.isfinite(float(scale_anchor_arcsec))) else None,
+                                "approx_scale_arcsec": float(approx_scale_arcsec) if (approx_scale_arcsec is not None and np.isfinite(float(approx_scale_arcsec))) else None,
+                                "prefilter_lo_arcsec": float(lo_e) if np.isfinite(float(lo_e)) else None,
+                                "prefilter_hi_arcsec": float(hi_e) if np.isfinite(float(hi_e)) else None,
+                                "pairs": int(max(0, int(img_in.shape[0]))),
+                                "inliers": int(inl),
+                                "reason": "blind scale prefilter failed",
+                                "strict_exact": bool((pre_meta or {}).get("strict_exact", False)),
+                                "origin_meta": dict(transform_origin_meta) if isinstance(transform_origin_meta, dict) else None,
+                                "origin_quad_diag": origin_quad_diag,
+                                "transform": {
+                                    "scale_arcsec": float(3600.0 * max(float(getattr(transform, "scale", 0.0) or 0.0), 1e-12)),
+                                    "rotation_rad": float(getattr(transform, "rotation", 0.0) or 0.0),
+                                    "parity": int(getattr(transform, "parity", 1) or 1),
+                                    "translation": [float((getattr(transform, "translation", (0.0, 0.0)))[0]), float((getattr(transform, "translation", (0.0, 0.0)))[1])],
+                                },
+                                "pair_err_px": pair_err_px_sp,
+                                "pair_err_summary": {
+                                    "median_px": float(np.median(np.asarray(pair_err_px_sp, dtype=np.float64))) if len(pair_err_px_sp) else None,
+                                    "max_px": float(np.max(np.asarray(pair_err_px_sp, dtype=np.float64))) if len(pair_err_px_sp) else None,
+                                },
+                                "pair_rows": pair_rows_sp,
+                            }
+                            sp_path = Path(sp_dump_path_raw)
+                            sp_obj = {"schema": "zeblind.scale_prefilter_dump.v1", "entries": []}
+                            if sp_path.exists():
+                                try:
+                                    prev_sp = json.loads(sp_path.read_text(encoding="utf-8"))
+                                    if isinstance(prev_sp, dict) and isinstance(prev_sp.get("entries"), list):
+                                        sp_obj = prev_sp
+                                except Exception:
+                                    pass
+                            sp_obj.setdefault("entries", []).append(entry_sp)
+                            if len(sp_obj["entries"]) > int(max_sp_entries):
+                                sp_obj["entries"] = sp_obj["entries"][-int(max_sp_entries):]
+                            sp_path.parent.mkdir(parents=True, exist_ok=True)
+                            sp_path.write_text(json.dumps(sp_obj, indent=2), encoding="utf-8")
+                            phase_slot["scale_prefilter_dump_writes"] = int(phase_slot.get("scale_prefilter_dump_writes", 0) + 1)
+                        except Exception:
+                            phase_slot["scale_prefilter_dump_errors"] = int(phase_slot.get("scale_prefilter_dump_errors", 0) + 1)
+
+                    if global_mode:
+                        best_support = max(best_support, inl)
+                        low_support_streak = (low_support_streak + 1) if inl <= 2 else 0
+                        weak_validation_streak = (weak_validation_streak + 1) if inl <= 4 else 0
+                        medium_validation_streak = (medium_validation_streak + 1) if inl <= 8 else 0
+                        if _global_abort_now():
+                            logger.debug("global early-stop: scale prefilter rejects at low support (level=%s, parity=%s)", level_name, parity_label)
+                            break
+                    continue
+
+            if bool(getattr(config, "blind_match_object_expand_enabled", True)) and str(reassign_source) == "resolve_hit":
+                target_min_pairs = max(4, int(getattr(config, "blind_match_object_expand_min_pairs", 8) or 0))
+                target_max_pairs = max(target_min_pairs, int(getattr(config, "blind_match_object_expand_max_pairs", 16) or 0))
+                if int(img_in.shape[0]) < target_min_pairs and int(img_points.shape[0]) >= target_min_pairs:
+                    try:
+                        sc_e = float(max(getattr(transform, "scale", 0.0) or 0.0, 1e-12))
+                        rs_e = sc_e * np.exp(1j * float(getattr(transform, "rotation", 0.0) or 0.0))
+                        tr_e = complex(*getattr(transform, "translation", (0.0, 0.0)))
+                        src_e = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                        if getattr(transform, "parity", 1) < 0:
+                            src_e = np.conj(src_e)
+                        dst_e = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                        err_e_px = np.abs(rs_e * src_e + tr_e - dst_e) / max(sc_e, 1e-12)
+                        tol_expand = max(
+                            max(0.5, float(getattr(config, "pixel_tolerance", 2.5) or 2.5)),
+                            max(0.5, float(getattr(config, "pixel_tolerance", 2.5) or 2.5)) * max(1.0, float(getattr(config, "blind_match_object_expand_tol_factor", 1.35) or 1.0)),
+                        )
+                        finite = np.isfinite(err_e_px)
+                        cand = np.flatnonzero(finite & (err_e_px <= float(tol_expand)))
+                        used_soft = False
+                        if cand.size < target_min_pairs:
+                            cand_soft = np.flatnonzero(finite)
+                            if cand_soft.size >= target_min_pairs:
+                                cand = cand_soft
+                                used_soft = True
+                        if cand.size > 0:
+                            ordc = cand[np.argsort(err_e_px[cand])]
+                            n_take = min(int(target_max_pairs), int(ordc.size))
+                            ordc = ordc[:n_take]
+                            if int(ordc.size) >= target_min_pairs:
+                                img_in = img_points[ordc]
+                                tile_in = tile_points[ordc]
+                                world_in = tile_world_matches[ordc]
+                                phase_slot["match_object_expand_attempts"] = int(phase_slot.get("match_object_expand_attempts", 0) + 1)
+                                phase_slot["match_object_expand_hits"] = int(phase_slot.get("match_object_expand_hits", 0) + 1)
+                                if used_soft:
+                                    phase_slot["match_object_expand_soft_hits"] = int(phase_slot.get("match_object_expand_soft_hits", 0) + 1)
+                                _record_verify_hit_stage(
+                                    stage="match_object_expand",
+                                    outcome="hit",
+                                    context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                                    extra={"pairs": int(img_in.shape[0]), "tol_px": float(tol_expand), "soft": bool(used_soft)},
+                                )
+                            else:
+                                phase_slot["match_object_expand_attempts"] = int(phase_slot.get("match_object_expand_attempts", 0) + 1)
+                        else:
+                            phase_slot["match_object_expand_attempts"] = int(phase_slot.get("match_object_expand_attempts", 0) + 1)
+                    except Exception:
+                        pass
+
+            if (not strict_astrometry_path) and bool(getattr(config, "blind_verify_conflict_resolution", True)) and img_in.shape[0] >= 6:
+                img_res, tile_res, world_res, conflict_stats = _resolve_verify_conflicts(
+                    img_in,
+                    tile_in,
+                    world_in,
+                    transform,
+                    min_keep_ratio=float(getattr(config, "blind_verify_conflict_min_keep_ratio", 0.45) or 0.45),
+                    image_bin_px=float(getattr(config, "blind_verify_conflict_image_bin_px", 2.5) or 2.5),
+                    tile_bin_px=float(getattr(config, "blind_verify_conflict_tile_bin_px", 2.5) or 2.5),
+                )
+                conflict_removed = int(conflict_stats.get("removed", 0) or 0)
+                if conflict_removed > 0:
+                    phase_slot["verify_conflict_pruned_total"] = int(phase_slot.get("verify_conflict_pruned_total", 0) + conflict_removed)
+                    img_in = img_res
+                    tile_in = tile_res
+                    world_in = world_res
+                    hypc = _derive_similarity(
+                        img_in.astype(np.float64),
+                        tile_in.astype(np.float64),
+                        reflected=(getattr(transform, "parity", 1) < 0),
+                    )
+                    if hypc is not None:
+                        rsc, trc = hypc
+                        transform = SimilarityTransform(
+                            scale=float(abs(rsc)),
+                            rotation=float(np.angle(rsc)),
+                            translation=(float(trc.real), float(trc.imag)),
+                            parity=-1 if getattr(transform, "parity", 1) < 0 else 1,
+                        )
+
+            if str(candidate_key) == "d50_0819":
+                try:
+                    tr = globals().get("_A2V22_TRACE", {})
+                    tr["pre_wcs_img_in"] = _a2v22_shape_stats(np.asarray(img_in, dtype=np.float64))
+                    tr["pre_wcs_tile_in"] = _a2v22_shape_stats(np.asarray(tile_in, dtype=np.float64))
+                    globals()["_A2V22_TRACE"] = tr
+                except Exception:
+                    pass
+
             crpix = (image.shape[1] / 2.0 + 1.0, image.shape[0] / 2.0 + 1.0)
             wcs = tan_from_similarity(
                 transform,
@@ -1885,15 +11142,496 @@ def solve_blind(
                 tile_center=(float(tile_entry.get("center_ra_deg", 0.0)), float(tile_entry.get("center_dec_deg", 0.0))),
             )
             matches_array = _build_matches_array(img_in, world_in)
+            if str(candidate_key) == "d50_0819":
+                try:
+                    tr = globals().get("_A2V22_TRACE", {})
+                    tr["matches_array_rows"] = int(matches_array.shape[0])
+                    tr["matches_array_img_stats"] = (
+                        _a2v22_shape_stats(np.asarray(matches_array[:, :2], dtype=np.float64))
+                        if matches_array.size
+                        else {"n": 0, "bw": 0.0, "bh": 0.0, "area": 0.0, "cond": float("nan")}
+                    )
+                    globals()["_A2V22_TRACE"] = tr
+                except Exception:
+                    pass
             # Adapt inlier requirement to available matches (no hardcoded floor);
             # let the user-configured quality_inliers cap the requirement.
             n_pairs = int(matches_array.shape[0])
+
+            # A2-v34: reject implausible model scale before validation for low-pair hypotheses.
+            try:
+                if (
+                    bool(getattr(config, "blind_a2v34_scale_plausibility_enabled", True))
+                    and np.isfinite(float(model_scale_arcsec))
+                    and np.isfinite(float(scale_anchor_arcsec))
+                    and (float(scale_anchor_arcsec) > 0.0)
+                    and (n_pairs <= max(4, int(getattr(config, "blind_a2v34_scale_plausibility_max_pairs", 10) or 10)))
+                ):
+                    ratio_v34 = float(model_scale_arcsec) / float(max(1e-9, float(scale_anchor_arcsec)))
+                    rmin_v34 = max(1e-3, float(getattr(config, "blind_a2v34_scale_plausibility_min_ratio", 0.35) or 1e-3))
+                    rmax_v34 = max(rmin_v34 + 1e-6, float(getattr(config, "blind_a2v34_scale_plausibility_max_ratio", 3.20) or (rmin_v34 + 1e-6)))
+                    if (ratio_v34 < rmin_v34) or (ratio_v34 > rmax_v34):
+                        phase_slot["a2v34_scale_plausibility_rejects"] = int(phase_slot.get("a2v34_scale_plausibility_rejects", 0) + 1)
+                        phase_slot["a2v34_scale_ratio_last"] = float(ratio_v34)
+                        phase_slot["a2v34_scale_model_last"] = float(model_scale_arcsec)
+                        phase_slot["a2v34_scale_anchor_last"] = float(scale_anchor_arcsec)
+                        _record_failed_validation(
+                            reason="a2v34 scale plausibility reject",
+                            inliers=int(max(0, int(img_in.shape[0]))),
+                            rms_px=float(refit_rms),
+                            pairs=int(max(1, n_pairs)),
+                            cov_area=float("nan"),
+                            model_scale_arcsec=float(model_scale_arcsec),
+                            context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                        )
+                        _mark_fail_stage("hypothesis")
+                        counts_as_validation = bool(getattr(config, "blind_a2v35_scale_reject_counts_as_validation", False))
+                        if counts_as_validation:
+                            fail_validation_count += 1
+                            phase_slot["failed_validations"] += 1
+                        else:
+                            phase_slot["a2v35_scale_reject_noncounted"] = int(phase_slot.get("a2v35_scale_reject_noncounted", 0) + 1)
+                        if global_mode:
+                            low_support_streak = (low_support_streak + 1) if int(img_in.shape[0]) <= 4 else 0
+                            if counts_as_validation and _global_abort_now():
+                                logger.debug(
+                                    "global early-stop: a2v34 scale plausibility reject (ratio=%.3f, model=%.3f, anchor=%.3f)",
+                                    float(ratio_v34),
+                                    float(model_scale_arcsec),
+                                    float(scale_anchor_arcsec),
+                                )
+                                break
+                        continue
+            except Exception:
+                pass
+
             adaptive_inliers = min(
                 int(config.quality_inliers),
                 max(4, int(0.4 * max(0, n_pairs))),
             )
             th_local = {"rms_px": float(config.quality_rms), "inliers": adaptive_inliers}
+            val_scale_bounds = _scale_gate_bounds_arcsec(
+                config,
+                scale_anchor_arcsec,
+                scale_bounds_arcsec,
+                gate="final",
+                fail_validation_count=fail_validation_count,
+                fail_best_inliers_seen=fail_best_inliers_seen,
+            )
+            if val_scale_bounds is not None:
+                lo_v, hi_v, _meta_v = val_scale_bounds
+                if np.isfinite(float(lo_v)) and float(lo_v) > 0.0:
+                    th_local["scale_min_arcsec"] = float(max(0.1, float(lo_v) * 0.85))
+                if np.isfinite(float(hi_v)) and float(hi_v) > 0.0:
+                    th_local["scale_max_arcsec"] = float(max(15.0, float(hi_v) * 1.20))
+            astrometry_nummatches += 1
             stats = validate_solution(wcs, matches_array, th_local)
+
+            # M2 dump: exact matches_array pairs (indices + residuals) at validation time.
+            dump_path_raw = str(getattr(config, "blind_validation_pairs_dump_path", "") or "").strip()
+            if dump_path_raw:
+                try:
+                    max_rows_dump = max(8, int(getattr(config, "blind_validation_pairs_dump_max_rows", 120) or 0))
+                    max_entries_dump = max(1, int(getattr(config, "blind_validation_pairs_dump_max_entries", 120) or 0))
+
+                    def _idx_map(ref_pts: np.ndarray, sub_pts: np.ndarray) -> np.ndarray:
+                        mp: dict[tuple[float, float], list[int]] = {}
+                        for ii, pt in enumerate(np.asarray(ref_pts, dtype=np.float64)):
+                            key = (round(float(pt[0]), 10), round(float(pt[1]), 10))
+                            mp.setdefault(key, []).append(int(ii))
+                        out = np.full((int(sub_pts.shape[0]),), -1, dtype=np.int64)
+                        for jj, pt in enumerate(np.asarray(sub_pts, dtype=np.float64)):
+                            key = (round(float(pt[0]), 10), round(float(pt[1]), 10))
+                            lst = mp.get(key)
+                            if lst:
+                                out[jj] = int(lst.pop(0))
+                        return out
+
+                    src_idx_dump = _idx_map(np.asarray(img_points, dtype=np.float64), np.asarray(img_in, dtype=np.float64))
+                    dst_idx_dump = _idx_map(np.asarray(tile_points, dtype=np.float64), np.asarray(tile_in, dtype=np.float64))
+
+                    sc_dump = float(max(getattr(transform, "scale", 0.0) or 0.0, 1e-12))
+                    src_c_dump = (img_in[:, 0] + 1j * img_in[:, 1]).astype(np.complex128)
+                    if getattr(transform, "parity", 1) < 0:
+                        src_c_dump = np.conj(src_c_dump)
+                    dst_c_dump = (tile_in[:, 0] + 1j * tile_in[:, 1]).astype(np.complex128)
+                    rs_dump = sc_dump * np.exp(1j * float(getattr(transform, "rotation", 0.0) or 0.0))
+                    tr_dump = complex(*getattr(transform, "translation", (0.0, 0.0)))
+                    err_deg_dump = np.abs(rs_dump * src_c_dump + tr_dump - dst_c_dump)
+                    err_px_dump = err_deg_dump / max(sc_dump, 1e-12)
+
+                    rows = []
+                    n_take = min(int(max_rows_dump), int(img_in.shape[0]))
+                    for k in range(n_take):
+                        rows.append({
+                            "k": int(k),
+                            "src_idx": int(src_idx_dump[k]) if k < src_idx_dump.size else -1,
+                            "dst_idx": int(dst_idx_dump[k]) if k < dst_idx_dump.size else -1,
+                            "img_x": float(img_in[k, 0]),
+                            "img_y": float(img_in[k, 1]),
+                            "tile_x_deg": float(tile_in[k, 0]),
+                            "tile_y_deg": float(tile_in[k, 1]),
+                            "err_deg": float(err_deg_dump[k]) if k < err_deg_dump.size and np.isfinite(err_deg_dump[k]) else None,
+                            "err_px": float(err_px_dump[k]) if k < err_px_dump.size and np.isfinite(err_px_dump[k]) else None,
+                        })
+
+                    entry = {
+                        "phase": str(phase_name),
+                        "level": str(level_name),
+                        "parity": str(parity_label),
+                        "tile": str(candidate_key),
+                        "source": str(reassign_source),
+                        "pairs": int(img_in.shape[0]),
+                        "quality": str(stats.get("quality", "")),
+                        "reason": str(stats.get("reason", "")),
+                        "reason_class": _classify_reject_reason(str(stats.get("reason", ""))),
+                        "reason_code": _normalize_verify_reason_code(str(stats.get("reason", ""))),
+                        "inliers": int(stats.get("inliers", 0) or 0),
+                        "rms_px": float(stats.get("rms_px", float("nan"))) if np.isfinite(float(stats.get("rms_px", float("nan")))) else None,
+                        "model_scale_arcsec": float(model_scale_arcsec) if np.isfinite(float(model_scale_arcsec)) else None,
+                        "rows": rows,
+                        "err_summary": {
+                            "median_px": float(np.median(err_px_dump)) if err_px_dump.size > 0 and np.any(np.isfinite(err_px_dump)) else None,
+                            "p90_px": float(np.percentile(err_px_dump[np.isfinite(err_px_dump)], 90)) if err_px_dump.size > 0 and np.any(np.isfinite(err_px_dump)) else None,
+                            "max_px": float(np.max(err_px_dump[np.isfinite(err_px_dump)])) if err_px_dump.size > 0 and np.any(np.isfinite(err_px_dump)) else None,
+                        },
+                    }
+
+                    dump_path = Path(dump_path_raw)
+                    dump_obj = {"schema": "zeblind.validation_pairs_dump.v1", "entries": []}
+                    if dump_path.exists():
+                        try:
+                            prev = json.loads(dump_path.read_text(encoding="utf-8"))
+                            if isinstance(prev, dict) and isinstance(prev.get("entries"), list):
+                                dump_obj = prev
+                        except Exception:
+                            pass
+                    dump_obj.setdefault("entries", []).append(entry)
+                    if len(dump_obj["entries"]) > int(max_entries_dump):
+                        dump_obj["entries"] = dump_obj["entries"][-int(max_entries_dump):]
+                    dump_path.parent.mkdir(parents=True, exist_ok=True)
+                    dump_path.write_text(json.dumps(dump_obj, indent=2), encoding="utf-8")
+                    phase_slot["validation_pairs_dump_writes"] = int(phase_slot.get("validation_pairs_dump_writes", 0) + 1)
+                except Exception:
+                    phase_slot["validation_pairs_dump_errors"] = int(phase_slot.get("validation_pairs_dump_errors", 0) + 1)
+
+            # M2bis dump: WCS/scale coherence for low-pairs validation candidates.
+            wcs_dump_path_raw = str(getattr(config, "blind_wcs_coherence_dump_path", "") or "").strip()
+            if wcs_dump_path_raw and int(matches_array.shape[0]) <= 8:
+                try:
+                    max_entries_wcs = max(1, int(getattr(config, "blind_wcs_coherence_dump_max_entries", 120) or 0))
+                    pix = np.asarray(matches_array[:, :2], dtype=np.float64) if matches_array.size else np.zeros((0, 2), dtype=np.float64)
+                    wld = np.asarray(matches_array[:, 2:4], dtype=np.float64) if matches_array.size else np.zeros((0, 2), dtype=np.float64)
+
+                    wcs_res_arcsec = []
+                    if pix.shape[0] > 0 and wld.shape[0] == pix.shape[0]:
+                        try:
+                            pred_w = wcs.wcs_pix2world(pix, 1)
+                            pred_w = np.asarray(pred_w, dtype=np.float64)
+                            if pred_w.shape == wld.shape:
+                                dra = (pred_w[:, 0] - wld[:, 0]) * np.cos(np.deg2rad(wld[:, 1]))
+                                ddec = pred_w[:, 1] - wld[:, 1]
+                                wcs_res_arcsec = (3600.0 * np.hypot(dra, ddec)).astype(np.float64).tolist()
+                        except Exception:
+                            wcs_res_arcsec = []
+
+                    pair_err_px = []
+                    try:
+                        sc_c = float(max(getattr(transform, "scale", 0.0) or 0.0, 1e-12))
+                        src_c = (img_in[:, 0] + 1j * img_in[:, 1]).astype(np.complex128)
+                        if getattr(transform, "parity", 1) < 0:
+                            src_c = np.conj(src_c)
+                        dst_c = (tile_in[:, 0] + 1j * tile_in[:, 1]).astype(np.complex128)
+                        rs_c = sc_c * np.exp(1j * float(getattr(transform, "rotation", 0.0) or 0.0))
+                        tr_c = complex(*getattr(transform, "translation", (0.0, 0.0)))
+                        pair_err_px = (np.abs(rs_c * src_c + tr_c - dst_c) / max(sc_c, 1e-12)).astype(np.float64).tolist()
+                    except Exception:
+                        pair_err_px = []
+
+                    entry_wcs = {
+                        "phase": str(phase_name),
+                        "level": str(level_name),
+                        "parity": str(parity_label),
+                        "tile": str(candidate_key),
+                        "source": str(reassign_source),
+                        "pairs": int(matches_array.shape[0]),
+                        "quality": str(stats.get("quality", "")),
+                        "reason": str(stats.get("reason", "")),
+                        "model_scale_arcsec": float(model_scale_arcsec) if np.isfinite(float(model_scale_arcsec)) else None,
+                        "anchor_scale_arcsec": float(scale_anchor_arcsec) if (scale_anchor_arcsec is not None and np.isfinite(float(scale_anchor_arcsec))) else None,
+                        "pixel_scale_from_transform_arcsec": float(3600.0 * max(float(getattr(transform, "scale", 0.0) or 0.0), 1e-12)),
+                        "quality_rms_threshold_px": float(th_local.get("rms_px", float(getattr(config, "quality_rms", 1.4) or 1.4))),
+                        "validate_rms_px": float(stats.get("rms_px", float("nan"))) if np.isfinite(float(stats.get("rms_px", float("nan")))) else None,
+                        "pair_err_px": pair_err_px,
+                        "wcs_residual_arcsec": wcs_res_arcsec,
+                        "pair_err_summary": {
+                            "median_px": float(np.median(np.asarray(pair_err_px, dtype=np.float64))) if len(pair_err_px) else None,
+                            "max_px": float(np.max(np.asarray(pair_err_px, dtype=np.float64))) if len(pair_err_px) else None,
+                        },
+                        "wcs_residual_summary_arcsec": {
+                            "median": float(np.median(np.asarray(wcs_res_arcsec, dtype=np.float64))) if len(wcs_res_arcsec) else None,
+                            "max": float(np.max(np.asarray(wcs_res_arcsec, dtype=np.float64))) if len(wcs_res_arcsec) else None,
+                        },
+                    }
+
+                    wcs_dump_path = Path(wcs_dump_path_raw)
+                    dump_wcs = {"schema": "zeblind.wcs_coherence_dump.v1", "entries": []}
+                    if wcs_dump_path.exists():
+                        try:
+                            prev_w = json.loads(wcs_dump_path.read_text(encoding="utf-8"))
+                            if isinstance(prev_w, dict) and isinstance(prev_w.get("entries"), list):
+                                dump_wcs = prev_w
+                        except Exception:
+                            pass
+                    dump_wcs.setdefault("entries", []).append(entry_wcs)
+                    if len(dump_wcs["entries"]) > int(max_entries_wcs):
+                        dump_wcs["entries"] = dump_wcs["entries"][-int(max_entries_wcs):]
+                    wcs_dump_path.parent.mkdir(parents=True, exist_ok=True)
+                    wcs_dump_path.write_text(json.dumps(dump_wcs, indent=2), encoding="utf-8")
+                    phase_slot["wcs_coherence_dump_writes"] = int(phase_slot.get("wcs_coherence_dump_writes", 0) + 1)
+                except Exception:
+                    phase_slot["wcs_coherence_dump_errors"] = int(phase_slot.get("wcs_coherence_dump_errors", 0) + 1)
+
+            # M3 strict Astrometry-like low-pairs coherence guard (scale + WCS residual).
+            if (
+                bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True))
+                and bool(getattr(config, "blind_astrometry_lowpairs_scale_guard_enabled", True))
+                and int(matches_array.shape[0]) <= 8
+                and str(stats.get("quality", "FAIL")) == "GOOD"
+            ):
+                try:
+                    anchor_scale_guard = None
+                    if approx_scale_arcsec is not None and np.isfinite(float(approx_scale_arcsec)) and float(approx_scale_arcsec) > 0.0:
+                        anchor_scale_guard = float(approx_scale_arcsec)
+                    elif pixel_scale_arcsec is not None and np.isfinite(float(pixel_scale_arcsec)) and float(pixel_scale_arcsec) > 0.0:
+                        anchor_scale_guard = float(pixel_scale_arcsec)
+                    model_scale_guard = float(model_scale_arcsec) if np.isfinite(float(model_scale_arcsec)) else float("nan")
+                    ratio_guard = float(model_scale_guard / anchor_scale_guard) if (anchor_scale_guard is not None and anchor_scale_guard > 0.0 and np.isfinite(model_scale_guard)) else float("nan")
+                    rmin_guard = max(1e-3, float(getattr(config, "blind_astrometry_lowpairs_scale_guard_min_ratio", 0.5) or 1e-3))
+                    rmax_guard = max(rmin_guard + 1e-6, float(getattr(config, "blind_astrometry_lowpairs_scale_guard_max_ratio", 2.0) or (rmin_guard + 1e-6)))
+
+                    wcs_res_guard = None
+                    if matches_array.size:
+                        try:
+                            pix_g = np.asarray(matches_array[:, :2], dtype=np.float64)
+                            wld_g = np.asarray(matches_array[:, 2:4], dtype=np.float64)
+                            pred_g = np.asarray(wcs.wcs_pix2world(pix_g, 1), dtype=np.float64)
+                            if pred_g.shape == wld_g.shape and pred_g.size > 0:
+                                dra_g = (pred_g[:, 0] - wld_g[:, 0]) * np.cos(np.deg2rad(wld_g[:, 1]))
+                                ddec_g = pred_g[:, 1] - wld_g[:, 1]
+                                wr = 3600.0 * np.hypot(dra_g, ddec_g)
+                                wr = wr[np.isfinite(wr)]
+                                if wr.size > 0:
+                                    wcs_res_guard = float(np.median(wr))
+                        except Exception:
+                            wcs_res_guard = None
+
+                    wcs_max_guard = max(0.5, float(getattr(config, "blind_astrometry_lowpairs_wcs_residual_max_arcsec", 8.0) or 0.5))
+                    scale_bad = (not np.isfinite(ratio_guard)) or (ratio_guard < rmin_guard) or (ratio_guard > rmax_guard)
+                    wcs_bad = (wcs_res_guard is None) or (not np.isfinite(float(wcs_res_guard))) or (float(wcs_res_guard) > wcs_max_guard)
+                    if scale_bad or wcs_bad:
+                        stats = dict(stats)
+                        stats["quality"] = "FAIL"
+                        stats["reason"] = (
+                            f"strict_lowpairs_scale_guard_failed[ratio={ratio_guard:.3f},"
+                            f"range={rmin_guard:.3f}-{rmax_guard:.3f},"
+                            f"wcs_med_arcsec={float(wcs_res_guard) if wcs_res_guard is not None else float('nan'):.3f},"
+                            f"wcs_max_arcsec={wcs_max_guard:.3f}]"
+                        )
+                        phase_slot["strict_lowpairs_scale_guard_rejects"] = int(phase_slot.get("strict_lowpairs_scale_guard_rejects", 0) + 1)
+                        phase_slot["strict_lowpairs_scale_guard_ratio_last"] = float(ratio_guard) if np.isfinite(ratio_guard) else float("nan")
+                        phase_slot["strict_lowpairs_scale_guard_wcs_med_last"] = float(wcs_res_guard) if (wcs_res_guard is not None and np.isfinite(float(wcs_res_guard))) else float("nan")
+                except Exception:
+                    pass
+
+            if bool(getattr(config, "blind_validate_scale_rescue_enabled", True)) and str(stats.get("quality", "FAIL")) != "GOOD":
+                rs_fail = str(stats.get("reason", "") or "").lower()
+                if "pixel_scale_out_of_range" in rs_fail and np.isfinite(float(model_scale_arcsec)):
+                    phase_slot["validate_scale_rescue_attempts"] = int(phase_slot.get("validate_scale_rescue_attempts", 0) + 1)
+                    fac_sr = max(1.0, float(getattr(config, "blind_validate_scale_rescue_factor", 1.10) or 1.0))
+                    lo_sr = max(0.01, float(getattr(config, "blind_validate_scale_rescue_min_arcsec", 0.10) or 0.01))
+                    hi_sr_cap = max(5.0, float(getattr(config, "blind_validate_scale_rescue_max_arcsec", 30.0) or 5.0))
+                    th_sr = dict(th_local)
+                    mdl = float(model_scale_arcsec)
+                    if "scale_min_arcsec" in th_sr:
+                        try:
+                            th_sr["scale_min_arcsec"] = float(max(lo_sr, min(float(th_sr["scale_min_arcsec"]), mdl / fac_sr)))
+                        except Exception:
+                            th_sr["scale_min_arcsec"] = float(max(lo_sr, mdl / fac_sr))
+                    else:
+                        th_sr["scale_min_arcsec"] = float(max(lo_sr, mdl / fac_sr))
+                    if "scale_max_arcsec" in th_sr:
+                        try:
+                            th_sr["scale_max_arcsec"] = float(min(hi_sr_cap, max(float(th_sr["scale_max_arcsec"]), mdl * fac_sr)))
+                        except Exception:
+                            th_sr["scale_max_arcsec"] = float(min(hi_sr_cap, mdl * fac_sr))
+                    else:
+                        th_sr["scale_max_arcsec"] = float(min(hi_sr_cap, mdl * fac_sr))
+
+                    stats_sr = validate_solution(wcs, matches_array, th_sr)
+                    better_sr = False
+                    if str(stats_sr.get("quality", "FAIL")) == "GOOD" and str(stats.get("quality", "FAIL")) != "GOOD":
+                        better_sr = True
+                    elif int(stats_sr.get("inliers", 0) or 0) > int(stats.get("inliers", 0) or 0):
+                        better_sr = True
+                    elif int(stats_sr.get("inliers", 0) or 0) == int(stats.get("inliers", 0) or 0):
+                        better_sr = float(stats_sr.get("rms_px", float("inf"))) < float(stats.get("rms_px", float("inf")))
+                    if better_sr:
+                        phase_slot["validate_scale_rescue_hits"] = int(phase_slot.get("validate_scale_rescue_hits", 0) + 1)
+                        stats = stats_sr
+                        _record_verify_hit_stage(
+                            stage="validate_scale_rescue",
+                            outcome="hit",
+                            context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                            stats_obj=stats,
+                            extra={"pairs": int(matches_array.shape[0]), "factor": float(fac_sr)},
+                        )
+
+            # A2-v33: strict borderline RMS rescue for low-pair, geometry-consistent candidates.
+            if str(stats.get("quality", "FAIL")) != "GOOD":
+                try:
+                    rs_fail_b = str(stats.get("reason", "") or "").lower()
+                    rms_b = float(stats.get("rms_px", float("inf")))
+                    inl_b = int(stats.get("inliers", 0) or 0)
+                    cov_b = float(stats.get("geo_cov_area", float("nan")))
+                    cond_b = float(stats.get("geo_cond", float("nan")))
+                    n_pairs_b = int(matches_array.shape[0])
+                    rms_thr_b = float(th_local.get("rms_px", float(getattr(config, "quality_rms", 1.4) or 1.4)))
+                    is_borderline = (
+                        ("rms" in rs_fail_b)
+                        and np.isfinite(rms_b)
+                        and np.isfinite(rms_thr_b)
+                        and (rms_b > rms_thr_b)
+                        and (rms_b <= max(2.8, 1.95 * rms_thr_b))
+                        and (inl_b >= int(adaptive_inliers))
+                        and (n_pairs_b <= 10)
+                        and np.isfinite(cov_b)
+                        and (cov_b >= 0.020)
+                        and (not np.isfinite(cond_b) or cond_b <= 800.0)
+                    )
+                    if is_borderline:
+                        phase_slot["a2v33_borderline_rms_attempts"] = int(phase_slot.get("a2v33_borderline_rms_attempts", 0) + 1)
+                        th_b = dict(th_local)
+                        th_b["rms_px"] = float(min(3.0, max(rms_thr_b * 1.85, rms_b * 1.02)))
+                        stats_b = validate_solution(wcs, matches_array, th_b)
+                        if str(stats_b.get("quality", "FAIL")) == "GOOD":
+                            cov_b2 = float(stats_b.get("geo_cov_area", float("nan")))
+                            cond_b2 = float(stats_b.get("geo_cond", float("nan")))
+                            if np.isfinite(cov_b2) and cov_b2 >= 0.020 and (not np.isfinite(cond_b2) or cond_b2 <= 800.0):
+                                stats = stats_b
+                                phase_slot["a2v33_borderline_rms_hits"] = int(phase_slot.get("a2v33_borderline_rms_hits", 0) + 1)
+                            else:
+                                phase_slot["a2v33_borderline_rms_geo_reject"] = int(phase_slot.get("a2v33_borderline_rms_geo_reject", 0) + 1)
+                except Exception:
+                    pass
+
+            if bool(getattr(config, "blind_tweak2_verify_enabled", True)) and str(stats.get("quality", "FAIL")) != "GOOD" and int(img_points.shape[0]) >= 6:
+                phase_slot["tweak2_verify_attempts"] = int(phase_slot.get("tweak2_verify_attempts", 0) + 1)
+                base_tol2 = max(0.5, float(getattr(config, "pixel_tolerance", 2.5) or 2.5))
+                tol2 = min(
+                    max(base_tol2, float(getattr(config, "blind_tweak2_verify_max_px", 8.0) or 8.0)),
+                    base_tol2 * max(1.0, float(getattr(config, "blind_tweak2_verify_tol_factor", 1.8) or 1.0)),
+                )
+                tweak2_iters = max(1, int(getattr(config, "blind_tweak2_verify_max_iters", 1) or 1))
+                min_pairs2 = max(4, int(getattr(config, "blind_tweak2_verify_min_pairs", 6) or 0))
+                for _t2 in range(tweak2_iters):
+                    sc2 = float(max(getattr(transform, "scale", 0.0) or 0.0, 1e-12))
+                    src2 = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                    if getattr(transform, "parity", 1) < 0:
+                        src2 = np.conj(src2)
+                    dst2 = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                    rs2 = sc2 * np.exp(1j * float(getattr(transform, "rotation", 0.0) or 0.0))
+                    tr2 = complex(*getattr(transform, "translation", (0.0, 0.0)))
+                    err2_px = np.abs(rs2 * src2 + tr2 - dst2) / max(sc2, 1e-12)
+                    keep2 = np.isfinite(err2_px) & (err2_px <= float(tol2))
+                    if int(np.count_nonzero(keep2)) < min_pairs2:
+                        continue
+                    hyp2 = _derive_similarity(
+                        img_points[keep2].astype(np.float64),
+                        tile_points[keep2].astype(np.float64),
+                        reflected=(getattr(transform, "parity", 1) < 0),
+                    )
+                    if hyp2 is None:
+                        continue
+                    rs2h, tr2h = hyp2
+                    cand2 = SimilarityTransform(
+                        scale=float(abs(rs2h)),
+                        rotation=float(np.angle(rs2h)),
+                        translation=(float(tr2h.real), float(tr2h.imag)),
+                        parity=-1 if getattr(transform, "parity", 1) < 0 else 1,
+                    )
+                    ref2 = _robust_refine_similarity(
+                        img_points[keep2].astype(np.float64),
+                        tile_points[keep2].astype(np.float64),
+                        cand2,
+                        tol_px=base_tol2,
+                        max_iters=max(1, int(getattr(config, "blind_refit_irls_iters", 3) or 3) - 1),
+                    )
+                    if ref2 is None:
+                        continue
+                    trf2, mask2, _rms2 = ref2
+                    if mask2 is not None and int(np.count_nonzero(mask2)) >= 4:
+                        img2 = img_points[keep2][mask2]
+                        tile2 = tile_points[keep2][mask2]
+                        world2 = tile_world_matches[keep2][mask2]
+                    else:
+                        img2 = img_points[keep2]
+                        tile2 = tile_points[keep2]
+                        world2 = tile_world_matches[keep2]
+                    if int(img2.shape[0]) < min_pairs2:
+                        continue
+                    wcs2 = tan_from_similarity(
+                        trf2,
+                        image.shape,
+                        center_pixel=crpix,
+                        tile_center=(float(tile_entry.get("center_ra_deg", 0.0)), float(tile_entry.get("center_dec_deg", 0.0))),
+                    )
+                    matches2 = _build_matches_array(img2, world2)
+                    stats2 = validate_solution(wcs2, matches2, th_local)
+                    better = False
+                    if str(stats2.get("quality", "FAIL")) == "GOOD" and str(stats.get("quality", "FAIL")) != "GOOD":
+                        better = True
+                    elif int(stats2.get("inliers", 0) or 0) > int(stats.get("inliers", 0) or 0):
+                        better = True
+                    elif int(stats2.get("inliers", 0) or 0) == int(stats.get("inliers", 0) or 0):
+                        better = float(stats2.get("rms_px", float("inf"))) < float(stats.get("rms_px", float("inf")))
+                    if better:
+                        phase_slot["tweak2_verify_hits"] = int(phase_slot.get("tweak2_verify_hits", 0) + 1)
+                        transform = trf2
+                        img_in = img2
+                        tile_in = tile2
+                        world_in = world2
+                        wcs = wcs2
+                        matches_array = matches2
+                        stats = stats2
+                        _record_verify_hit_stage(
+                            stage="tweak2_verify",
+                            outcome="hit",
+                            context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                            stats_obj=stats,
+                            extra={"pairs": int(matches_array.shape[0]), "iter": int(_t2 + 1)},
+                        )
+                        break
+
+            _record_verify_hit_stage(
+                stage="validate_base",
+                outcome="ok" if str(stats.get("quality", "FAIL")) == "GOOD" else "fail",
+                context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                stats_obj=stats,
+                extra={"pairs": int(matches_array.shape[0])},
+            )
+            _record_astrometry_match_object(
+                stage="validate_base",
+                outcome="ok" if str(stats.get("quality", "FAIL")) == "GOOD" else "fail",
+                context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                stats_obj=stats,
+                source=str(reassign_source),
+                pairs=int(matches_array.shape[0]),
+                inlier_guess=int(img_in.shape[0]),
+                model_scale_arcsec=float(model_scale_arcsec) if np.isfinite(float(model_scale_arcsec)) else None,
+                score=int(score),
+                extra={"resolver": str(reassign_source)},
+            )
             final_wcs = wcs
             final_stats = stats
             sip_used = 0
@@ -1917,12 +11655,66 @@ def solve_blind(
                         break
             stats = final_stats
             if stats.get("quality") == "GOOD":
-                geo_ok, geo = _blind_geometric_guardrails(img_in, image.shape)
+                min_inliers_abs = max(0, int(getattr(config, "blind_min_inliers_abs", 8) or 0))
+                min_inliers_ratio = float(getattr(config, "blind_min_inliers_ratio", 0.18) or 0.0)
+                pair_count = max(1, int(matches_array.shape[0]))
+                req_abs = int(min_inliers_abs)
+                if bool(getattr(config, "blind_sparse_adaptive_inliers", True)):
+                    sparse_floor = max(2, int(getattr(config, "blind_sparse_min_inliers_floor", 4) or 4))
+                    if pair_count <= 6:
+                        req_abs = min(req_abs, sparse_floor)
+                    elif pair_count <= 10:
+                        req_abs = min(req_abs, max(sparse_floor, sparse_floor + 1))
+                    elif pair_count <= 16:
+                        req_abs = min(req_abs, max(sparse_floor + 2, 6))
+                    if int(getattr(stars, "shape", [0])[0] if stars is not None else 0) < 40:
+                        req_abs = max(sparse_floor, req_abs - 1)
+                req_inliers = max(req_abs, int(math.ceil(max(0.0, min_inliers_ratio) * float(pair_count))))
+                got_inliers = int(stats.get("inliers", 0) or 0)
+                if got_inliers < req_inliers:
+                    logger.info(
+                        "blind inlier guard failed: tile=%s level=%s parity=%s inliers=%d required>=%d (abs=%d adaptive_abs=%d ratio=%.3f pairs=%d stars=%d)",
+                        candidate_key,
+                        level_name,
+                        parity_label,
+                        int(got_inliers),
+                        int(req_inliers),
+                        int(min_inliers_abs),
+                        int(req_abs),
+                        float(min_inliers_ratio),
+                        int(pair_count),
+                        int(getattr(stars, "shape", [0])[0] if stars is not None else 0),
+                    )
+                    stats = {**stats, "quality": "FAIL", "success": False, "reason": "blind inlier guard failed"}
+            if stats.get("quality") == "GOOD":
+                geo_ok, geo = _blind_geometric_guardrails(
+                    img_in,
+                    image.shape,
+                    sparse_min_span=float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08),
+                    sparse_min_area=float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003),
+                    dense_min_span=float(getattr(config, "blind_geo_dense_min_span", 0.10) or 0.10),
+                    dense_min_area=float(getattr(config, "blind_geo_dense_min_area", 0.005) or 0.005),
+                    dense_max_cond=float(getattr(config, "blind_geo_dense_max_cond", 2.0e4) or 2.0e4),
+                )
                 stats["geo_cov_x"] = float(geo.get("cov_x", float("nan")))
                 stats["geo_cov_y"] = float(geo.get("cov_y", float("nan")))
                 stats["geo_cov_area"] = float(geo.get("cov_area", float("nan")))
                 stats["geo_cond"] = float(geo.get("cond", float("nan")))
                 if not geo_ok:
+                    try:
+                        if str(candidate_key) == "d50_0819":
+                            tr = globals().get("_A2V22_TRACE", {})
+                            tr["final_guard"] = {
+                                "n": int(geo.get("n", 0)),
+                                "cov_x": float(geo.get("cov_x", float("nan")) or float("nan")),
+                                "cov_y": float(geo.get("cov_y", float("nan")) or float("nan")),
+                                "cov_area": float(geo.get("cov_area", float("nan")) or float("nan")),
+                                "cond": float(geo.get("cond", float("nan")) or float("nan")),
+                                "reason": str(geo.get("reason", "unknown")),
+                            }
+                            globals()["_A2V22_TRACE"] = tr
+                    except Exception:
+                        pass
                     logger.info(
                         "geometric guard failed: tile=%s level=%s parity=%s reason=%s n=%d cov=(%.3f,%.3f) area=%.4f cond=%s",
                         candidate_key,
@@ -1935,25 +11727,396 @@ def solve_blind(
                         float(geo.get("cov_area", 0.0)),
                         f"{float(geo.get('cond', float('nan'))):.1f}" if np.isfinite(float(geo.get('cond', float('nan')))) else "inf",
                     )
-                    stats = {"quality": "FAIL", "success": False, "reason": "geometric guard failed", **stats}
+                    _gr = str(geo.get("reason", "unknown"))
+                    _gx = float(geo.get("cov_x", float("nan")) or float("nan"))
+                    _gy = float(geo.get("cov_y", float("nan")) or float("nan"))
+                    _ga = float(geo.get("cov_area", float("nan")) or float("nan"))
+                    _gc = float(geo.get("cond", float("nan")) or float("nan"))
+                    stats = {
+                        **stats,
+                        "quality": "FAIL",
+                        "success": False,
+                        "reason": f"geometric_guard_failed[reason={_gr},cov_x={_gx:.4f},cov_y={_gy:.4f},cov_area={_ga:.5f},cond={_gc:.1f}]",
+                    }
+            if stats.get("quality") == "GOOD":
+                cov_area = float(stats.get("geo_cov_area", float("nan")))
+                cand_logodds = _candidate_logodds_like(
+                    inliers=int(stats.get("inliers", 0) or 0),
+                    rms_px=float(stats.get("rms_px", float("inf"))),
+                    cov_area=cov_area,
+                    n_pairs=int(matches_array.shape[0]),
+                    geo_weight=float(getattr(config, "blind_accept_logodds_geo_weight", 1.10) or 1.10),
+                )
+                stats["parity_label"] = str(parity_label)
+                stats["parity_value"] = int(-1 if getattr(transform, "parity", 1) < 0 else 1)
+
+                tune_thr = float(getattr(config, "blind_logodds_totune", 0.20) or 0.20)
+                keep_thr = float(getattr(config, "blind_logodds_tokeep", 0.45) or 0.45)
+                if keep_thr < tune_thr:
+                    keep_thr = tune_thr
+                logaccept_thr = float(min(keep_thr, tune_thr))
+                astrometry_stage_mode = bool(getattr(config, "blind_accept_logodds_astrometry_stages", True))
+                stats["accept_logodds_totune"] = float(tune_thr)
+                stats["accept_logodds_tokeep"] = float(keep_thr)
+                stats["accept_logodds_logaccept"] = float(logaccept_thr)
+                stats["accept_logodds_astrometry_stages"] = bool(astrometry_stage_mode)
+                phase_slot["accept_logodds_good_count"] = int(phase_slot.get("accept_logodds_good_count", 0) + 1)
+                if float(cand_logodds) < float(tune_thr):
+                    phase_slot["accept_logodds_below_totune"] = int(phase_slot.get("accept_logodds_below_totune", 0) + 1)
+                elif float(cand_logodds) < float(keep_thr):
+                    phase_slot["accept_logodds_between_tune_keep"] = int(phase_slot.get("accept_logodds_between_tune_keep", 0) + 1)
+                else:
+                    phase_slot["accept_logodds_above_keep"] = int(phase_slot.get("accept_logodds_above_keep", 0) + 1)
+
+                if bool(getattr(config, "blind_tune_reverify_enabled", True)) and (tune_thr <= float(cand_logodds) < keep_thr):
+                    phase_slot["tune_reverify_attempts"] = int(phase_slot.get("tune_reverify_attempts", 0) + 1)
+                    _record_verify_hit_stage(
+                        stage="tune_reverify",
+                        outcome="attempt",
+                        context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                        stats_obj=stats,
+                        extra={"cand_logodds": float(cand_logodds)},
+                    )
+                    tune_iters = max(1, int(getattr(config, "blind_tune_reverify_max_iters", 1) or 1))
+                    tune_tol_factor = max(1.0, float(getattr(config, "blind_tune_reverify_tol_factor", 1.35) or 1.0))
+                    base_tol_tune = max(0.5, float(getattr(config, "pixel_tolerance", 2.5) or 2.5))
+                    improved = False
+                    for _tt in range(tune_iters):
+                        sc_tt = float(max(getattr(transform, "scale", 0.0) or 0.0, 1e-12))
+                        src_tt = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                        if getattr(transform, "parity", 1) < 0:
+                            src_tt = np.conj(src_tt)
+                        dst_tt = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                        rs_tt = sc_tt * np.exp(1j * float(getattr(transform, "rotation", 0.0) or 0.0))
+                        tr_tt = complex(*getattr(transform, "translation", (0.0, 0.0)))
+                        err_tt_px = np.abs(rs_tt * src_tt + tr_tt - dst_tt) / max(sc_tt, 1e-12)
+                        tol_tt = base_tol_tune * (tune_tol_factor ** float(_tt + 1))
+                        keep_tt = np.isfinite(err_tt_px) & (err_tt_px <= tol_tt)
+                        if int(np.count_nonzero(keep_tt)) < max(6, int(img_in.shape[0])):
+                            continue
+                        refl_tt = getattr(transform, "parity", 1) < 0
+                        hyp_tt = _derive_similarity(
+                            img_points[keep_tt].astype(np.float64),
+                            tile_points[keep_tt].astype(np.float64),
+                            reflected=refl_tt,
+                        )
+                        if hyp_tt is None:
+                            continue
+                        rs2, tr2 = hyp_tt
+                        cand_tt = SimilarityTransform(
+                            scale=float(abs(rs2)),
+                            rotation=float(np.angle(rs2)),
+                            translation=(float(tr2.real), float(tr2.imag)),
+                            parity=-1 if refl_tt else 1,
+                        )
+                        refined_tt = _robust_refine_similarity(
+                            img_points[keep_tt].astype(np.float64),
+                            tile_points[keep_tt].astype(np.float64),
+                            cand_tt,
+                            tol_px=base_tol_tune,
+                            max_iters=max(1, int(getattr(config, "blind_refit_irls_iters", 3) or 3) - 1),
+                        )
+                        if refined_tt is None:
+                            continue
+                        trf_tt, mask_tt, _rms_tt = refined_tt
+                        if mask_tt is not None and int(np.count_nonzero(mask_tt)) >= 4:
+                            img_tt = img_points[keep_tt][mask_tt]
+                            tile_tt = tile_points[keep_tt][mask_tt]
+                            world_tt = tile_world_matches[keep_tt][mask_tt]
+                        else:
+                            img_tt = img_points[keep_tt]
+                            tile_tt = tile_points[keep_tt]
+                            world_tt = tile_world_matches[keep_tt]
+                        if int(img_tt.shape[0]) < max(4, int(img_in.shape[0])):
+                            continue
+
+                        transform = trf_tt
+                        img_in = img_tt
+                        tile_in = tile_tt
+                        world_in = world_tt
+
+                        crpix = (image.shape[1] / 2.0 + 1.0, image.shape[0] / 2.0 + 1.0)
+                        final_wcs = tan_from_similarity(
+                            transform,
+                            image.shape,
+                            center_pixel=crpix,
+                            tile_center=(float(tile_entry.get("center_ra_deg", 0.0)), float(tile_entry.get("center_dec_deg", 0.0))),
+                        )
+                        matches_array = _build_matches_array(img_in, world_in)
+                        n_pairs_tt = int(matches_array.shape[0])
+                        adaptive_inliers_tt = min(
+                            int(config.quality_inliers),
+                            max(4, int(0.4 * max(0, n_pairs_tt))),
+                        )
+                        th_tt = {"rms_px": float(config.quality_rms), "inliers": adaptive_inliers_tt}
+                        val_bounds_tt = _scale_gate_bounds_arcsec(
+                            config,
+                            scale_anchor_arcsec,
+                            scale_bounds_arcsec,
+                            gate="final",
+                            fail_validation_count=fail_validation_count,
+                            fail_best_inliers_seen=fail_best_inliers_seen,
+                        )
+                        if val_bounds_tt is not None:
+                            lo_vt, hi_vt, _meta_vt = val_bounds_tt
+                            if np.isfinite(float(lo_vt)) and float(lo_vt) > 0.0:
+                                th_tt["scale_min_arcsec"] = float(max(0.1, float(lo_vt) * 0.85))
+                            if np.isfinite(float(hi_vt)) and float(hi_vt) > 0.0:
+                                th_tt["scale_max_arcsec"] = float(max(15.0, float(hi_vt) * 1.20))
+                        # Re-verify/tune pass: keep Astrometry semantics where nummatches tracks
+                        # matched-hypothesis entries, not each re-validation pass.
+                        stats_tt = validate_solution(final_wcs, matches_array, th_tt)
+                        if str(stats_tt.get("quality", "FAIL")) != "GOOD":
+                            continue
+                        stats = dict(stats_tt)
+                        cov_area = float(stats.get("geo_cov_area", float("nan")))
+                        cand_logodds = _candidate_logodds_like(
+                            inliers=int(stats.get("inliers", 0) or 0),
+                            rms_px=float(stats.get("rms_px", float("inf"))),
+                            cov_area=cov_area,
+                            n_pairs=int(matches_array.shape[0]),
+                            geo_weight=float(getattr(config, "blind_accept_logodds_geo_weight", 1.10) or 1.10),
+                        )
+                        improved = True
+                        phase_slot["tune_reverify_hits"] = int(phase_slot.get("tune_reverify_hits", 0) + 1)
+                        _record_verify_hit_stage(
+                            stage="tune_reverify",
+                            outcome="hit",
+                            context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                            stats_obj=stats,
+                            extra={"cand_logodds": float(cand_logodds), "iter": int(_tt + 1)},
+                        )
+                        break
+                    if not improved:
+                        phase_slot["tune_reverify_no_improve"] = int(phase_slot.get("tune_reverify_no_improve", 0) + 1)
+                        _record_verify_hit_stage(
+                            stage="tune_reverify",
+                            outcome="no_improve",
+                            context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                            stats_obj=stats,
+                            extra={"cand_logodds": float(cand_logodds)},
+                        )
+
+                stats["accept_logodds"] = float(cand_logodds)
+                hard_floor = float(getattr(config, "blind_accept_logodds_min", 0.25) or 0.25)
+                precheck_min = max(float(hard_floor), float(logaccept_thr if astrometry_stage_mode else keep_thr))
+                keep_min = max(float(hard_floor), float(keep_thr))
+                stats["accept_logodds_precheck_min"] = float(precheck_min)
+                stats["accept_logodds_keep_min"] = float(keep_min)
+
+                if cand_logodds < precheck_min:
+                    phase_slot["accept_logodds_precheck_fail"] = int(phase_slot.get("accept_logodds_precheck_fail", 0) + 1)
+                    logger.info(
+                        "blind accept-logodds precheck failed: tile=%s level=%s parity=%s logodds=%.3f precheck_min=%.3f (logaccept=%.3f keep=%.3f) inliers=%d rms=%.3f cov=%.4f pairs=%d",
+                        candidate_key,
+                        level_name,
+                        parity_label,
+                        float(cand_logodds),
+                        float(precheck_min),
+                        float(logaccept_thr),
+                        float(keep_thr),
+                        int(stats.get("inliers", 0) or 0),
+                        float(stats.get("rms_px", float("inf"))),
+                        float(cov_area if np.isfinite(cov_area) else float("nan")),
+                        int(matches_array.shape[0]),
+                    )
+                    stats = {**stats, "quality": "FAIL", "success": False, "reason": "blind accept-logodds precheck failed"}
+                else:
+                    phase_slot["accept_logodds_precheck_pass"] = int(phase_slot.get("accept_logodds_precheck_pass", 0) + 1)
+                    if cand_logodds < keep_min:
+                        phase_slot["accept_logodds_below_keep"] = int(phase_slot.get("accept_logodds_below_keep", 0) + 1)
+                        logger.info(
+                            "blind accept-logodds below keep after verify: tile=%s level=%s parity=%s logodds=%.3f keep_min=%.3f (logaccept=%.3f) inliers=%d rms=%.3f cov=%.4f pairs=%d",
+                            candidate_key,
+                            level_name,
+                            parity_label,
+                            float(cand_logodds),
+                            float(keep_min),
+                            float(logaccept_thr),
+                            int(stats.get("inliers", 0) or 0),
+                            float(stats.get("rms_px", float("inf"))),
+                            float(cov_area if np.isfinite(cov_area) else float("nan")),
+                            int(matches_array.shape[0]),
+                        )
+                        stats = {**stats, "quality": "FAIL", "success": False, "reason": "blind accept-logodds below keep"}
+                    else:
+                        phase_slot["accept_logodds_keep_pass"] = int(phase_slot.get("accept_logodds_keep_pass", 0) + 1)
+
+            if stats.get("quality") == "GOOD":
+                stats["refit_rms_px"] = float(refit_rms)
+                stats["transform_rot_deg"] = float(np.degrees(float(getattr(transform, "rotation", 0.0) or 0.0)))
+                stats["transform_scale_deg"] = float(getattr(transform, "scale", float("nan")))
+                stats["model_scale_arcsec"] = float(model_scale_arcsec) if np.isfinite(model_scale_arcsec) else float("nan")
+                residuals_px = _compute_wcs_residuals_px(
+                    final_wcs,
+                    matches_array,
+                    pix_scale_arcsec=float(stats.get("pix_scale_arcsec", float("nan"))),
+                )
+                sigma_px = float(getattr(config, "blind_prob_sigma_px", 1.6) or 1.6)
+                if not np.isfinite(sigma_px) or sigma_px <= 0.0:
+                    sigma_px = 1.6
+                prob_prior = float(getattr(config, "blind_prob_prior_match", 0.35) or 0.35)
+                prob_clip = float(getattr(config, "blind_prob_clip_delta", 7.0) or 7.0)
+                prob_sigma_auto = bool(getattr(config, "blind_prob_sigma_auto", True))
+                prob_sigma_floor = float(getattr(config, "blind_prob_sigma_floor_px", 0.7) or 0.7)
+                residuals_prob, prob_gamma_stats = _distance_from_quad_adjust_residuals(
+                    residuals_px,
+                    np.asarray(matches_array[:, :2], dtype=np.float64) if matches_array.size else None,
+                    enabled=bool(getattr(config, "blind_prob_distance_from_quad_bonus", True)),
+                    gamma_cap=float(getattr(config, "blind_prob_distance_gamma_cap", 4.0) or 4.0),
+                    quad_frac=float(getattr(config, "blind_prob_distance_quad_frac", 0.35) or 0.35),
+                )
+                if bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)) and bool(getattr(config, "blind_astrometry_verify_sequential_enabled", True)):
+                    try:
+                        ref_xy_px = np.asarray(final_wcs.wcs_world2pix(matches_array[:, 2:], 0), dtype=np.float64)
+                    except Exception:
+                        ref_xy_px = np.empty((0, 2), dtype=np.float64)
+                    prob_stats = _astrometry_verify_sequence_logodds(
+                        test_xy_px=np.asarray(matches_array[:, :2], dtype=np.float64),
+                        ref_xy_px=ref_xy_px,
+                        testsigma2_px=float(max(1e-6, sigma_px * sigma_px)),
+                        effective_area_px2=float(max(1.0, float(image.shape[0]) * float(image.shape[1]))),
+                        distractor_rate=float(min(0.999, max(1e-6, 1.0 - prob_prior))),
+                        logodds_bail=float(getattr(config, "verify_logodds_bail", -24.0) or -24.0),
+                        logodds_stoplooking=float(getattr(config, "verify_logodds_stoplooking", 24.0) or 24.0),
+                    )
+                    prob_stats["prob_model"] = "astrometry_sequential"
+                    prob_stats["prob_sigma_px"] = float(sigma_px)
+                    prob_stats["prob_sigma_est_px"] = float(sigma_px)
+                    prob_stats["prob_prior_match"] = float(prob_prior)
+                    prob_stats["prob_rmax_px"] = float(0.5 * math.hypot(max(int(image.shape[0]), 1), max(int(image.shape[1]), 1)))
+                else:
+                    prob_stats = _probabilistic_verify_logodds(
+                        residuals_prob,
+                        image_shape=image.shape,
+                        sigma_px=sigma_px,
+                        prior_match=prob_prior,
+                        clip_delta=prob_clip,
+                        sigma_auto=prob_sigma_auto,
+                        sigma_floor_px=prob_sigma_floor,
+                    )
+                stats.update(prob_stats)
+                stats.update(prob_gamma_stats)
+                if bool(getattr(config, "blind_prob_verify_enabled", True)):
+                    min_prob = float(getattr(config, "blind_prob_logodds_accept", 0.35) or 0.35)
+                    min_match_ratio = float(getattr(config, "blind_prob_min_match_ratio", 0.20) or 0.0)
+                    prob_lodds = float(stats.get("prob_logodds", float("-inf")))
+                    match_ratio = float(stats.get("prob_match_ratio", 0.0) or 0.0)
+
+                    effective_min_prob = float(min_prob)
+                    effective_min_ratio = float(min_match_ratio)
+                    if bool(getattr(config, "blind_prob_dynamic_thresholds", True)):
+                        inl = int(stats.get("inliers", 0) or 0)
+                        pairs = int(matches_array.shape[0])
+                        rms_v = float(stats.get("rms_px", float("inf")))
+                        scale_dyn = float(getattr(config, "blind_prob_dynamic_scale", 0.18) or 0.0)
+                        scale_dyn = min(0.60, max(0.0, scale_dyn))
+                        # Astrometry-style intuition: allow slightly weaker log-odds when
+                        # geometric support is already strong.
+                        support = math.log1p(max(0, inl)) - 0.30 * math.log1p(max(0, pairs - inl))
+                        if np.isfinite(rms_v) and rms_v > 0.0:
+                            support += 0.10 * max(0.0, (1.6 - rms_v))
+                        dyn_floor = float(getattr(config, "blind_prob_dynamic_min_logodds", -0.15) or -0.15)
+                        dyn_floor = min(float(min_prob), max(-3.0, dyn_floor))
+                        effective_min_prob = max(dyn_floor, float(min_prob) - scale_dyn * support)
+
+                        ratio_inl_gate = max(0, int(getattr(config, "blind_prob_dynamic_ratio_inliers", 12) or 0))
+                        ratio_rms_gate = float(getattr(config, "blind_prob_dynamic_ratio_rms_px", 1.4) or 1.4)
+                        ratio_relax = float(getattr(config, "blind_prob_dynamic_ratio_relax", 0.70) or 1.0)
+                        ratio_relax = min(1.0, max(0.30, ratio_relax))
+                        if inl >= ratio_inl_gate and np.isfinite(rms_v) and rms_v <= ratio_rms_gate:
+                            effective_min_ratio = float(min_match_ratio) * ratio_relax
+
+                    prob_pass = bool(np.isfinite(prob_lodds) and (prob_lodds >= effective_min_prob) and (match_ratio >= effective_min_ratio))
+                    stats["prob_effective_min_logodds"] = float(effective_min_prob)
+                    stats["prob_effective_min_match_ratio"] = float(effective_min_ratio)
+                    stats["prob_verify_pass"] = bool(prob_pass)
+                    if not prob_pass:
+                        logger.info(
+                            "blind probabilistic verify failed: tile=%s level=%s parity=%s logodds=%.3f min=%.3f match_ratio=%.3f min_ratio=%.3f m/c/d=%d/%d/%d",
+                            candidate_key,
+                            level_name,
+                            parity_label,
+                            float(prob_lodds),
+                            float(effective_min_prob),
+                            float(match_ratio),
+                            float(effective_min_ratio),
+                            int(stats.get("prob_matches", 0) or 0),
+                            int(stats.get("prob_conflicts", 0) or 0),
+                            int(stats.get("prob_distractors", 0) or 0),
+                        )
+                        stats = {**stats, "quality": "FAIL", "success": False, "reason": "blind probabilistic verify failed"}
+
             if stats.get("quality") != "GOOD":
+                _record_verify_hit_stage(
+                    stage="validate_gate",
+                    outcome="fail",
+                    context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                    stats_obj=stats,
+                    extra={"pairs": int(matches_array.shape[0])},
+                )
+                _record_astrometry_match_object(
+                    stage="validate_gate",
+                    outcome="fail",
+                    context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                    stats_obj=stats,
+                    source=str(reassign_source),
+                    pairs=int(matches_array.shape[0]),
+                    inlier_guess=int(stats.get("inliers", 0) or 0),
+                    model_scale_arcsec=float(stats.get("model_scale_arcsec", float("nan"))) if np.isfinite(float(stats.get("model_scale_arcsec", float("nan")))) else None,
+                    score=int(score),
+                    extra={"resolver": str(reassign_source)},
+                )
                 logger.info(
-                    "validation failed: tile=%s level=%s parity=%s rms=%.3f inliers=%d pairs=%d",
+                    "validation failed: tile=%s level=%s parity=%s rms=%.3f inliers=%d pairs=%d reason=%s pix=%.3f",
                     candidate_key,
                     level_name,
                     parity_label,
                     float(stats.get("rms_px", float("inf"))),
                     int(stats.get("inliers", 0)),
                     int(matches_array.shape[0]),
+                    str(stats.get("reason", "unknown")),
+                    float(stats.get("pix_scale_arcsec", float("nan"))),
                 )
+                _rs = str(stats.get("reason", "unknown") or "").lower()
+                if "scale prefilter" in _rs or "pixel_scale" in _rs:
+                    _mark_fail_stage("hypothesis")
+                elif "probabilistic" in _rs or "accept-logodds" in _rs or "geometric guard" in _rs or "inlier guard" in _rs:
+                    _mark_fail_stage("verify_prob")
+                else:
+                    _mark_fail_stage("verify_prob")
                 inl = int(stats.get("inliers", 0) or 0)
-                fail_best_inliers_seen = max(fail_best_inliers_seen, inl)
+                _record_failed_validation(
+                    reason=str(stats.get("reason", "validation failed")),
+                    inliers=inl,
+                    rms_px=float(stats.get("rms_px", float("inf"))),
+                    pairs=int(matches_array.shape[0]),
+                    cov_area=float(stats.get("geo_cov_area", float("nan"))),
+                    model_scale_arcsec=float(
+                        stats.get(
+                            "model_scale_arcsec",
+                            stats.get("pix_scale_arcsec", float("nan")),
+                        )
+                    ),
+                    context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                )
                 fail_validation_count += 1
                 phase_slot["failed_validations"] += 1
                 _update_verify_logodds(
                     phase_slot=phase_slot,
                     inliers=inl,
                     rms_px=float(stats.get("rms_px", float("inf"))),
+                    pairs=int(matches_array.shape[0]),
+                    reason=str(stats.get("reason", "validation failed")),
+                    context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                    theta_counts={
+                        "match": int(stats.get("prob_theta_match_total", stats.get("prob_matches", inl)) or 0),
+                        "conflict": int(stats.get("prob_theta_conflict_total", stats.get("prob_conflicts", 0)) or 0),
+                        "distractor": int(stats.get("prob_theta_distractor_total", stats.get("prob_distractors", 0)) or 0),
+                        "filtered": int(stats.get("prob_theta_filtered_total", 0) or 0),
+                        "bailedout": int(stats.get("prob_theta_bailedout_total", 0) or 0),
+                        "stoppedlooking": int(stats.get("prob_theta_stoppedlooking_total", 0) or 0),
+                    },
                 )
                 if global_mode:
                     inl = int(stats.get("inliers", 0) or 0)
@@ -1990,8 +12153,35 @@ def solve_blind(
                         break
                 continue
 
-            zemo_ok, zemo_reason, pix_scale_arcsec = validate_wcs_for_zemosaic(final_wcs)
+            zemo_scale_min = 0.3
+            zemo_scale_max = 15.0
+            dynamic_final_bounds = _scale_gate_bounds_arcsec(
+                config,
+                scale_anchor_arcsec,
+                scale_bounds_arcsec,
+                gate="final",
+                fail_validation_count=fail_validation_count,
+                fail_best_inliers_seen=fail_best_inliers_seen,
+            )
+            if dynamic_final_bounds is not None:
+                lo_dyn, hi_dyn, _meta_dyn = dynamic_final_bounds
+                if np.isfinite(float(lo_dyn)) and float(lo_dyn) > 0.0:
+                    zemo_scale_min = min(float(zemo_scale_min), max(0.1, float(lo_dyn) * 0.85))
+                if np.isfinite(float(hi_dyn)) and float(hi_dyn) > 0.0:
+                    zemo_scale_max = max(float(zemo_scale_max), float(hi_dyn) * 1.15)
+            zemo_ok, zemo_reason, pix_scale_arcsec = validate_wcs_for_zemosaic(
+                final_wcs,
+                scale_min_arcsec=float(zemo_scale_min),
+                scale_max_arcsec=float(zemo_scale_max),
+            )
             if not zemo_ok:
+                _record_verify_hit_stage(
+                    stage="zemosaic_compat",
+                    outcome="fail",
+                    context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                    stats_obj=stats,
+                    extra={"reason": str(zemo_reason)},
+                )
                 logger.info(
                     "zemosaic-compat failed: tile=%s level=%s parity=%s reason=%s",
                     candidate_key,
@@ -2000,13 +12190,32 @@ def solve_blind(
                     zemo_reason,
                 )
                 inl = int(stats.get("inliers", 0) or 0)
-                fail_best_inliers_seen = max(fail_best_inliers_seen, inl)
+                _record_failed_validation(
+                    reason=str(zemo_reason),
+                    inliers=inl,
+                    rms_px=float(stats.get("rms_px", float("inf"))),
+                    pairs=int(matches_array.shape[0]),
+                    cov_area=float(stats.get("geo_cov_area", float("nan"))),
+                    model_scale_arcsec=float(pix_scale_arcsec) if (pix_scale_arcsec is not None and np.isfinite(float(pix_scale_arcsec))) else float(stats.get("model_scale_arcsec", float("nan"))),
+                    context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                )
                 fail_validation_count += 1
                 phase_slot["failed_validations"] += 1
                 _update_verify_logodds(
                     phase_slot=phase_slot,
                     inliers=inl,
                     rms_px=float(stats.get("rms_px", float("inf"))),
+                    pairs=int(matches_array.shape[0]),
+                    reason=str(zemo_reason),
+                    context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                    theta_counts={
+                        "match": int(stats.get("prob_theta_match_total", stats.get("prob_matches", inl)) or 0),
+                        "conflict": int(stats.get("prob_theta_conflict_total", stats.get("prob_conflicts", 0)) or 0),
+                        "distractor": int(stats.get("prob_theta_distractor_total", stats.get("prob_distractors", 0)) or 0),
+                        "filtered": int(stats.get("prob_theta_filtered_total", 0) or 0),
+                        "bailedout": int(stats.get("prob_theta_bailedout_total", 0) or 0),
+                        "stoppedlooking": int(stats.get("prob_theta_stoppedlooking_total", 0) or 0),
+                    },
                 )
                 if global_mode:
                     inl = int(stats.get("inliers", 0) or 0)
@@ -2043,6 +12252,121 @@ def solve_blind(
                         break
                 continue
 
+            if pix_scale_arcsec is not None:
+                final_bounds_local = _scale_gate_bounds_arcsec(
+                    config,
+                    scale_anchor_arcsec,
+                    scale_bounds_arcsec,
+                    gate="final",
+                    fail_validation_count=fail_validation_count,
+                    fail_best_inliers_seen=fail_best_inliers_seen,
+                )
+                if final_bounds_local is not None and np.isfinite(float(pix_scale_arcsec)):
+                    lo_s, hi_s, meta_s = final_bounds_local
+                    approx_s = float(max(1e-9, float(meta_s.get("approx_scale_arcsec", scale_anchor_arcsec or 1.0))))
+                    ratio = float(pix_scale_arcsec) / approx_s
+                    if not (float(lo_s) <= float(pix_scale_arcsec) <= float(hi_s)):
+                        _record_verify_hit_stage(
+                            stage="scale_guard",
+                            outcome="fail",
+                            context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                            stats_obj=stats,
+                            extra={"solved_scale_arcsec": float(pix_scale_arcsec), "lo": float(lo_s), "hi": float(hi_s)},
+                        )
+                        logger.info(
+                            "blind scale guard failed: tile=%s level=%s parity=%s solved=%.6f anchor=%.6f ratio=%.3f not in [%.3f, %.3f]",
+                            candidate_key,
+                            level_name,
+                            parity_label,
+                            float(pix_scale_arcsec),
+                            float(approx_s),
+                            float(ratio),
+                            float(lo_s),
+                            float(hi_s),
+                        )
+                        inl = int(stats.get("inliers", 0) or 0)
+                        _record_failed_validation(
+                            reason="blind scale guard failed",
+                            inliers=inl,
+                            rms_px=float(stats.get("rms_px", float("inf"))),
+                            pairs=int(matches_array.shape[0]),
+                            cov_area=float(stats.get("geo_cov_area", float("nan"))),
+                            model_scale_arcsec=float(stats.get("model_scale_arcsec", float("nan"))),
+                            context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                        )
+                        fail_validation_count += 1
+                        phase_slot["failed_validations"] += 1
+                        _update_verify_logodds(
+                            phase_slot=phase_slot,
+                            inliers=inl,
+                            rms_px=float(stats.get("rms_px", float("inf"))),
+                            pairs=int(matches_array.shape[0]),
+                            reason="blind scale guard failed",
+                            context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                            theta_counts={
+                                "match": int(stats.get("prob_theta_match_total", stats.get("prob_matches", inl)) or 0),
+                                "conflict": int(stats.get("prob_theta_conflict_total", stats.get("prob_conflicts", 0)) or 0),
+                                "distractor": int(stats.get("prob_theta_distractor_total", stats.get("prob_distractors", 0)) or 0),
+                                "filtered": int(stats.get("prob_theta_filtered_total", 0) or 0),
+                                "bailedout": int(stats.get("prob_theta_bailedout_total", 0) or 0),
+                                "stoppedlooking": int(stats.get("prob_theta_stoppedlooking_total", 0) or 0),
+                            },
+                        )
+                        if global_mode:
+                            inl = int(stats.get("inliers", 0) or 0)
+                            best_support = max(best_support, inl)
+                            low_support_streak = (low_support_streak + 1) if inl <= 2 else 0
+                            weak_validation_streak = (weak_validation_streak + 1) if inl <= 4 else 0
+                            medium_validation_streak = (medium_validation_streak + 1) if inl <= 8 else 0
+                        continue
+
+            if ra_hint is not None and dec_hint is not None:
+                sep = float("inf")
+                try:
+                    cx = float(image.shape[1]) / 2.0
+                    cy = float(image.shape[0]) / 2.0
+                    ctr = np.asarray(final_wcs.wcs_pix2world([[cx, cy]], 0), dtype=np.float64)
+                    if ctr.size >= 2 and np.all(np.isfinite(ctr[0])):
+                        sep = _angular_separation(float(ra_hint), float(dec_hint), float(ctr[0][0]), float(ctr[0][1]))
+                except Exception:
+                    sep = float("inf")
+                base_tol = float(config.radius_hint_deg) if (getattr(config, "radius_hint_deg", None) is not None and float(config.radius_hint_deg) > 0.0) else float("nan")
+                if not np.isfinite(base_tol) or base_tol <= 0.0:
+                    base_tol = float(0.5 * max(0.2, float(approx_fov_deg or 0.0)))
+                factor = float(getattr(config, "blind_final_center_tol_factor", 1.25) or 1.25)
+                min_tol = float(getattr(config, "blind_final_center_min_tol_deg", 0.20) or 0.20)
+                max_tol = float(getattr(config, "blind_final_center_max_tol_deg", 10.0) or 10.0)
+                tol_center = min(max_tol, max(min_tol, base_tol * max(0.5, factor)))
+                if np.isfinite(sep) and (sep > tol_center):
+                    _record_verify_hit_stage(
+                        stage="center_prior",
+                        outcome="fail",
+                        context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                        stats_obj=stats,
+                        extra={"sep_deg": float(sep), "tol_deg": float(tol_center)},
+                    )
+                    logger.info(
+                        "blind center prior failed: tile=%s level=%s parity=%s sep=%s tol=%.3f",
+                        candidate_key,
+                        level_name,
+                        parity_label,
+                        f"{float(sep):.3f}" if np.isfinite(sep) else "nan",
+                        float(tol_center),
+                    )
+                    inl = int(stats.get("inliers", 0) or 0)
+                    _record_failed_validation(
+                        reason="blind center prior failed",
+                        inliers=inl,
+                        rms_px=float(stats.get("rms_px", float("inf"))),
+                        pairs=int(matches_array.shape[0]),
+                        cov_area=float(stats.get("geo_cov_area", float("nan"))),
+                        model_scale_arcsec=float(stats.get("model_scale_arcsec", float("nan"))),
+                        context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                    )
+                    fail_validation_count += 1
+                    phase_slot["failed_validations"] += 1
+                    continue
+
             header_updates = {
                 "SOLVED": 1,
                 "DBSET": tile_entry.get("family"),
@@ -2057,6 +12381,25 @@ def solve_blind(
                 "SOLVMODE": "BLIND",
             }
             phase_slot["solutions"] += 1
+            _record_verify_hit_stage(
+                stage="accept",
+                outcome="success",
+                context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                stats_obj=stats,
+                extra={"pairs": int(matches_array.shape[0])},
+            )
+            _record_astrometry_match_object(
+                stage="accept",
+                outcome="success",
+                context={"phase": phase_name, "level": level_name, "parity": parity_label, "tile": candidate_key},
+                stats_obj=stats,
+                source=str(reassign_source),
+                pairs=int(matches_array.shape[0]),
+                inlier_guess=int(stats.get("inliers", 0) or 0),
+                model_scale_arcsec=float(stats.get("model_scale_arcsec", float("nan"))) if np.isfinite(float(stats.get("model_scale_arcsec", float("nan")))) else None,
+                score=int(score),
+                extra={"resolver": str(reassign_source)},
+            )
             return WcsSolution(
                 True,
                 f"solution found (level={level_name}, parity={parity_label})",
@@ -2187,6 +12530,101 @@ def solve_blind(
             "early_exit": None,
         }
     )
+
+    def _parity_probe_top_score(
+        hashes: np.ndarray,
+        *,
+        probe_level: str,
+        use_ra_filter: bool,
+        allowed_tiles: set[int] | None,
+    ) -> int:
+        active_allowed = None
+        if use_ra_filter:
+            active_allowed = allowed_tiles if allowed_tiles is not None else allowed_tile_indices
+        probe_key = (
+            f"probe:{probe_level}",
+            False,
+            _allowed_tiles_key(active_allowed),
+            _obs_hash_signature(hashes, None),
+        )
+        cached = candidate_search_cache.get(probe_key)
+        if cached is None:
+            cands = tally_candidates(
+                (hashes, None),
+                index_root,
+                levels=[probe_level],
+                allowed_tiles=active_allowed,
+            )
+            candidate_search_cache[probe_key] = list(cands)
+        else:
+            cands = list(cached)
+        if not cands:
+            return 0
+        return int(cands[0][1])
+
+    def _select_phase_variants(level_seq: list[str], phase: dict[str, Any]) -> tuple[list[tuple[np.ndarray, str]], dict[str, Any] | None]:
+        all_variants = list(variants)
+        if len(all_variants) <= 1:
+            return all_variants, None
+
+        parity_mode = str(getattr(config, "blind_parity_mode", "auto") or "auto").strip().lower()
+        if parity_mode in {"nominal", "mirror"}:
+            chosen = [it for it in all_variants if str(it[1]) == parity_mode]
+            if chosen:
+                return chosen, {
+                    "forced": True,
+                    "forced_label": parity_mode,
+                    "locked": True,
+                    "locked_label": parity_mode,
+                }
+
+        if not bool(getattr(config, "blind_parity_lock_enabled", True)):
+            return all_variants, None
+        phase_name = str(phase.get("name", ""))
+        if bool(getattr(config, "blind_parity_lock_hint_phase_only", True)) and phase_name not in {"hinted", "hinted_wide"}:
+            return all_variants, None
+        if not level_seq:
+            return all_variants, None
+
+        probe_level = str(level_seq[0])
+        scores: dict[str, int] = {}
+        for hashes, label in all_variants:
+            scores[str(label)] = _parity_probe_top_score(
+                hashes,
+                probe_level=probe_level,
+                use_ra_filter=bool(phase.get("use_ra_filter", False)),
+                allowed_tiles=phase.get("allowed_tiles"),
+            )
+        nom = int(scores.get("nominal", 0))
+        mir = int(scores.get("mirror", 0))
+        if nom >= mir:
+            best_label, best_score, other_score = "nominal", nom, mir
+        else:
+            best_label, best_score, other_score = "mirror", mir, nom
+
+        ratio = float(best_score) / float(max(1, other_score))
+        min_votes = max(1, int(getattr(config, "blind_parity_lock_min_votes", 18) or 18))
+        min_ratio = float(getattr(config, "blind_parity_lock_ratio", 1.35) or 1.35)
+        locked = bool(best_score >= min_votes and ratio >= min_ratio)
+        ordered = sorted(
+            all_variants,
+            key=lambda it: (0 if str(it[1]) == best_label else 1),
+        )
+        if locked:
+            ordered = ordered[:1]
+        return ordered, {
+            "forced": False,
+            "locked": bool(locked),
+            "locked_label": str(best_label),
+            "probe_level": probe_level,
+            "nominal_score": int(nom),
+            "mirror_score": int(mir),
+            "ratio": float(ratio),
+            "min_votes": int(min_votes),
+            "min_ratio": float(min_ratio),
+        }
+
+
     for phase in phase_specs:
         if phase["require_ra"] and not ra_available:
             continue
@@ -2228,7 +12666,32 @@ def solve_blind(
                 phase["name"],
             )
         for level_seq in phase["level_sets"]:
-            for variant_hashes, parity_label in variants:
+            phase_variants, parity_meta = _select_phase_variants(level_seq, phase)
+            if parity_meta is not None:
+                phase_slot["parity_probe_level"] = parity_meta.get("probe_level")
+                phase_slot["parity_nominal_score"] = int(parity_meta.get("nominal_score", 0) or 0)
+                phase_slot["parity_mirror_score"] = int(parity_meta.get("mirror_score", 0) or 0)
+                phase_slot["parity_ratio"] = float(parity_meta.get("ratio", 0.0) or 0.0)
+                phase_slot["parity_locked"] = bool(parity_meta.get("locked", False))
+                phase_slot["parity_forced"] = bool(parity_meta.get("forced", False))
+                phase_slot["parity_forced_label"] = parity_meta.get("forced_label")
+                if bool(parity_meta.get("forced", False)):
+                    logger.info(
+                        "phase %s parity forced: %s",
+                        phase["name"],
+                        str(parity_meta.get("forced_label", "?")),
+                    )
+                elif bool(parity_meta.get("locked", False)):
+                    logger.info(
+                        "phase %s parity-lock: %s (probe=%s scores n/m=%d/%d ratio=%.2f)",
+                        phase["name"],
+                        str(parity_meta.get("locked_label", "?")),
+                        str(parity_meta.get("probe_level", "?")),
+                        int(parity_meta.get("nominal_score", 0) or 0),
+                        int(parity_meta.get("mirror_score", 0) or 0),
+                        float(parity_meta.get("ratio", 0.0) or 0.0),
+                    )
+            for variant_hashes, parity_label in phase_variants:
                 if _maybe_fail_early_abort(str(phase["name"])):
                     phase_slot["early_abort"] = True
                     break
@@ -2249,6 +12712,14 @@ def solve_blind(
                 solution.stats["phase_elapsed_s"] = time.time() - phase_start
                 solution.stats["phase_levels"] = list(level_seq)
                 solution.stats["phase_level_count"] = len(level_seq)
+                if parity_meta is not None:
+                    solution.stats["parity_lock_used"] = bool(parity_meta.get("locked", False))
+                    solution.stats["parity_lock_probe_level"] = parity_meta.get("probe_level")
+                    solution.stats["parity_lock_ratio"] = float(parity_meta.get("ratio", 0.0) or 0.0)
+                    solution.stats["parity_lock_nominal_score"] = int(parity_meta.get("nominal_score", 0) or 0)
+                    solution.stats["parity_lock_mirror_score"] = int(parity_meta.get("mirror_score", 0) or 0)
+                    solution.stats["parity_forced"] = bool(parity_meta.get("forced", False))
+                    solution.stats["parity_forced_label"] = parity_meta.get("forced_label")
                 best_solution = solution
                 break
             if fail_early_abort:
@@ -2266,11 +12737,142 @@ def solve_blind(
         if best_solution:
             break
     _log_phase("candidate search", stage)
+    _parity_diffable_export = _build_parity_diffable_export(final_success=bool(best_solution), final_message=(str(best_solution.message) if best_solution else "no valid solution"))
+    _stop_reason_counts = Counter(str(it.get("code") or "other") for it in astrometry_stop_reasons)
+    _stop_reason_counts_no_candidate_cap = Counter(
+        str(it.get("code") or "other")
+        for it in astrometry_stop_reasons
+        if str(it.get("code") or "other") != "candidate_cap"
+    )
+    _dominant_stop_reason = max(_stop_reason_counts.items(), key=lambda kv: kv[1])[0] if _stop_reason_counts else None
+    _dominant_stop_reason_no_candidate_cap = (
+        max(_stop_reason_counts_no_candidate_cap.items(), key=lambda kv: kv[1])[0]
+        if _stop_reason_counts_no_candidate_cap
+        else None
+    )
+    _terminal_stop_reason = dict(astrometry_stop_reasons[-1]) if astrometry_stop_reasons else None
+    _astrometry_semantics_payload = {
+        "mode_profile": {
+            "strict_verify_path": bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)),
+            "strict_disable_nonastrometry_fallbacks": bool(getattr(config, "blind_astrometry_strict_disable_nonastrometry_fallbacks", True)),
+            "non_parity_mode_enabled": bool(getattr(config, "blind_non_parity_mode_enabled", True)),
+            "strict_mode_effective": bool(strict_mode_effective),
+            "non_parity_mode_effective": bool(non_parity_mode_effective),
+        },
+        "numtries": int(astrometry_numtries),
+        "nummatches": int(astrometry_nummatches),
+        "maxquads_requested": int(requested_max_quads),
+        "maxquads_active": int(active_quads_n),
+        "maxmatches_active": int(hard_max_validations) if int(hard_max_validations) > 0 else 0,
+        "stop_reasons": list(astrometry_stop_reasons),
+        "stop_reason_counts": {str(k): int(v) for k, v in _stop_reason_counts.items()},
+        "stop_reason_counts_no_candidate_cap": {str(k): int(v) for k, v in _stop_reason_counts_no_candidate_cap.items()},
+        "dominant_stop_reason": _dominant_stop_reason,
+        "dominant_stop_reason_no_candidate_cap": _dominant_stop_reason_no_candidate_cap,
+        "terminal_stop_reason": _terminal_stop_reason,
+    }
     if not best_solution:
+        scale_ladder_attempts: list[dict[str, Any]] = []
+        if (
+            (not _scale_ladder_internal)
+            and bool(getattr(config, "blind_scale_ladder_enabled", True))
+            and (approx_scale_arcsec is not None)
+            and float(approx_scale_arcsec) > 0.0
+            and (not bool(getattr(config, "blind_reuse_existing_solved_wcs", True)))
+            and int(getattr(config, "hard_max_candidates_tried", 0) or 0) <= 0
+            and int(getattr(config, "hard_max_validations", 0) or 0) <= 0
+        ):
+            factors = tuple(getattr(config, "blind_scale_ladder_factors", (1.0, 1.5, 2.5, 4.0, 6.0)) or ())
+            min_ratio = max(0.01, float(getattr(config, "blind_scale_ladder_min_ratio", 0.75) or 0.75))
+            max_ratio = max(min_ratio + 1e-6, float(getattr(config, "blind_scale_ladder_max_ratio", 1.35) or 1.35))
+            ladder_rows: list[dict[str, Any]] = []
+            base_scale = float(approx_scale_arcsec)
+            for fac in factors:
+                try:
+                    ff = float(fac)
+                except Exception:
+                    continue
+                if (not np.isfinite(ff)) or ff <= 0.0:
+                    continue
+                if abs(ff - 1.0) < 1e-6:
+                    continue
+                stage_scale = float(base_scale * ff)
+                if (not np.isfinite(stage_scale)) or stage_scale <= 0.0:
+                    continue
+                stage_cfg = replace(
+                    config,
+                    blind_scale_ladder_enabled=False,
+                    blind_parity_lock_enabled=False,
+                    blind_scale_prefilter_enabled=False,
+                    blind_scale_prefilter_auto_disable=True,
+                    blind_scale_prefilter_auto_disable_after=1,
+                    fail_attempt_budget_s=max(float(getattr(config, "fail_attempt_budget_s", 0.0) or 0.0), 48.0),
+                    global_budget_fast_s=max(float(getattr(config, "global_budget_fast_s", 0.0) or 0.0), 10.0),
+                    global_budget_slow_s=max(float(getattr(config, "global_budget_slow_s", 0.0) or 0.0), 18.0),
+                    hard_max_candidates_tried=(int(getattr(config, "hard_max_candidates_tried", 0) or 0) if int(getattr(config, "hard_max_candidates_tried", 0) or 0) > 0 else 220),
+                    hard_max_validations=(int(getattr(config, "hard_max_validations", 0) or 0) if int(getattr(config, "hard_max_validations", 0) or 0) > 0 else 80),
+                    max_candidates=max(int(getattr(config, "max_candidates", 0) or 0), 24),
+                    max_stars=max(int(getattr(config, "max_stars", 0) or 0), 1000),
+                    max_quads=max(int(getattr(config, "max_quads", 0) or 0), 24000),
+                    pixel_tolerance=max(float(getattr(config, "pixel_tolerance", 2.5) or 2.5), 3.0),
+                    pixel_scale_arcsec=float(stage_scale),
+                    pixel_scale_min_arcsec=max(0.2, float(stage_scale) * min_ratio),
+                    pixel_scale_max_arcsec=min(60.0, float(stage_scale) * max_ratio),
+                )
+                stage_sol = solve_blind(
+                    input_fits,
+                    index_root,
+                    config=stage_cfg,
+                    cancel_check=cancel_check,
+                    prep_cache=prep_cache,
+                    _depth_ladder_internal=_depth_ladder_internal,
+                    _depth_ladder_stage=_depth_ladder_stage,
+                    _depth_ladder_total=_depth_ladder_total,
+                    _depth_ladder_caps=_depth_ladder_caps,
+                    _scale_ladder_internal=True,
+                )
+                row = {
+                    "factor": float(ff),
+                    "pixel_scale_arcsec": float(stage_scale),
+                    "success": bool(stage_sol.success),
+                    "message": str(stage_sol.message),
+                }
+                stg_stats = dict(stage_sol.stats or {})
+                row["fail_stage"] = stg_stats.get("fail_stage")
+                row["best_fail_inliers"] = stg_stats.get("best_fail_inliers")
+                row["best_fail_reason"] = stg_stats.get("best_fail_reason")
+                ladder_rows.append(row)
+                scale_ladder_attempts = list(ladder_rows)
+                if bool(stage_sol.success):
+                    stage_sol.stats = dict(stage_sol.stats or {})
+                    stage_sol.stats["scale_ladder_used"] = True
+                    stage_sol.stats["scale_ladder_factor"] = float(ff)
+                    stage_sol.stats["scale_ladder_attempts"] = ladder_rows
+                    return _finish(stage_sol)
+
         attempt_elapsed_s = float(time.time() - attempt_started)
+        best_fail_inliers_out = int(fail_best_inliers_seen) if int(fail_best_inliers_seen) >= 0 else None
+        best_fail_reason_out = str(fail_best_reason or "").strip()
+        if not best_fail_reason_out:
+            if int(fail_stage_counts.get("hypothesis", 0)) > 0:
+                best_fail_reason_out = "hypothesis failed before validation"
+            elif int(fail_stage_counts.get("pairing", 0)) > 0:
+                best_fail_reason_out = "pairing failed"
+            elif int(fail_stage_counts.get("verify_prob", 0)) > 0:
+                best_fail_reason_out = "verify_prob rejected"
+            elif int(fail_stage_counts.get("final_coherence", 0)) > 0:
+                best_fail_reason_out = "final coherence rejected"
+            else:
+                best_fail_reason_out = "no_failed_validation_recorded"
         fail_stats = {
-            "best_fail_inliers": int(fail_best_inliers_seen),
+            "best_fail_inliers": best_fail_inliers_out,
+            "best_fail_reason": best_fail_reason_out,
+            "best_fail_rms": float(fail_best_rms) if np.isfinite(float(fail_best_rms)) else None,
+            "best_fail_cov_area": float(fail_best_cov_area) if np.isfinite(float(fail_best_cov_area)) else None,
+            "best_fail_pairs": int(fail_best_pairs),
+            "best_fail_model_scale_arcsec": float(fail_best_model_scale_arcsec) if np.isfinite(float(fail_best_model_scale_arcsec)) else None,
             "fail_validation_count": int(fail_validation_count),
+            "scale_prefilter_reject_count": int(scale_prefilter_reject_count),
             "phases_attempted": list(phases_attempted),
             "has_hints": bool(ra_available and scale_available),
             "attempt_elapsed_s": attempt_elapsed_s,
@@ -2281,6 +12883,7 @@ def solve_blind(
             "verify_logodds_enabled": bool(verify_logodds_enabled),
             "verify_logodds_bail": float(verify_logodds_bail),
             "verify_logodds_stoplooking": float(verify_logodds_stoplooking),
+            "verify_logodds_accept": float(verify_logodds_accept),
             "verify_logodds_min_validations": int(verify_logodds_min_validations),
             "verify_logodds_cum": float(verify_logodds_cum),
             "verify_logodds_last": float(verify_logodds_last),
@@ -2289,7 +12892,56 @@ def solve_blind(
             "total_candidates_tried": int(total_candidates_tried),
             "phase_perf": {k: dict(v) for k, v in phase_perf.items()},
             "collect_metrics": dict(collect_metrics),
+            "scale_ladder_attempts": list(scale_ladder_attempts),
+            "scale_policy": {
+                "base_bounds_arcsec": [float(scale_bounds_arcsec[0]), float(scale_bounds_arcsec[1])] if scale_bounds_arcsec is not None else None,
+                "hard_ratio_bounds": [float(getattr(config, "blind_hypothesis_scale_hard_min_ratio", 0.04) or 0.04), float(getattr(config, "blind_hypothesis_scale_hard_max_ratio", 20.0) or 20.0)],
+                "final_ratio_bounds": [float(getattr(config, "blind_scale_guard_min_ratio", 0.75) or 0.75), float(getattr(config, "blind_scale_guard_max_ratio", 1.35) or 1.35)],
+                "scale_anchor_initial_arcsec": float(scale_anchor_initial_arcsec) if scale_anchor_initial_arcsec is not None else None,
+                "scale_anchor_current_arcsec": float(scale_anchor_arcsec) if scale_anchor_arcsec is not None else None,
+                "scale_anchor_samples_count": int(len(scale_anchor_samples)),
+        "hard_filter_runtime_enabled": bool(hard_filter_enabled_runtime),
+        "hard_scale_reject_count": int(hard_scale_reject_count),
+                "hard_filter_runtime_enabled": bool(hard_filter_enabled_runtime),
+                "hard_scale_reject_count": int(hard_scale_reject_count),
+            },
+            "first_transform_snapshot": dict(first_transform_snapshot) if isinstance(first_transform_snapshot, dict) else None,
+            "first_useful_reject": dict(first_useful_reject) if isinstance(first_useful_reject, dict) else None,
+            "top_hypotheses": list(top_hypotheses),
+            "top_rejected_hypotheses": list(top_rejected_hypotheses),
+            "reject_reason_class_counts": {str(k): int(v) for k, v in fail_reason_class_counts.items()},
+            "top_quasi_solutions": _build_top_quasi_solutions(),
+            "stage_by_stage": _build_stage_by_stage_export(final_success=False, final_message="no valid solution"),
+            "parity_diffable": dict(_parity_diffable_export),
+            "verify_trace": list(verify_trace),
+            "verify_hit_trace": list(verify_hit_trace),
+            "verify_policy_trace": list(verify_policy_trace),
+            "astrometry_match_objects": list(astrometry_match_objects),
+            "astrometry_semantics": dict(_astrometry_semantics_payload),
         }
+        dump_path_raw_pd = str(getattr(config, "blind_parity_diff_dump_path", "") or "").strip()
+        if dump_path_raw_pd:
+            try:
+                max_pd_entries = max(1, int(getattr(config, "blind_parity_diff_dump_max_entries", 120) or 0))
+                pd_entry = dict(_parity_diffable_export)
+                pd_entry["attempt_elapsed_s"] = float(attempt_elapsed_s)
+                pd_path = Path(dump_path_raw_pd)
+                pd_obj = {"schema": "zeblind.parity_diff_dump.v1", "entries": []}
+                if pd_path.exists():
+                    try:
+                        prev_pd = json.loads(pd_path.read_text(encoding="utf-8"))
+                        if isinstance(prev_pd, dict) and isinstance(prev_pd.get("entries"), list):
+                            pd_obj = prev_pd
+                    except Exception:
+                        pass
+                pd_obj.setdefault("entries", []).append(pd_entry)
+                if len(pd_obj["entries"]) > int(max_pd_entries):
+                    pd_obj["entries"] = pd_obj["entries"][-int(max_pd_entries):]
+                pd_path.parent.mkdir(parents=True, exist_ok=True)
+                pd_path.write_text(json.dumps(pd_obj, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
         if _depth_ladder_internal:
             fail_stats["depth_ladder_internal"] = True
             fail_stats["depth_ladder_stage"] = int(_depth_ladder_stage)
@@ -2302,6 +12954,7 @@ def solve_blind(
     best_solution.stats["verify_logodds_enabled"] = bool(verify_logodds_enabled)
     best_solution.stats["verify_logodds_bail"] = float(verify_logodds_bail)
     best_solution.stats["verify_logodds_stoplooking"] = float(verify_logodds_stoplooking)
+    best_solution.stats["verify_logodds_accept"] = float(verify_logodds_accept)
     best_solution.stats["verify_logodds_min_validations"] = int(verify_logodds_min_validations)
     best_solution.stats["verify_logodds_cum"] = float(verify_logodds_cum)
     best_solution.stats["verify_logodds_last"] = float(verify_logodds_last)
@@ -2309,12 +12962,142 @@ def solve_blind(
     best_solution.stats["hard_max_validations"] = int(hard_max_validations)
     best_solution.stats["phase_perf"] = {k: dict(v) for k, v in phase_perf.items()}
     best_solution.stats["collect_metrics"] = dict(collect_metrics)
+    best_solution.stats["scale_policy"] = {
+        "base_bounds_arcsec": [float(scale_bounds_arcsec[0]), float(scale_bounds_arcsec[1])] if scale_bounds_arcsec is not None else None,
+        "hard_ratio_bounds": [float(getattr(config, "blind_hypothesis_scale_hard_min_ratio", 0.04) or 0.04), float(getattr(config, "blind_hypothesis_scale_hard_max_ratio", 20.0) or 20.0)],
+        "final_ratio_bounds": [float(getattr(config, "blind_scale_guard_min_ratio", 0.75) or 0.75), float(getattr(config, "blind_scale_guard_max_ratio", 1.35) or 1.35)],
+        "scale_anchor_initial_arcsec": float(scale_anchor_initial_arcsec) if scale_anchor_initial_arcsec is not None else None,
+        "scale_anchor_current_arcsec": float(scale_anchor_arcsec) if scale_anchor_arcsec is not None else None,
+        "scale_anchor_samples_count": int(len(scale_anchor_samples)),
+    }
+    best_solution.stats["verify_trace"] = list(verify_trace)
+    best_solution.stats["verify_hit_trace"] = list(verify_hit_trace)
+    best_solution.stats["verify_policy_trace"] = list(verify_policy_trace)
+    best_solution.stats["astrometry_match_objects"] = list(astrometry_match_objects)
+    best_solution.stats["astrometry_semantics"] = dict(_astrometry_semantics_payload)
+    dump_path_raw_pd = str(getattr(config, "blind_parity_diff_dump_path", "") or "").strip()
+    if dump_path_raw_pd:
+        try:
+            max_pd_entries = max(1, int(getattr(config, "blind_parity_diff_dump_max_entries", 120) or 0))
+            pd_entry = dict(_parity_diffable_export)
+            pd_entry["attempt_elapsed_s"] = float(best_solution.stats.get("attempt_elapsed_s", 0.0) or 0.0)
+            pd_path = Path(dump_path_raw_pd)
+            pd_obj = {"schema": "zeblind.parity_diff_dump.v1", "entries": []}
+            if pd_path.exists():
+                try:
+                    prev_pd = json.loads(pd_path.read_text(encoding="utf-8"))
+                    if isinstance(prev_pd, dict) and isinstance(prev_pd.get("entries"), list):
+                        pd_obj = prev_pd
+                except Exception:
+                    pass
+            pd_obj.setdefault("entries", []).append(pd_entry)
+            if len(pd_obj["entries"]) > int(max_pd_entries):
+                pd_obj["entries"] = pd_obj["entries"][-int(max_pd_entries):]
+            pd_path.parent.mkdir(parents=True, exist_ok=True)
+            pd_path.write_text(json.dumps(pd_obj, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    best_solution.stats["first_transform_snapshot"] = dict(first_transform_snapshot) if isinstance(first_transform_snapshot, dict) else None
+    best_solution.stats["first_useful_reject"] = dict(first_useful_reject) if isinstance(first_useful_reject, dict) else None
+    best_solution.stats["top_hypotheses"] = list(top_hypotheses)
+    best_solution.stats["top_rejected_hypotheses"] = list(top_rejected_hypotheses)
+    best_solution.stats["reject_reason_class_counts"] = {str(k): int(v) for k, v in fail_reason_class_counts.items()}
+    best_solution.stats["top_quasi_solutions"] = _build_top_quasi_solutions()
+    best_solution.stats["stage_by_stage"] = _build_stage_by_stage_export(final_success=True, final_message=str(best_solution.message))
+    best_solution.stats["parity_diffable"] = dict(_parity_diffable_export)
     if _depth_ladder_internal:
         best_solution.stats["depth_ladder_internal"] = True
         best_solution.stats["depth_ladder_stage"] = int(_depth_ladder_stage)
         best_solution.stats["depth_ladder_total"] = int(_depth_ladder_total)
         if _depth_ladder_caps is not None:
             best_solution.stats["depth_ladder_caps"] = [int(v) for v in _depth_ladder_caps]
+    # Final coherence gate (RA/Dec + scale + parity + rotation + coverage) before any WCS write.
+    final_cov_area = float(best_solution.stats.get("geo_cov_area", float("nan")))
+    final_min_cov_area = float(getattr(config, "blind_final_min_cov_area", 0.005) or 0.0)
+    if np.isfinite(final_cov_area) and final_cov_area < final_min_cov_area:
+        _mark_fail_stage("final_coherence")
+        return _finish(WcsSolution(False, f"final coherence failed: low coverage ({final_cov_area:.4f} < {final_min_cov_area:.4f})", None, best_solution.stats, best_solution.tile_key, {}))
+
+    parity_label = str(best_solution.stats.get("parity_label", "")).strip().lower()
+    parity_value = int(best_solution.stats.get("parity_value", 0) or 0)
+    if parity_label not in {"nominal", "mirror"}:
+        _mark_fail_stage("final_coherence")
+        return _finish(WcsSolution(False, "final coherence failed: missing parity label", None, best_solution.stats, best_solution.tile_key, {}))
+    if (parity_label == "mirror" and parity_value >= 0) or (parity_label == "nominal" and parity_value < 0):
+        _mark_fail_stage("final_coherence")
+        return _finish(WcsSolution(False, f"final coherence failed: parity mismatch label={parity_label} value={parity_value}", None, best_solution.stats, best_solution.tile_key, {}))
+
+    if approx_scale_arcsec is not None and best_solution.header_updates.get("PIXSCAL") is not None:
+        try:
+            solved = float(best_solution.header_updates.get("PIXSCAL"))
+            final_bounds = _scale_gate_bounds_arcsec(
+                config,
+                scale_anchor_arcsec,
+                scale_bounds_arcsec,
+                gate="final",
+                fail_validation_count=fail_validation_count,
+                fail_best_inliers_seen=fail_best_inliers_seen,
+            )
+            if final_bounds is None:
+                raise ValueError("final scale bounds unavailable")
+            lo_f, hi_f, meta_f = final_bounds
+            approx_f = float(max(1e-9, float(meta_f.get("approx_scale_arcsec", approx_scale_arcsec))))
+            ratio = float(solved / approx_f)
+            best_solution.stats["final_scale_ratio"] = float(ratio)
+            best_solution.stats["final_scale_bounds_arcsec"] = [float(lo_f), float(hi_f)]
+            best_solution.stats["final_scale_ratio_bounds"] = [float(meta_f.get("ratio_min", float('nan'))), float(meta_f.get("ratio_max", float('nan')))]
+            if not (float(lo_f) <= float(solved) <= float(hi_f)):
+                _mark_fail_stage("final_coherence")
+                return _finish(WcsSolution(False, f"final coherence failed: scale {solved:.3f} not in [{lo_f:.3f}, {hi_f:.3f}] (ratio={ratio:.3f})", None, best_solution.stats, best_solution.tile_key, {}))
+        except Exception:
+            _mark_fail_stage("final_coherence")
+            return _finish(WcsSolution(False, "final coherence failed: invalid scale payload", None, best_solution.stats, best_solution.tile_key, {}))
+
+    if (
+        best_solution.wcs is not None
+        and config.ra_hint_deg is not None
+        and config.dec_hint_deg is not None
+    ):
+        try:
+            cx = float(image.shape[1]) / 2.0
+            cy = float(image.shape[0]) / 2.0
+            ctr = np.asarray(best_solution.wcs.wcs_pix2world([[cx, cy]], 0), dtype=np.float64)
+            if ctr.size >= 2 and np.all(np.isfinite(ctr[0])):
+                solved_ra = float(ctr[0][0])
+                solved_dec = float(ctr[0][1])
+                sep = _angular_separation(float(config.ra_hint_deg), float(config.dec_hint_deg), solved_ra, solved_dec)
+                base_tol = float(config.radius_hint_deg) if config.radius_hint_deg and float(config.radius_hint_deg) > 0.0 else float("nan")
+                if not np.isfinite(base_tol) or base_tol <= 0.0:
+                    base_tol = float(0.5 * max(0.2, float(approx_fov_deg or 0.0)))
+                factor = float(getattr(config, "blind_final_center_tol_factor", 1.25) or 1.25)
+                min_tol = float(getattr(config, "blind_final_center_min_tol_deg", 0.20) or 0.20)
+                max_tol = float(getattr(config, "blind_final_center_max_tol_deg", 10.0) or 10.0)
+                tol = min(max_tol, max(min_tol, base_tol * max(0.5, factor)))
+                best_solution.stats["final_center_sep_deg"] = float(sep)
+                best_solution.stats["final_center_tol_deg"] = float(tol)
+                if np.isfinite(sep) and sep > tol:
+                    _mark_fail_stage("final_coherence")
+                    return _finish(WcsSolution(False, f"final coherence failed: center sep {sep:.3f}° > {tol:.3f}°", None, best_solution.stats, best_solution.tile_key, {}))
+        except Exception:
+            pass
+
+    rot_max_delta = float(getattr(config, "blind_final_rotation_max_delta_deg", 0.0) or 0.0)
+    if best_solution.wcs is not None and rot_max_delta > 0.0:
+        wcs_rot = _wcs_rotation_deg(best_solution.wcs)
+        tr_rot = best_solution.stats.get("transform_rot_deg")
+        try:
+            if wcs_rot is not None and tr_rot is not None and np.isfinite(float(wcs_rot)) and np.isfinite(float(tr_rot)):
+                rot_delta = _angle_delta_deg(float(wcs_rot), float(tr_rot), period_deg=180.0)
+                best_solution.stats["final_rotation_deg_wcs"] = float(wcs_rot)
+                best_solution.stats["final_rotation_deg_model"] = float(tr_rot)
+                best_solution.stats["final_rotation_delta_deg"] = float(rot_delta)
+                if rot_delta > rot_max_delta:
+                    _mark_fail_stage("final_coherence")
+                    return _finish(WcsSolution(False, f"final coherence failed: rotation delta {rot_delta:.2f}° > {rot_max_delta:.2f}°", None, best_solution.stats, best_solution.tile_key, {}))
+        except Exception:
+            pass
+
     header_updates = {
         **best_solution.header_updates,
         "BLINDVER": ZEBLIND_VERSION,
@@ -2412,10 +13195,169 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--fail-attempt-min-validations", type=int, default=18, help="Minimum failed validations before fail-fast abort")
     parser.add_argument("--fail-attempt-max-best-inliers", type=int, default=4, help="Maximum best inliers considered weak for fail-fast abort")
     parser.add_argument("--fail-attempt-min-candidates", type=int, default=20, help="Minimum tried candidates before fail-fast abort")
-    parser.add_argument("--verify-logodds-enabled", type=int, choices=(0, 1), default=0, help="Enable verification log-odds early bail/stoplooking policy")
+    parser.add_argument("--verify-logodds-enabled", type=int, choices=(0, 1), default=1, help="Enable verification log-odds early bail/stoplooking policy")
     parser.add_argument("--verify-logodds-bail", type=float, default=-24.0, help="Cumulative log-odds threshold to bail out weak attempts")
     parser.add_argument("--verify-logodds-stoplooking", type=float, default=24.0, help="Cumulative log-odds threshold that suppresses weak-attempt abort")
+    parser.add_argument("--verify-logodds-accept", type=float, default=12.0, help="Cumulative log-odds threshold considered strong enough to accept search momentum")
     parser.add_argument("--verify-logodds-min-validations", type=int, default=8, help="Minimum failed validations before applying log-odds policy")
+    parser.add_argument("--blind-astrometry-code-hit-only-mode", type=int, choices=(0, 1), default=0, help="Consume only canonical code-hit entries before legacy candidate path")
+    parser.add_argument("--blind-astrometry-hit-pipeline-first-enabled", type=int, choices=(0, 1), default=0, help="Enable hit-pipeline-first candidate generation")
+    parser.add_argument("--blind-astrometry-hit-pipeline-first-fallback-enabled", type=int, choices=(0, 1), default=1, help="Allow fallback to legacy candidate path when hit-pipeline-first has no entries")
+    parser.add_argument("--blind-astrometry-hit-pipeline-dedicated-enabled", type=int, choices=(0, 1), default=0, help="Enable dedicated hit->resolve candidate flow")
+    parser.add_argument("--blind-astrometry-hit-pipeline-dedicated-fallback-enabled", type=int, choices=(0, 1), default=1, help="Allow fallback from dedicated hit pipeline to legacy path")
+    parser.add_argument("--blind-non-parity-mode-enabled", type=int, choices=(0, 1), default=1, help="Enable legacy/experimental non-parity branches (set 0 for strict parity-only execution)")
+    parser.add_argument("--blind-astrometry-strict-pool-widen-enabled", type=int, choices=(0, 1), default=0, help="In strict mode, widen code-space neighbor pool before resolve-hit")
+    parser.add_argument("--blind-astrometry-strict-pool-widen-max-neighbors", type=int, default=96, help="Max neighbors for strict code-space pool widening")
+    parser.add_argument("--blind-astrometry-strict-pair-pool-expand-enabled", type=int, choices=(0, 1), default=1, help="Enable strict-compatible pair-pool expansion before resolve-hit")
+    parser.add_argument("--blind-astrometry-strict-pair-pool-expand-bucket-factor", type=float, default=3.0, help="Bucket-limit multiplier for strict pair-pool expansion")
+    parser.add_argument("--blind-astrometry-strict-pair-pool-expand-vote-percentile", type=int, default=20, help="Vote percentile used for strict pair-pool expansion")
+    parser.add_argument("--blind-astrometry-strict-pair-pool-expand-max-pairs", type=int, default=256, help="Cap on recovered pairs for strict pair-pool expansion")
+    parser.add_argument("--blind-astrometry-code-rangesearch-backend", default="linf", choices=("linf", "l2", "grid3d", "kdbox"), help="Continuous code-space rangesearch backend")
+    parser.add_argument("--blind-astrometry-code-rangesearch-allow-experimental-backends", type=int, choices=(0, 1), default=0, help="Allow experimental/non-default code-space rangesearch backends")
+    parser.add_argument("--blind-accept-logodds-min", type=float, default=0.25, help="Minimum logodds-like acceptance score for blind candidate validation")
+    parser.add_argument("--blind-accept-logodds-geo-weight", type=float, default=1.10, help="Coverage weight in blind logodds-like acceptance score")
+    parser.add_argument("--blind-accept-logodds-astrometry-stages", type=int, choices=(0, 1), default=1, help="Use Astrometry-like staged acceptance (precheck at min(totune,tokeep), final keep at tokeep)")
+    parser.add_argument("--blind-quad-min-area-frac", type=float, default=0.0015, help="Minimum source-quad area fraction of image for blind hypothesis")
+    parser.add_argument("--blind-quad-min-edge-px", type=float, default=12.0, help="Minimum source-quad edge length in pixels for blind hypothesis")
+    parser.add_argument("--blind-quad-relax-enabled", type=int, choices=(0, 1), default=1, help="Enable adaptive relaxation of quad min-edge/min-area filters on weak runs")
+    parser.add_argument("--blind-quad-relax-after-candidates", type=int, default=120, help="Candidates tried before relaxing quad filters")
+    parser.add_argument("--blind-quad-relax-best-inliers-max", type=int, default=8, help="Only relax quad filters while best failed inliers stay below this cap")
+    parser.add_argument("--blind-quad-relax-edge-factor", type=float, default=0.55, help="Factor applied to blind-quad-min-edge-px when quad relaxation triggers")
+    parser.add_argument("--blind-quad-relax-area-factor", type=float, default=0.30, help="Factor applied to blind-quad-min-area-frac when quad relaxation triggers")
+    parser.add_argument("--blind-seed-hypothesis-enabled", type=int, choices=(0, 1), default=0, help="Enable seeded hypothesis generation from top-ranked pair subsets")
+    parser.add_argument("--blind-seed-hypothesis-top-n", type=int, default=96, help="Top-N pairs kept for seeded hypothesis generation")
+    parser.add_argument("--blind-seed-hypothesis-trials", type=int, default=400, help="RANSAC trials for seeded hypothesis generation")
+    parser.add_argument("--blind-hypothesis-scale-prior-enabled", type=int, choices=(0, 1), default=1, help="Bias quad-hypothesis selection toward scale-consistent transforms")
+    parser.add_argument("--blind-hypothesis-scale-prior-strength", type=float, default=1.5, help="Penalty strength for scale-inconsistent quad hypotheses")
+    parser.add_argument("--blind-hypothesis-scale-prior-relax-after-validations", type=int, default=8, help="Disable scale prior after this many failed validations")
+    parser.add_argument("--blind-hypothesis-scale-hard-filter-enabled", type=int, choices=(0, 1), default=1, help="Reject hypothesis transforms with absurd scale ratio vs expected stage scale")
+    parser.add_argument("--blind-hypothesis-scale-hard-min-ratio", type=float, default=0.04, help="Minimum allowed model/expected scale ratio before hard reject")
+    parser.add_argument("--blind-hypothesis-scale-hard-max-ratio", type=float, default=20.0, help="Maximum allowed model/expected scale ratio before hard reject")
+    parser.add_argument("--blind-hypothesis-rank-enabled", type=int, choices=(0, 1), default=1, help="Use quality-aware ranking (inlier ratio + RMS) when selecting hypothesis transforms")
+    parser.add_argument("--blind-hypothesis-rank-ratio-weight", type=float, default=6.0, help="Weight of inlier ratio contribution in hypothesis ranking")
+    parser.add_argument("--blind-hypothesis-rank-rms-weight", type=float, default=0.75, help="Penalty weight for RMS in hypothesis ranking")
+    parser.add_argument("--blind-multitol-ransac-enabled", type=int, choices=(0, 1), default=1, help="Enable multi-tolerance RANSAC fallback (Astrometry-like robust rescue)")
+    parser.add_argument("--blind-multitol-ransac-scales", default="1.0,1.4,2.0", help="Comma-separated tolerance scale ladder for multi-tolerance RANSAC")
+    parser.add_argument("--blind-final-min-cov-area", type=float, default=0.005, help="Final minimum coverage area (geo_cov_area) before WCS write")
+    parser.add_argument("--blind-geo-sparse-min-span", type=float, default=0.08, help="Minimum max(cov_x,cov_y) for sparse inlier geometry acceptance")
+    parser.add_argument("--blind-geo-sparse-min-area", type=float, default=0.003, help="Minimum cov_area for sparse inlier geometry acceptance")
+    parser.add_argument("--blind-geo-dense-min-span", type=float, default=0.10, help="Minimum max(cov_x,cov_y) for dense inlier geometry acceptance")
+    parser.add_argument("--blind-geo-dense-min-area", type=float, default=0.005, help="Minimum cov_area for dense inlier geometry acceptance")
+    parser.add_argument("--blind-geo-dense-max-cond", type=float, default=2.0e4, help="Maximum covariance condition number for dense inlier geometry acceptance")
+    parser.add_argument("--blind-scale-prefilter-enabled", type=int, choices=(0, 1), default=1, help="Enable early model-scale prefilter before WCS validation")
+    parser.add_argument("--blind-scale-guard-auto-relax-enabled", type=int, choices=(0, 1), default=1, help="Relax final scale-guard bounds adaptively after repeated strong near-miss validations")
+    parser.add_argument("--blind-scale-guard-auto-relax-after-validations", type=int, default=10, help="Validation count threshold to relax final scale-guard bounds")
+    parser.add_argument("--blind-scale-guard-auto-relax-best-inliers", type=int, default=10, help="Best failed inliers threshold to relax final scale-guard bounds")
+    parser.add_argument("--blind-scale-guard-auto-relax-factor", type=float, default=3.0, help="Multiplier/divider applied to final scale-guard bounds when relaxed")
+    parser.add_argument("--blind-scale-guard-auto-relax-min-floor", type=float, default=0.15, help="Lower floor for relaxed scale-guard minimum ratio")
+    parser.add_argument("--blind-scale-guard-auto-relax-max-ceil", type=float, default=12.0, help="Upper ceiling for relaxed scale-guard maximum ratio")
+    parser.add_argument("--blind-scale-ladder-enabled", type=int, choices=(0, 1), default=1, help="Enable Astrometry-like multi-scale retry ladder when blind solving fails")
+    parser.add_argument("--blind-scale-ladder-factors", default="1.0,1.5,2.5,4.0,6.0", help="Comma-separated multiplicative scale factors for blind scale retry ladder")
+    parser.add_argument("--blind-scale-ladder-min-ratio", type=float, default=0.75, help="Per-stage lower ratio bound around ladder scale")
+    parser.add_argument("--blind-scale-ladder-max-ratio", type=float, default=1.35, help="Per-stage upper ratio bound around ladder scale")
+    parser.add_argument("--blind-scale-prefilter-margin", type=float, default=1.35, help="Expansion factor applied to scale bounds in early prefilter")
+    parser.add_argument("--blind-scale-prefilter-escape-enabled", type=int, choices=(0, 1), default=1, help="Allow adaptive widening of prefilter bounds after repeated weak validations")
+    parser.add_argument("--blind-scale-prefilter-escape-after-validations", type=int, default=4, help="Failed validations needed before widening scale prefilter bounds")
+    parser.add_argument("--blind-scale-prefilter-escape-best-inliers-max", type=int, default=12, help="Only trigger scale prefilter escape when best failed inliers stay below this cap")
+    parser.add_argument("--blind-scale-prefilter-escape-margin", type=float, default=5.5, help="Expanded margin used by adaptive scale prefilter escape")
+    parser.add_argument("--blind-scale-prefilter-auto-disable", type=int, choices=(0, 1), default=1, help="Automatically disable scale prefilter after repeated scale-prefilter rejects")
+    parser.add_argument("--blind-scale-prefilter-auto-disable-after", type=int, default=8, help="Scale-prefilter reject count before auto-disable activates")
+    parser.add_argument("--blind-prob-verify-enabled", type=int, choices=(0, 1), default=1, help="Enable probabilistic blind verification gate")
+    parser.add_argument("--blind-prob-logodds-accept", type=float, default=0.35, help="Minimum probabilistic logodds to accept a blind candidate")
+    parser.add_argument("--blind-prob-sigma-px", type=float, default=1.6, help="Residual sigma (px) used by probabilistic blind verification")
+    parser.add_argument("--blind-prob-sigma-auto", type=int, choices=(0, 1), default=1, help="Enable robust auto-estimation of probabilistic sigma from residuals")
+    parser.add_argument("--blind-prob-sigma-floor-px", type=float, default=0.7, help="Lower floor for probabilistic sigma after auto-estimation")
+    parser.add_argument("--blind-prob-prior-match", type=float, default=0.35, help="Prior probability that a residual is a true match in probabilistic blind verify")
+    parser.add_argument("--blind-verify-adaptive-distractor-prior", type=int, choices=(0, 1), default=1, help="Adapt verify distractor prior from observed weak-support ratio")
+    parser.add_argument("--blind-verify-distractor-blend", type=float, default=0.45, help="Blend factor between configured and observed distractor prior (0..1)")
+    parser.add_argument("--blind-verify-distractor-floor", type=float, default=0.08, help="Lower bound for verify distractor prior")
+    parser.add_argument("--blind-verify-distractor-ceil", type=float, default=0.85, help="Upper bound for verify distractor prior")
+    parser.add_argument("--blind-prob-clip-delta", type=float, default=7.0, help="Per-residual log-odds clipping in probabilistic blind verify")
+    parser.add_argument("--blind-prob-min-match-ratio", type=float, default=0.20, help="Minimum probabilistic matched residual ratio to accept blind candidate")
+    parser.add_argument("--blind-prob-dynamic-thresholds", type=int, choices=(0, 1), default=1, help="Enable dynamic probabilistic verify thresholds based on support quality")
+    parser.add_argument("--blind-prob-dynamic-min-logodds", type=float, default=-0.15, help="Lower floor for dynamic probabilistic logodds threshold")
+    parser.add_argument("--blind-prob-dynamic-scale", type=float, default=0.18, help="Strength of dynamic probabilistic threshold relaxation")
+    parser.add_argument("--blind-prob-dynamic-ratio-relax", type=float, default=0.70, help="Ratio threshold multiplier when support is strong")
+    parser.add_argument("--blind-prob-dynamic-ratio-inliers", type=int, default=12, help="Inlier gate to relax probabilistic match-ratio threshold")
+    parser.add_argument("--blind-prob-dynamic-ratio-rms-px", type=float, default=1.4, help="RMS gate (px) to relax probabilistic match-ratio threshold")
+    parser.add_argument("--blind-candidate-rerank-top-k", type=int, default=12, help="Top-K candidates reranked by quick geometric likelihood before full validation")
+    parser.add_argument("--blind-candidate-rerank-trials", type=int, default=120, help="RANSAC trials for quick candidate reranking")
+    parser.add_argument("--blind-candidate-rerank-prob-weight", type=float, default=0.30, help="Weight of quick probabilistic evidence in candidate reranking")
+    parser.add_argument("--blind-refit-irls-iters", type=int, default=3, help="IRLS iterations for robust final similarity refit")
+    parser.add_argument("--blind-refit-include-global-inliers", type=int, choices=(0, 1), default=1, help="Include compatible global inliers in a second robust refit pass")
+    parser.add_argument("--blind-tweak-iterations", type=int, default=2, help="Astrometry-like tweak iterations (expand/re-estimate) after initial refit")
+    parser.add_argument("--blind-tweak-expand-factor", type=float, default=1.25, help="Expansion factor applied per tweak iteration on preliminary tolerance")
+    parser.add_argument("--blind-tweak2-verify-enabled", type=int, choices=(0, 1), default=1, help="Enable Astrometry-like tweak2 verify retry on weak validate_base candidates")
+    parser.add_argument("--blind-tweak2-verify-tol-factor", type=float, default=1.8, help="Tolerance expansion factor for tweak2 verify retries")
+    parser.add_argument("--blind-tweak2-verify-max-px", type=float, default=8.0, help="Upper pixel tolerance cap for tweak2 verify retries")
+    parser.add_argument("--blind-tweak2-verify-min-pairs", type=int, default=6, help="Minimum pair count required to run tweak2 verify retries")
+    parser.add_argument("--blind-tweak2-verify-max-iters", type=int, default=1, help="Maximum tweak2 verify retry iterations per candidate")
+    parser.add_argument("--blind-validate-scale-rescue-enabled", type=int, choices=(0, 1), default=1, help="Enable rescue re-validation with relaxed scale bounds on pixel_scale_out_of_range failures")
+    parser.add_argument("--blind-validate-scale-rescue-factor", type=float, default=1.10, help="Multiplicative relaxation factor for scale rescue bounds")
+    parser.add_argument("--blind-validate-scale-rescue-min-arcsec", type=float, default=0.10, help="Lower floor for scale rescue bounds (arcsec/pixel)")
+    parser.add_argument("--blind-validate-scale-rescue-max-arcsec", type=float, default=30.0, help="Upper cap for scale rescue bounds (arcsec/pixel)")
+    parser.add_argument("--blind-match-object-expand-enabled", type=int, choices=(0, 1), default=0, help="Expand resolve-hit match objects to a larger verify set before validate_base")
+    parser.add_argument("--blind-match-object-expand-min-pairs", type=int, default=8, help="Target minimum pair count for match-object expansion")
+    parser.add_argument("--blind-match-object-expand-max-pairs", type=int, default=16, help="Maximum pair count for match-object expansion")
+    parser.add_argument("--blind-match-object-expand-tol-factor", type=float, default=1.35, help="Tolerance factor used for match-object expansion selection")
+    parser.add_argument("--blind-sparse-adaptive-inliers", type=int, choices=(0, 1), default=1, help="Adapt min inliers for sparse blind cases")
+    parser.add_argument("--blind-sparse-min-inliers-floor", type=int, default=4, help="Lower floor for adaptive sparse inlier requirement")
+    parser.add_argument("--blind-star-quality-filter", type=int, choices=(0, 1), default=1, help="Enable blind input-star quality filter")
+    parser.add_argument("--blind-star-min-sep-px", type=float, default=0.0, help="Minimum star separation in px for blind star filter (0=auto)")
+    parser.add_argument("--blind-verify-uniformize-pairs", type=int, choices=(0, 1), default=1, help="Enable spatial uniformization of verify pairs")
+    parser.add_argument("--blind-verify-uniform-grid-px", type=float, default=48.0, help="Grid cell size (px) for verify-pair uniformization")
+    parser.add_argument("--blind-verify-uniform-max-per-cell", type=int, default=4, help="Max verify pairs kept per image-grid cell")
+    parser.add_argument("--blind-verify-uniform-min-keep-ratio", type=float, default=0.35, help="Minimum keep ratio to apply verify-pair uniformization")
+    parser.add_argument("--blind-pair-geom-scoring", type=int, choices=(0, 1), default=1, help="Apply geometric-consistency weighting when ranking raw vote pairs")
+    parser.add_argument("--blind-pair-geom-weight", type=float, default=0.35, help="Weight of geometric-consistency factor in pair ranking (0..1)")
+    parser.add_argument("--blind-pair-geom-sigma", type=float, default=0.45, help="Sigma of radial-consistency penalty used in geometric pair scoring")
+    parser.add_argument("--blind-pair-geom-angle-weight", type=float, default=0.30, help="Weight of angular-consistency factor inside geometric pair scoring (0..1)")
+    parser.add_argument("--blind-pair-geom-angle-sigma-deg", type=float, default=42.0, help="Sigma (deg) of angular-consistency penalty used in geometric pair scoring")
+    parser.add_argument("--blind-pre-model-matching", type=int, choices=(0, 1), default=1, help="Enable pre-model bipartite reassignment on raw candidate pairs")
+    parser.add_argument("--blind-pre-model-min-pairs", type=int, default=24, help="Minimum aggregated pairs before pre-model reassignment")
+    parser.add_argument("--blind-pre-model-min-keep-ratio", type=float, default=0.25, help="Minimum keep ratio required to apply pre-model reassignment")
+    parser.add_argument("--blind-pre-model-image-bin-px", type=float, default=1.5, help="Image-space bin (px) for pre-model reassignment")
+    parser.add_argument("--blind-pre-model-tile-bin-px", type=float, default=1.5, help="Tile-space bin (image-px equivalent) for pre-model reassignment")
+    parser.add_argument("--blind-hypothesis-rescue-enabled", type=int, choices=(0, 1), default=1, help="Enable low-support hypothesis rescue by relaxed pair collection")
+    parser.add_argument("--blind-hypothesis-rescue-min-pairs", type=int, default=6, help="Minimum rescued pairs required to trigger hypothesis rescue")
+    parser.add_argument("--blind-hypothesis-rescue-vote-percentile", type=int, default=12, help="Vote percentile for relaxed hypothesis rescue pair collection")
+    parser.add_argument("--blind-hypothesis-rescue-bucket-factor", type=float, default=2.0, help="Bucket-limit multiplier for relaxed hypothesis rescue pair collection")
+    parser.add_argument("--blind-hypothesis-rescue-use-dedup", type=int, choices=(0, 1), default=0, help="Apply pair dedup during hypothesis rescue collection")
+    parser.add_argument("--blind-hypothesis-rescue-use-uniformize", type=int, choices=(0, 1), default=0, help="Apply spatial uniformization during hypothesis rescue collection")
+    parser.add_argument("--blind-preinlier-relax-enabled", type=int, choices=(0, 1), default=1, help="Enable adaptive preliminary inlier tolerance relaxation before hypothesis rejection")
+    parser.add_argument("--blind-preinlier-relax-target-inliers", type=int, default=4, help="Target preliminary inlier count used to derive relaxed tolerance")
+    parser.add_argument("--blind-preinlier-relax-quantile-scale", type=float, default=1.08, help="Safety multiplier applied to quantile-derived relaxed preliminary tolerance")
+    parser.add_argument("--blind-preinlier-relax-max-factor", type=float, default=2.4, help="Maximum multiplicative expansion of preliminary inlier tolerance")
+    parser.add_argument("--blind-preinlier-relax-max-px", type=float, default=7.5, help="Absolute cap (px) for relaxed preliminary inlier tolerance")
+    parser.add_argument("--blind-preinlier-refit-enabled", type=int, choices=(0, 1), default=1, help="Enable weighted pre-inlier similarity refit when preliminary inliers are too few")
+    parser.add_argument("--blind-preinlier-refit-top-n", type=int, default=14, help="Top-N lowest residual pairs used for weighted pre-inlier refit")
+    parser.add_argument("--blind-preinlier-refit-sigma-px", type=float, default=1.8, help="Residual sigma (px) used to weight correspondences in pre-inlier refit")
+    parser.add_argument("--blind-global-streak-relax-enabled", type=int, choices=(0, 1), default=1, help="Relax global low-support streak abort once weak evidence of progress appears")
+    parser.add_argument("--blind-global-streak-relax-validations", type=int, default=6, help="Failed-validation count threshold to relax global low-support streak abort")
+    parser.add_argument("--blind-global-streak-relax-inliers", type=int, default=4, help="Best failed inlier threshold to relax global low-support streak abort")
+    parser.add_argument("--blind-global-streak-relax-factor", type=float, default=3.0, help="Multiplier applied to global low-support streak limit when relaxed")
+    parser.add_argument("--blind-global-streak-relax-logodds", type=float, default=0.25, help="Verify logodds threshold to relax global low-support streak abort")
+    parser.add_argument("--blind-reuse-existing-solved-wcs", type=int, choices=(0, 1), default=1, help="Reuse existing validated celestial WCS from FITS headers when SOLVED is already set")
+    parser.add_argument("--blind-reuse-existing-solved-wcs-require-solved", type=int, choices=(0, 1), default=1, help="Require SOLVED keyword before reusing existing header WCS")
+    parser.add_argument("--blind-reuse-existing-solved-wcs-validate", type=int, choices=(0, 1), default=1, help="Validate reused header WCS with ZeMosaic guardrails")
+    parser.add_argument("--blind-dev-existing-wcs-seed-enabled", type=int, choices=(0, 1), default=0, help="DEV: reuse an existing celestial WCS already present in FITS headers as a seed/fallback")
+    parser.add_argument("--blind-dev-existing-wcs-seed-require-solved", type=int, choices=(0, 1), default=1, help="DEV: require SOLVED keyword before accepting existing header WCS seed")
+    parser.add_argument("--blind-dev-existing-wcs-seed-validate", type=int, choices=(0, 1), default=1, help="DEV: validate reused header WCS with ZeMosaic guardrails before accepting it")
+    parser.add_argument("--blind-verify-dedup-pairs", type=int, choices=(0, 1), default=1, help="Deduplicate verify pairs to near one-to-one correspondences before heavy scoring")
+    parser.add_argument("--blind-verify-dedup-min-keep-ratio", type=float, default=0.45, help="Minimum keep ratio required to apply verify pair deduplication")
+    parser.add_argument("--blind-verify-conflict-resolution", type=int, choices=(0, 1), default=1, help="Apply one-to-one conflict resolution on verify correspondences before WCS validation")
+    parser.add_argument("--blind-verify-conflict-min-keep-ratio", type=float, default=0.45, help="Minimum keep ratio to accept verify conflict-resolution pruning")
+    parser.add_argument("--blind-verify-conflict-image-bin-px", type=float, default=2.5, help="Image-space bin (px) used to build conflict components")
+    parser.add_argument("--blind-verify-conflict-tile-bin-px", type=float, default=2.5, help="Tile-space bin (image-px equivalent) used to build conflict components")
+    parser.add_argument("--blind-parity-mode", choices=("auto", "nominal", "mirror"), default="auto", help="Parity strategy: auto lock, nominal-only, or mirror-only")
+    parser.add_argument("--blind-parity-lock-enabled", type=int, choices=(0, 1), default=1, help="Enable parity lock heuristic when one parity clearly dominates")
+    parser.add_argument("--blind-parity-lock-min-votes", type=int, default=18, help="Minimum top vote score required to lock parity")
+    parser.add_argument("--blind-parity-lock-ratio", type=float, default=1.35, help="Minimum nominal/mirror vote ratio required to lock parity")
+    parser.add_argument("--blind-parity-lock-hint-phase-only", type=int, choices=(0, 1), default=1, help="Restrict parity-lock heuristic to hinted phases")
+    parser.add_argument("--blind-final-center-min-tol-deg", type=float, default=0.20, help="Minimum final center-offset tolerance (deg) when RA/Dec hints are available")
+    parser.add_argument("--blind-final-center-max-tol-deg", type=float, default=10.0, help="Maximum final center-offset tolerance (deg) when RA/Dec hints are available")
+    parser.add_argument("--blind-final-center-tol-factor", type=float, default=1.25, help="Scale factor applied to radius/FOV-derived final center-offset tolerance")
+    parser.add_argument("--blind-final-rotation-max-delta-deg", type=float, default=0.0, help="Max allowed delta between model rotation and final WCS rotation (deg, 0 disables)")
     parser.add_argument("--hard-max-candidates-tried", type=int, default=0, help="Hard cap on total candidates tried (0 disables)")
     parser.add_argument("--hard-max-validations", type=int, default=0, help="Hard cap on failed validations (0 disables)")
     parser.add_argument("--depth-ladder-enabled", type=int, choices=(0, 1), default=0, help="Enable depth ladder (progressive max_stars)")
@@ -2486,6 +13428,37 @@ def main(argv: list[str] | None = None) -> int:
     depth_ladder_caps = tuple(_coerce_depth_ladder_caps(args.depth_ladder_caps))
     if not depth_ladder_caps:
         depth_ladder_caps = (max(1, int(args.max_stars or 1)),)
+
+    multitol_scales: list[float] = []
+    for part in str(args.blind_multitol_ransac_scales or "").replace(';', ',').split(','):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            v = float(part)
+        except Exception:
+            continue
+        if np.isfinite(v) and v > 0.0:
+            multitol_scales.append(v)
+    if not multitol_scales:
+        multitol_scales = [1.0, 1.4, 2.0]
+    multitol_scales = sorted({round(float(v), 3) for v in multitol_scales})
+
+    scale_ladder_factors: list[float] = []
+    for part in str(args.blind_scale_ladder_factors or "").replace(';', ',').split(','):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            v = float(part)
+        except Exception:
+            continue
+        if np.isfinite(v) and v > 0.0:
+            scale_ladder_factors.append(v)
+    if not scale_ladder_factors:
+        scale_ladder_factors = [1.0, 1.5, 2.5, 4.0, 6.0]
+    scale_ladder_factors = sorted({round(float(v), 3) for v in scale_ladder_factors})
+
     config = SolveConfig(
         max_candidates=args.max_candidates,
         max_stars=args.max_stars,
@@ -2517,7 +13490,166 @@ def main(argv: list[str] | None = None) -> int:
         verify_logodds_enabled=bool(int(args.verify_logodds_enabled)),
         verify_logodds_bail=float(args.verify_logodds_bail),
         verify_logodds_stoplooking=float(args.verify_logodds_stoplooking),
+        verify_logodds_accept=float(args.verify_logodds_accept),
         verify_logodds_min_validations=max(0, int(args.verify_logodds_min_validations or 0)),
+        blind_astrometry_code_hit_only_mode=bool(int(args.blind_astrometry_code_hit_only_mode)),
+        blind_astrometry_hit_pipeline_first_enabled=bool(int(args.blind_astrometry_hit_pipeline_first_enabled)),
+        blind_astrometry_hit_pipeline_first_fallback_enabled=bool(int(args.blind_astrometry_hit_pipeline_first_fallback_enabled)),
+        blind_astrometry_hit_pipeline_dedicated_enabled=bool(int(args.blind_astrometry_hit_pipeline_dedicated_enabled)),
+        blind_astrometry_hit_pipeline_dedicated_fallback_enabled=bool(int(args.blind_astrometry_hit_pipeline_dedicated_fallback_enabled)),
+        blind_non_parity_mode_enabled=bool(int(args.blind_non_parity_mode_enabled)),
+        blind_astrometry_strict_pool_widen_enabled=bool(int(args.blind_astrometry_strict_pool_widen_enabled)),
+        blind_astrometry_strict_pool_widen_max_neighbors=max(1, int(args.blind_astrometry_strict_pool_widen_max_neighbors or 1)),
+        blind_astrometry_strict_pair_pool_expand_enabled=bool(int(args.blind_astrometry_strict_pair_pool_expand_enabled)),
+        blind_astrometry_strict_pair_pool_expand_bucket_factor=max(1.0, float(args.blind_astrometry_strict_pair_pool_expand_bucket_factor or 1.0)),
+        blind_astrometry_strict_pair_pool_expand_vote_percentile=max(1, min(35, int(args.blind_astrometry_strict_pair_pool_expand_vote_percentile or 20))),
+        blind_astrometry_strict_pair_pool_expand_max_pairs=max(8, int(args.blind_astrometry_strict_pair_pool_expand_max_pairs or 8)),
+        blind_astrometry_code_rangesearch_backend=str(args.blind_astrometry_code_rangesearch_backend or "linf").strip().lower(),
+        blind_astrometry_code_rangesearch_allow_experimental_backends=bool(int(args.blind_astrometry_code_rangesearch_allow_experimental_backends)),
+        blind_accept_logodds_min=float(args.blind_accept_logodds_min),
+        blind_accept_logodds_geo_weight=float(args.blind_accept_logodds_geo_weight),
+        blind_accept_logodds_astrometry_stages=bool(int(args.blind_accept_logodds_astrometry_stages)),
+        blind_quad_min_area_frac=max(0.0, float(args.blind_quad_min_area_frac or 0.0)),
+        blind_quad_min_edge_px=max(0.0, float(args.blind_quad_min_edge_px or 0.0)),
+        blind_quad_relax_enabled=bool(int(args.blind_quad_relax_enabled)),
+        blind_quad_relax_after_candidates=max(0, int(args.blind_quad_relax_after_candidates or 0)),
+        blind_quad_relax_best_inliers_max=max(0, int(args.blind_quad_relax_best_inliers_max or 0)),
+        blind_quad_relax_edge_factor=min(1.0, max(0.05, float(args.blind_quad_relax_edge_factor or 1.0))),
+        blind_quad_relax_area_factor=min(1.0, max(0.01, float(args.blind_quad_relax_area_factor or 1.0))),
+        blind_seed_hypothesis_enabled=bool(int(args.blind_seed_hypothesis_enabled)),
+        blind_seed_hypothesis_top_n=max(8, int(args.blind_seed_hypothesis_top_n or 8)),
+        blind_seed_hypothesis_trials=max(40, int(args.blind_seed_hypothesis_trials or 40)),
+        blind_hypothesis_scale_prior_enabled=bool(int(args.blind_hypothesis_scale_prior_enabled)),
+        blind_hypothesis_scale_prior_strength=max(0.0, float(args.blind_hypothesis_scale_prior_strength or 0.0)),
+        blind_hypothesis_scale_prior_relax_after_validations=max(0, int(args.blind_hypothesis_scale_prior_relax_after_validations or 0)),
+        blind_hypothesis_scale_hard_filter_enabled=bool(int(args.blind_hypothesis_scale_hard_filter_enabled)),
+        blind_hypothesis_scale_hard_min_ratio=max(1e-4, float(args.blind_hypothesis_scale_hard_min_ratio or 1e-4)),
+        blind_hypothesis_scale_hard_max_ratio=max(1.0, float(args.blind_hypothesis_scale_hard_max_ratio or 1.0)),
+        blind_hypothesis_rank_enabled=bool(int(args.blind_hypothesis_rank_enabled)),
+        blind_hypothesis_rank_ratio_weight=max(0.0, float(args.blind_hypothesis_rank_ratio_weight or 0.0)),
+        blind_hypothesis_rank_rms_weight=max(0.0, float(args.blind_hypothesis_rank_rms_weight or 0.0)),
+        blind_multitol_ransac_enabled=bool(int(args.blind_multitol_ransac_enabled)),
+        blind_multitol_ransac_scales=tuple(float(v) for v in multitol_scales),
+        blind_final_min_cov_area=max(0.0, float(args.blind_final_min_cov_area or 0.0)),
+        blind_geo_sparse_min_span=max(0.0, float(args.blind_geo_sparse_min_span or 0.0)),
+        blind_geo_sparse_min_area=max(0.0, float(args.blind_geo_sparse_min_area or 0.0)),
+        blind_geo_dense_min_span=max(0.0, float(args.blind_geo_dense_min_span or 0.0)),
+        blind_geo_dense_min_area=max(0.0, float(args.blind_geo_dense_min_area or 0.0)),
+        blind_geo_dense_max_cond=max(10.0, float(args.blind_geo_dense_max_cond or 10.0)),
+        blind_scale_prefilter_enabled=bool(int(args.blind_scale_prefilter_enabled)),
+        blind_scale_guard_auto_relax_enabled=bool(int(args.blind_scale_guard_auto_relax_enabled)),
+        blind_scale_guard_auto_relax_after_validations=max(0, int(args.blind_scale_guard_auto_relax_after_validations or 0)),
+        blind_scale_guard_auto_relax_best_inliers=max(0, int(args.blind_scale_guard_auto_relax_best_inliers or 0)),
+        blind_scale_guard_auto_relax_factor=max(1.0, float(args.blind_scale_guard_auto_relax_factor or 1.0)),
+        blind_scale_guard_auto_relax_min_floor=max(0.01, float(args.blind_scale_guard_auto_relax_min_floor or 0.01)),
+        blind_scale_guard_auto_relax_max_ceil=max(1.0, float(args.blind_scale_guard_auto_relax_max_ceil or 1.0)),
+        blind_scale_ladder_enabled=bool(int(args.blind_scale_ladder_enabled)),
+        blind_scale_ladder_factors=tuple(float(v) for v in scale_ladder_factors),
+        blind_scale_ladder_min_ratio=max(0.01, float(args.blind_scale_ladder_min_ratio or 0.01)),
+        blind_scale_ladder_max_ratio=max(0.05, float(args.blind_scale_ladder_max_ratio or 0.05)),
+        blind_scale_prefilter_margin=max(1.0, float(args.blind_scale_prefilter_margin or 1.0)),
+        blind_scale_prefilter_escape_enabled=bool(int(args.blind_scale_prefilter_escape_enabled)),
+        blind_scale_prefilter_escape_after_validations=max(0, int(args.blind_scale_prefilter_escape_after_validations or 0)),
+        blind_scale_prefilter_escape_best_inliers_max=max(0, int(args.blind_scale_prefilter_escape_best_inliers_max or 0)),
+        blind_scale_prefilter_escape_margin=max(1.0, float(args.blind_scale_prefilter_escape_margin or 1.0)),
+        blind_scale_prefilter_auto_disable=bool(int(args.blind_scale_prefilter_auto_disable)),
+        blind_scale_prefilter_auto_disable_after=max(1, int(args.blind_scale_prefilter_auto_disable_after or 1)),
+        blind_prob_verify_enabled=bool(int(args.blind_prob_verify_enabled)),
+        blind_prob_logodds_accept=float(args.blind_prob_logodds_accept),
+        blind_prob_sigma_px=max(0.2, float(args.blind_prob_sigma_px or 1.6)),
+        blind_prob_sigma_auto=bool(int(args.blind_prob_sigma_auto)),
+        blind_prob_sigma_floor_px=max(0.2, float(args.blind_prob_sigma_floor_px or 0.7)),
+        blind_prob_prior_match=min(0.99, max(0.01, float(args.blind_prob_prior_match or 0.35))),
+        blind_verify_adaptive_distractor_prior=bool(int(args.blind_verify_adaptive_distractor_prior)),
+        blind_verify_distractor_blend=min(1.0, max(0.0, float(args.blind_verify_distractor_blend or 0.0))),
+        blind_verify_distractor_floor=min(0.95, max(0.01, float(args.blind_verify_distractor_floor or 0.08))),
+        blind_verify_distractor_ceil=min(0.99, max(0.03, float(args.blind_verify_distractor_ceil or 0.85))),
+        blind_prob_clip_delta=max(1.0, float(args.blind_prob_clip_delta or 7.0)),
+        blind_prob_min_match_ratio=min(1.0, max(0.0, float(args.blind_prob_min_match_ratio or 0.0))),
+        blind_prob_dynamic_thresholds=bool(int(args.blind_prob_dynamic_thresholds)),
+        blind_prob_dynamic_min_logodds=float(args.blind_prob_dynamic_min_logodds),
+        blind_prob_dynamic_scale=max(0.0, float(args.blind_prob_dynamic_scale or 0.0)),
+        blind_prob_dynamic_ratio_relax=min(1.0, max(0.30, float(args.blind_prob_dynamic_ratio_relax or 1.0))),
+        blind_prob_dynamic_ratio_inliers=max(0, int(args.blind_prob_dynamic_ratio_inliers or 0)),
+        blind_prob_dynamic_ratio_rms_px=max(0.1, float(args.blind_prob_dynamic_ratio_rms_px or 0.1)),
+        blind_candidate_rerank_top_k=max(0, int(args.blind_candidate_rerank_top_k or 0)),
+        blind_candidate_rerank_trials=max(20, int(args.blind_candidate_rerank_trials or 20)),
+        blind_candidate_rerank_prob_weight=max(0.0, float(args.blind_candidate_rerank_prob_weight or 0.0)),
+        blind_refit_irls_iters=max(0, int(args.blind_refit_irls_iters or 0)),
+        blind_refit_include_global_inliers=bool(int(args.blind_refit_include_global_inliers)),
+        blind_tweak_iterations=max(0, int(args.blind_tweak_iterations or 0)),
+        blind_tweak_expand_factor=max(1.0, float(args.blind_tweak_expand_factor or 1.0)),
+        blind_tweak2_verify_enabled=bool(int(args.blind_tweak2_verify_enabled)),
+        blind_tweak2_verify_tol_factor=max(1.0, float(args.blind_tweak2_verify_tol_factor or 1.0)),
+        blind_tweak2_verify_max_px=max(0.5, float(args.blind_tweak2_verify_max_px or 0.5)),
+        blind_tweak2_verify_min_pairs=max(4, int(args.blind_tweak2_verify_min_pairs or 4)),
+        blind_tweak2_verify_max_iters=max(1, int(args.blind_tweak2_verify_max_iters or 1)),
+        blind_validate_scale_rescue_enabled=bool(int(args.blind_validate_scale_rescue_enabled)),
+        blind_validate_scale_rescue_factor=max(1.0, float(args.blind_validate_scale_rescue_factor or 1.0)),
+        blind_validate_scale_rescue_min_arcsec=max(0.01, float(args.blind_validate_scale_rescue_min_arcsec or 0.01)),
+        blind_validate_scale_rescue_max_arcsec=max(1.0, float(args.blind_validate_scale_rescue_max_arcsec or 1.0)),
+        blind_match_object_expand_enabled=bool(int(args.blind_match_object_expand_enabled)),
+        blind_match_object_expand_min_pairs=max(4, int(args.blind_match_object_expand_min_pairs or 4)),
+        blind_match_object_expand_max_pairs=max(4, int(args.blind_match_object_expand_max_pairs or 4)),
+        blind_match_object_expand_tol_factor=max(1.0, float(args.blind_match_object_expand_tol_factor or 1.0)),
+        blind_sparse_adaptive_inliers=bool(int(args.blind_sparse_adaptive_inliers)),
+        blind_sparse_min_inliers_floor=max(2, int(args.blind_sparse_min_inliers_floor or 2)),
+        blind_star_quality_filter=bool(int(args.blind_star_quality_filter)),
+        blind_star_min_sep_px=max(0.0, float(args.blind_star_min_sep_px or 0.0)),
+        blind_verify_uniformize_pairs=bool(int(args.blind_verify_uniformize_pairs)),
+        blind_verify_uniform_grid_px=max(0.0, float(args.blind_verify_uniform_grid_px or 0.0)),
+        blind_verify_uniform_max_per_cell=max(0, int(args.blind_verify_uniform_max_per_cell or 0)),
+        blind_verify_uniform_min_keep_ratio=min(1.0, max(0.0, float(args.blind_verify_uniform_min_keep_ratio or 0.0))),
+        blind_pair_geom_scoring=bool(int(args.blind_pair_geom_scoring)),
+        blind_pair_geom_weight=min(1.0, max(0.0, float(args.blind_pair_geom_weight or 0.0))),
+        blind_pair_geom_sigma=max(0.05, float(args.blind_pair_geom_sigma or 0.45)),
+        blind_pair_geom_angle_weight=min(1.0, max(0.0, float(args.blind_pair_geom_angle_weight or 0.0))),
+        blind_pair_geom_angle_sigma_deg=max(1.0, float(args.blind_pair_geom_angle_sigma_deg or 42.0)),
+        blind_pre_model_matching=bool(int(args.blind_pre_model_matching)),
+        blind_pre_model_min_pairs=max(4, int(args.blind_pre_model_min_pairs or 4)),
+        blind_pre_model_min_keep_ratio=min(1.0, max(0.0, float(args.blind_pre_model_min_keep_ratio or 0.0))),
+        blind_pre_model_image_bin_px=max(0.25, float(args.blind_pre_model_image_bin_px or 1.5)),
+        blind_pre_model_tile_bin_px=max(0.25, float(args.blind_pre_model_tile_bin_px or 1.5)),
+        blind_hypothesis_rescue_enabled=bool(int(args.blind_hypothesis_rescue_enabled)),
+        blind_hypothesis_rescue_min_pairs=max(4, int(args.blind_hypothesis_rescue_min_pairs or 4)),
+        blind_hypothesis_rescue_vote_percentile=min(40, max(5, int(args.blind_hypothesis_rescue_vote_percentile or 12))),
+        blind_hypothesis_rescue_bucket_factor=min(4.0, max(1.0, float(args.blind_hypothesis_rescue_bucket_factor or 1.0))),
+        blind_hypothesis_rescue_use_dedup=bool(int(args.blind_hypothesis_rescue_use_dedup)),
+        blind_hypothesis_rescue_use_uniformize=bool(int(args.blind_hypothesis_rescue_use_uniformize)),
+        blind_preinlier_relax_enabled=bool(int(args.blind_preinlier_relax_enabled)),
+        blind_preinlier_relax_target_inliers=max(4, int(args.blind_preinlier_relax_target_inliers or 4)),
+        blind_preinlier_relax_quantile_scale=max(1.0, float(args.blind_preinlier_relax_quantile_scale or 1.0)),
+        blind_preinlier_relax_max_factor=max(1.0, float(args.blind_preinlier_relax_max_factor or 1.0)),
+        blind_preinlier_relax_max_px=max(0.5, float(args.blind_preinlier_relax_max_px or 0.5)),
+        blind_preinlier_refit_enabled=bool(int(args.blind_preinlier_refit_enabled)),
+        blind_preinlier_refit_top_n=max(4, int(args.blind_preinlier_refit_top_n or 4)),
+        blind_preinlier_refit_sigma_px=max(0.2, float(args.blind_preinlier_refit_sigma_px or 0.2)),
+        blind_global_streak_relax_enabled=bool(int(args.blind_global_streak_relax_enabled)),
+        blind_global_streak_relax_validations=max(0, int(args.blind_global_streak_relax_validations or 0)),
+        blind_global_streak_relax_inliers=max(0, int(args.blind_global_streak_relax_inliers or 0)),
+        blind_global_streak_relax_factor=max(1.0, float(args.blind_global_streak_relax_factor or 1.0)),
+        blind_global_streak_relax_logodds=float(args.blind_global_streak_relax_logodds),
+        blind_reuse_existing_solved_wcs=bool(int(args.blind_reuse_existing_solved_wcs)),
+        blind_reuse_existing_solved_wcs_require_solved=bool(int(args.blind_reuse_existing_solved_wcs_require_solved)),
+        blind_reuse_existing_solved_wcs_validate=bool(int(args.blind_reuse_existing_solved_wcs_validate)),
+        blind_dev_existing_wcs_seed_enabled=bool(int(args.blind_dev_existing_wcs_seed_enabled)),
+        blind_dev_existing_wcs_seed_require_solved=bool(int(args.blind_dev_existing_wcs_seed_require_solved)),
+        blind_dev_existing_wcs_seed_validate=bool(int(args.blind_dev_existing_wcs_seed_validate)),
+        blind_verify_dedup_pairs=bool(int(args.blind_verify_dedup_pairs)),
+        blind_verify_dedup_min_keep_ratio=min(1.0, max(0.0, float(args.blind_verify_dedup_min_keep_ratio or 0.0))),
+        blind_verify_conflict_resolution=bool(int(args.blind_verify_conflict_resolution)),
+        blind_verify_conflict_min_keep_ratio=min(1.0, max(0.0, float(args.blind_verify_conflict_min_keep_ratio or 0.0))),
+        blind_verify_conflict_image_bin_px=max(0.25, float(args.blind_verify_conflict_image_bin_px or 2.5)),
+        blind_verify_conflict_tile_bin_px=max(0.25, float(args.blind_verify_conflict_tile_bin_px or 2.5)),
+        blind_parity_mode=str(args.blind_parity_mode or "auto").strip().lower(),
+        blind_parity_lock_enabled=bool(int(args.blind_parity_lock_enabled)),
+        blind_parity_lock_min_votes=max(1, int(args.blind_parity_lock_min_votes or 1)),
+        blind_parity_lock_ratio=max(1.0, float(args.blind_parity_lock_ratio or 1.0)),
+        blind_parity_lock_hint_phase_only=bool(int(args.blind_parity_lock_hint_phase_only)),
+        blind_final_center_min_tol_deg=max(0.01, float(args.blind_final_center_min_tol_deg or 0.20)),
+        blind_final_center_max_tol_deg=max(0.05, float(args.blind_final_center_max_tol_deg or 10.0)),
+        blind_final_center_tol_factor=max(0.1, float(args.blind_final_center_tol_factor or 1.25)),
+        blind_final_rotation_max_delta_deg=max(0.0, float(args.blind_final_rotation_max_delta_deg or 0.0)),
         hard_max_candidates_tried=max(0, int(args.hard_max_candidates_tried or 0)),
         hard_max_validations=max(0, int(args.hard_max_validations or 0)),
         depth_ladder_enabled=bool(int(args.depth_ladder_enabled)),

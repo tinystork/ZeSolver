@@ -1,506 +1,226 @@
-# ZeSolver Memory Log
+# ZeSolver Memory Log (accompli uniquement)
 
-## 2026-04-11
+> Règle: ce fichier contient uniquement ce qui a été fait/validé.
+> Le reste à faire est dans `followup.md`.
 
-### Discoveries
-- Baseline benchmark in repo indicates low global success rate: 6/111 attempts.
-- `downsample-2` profile is currently the strongest profile on this dataset.
-- Near solver quality is strongly tied to metadata quality (RA/DEC/scale hints).
-- Test suite reveals a critical quad-index fragility: `no quads were hashed for level L` in synthetic index setup.
+## 2026-04-11 → 2026-04-24 (synthèse consolidée)
 
-### Actions completed
-- Read and reviewed: `AGENT.md`, `followup.md`, `README.md`.
-- Audited main solver flow (`zeblindsolver.py`, `metadata_solver.py`, quads/index modules, detector).
-- Ran benchmark report analysis from existing `benchmark_report.json`.
-- Ran `pytest -q` to capture current regressions and failure modes.
-- Updated `followup.md` with current diagnostic and short-term execution plan.
-- Updated `AGENT.md` with current focus and repo memory convention.
+### Robustesse solver / infra
+- Audit global du flow solver (zeblind, metadata, index/quads, détection) et stabilisation progressive.
+- Multiples correctifs de robustesse quad/hash (ordering canonique, fallbacks sampling, fallback hashes par niveau).
+- Correctifs stop/cancel batch (poll futures + shutdown non bloquant) pour éviter les faux freeze.
+- Fix runtime GPU/venv (re-exec dans `.venv`), suppression de causes CPU-only involontaires.
 
-### Next actions
-- Reproduce and fix the `level L` quad hashing failure deterministically.
-- Add non-regression tests around quad generation/hash acceptance across scales.
-- Re-run benchmark and compare success rate + runtime before/after patches.
+### ZeNear (phase fiabilisation)
+- Passage progressif à une validation near adaptative (inliers requis non figés), avec gains nets de solve local.
+- Staging de fallback détection near (passes successives) pour cas faibles supports.
+- Smokes validés sur sous-ensembles puis jeux plus larges (améliorations de solve observées à l’époque de cette phase).
 
+### ZeBlind (phase conformité Astrometry initiale)
+- Mise en place/incrémentation du moteur verify log-odds (match/conflict/distractor) + télémétrie.
+- Préfiltres d’échelle/hypothèse et instrumentation détaillée des causes d’échec.
+- Mécaniques de pruning/tri des paires (uniformisation, dédup, scoring géométrique) avec gains de coût mais solve-rate encore limité sur lot fallback.
+- Références fallback Astrometry conservées (`rejected_cases_wcs_reference.{json,md}`).
 
-## 2026-04-11 (itération 1 - mise en place)
+---
 
-### Code changes
-- Patched `zeblindsolver/asterisms.py` to use a canonical angular ordering for quad points before hashing (instead of radius-to-centroid ordering), preventing bow-tie quads with near-zero polygon area.
-- Replaced 2D `np.cross` parity check with scalar cross-product (`cross_z`) to avoid NumPy 2.0 deprecation and keep parity explicit.
-- Hardened `zeblindsolver/zeblindsolver.py` background-removal call with a compatibility fallback for simplified mocked signatures used by tests.
+## 2026-04-25 (sprint portage Astrometry blind)
 
-### Validation
-- Ran targeted tests:
-  - `pytest -q tests/test_synthetic.py tests/test_failures.py::test_solver_returns_fail_quickly`
-  - Result: **4 passed**.
+### Décisions structurantes
+- Validation explicite: poursuivre le portage complet avant toute désactivation prématurée de briques amont.
+- Checkpoint anti-boucle formalisé: **NO-GO** sur micro-tuning resolve-hit seul tant que l’amont ne produit pas de signal.
 
-### Impact expected
-- Removes a concrete failure mode where valid quads could be discarded at hash time (notably visible on synthetic fixtures).
-- Improves immediate robustness baseline before deeper perf tuning.
+### Portage réalisé (code/méthode)
+- Portage `try_permutations` dans le chemin principal quad-match (pas seulement rescue).
+- Ajout bloc add_stars/inbox côté ZeBlind et conservation en défaut actif.
+- Évolution lookup code-space:
+  - near lookup (bucket-level puis entry-level),
+  - filtre continu code-space,
+  - backend rangesearch continu (approximation).
+- Introduction objet canonique `code-hit` (entry/score/source) + score gating + geom gating amont.
+- Ajout mode `code-hit only` (génération candidates centrée hits canonique, fallback conditionnel).
 
+### Resolve-hit / consommation des hits
+- Ajout resolve-hit local + refit, puis évaluation globale post-refit.
+- Ajout instrumentation globale (`global_evals`, `global_better`, deltas) et variante hybrid-refit.
+- Correctif de flux: un quality reject resolve-hit ne supprime plus l’hypothesis de base.
 
-## 2026-04-12 (itération 2)
+### Résultats observés (subset/cas bloquants)
+- Les briques s’exécutent et sont instrumentées (hits/evals présents), mais:
+  - `nummatches` reste à 0 sur les cas bloquants M106,
+  - `global_better`/`hybrid_better` restent à 0 dans les A/B décisifs.
+- Gains surtout côté coût/filtrage bruit, pas encore de percée solve.
 
-### Changes implemented
-- Added robust quad ordering in hashing path already present from iteration 1 and extended quad sampling robustness:
-  - pairwise sampler now falls back/augments with legacy local-neighborhood quads when pairwise output is too sparse.
-  - merged quad sets are deduplicated in stable order before hashing.
-- Added blind-solver robustness fallback for level-specific observed hashes:
-  - when pixel-adapted level filtering yields zero hashes, solver now falls back to base hash set for that level instead of hard failing candidate search.
+### Rapports de référence de la soirée
+- Complétude/gaps portage: `zeblind_astrometry_portage_completeness_20260425_v74.md`
+- Reassessment gaps: `..._v77b.md`, `..._v78b.md`
+- Go/No-Go formel: `zeblind_portage_go_nogo_20260425_v86b.md`
+- A/B décisif resolve-hit OFF/ON: `zeblind_p1_subset2_20260425_v86_resolve_hit_ab_decisive.json`
+- A/B mode code-hit only: `zeblind_p1_subset2_20260425_v87_code_hit_only_ab.json`
 
-### Why this matters
-- Reduces false dead-ends in candidate search caused by scale-hint mismatch or sparse quad generation.
-- Improves probability of finding valid candidates while keeping level-guided behavior when hashes exist.
+---
 
-### Validation
-- `pytest -q tests/test_synthetic.py tests/test_failures.py::test_solver_returns_fail_quickly tests/test_matcher.py tests/test_zeblindsolver.py`
-- Result: **13 passed**.
+## État consolidé (fin 2026-04-25)
+- Conformité structure/code Astrometry: partielle avancée.
+- Parité comportementale sur cas bloquants: non atteinte.
+- Verrou principal confirmé: qualité des correspondances amont (avant resolve), pas le tuning local du refit.
 
-### Next step
-- Re-run benchmark on your regenerated index/hashes dataset to measure success-rate and runtime delta versus previous baseline.
 
+- 2026-04-25 (G2.65): début concret du bloc A5 (recherche continue plus native) avec backend `blind_astrometry_code_rangesearch_backend` (`linf`/`l2`) + rayon `blind_astrometry_code_rangesearch_l2_radius`, cache des codes log + tri 1D pour pruning local (approx rangesearch continu). A/B subset2 `v88`: backend `l2` bien actif (`code_rs_l2_activations>0`), coût runtime en baisse sur les 2 cas, mais `nummatches=0` et `global_better=0` inchangés.
+- 2026-04-25 (G2.66): enrichissement de l’objet canonique `code-hit` (ajout `rank` et `metric`), puis consommation ordonnée en mode `code-hit only` (priorité rank/score). Smoke `v88b` valide l’exécution sans régression fonctionnelle; blocage solve toujours présent sur 233027.
 
-## 2026-04-12 (diagnostic stop/cancel)
 
-### Symptom observed
-- GUI stop requests were logged multiple times (`Arrêt demandé…`) while the run kept going.
+- 2026-04-25 (G2.67): ajout du mode `blind_astrometry_hit_pipeline_first_*` (strict/fallback) pour forcer une consommation hits->candidats avant heuristiques legacy, avec métriques d’activation/fallback/skip. A/B subset2 `v89`: pipeline-first s’active massivement (activations >0) et le mode strict réduit parfois le coût, mais aucun signal solve (`nummatches=0`, `resolve_global_better=0`).
 
-### Root cause identified
-- In `BatchSolver.run` (`zesolver.py`), the loop waited on `next(as_completed(inflight))`, which blocks until one task completes.
-- On stop, the cancel flag was set but the loop could not observe it while blocked.
-- Additionally, the `ThreadPoolExecutor` context manager waits for running tasks on exit, delaying effective stop feedback.
 
-### Mitigation implemented
-- Reworked `BatchSolver.run` to poll futures with `concurrent.futures.wait(..., timeout=0.2, FIRST_COMPLETED)` and check cancel regularly.
-- On cancel, call `shutdown(wait=False, cancel_futures=True)` to return control immediately (cooperative cancel still expected in worker code).
-- Added a cancel check inside metadata candidate-pair building loop (`metadata_solver.py`) to improve cooperative interruption during heavy matching.
+- 2026-04-25 (G2.68): extension du backend de recherche continue avec un troisième mode `grid3d` (binning 3D en log-space + voisinage par bins), en plus de `linf` et `l2`. Ajout des métriques `astrometry_code_rangesearch_grid_activations` et options `blind_astrometry_code_rangesearch_grid_*`. A/B subset2 `v90` (linf/l2/grid3d + hit-pipeline-first strict): backends bien activés selon mode mais aucun signal solve (`nummatches=0`, `resolve_global_better=0`).
 
-### Validation
-- `pytest -q tests/test_metadata_solver.py tests/test_zeblindsolver.py tests/test_synthetic.py`
-- Result: **12 passed**.
 
+- 2026-04-25 (stabilisation avant pause): interruption des runs Python longue durée restés actifs (3 processus `python3 -` CPU-bound) pour repartir proprement. Les backends expérimentaux code-space (`l2`, `grid3d`) sont désormais **désactivés par défaut** via `blind_astrometry_code_rangesearch_allow_experimental_backends=False`; toute demande `backend=l2/grid3d` est forcée en `linf` tant que ce flag n’est pas activé explicitement. Compile/tests rapides validés après changement.
 
-## 2026-04-12 (run appears frozen after ZENEAR start)
 
-### Findings
-- Live process was active (4 compute threads near 95% CPU each), not deadlocked.
-- Log stalled right after `near solve start ...` because near solver spent most time in `detect_stars(...)` on raw frames.
-- In this dataset/config, blind fallback was disabled (near-only), so long near stages are user-visible as apparent freeze.
+- 2026-04-25 (G2.69): accomplissement du bloc B4 minimal avec ajout d’un mode dédié non-legacy `blind_astrometry_hit_pipeline_dedicated_enabled` (+ fallback/strict) qui force la consommation des `code-hit` avant parcours legacy. Nouvelles métriques `astrometry_hit_pipeline_dedicated_*`. A/B subset2 `v91`: chemin dédié bien activé (activations/skips/fallbacks cohérents) et réduction nette du runtime, mais solve-rate inchangé (`nummatches=0`, `resolve_global_better=0`).
 
-### Mitigations applied
-- Improved stop responsiveness already in `BatchSolver.run` (poll + non-blocking shutdown on cancel).
-- Tuned near-star detection call to avoid pathological segmentation cost:
-  - pre-remove background in near pipeline,
-  - use `mode=global`, `k_sigma=4.0`, `min_area=8`,
-  - cap labels processed via new `max_labels` argument in `detect_stars` (CPU path).
-- Added temporary near-stage logs (`candidates`, `catalog stars`, `detect start/done`, `pair-build`, `ransac`) for diagnosis.
+- 2026-04-29 (état des lieux ZeBlind): analyse complète du run `zesolver.log` confirmant le pattern actuel: ZeNear robuste sur cas simples, ZeBlind en échec sur cas difficiles avec `best_fail_inliers=0` et longues recherches candidates, puis fallback Astrometry qui résout 8/8. Relecture croisée Astrometry source (`solver.c`, `verify2.c`) + rapports `v78b/v86b` => gaps encore bloquants priorisés: KD/rangesearch natif, pipeline strict hit->resolve->fit->verify, parité complète permutations/index-driven, alignement compteurs/arrêts, activation cohérente verify log-odds en run blind.
 
-### Measured effect
-- Single-frame near solve dropped from >180s timeout to ~6s on test frame (still failing strict quality gate: inliers 19 < 60).
+- 2026-04-29 (itération autonome ZeBlind, robustesse runtime): patch du contrôle de budget pour les probes difficiles. Les hard caps (`hard_max_candidates_tried`, `hard_max_validations`) sont maintenant consommés globalement à travers les stages du depth ladder (au lieu d’être réinitialisés implicitement), avec arrêt explicite quand le budget est épuisé. Le scale-ladder est aussi bypassé automatiquement quand un hard budget explicite est posé, pour éviter les reruns coûteux en diagnostic. Validation: compile OK + probe mono-image (`testzeblind`) qui s’arrête proprement sur budget épuisé au lieu de repartir en longues itérations.
 
+- 2026-04-29 (probe mono-image post-patch): test `testzeblind` en mode borné (`depth_ladder=0`, `scale_ladder=0`, `hit_pipeline_dedicated=1`, hard cap=40) confirme un échec en amont avec `validations=0` avant épuisement budget. Conclusion pratique: le verrou reste côté génération/qualité des correspondances candidates (avant verify), pas sur des seuils de validation finaux.
 
-## 2026-04-12 (GPU runtime fix)
+- 2026-04-29 (re-cadrage mission): suite à la demande Tristan, mission officielle basculée en parité complète ZeBlind/Astrometry (local Python pur, sans logique serveur Astrometry), avec ZeNear gelé hors non-régression. Audit transversal lancé sur `astrometry-main` (solver/plot/include/libkd/util), backlog exhaustif formalisé dans `followup.md` + rapport `reports/zeblind_astrometry_full_audit_20260429.md`.
 
-### Issue
-- System launched `zesolver.py` with `/usr/bin/python`, while CuPy (`cupy-cuda12x`) is only available in repo `.venv`.
-- Result: runtime sees no CuPy, UI/backend falls back to CPU.
+- 2026-04-29 (parité ZeBlind, A1-v1): implémentation d’un backend code-space `kdbox` dans `zeblindsolver.py` (KD-tree local 3D sur codes log + query box rangesearch), cache tuile enrichi, et exposition CLI (`--blind-astrometry-code-rangesearch-backend`, `--blind-astrometry-code-rangesearch-allow-experimental-backends`). Gates techniques OK (py_compile + tests ciblés 2/2). Probe mono-image borné encore en échec solve-rate (`validations=0`) -> blocage principal toujours amont correspondances/resolve, pas un souci de plumbing runtime.
 
-### Script-side fix
-- Added automatic interpreter re-exec in `zesolver.py`:
-  - detect project venv python at `.venv/bin/python` (or Windows equivalent),
-  - if current interpreter is not the venv one, re-launch the same command under venv,
-  - guard against loops with `ZE_REEXECED_VENV` and opt-out via `ZE_NO_VENV_REEXEC=1`.
+- 2026-04-29 (probe qualité vs logique): exécution réelle ZeBlind via appel explicite `main()` (et non `python -m zeblindsolver.zeblindsolver`, qui peut être no-op). Sur copies RAW sans WCS (`testzeblind/probe_raw`), ZeBlind échoue à la fois sur une image de référence ZeNear-résoluble et sur un cas dur (caps 220/120), avec `validations=0..2`, `best_inliers<=0` pour `linf` et `kdbox` -> blocage confirmé en amont de verify (candidate/hypothesis pipeline), pas seulement qualité image.
 
-### Verification
-- Environment check confirmed:
-  - `/usr/bin/python` -> cupy unavailable,
-  - `/home/tristan/ZeSolver/.venv/bin/python` -> cupy available.
+- 2026-04-29 (try_permutations v1): ZeBlind patch avec expansion permutations AB-first (`blind_astrometry_try_permutations_max` défaut 12 + helper `_astrometry_permutation_orders`) et nouveaux compteurs `astrometry_try_perm_*`. Probe runtime réel sur image RAW ZeNear-résoluble: permutations et resolve-hit s’activent massivement, mais toujours `no valid solution` (`nummatches=0`, inliers quasi nuls) -> blocage confirmé sur qualité des correspondances/hypothèses, pas sur absence de parcours permutations.
 
+- 2026-04-29 (resolve/reassign v1): ajout d’un scoring de transform one-to-one non index-lock (`_score_transform_with_reassignment`) et intégration dans le pipeline hypothèse + consommation des paires reassigned pour construire les inliers. Probe RAW ZeNear-résoluble (caps 40/40): amélioration marginale du signal (`empty_inliers` 27->21, `too_few_inliers` 3->9, `reassign_eval_better=15`) mais toujours `nummatches=0` / `failed_validations=0`.
 
-## 2026-04-12 (ZENEAR D50 diagnosis and fix)
+- 2026-04-29 (code rangesearch adaptatif): ajout d'un auto-disable `code_rangesearch` en run faible (après N candidats sans validations/inliers), avec compteur `astrometry_code_rangesearch_auto_disabled`. Effet mesuré sur image RAW ZeNear-résoluble (caps 30/30): `nummatches` passe de 0 à 4 et `failed_validations` de 0 à 1; progrès partiel mais pas encore de solution complète, cas dur inchangé.
 
-### Root cause
-- ZENEAR was rejecting geometrically valid solutions due to a fixed `quality_inliers=60` gate.
-- Logs showed very low RMS with consistent inliers in the 19-33 range, i.e. good fits rejected by an unrealistic fixed threshold for this FOV/dataset.
+- 2026-04-29 (portage try_permutations v2): remplacement du set fixe de permutations par une génération récursive Astrometry-like dans le chemin candidat principal (slot-filling interne + gardes `cx<=dx` et `meanx<=0.5`, swap backbone AB). Ajout config `blind_astrometry_cxdx_margin` et compteurs `astrometry_try_perm_meanx_rejects`/`astrometry_try_perm_invalid_code`. Gate OK (py_compile + tests ciblés). Probe RAW ZeNear ref (caps 30/30): `numtries=30`, `nummatches=4`, `failed_validations=1` avec rejets récursifs tracés.
 
-### Fix
-- In `zeblindsolver/metadata_solver.py`, switched near validation to adaptive inlier threshold:
-  - `adaptive_inliers = min(cfg.quality_inliers, max(6, int(0.4 * n_pairs)))`
-  - use this threshold consistently for TAN + LS + SIP validation.
-- Added header keyword `REQINL` to record the effective inlier requirement used at acceptance time.
+- 2026-04-29 (portage resolve_matches v2): ajout d'un appariement one-to-one global par distance (`_greedy_global_pairing`) et intégration dans `resolve_hit` + `reassign_eval`. Gate OK (py_compile + tests). Sur RAW ZeNear ref, le signal verify augmente à budget élargi (`nummatches` monte à 12 et `failed_validations` à 4 au cap 120), sans solve final pour l'instant.
 
-### Quick validation
-- Single frame previously failing now succeeds in ~6.2s (`inliers=19`, `REQINL=7`).
-- 6-frame smoke test on `dataset_test`: **6/6 solved** (all near mode), ~6-7s per frame on CPU.
+- 2026-04-29 (portage verify/log-odds v1): alignement de l'acceptation sur une logique Astrometry-like en 2 étages (`logaccept=min(totune,tokeep)` puis gate final `tokeep`), avec nouveau flag `blind_accept_logodds_astrometry_stages` (CLI inclus) et compteurs dédiés (`accept_logodds_precheck_*`, `accept_logodds_below_keep`, `accept_logodds_keep_pass`). Gate OK (py_compile + tests). Probe ZeNear ref caps 120: ON/OFF identiques (`nummatches=12`, `failed_validations=4`).
 
+- 2026-04-29 (portage astrometry counters/stop v1): `nummatches` réaligné sur une sémantique Astrometry (incrément par hit envoyé au verify, plus par volume de paires), suppression de l'incrément en re-verify tune, ajout `maxmatches_active` dans `astrometry_semantics`, et normalisation des `stop_reasons` avec champ `code` stable (`candidate_cap`, `maxquads_reached`, `maxmatches_reached`, `logodds_bail`, etc.). Gate OK (py_compile + tests), probes bornés sans solve final mais diagnostics plus fidèles.
 
-## 2026-04-12 (ZENEAR final stretch: 10 stubborn files)
+- 2026-04-29 (portage chaîne stricte hit->resolve->fit->verify v1): `_resolve_hit_correspondences` exporte les correspondances indexées (`src_indices/dst_indices`) et ces index sont maintenant propagés dans le flux principal post-hypothesis (`reassign_src_idx/reassign_dst_idx`) avant fit/validate. Nouveaux compteurs `astrometry_post_resolve_attempts/hits` + traces `verify_hit_trace(stage=hit_resolve_chain)`. Gate OK (py_compile + tests). Probe ZeNear ref caps120: pipeline utilisé (`post_resolve_hits=4`) sans solve final.
 
-### Additional root cause
-- Last 10 failures were mostly low-support detections on faint/edge frames.
-- Aggressive near detection (`global k=4` on background-subtracted image) produced 0-4 stars on these frames.
+- 2026-04-29 (portage objets match v1): ajout d'une structure `astrometry_match_objects` (stages `validate_base`/`validate_gate`/`accept`) pour tracer des objets match Astrometry-like avec source explicite des correspondances (`inlier_mask`, `reassign_eval`, `resolve_hit`), score, échelle, qualité et raison de rejet. Export activé dans les stats finaux + compteur de phase `astrometry_match_objects_total`. Gate OK (py_compile + tests). Probe ZeNear ref caps120: 6 objets (3 validate_base fail + 3 validate_gate fail), source `resolve_hit` dominante, toujours sans solve final.
 
-### Fixes
-- Added staged near-detect fallback in `metadata_solver.py` when support is low:
-  1) default fast pass: processed image, global k=4.0,
-  2) fallback #1: raw image, global k=3.0,
-  3) fallback #2: raw image, global k=2.5.
-- Tuned adaptive inlier gate lower bound from 6 to 4 with pair-aware scaling:
-  - `adaptive_inliers = min(cfg.quality_inliers, max(4, int(0.3 * n_pairs)))`
+- 2026-04-29 (portage tweak2 verify v1): ajout d'un retry Astrometry-like après `validate_base` en échec (tolérance élargie, refit robuste, re-validation) avec nouveaux flags `blind_tweak2_verify_*` et options CLI associées. Instrumentation `tweak2_verify_attempts/hits`. Gate OK (py_compile + tests). A/B sur ZeNear ref caps120: mécanisme actif (3 tentatives) mais 0 hit et résultat final inchangé (`nummatches=3`, `failed_validations=4`).
 
-### Validation
-- Previously unresolved 10-file subset: **10/10 solved**.
-- Full `dataset_test` near-only smoke test: **30/30 solved** (~98s total on CPU).
-- `tests/test_failures.py::test_solver_returns_fail_quickly` now passes again.
-
+- 2026-04-29 (portage validate scale rescue v1): ajout d'un fallback de re-validation ciblé sur les échecs `pixel_scale_out_of_range`, avec bornes d'échelle relâchées de façon contrôlée (`blind_validate_scale_rescue_*`, CLI inclus). Instrumentation `validate_scale_rescue_attempts/hits`. Gate OK (py_compile + tests). A/B sur ZeNear ref caps120: `failed_validations` baisse de 4 à 3 (1 rescue hit), sans solve final.
 
-## 2026-04-12 (virage perf: fiabilité -> débit 10k+)
+- 2026-04-29 (probe expansion match-object + guardrail): tentative d'expansion des match-objects `resolve_hit` avant validate (avec soft fallback) implémentée et mesurée. A/B ZeNear ref caps120: ON dégrade (`failed_validations` 3->5). Décision produit appliquée immédiatement: conserver le mécanisme en expérimental mais **désactivé par défaut** (`blind_match_object_expand_enabled=False`, CLI default 0) pour protéger la non-régression. Gate OK (py_compile + tests).
 
-### Contexte terrain
-- Run lourd en cours: ZeNear jugé fiable sur les 300+ premières images.
-- Nouveau goulot identifié: vitesse d'exécution globale (objectif final 10k+ images).
-- Hypothèse de travail validée: le gain ne viendra pas d'un seul levier, mais d'une combinaison orchestration CPU + GPU ciblé + pipeline hybride.
-
-### Décision produit/technique
-- Changer la priorité immédiate: passer de la chasse aux échecs de solve à l'ingénierie de débit.
-- Ordre retenu:
-  1) tuning parallèle CPU/I/O/cache,
-  2) réactivation GPU sur étapes rentables (détection),
-  3) pipeline CPU+GPU simultané (overlap des étapes).
 
-### Critère de succès
-- Débit mesurablement supérieur (images/min) sans perte de robustesse ni dérive de reproductibilité.
+- 2026-04-30 (probe amont hypothèse): re-probe mono-image RAW ZeNear ref avec caps bornés (30/30), depth/scale ladders OFF, puis pipeline hits activé (`code_hit_object=1`, `hit_pipeline_dedicated=1`, lock parité OFF). Résultat inchangé: échec avant verify (`fail_validation_count=0`, `best_fail_reason=hypothesis failed before validation`). Signal dominant mesuré: `fail_stage_counts` pairing=7 / hypothesis=23, surtout `hypothesis_fail_empty_inliers` (scale_only=15, hinted_wide=6). Test d’ablation `preinlier_relax` agressif (max_factor 4.5, max_px 15, refit sigma 4.0) sans effet (`preinlier_relax_hits=0`, `preinlier_refit_hits=0`). Conclusion: blocage principal confirmé sur l’amont `resolve_matches -> seed transform`, pas sur verify ni sur simple relaxation de tolérance.
 
-## 2026-04-12 (orientation UX produit, post-perf)
 
-### Décision produit
-- Priorité validée: rendre ZeSolver compréhensible pour un utilisateur lambda via une surcouche UX simple, puis l'intégrer dans ZeMosaic.
-- Les réglages experts restent disponibles, mais ne doivent plus être la porte d'entrée.
+- 2026-04-30 (A2-v1 seed-rescue transform): patch amont dans `zeblindsolver.py` juste avant `empty_inliers` pour tenter un refit de transform depuis correspondances `resolve_hit` relâchées (tolérance élargie + refit similarity). Validation technique OK (`py_compile` + `pytest` ciblé 2/2). Probe RAW ZeNear ref borné (caps 30/30) sans gain solve: `fail_validation_count=0`, `best_fail_reason=hypothesis failed before validation`, `astrometry_seed_rescue_hits=0`, distribution d’échec inchangée (`hypothesis_fail_empty_inliers` dominant).
 
-### UX cible à mémoriser
-- Wizard premier démarrage: setup ASTAP/bases + presets instrument.
-- Étape index/hashes: construire ou réutiliser un répertoire existant avec validation.
-- Workflow dossier: sélectionner entrée, option de nettoyage WCS (zewcscleaner), lancer batch.
-- Résultats: résumé lisible + gestion des non-résolus pensée pour l'environnement ZeMosaic.
+- 2026-04-30 (A2-v2/v3 amont): deux itérations supplémentaires testées sur probe RAW ZeNear ref (caps 30/30). A2-v2 = retry adaptatif `resolve_hit` (tolérance x2.5, `max_pairs` élargi). A2-v3 = bootstrap similarity depuis meilleurs résidus (best-4..8) avant gate `empty_inliers`. Gates techniques OK (`py_compile`, `pytest` 2/2). Résultat inchangé: `success=false`, `fail_validation_count=0`, `best_fail_reason=hypothesis failed before validation`, `seed_best4_hits=0`, `seed_rescue_hits=0`, `hypothesis_fail_empty_inliers` reste dominant.
 
-### Contrainte d'intégration
-- Le nom exact du dossier de rejet est secondaire côté ZeSolver seul; la convention finale doit être dictée par le pipeline ZeMosaic.
+- 2026-04-30 (A2-v4 diagnostics post_resolve): ajout instrumentation ciblée sur échecs `rh_post=None` (compteurs too_few_pairs + paires totales + distance médiane). Gate OK (`py_compile`, `pytest` 2/2). Probe RAW ZeNear ref borné: `post_resolve_attempts=23`, `post_resolve_hits=0`, `post_resolve_fail_too_few_pairs=23`, `post_resolve_fail_pairs_total=2`. Conclusion robuste: blocage principal = manque de correspondances stables avant validate; verify non impliqué à ce stade.
 
+- 2026-04-30 (A2-v5/v6): ajout d’un rescue amont de collecte de paires (passage relâché) + tentative post-resolve relâchée conditionnelle. Gates OK (`py_compile`, `pytest` 2/2). Probe RAW ref: gain massif en paires brutes (`upstream_pair_rescue_pairs_gain=494`, hits rescue=8/15), mais toujours `nummatches=0` et `post_resolve_hits=0` (même en mode relâché). Lecture durable: blocage principal = consistance géométrique des paires candidates, pas seulement volume.
 
-## 2026-04-13 (reorientation mission Zenear vs ASTAP)
+- 2026-04-30 (A2-v7): tentative de stabilisation géométrique des paires après rescue amont via `pre_model_bipartite_reassign` forcé. Gates OK (`py_compile`, `pytest` 2/2). Probe RAW ref: passage tenté 14 fois mais aucun subset retenu (`a2v7_geom_repair_hits=0`), `post_resolve_hits=0`, `nummatches=0`. Le blocage persiste avant verify.
 
-### Demande produit
-- Tristan a demandé de réorienter explicitement la mission: comprendre pourquoi ASTAP résout M106 alors que ZeNear (priorité absolue) reste insuffisant.
+- 2026-04-30 (A2-v8): ajout instrumentation support paires pré-transform + probes comparatives `probe_full` vs `probe_hint_strict` (hinted/hinted_wide only). Gates OK (`py_compile`, `pytest` 2/2). Constat robuste: `post_resolve_hits=0` dans les deux modes, échec dominant `too_few_pairs`; en strict apparaît aussi `best_fail_reason=blind hypothesis scale hard reject` avec `fail_validation_count=1`.
 
-### Travail effectué
-- Création/maintenance d'un plan dédié: `MISSION_ZENEAR_ASTAP_GAP.md`.
-- Ajout d'instrumentation near profonde (`near_debug.jsonl`).
-- Durcissement de la validation WCS pour bloquer les faux positifs (échelles dégénérées).
-- Tentative d'implémentation ASTAP-like partielle (votes quads + hypothèse quad pré-RANSAC).
-- Fallback blind enrichi par hints metadata dans le wrapper near.
+- 2026-04-30 (A2-v9 scale-hard A/B strict): comparaison ON/OFF du `blind_hypothesis_scale_hard_filter_enabled` en mode hinted strict. OFF débloque un léger signal (`hinted post_resolve_hits: 0 -> 1`) mais pas de solve (`nummatches=0`), avec bascule du motif d’échec vers `blind scale prefilter failed`. Conclusion: le gate scale-hard masque un peu de signal mais le verrou principal reste la chaîne de correspondances + cohérence d’échelle.
 
-### État actuel
-- Les améliorations augmentent la visibilité et réduisent les faux positifs, mais ZeNear pur n'est pas encore fiable sur M106.
-- Le prochain saut de robustesse nécessite un matching quad-hash plus fidèle au pipeline ASTAP.
+- 2026-04-30 (A2-v10 scale-prefilter A/B strict): avec `scale_hard_filter=OFF`, comparaison `blind_scale_prefilter` ON/OFF en mode hinted strict. OFF débloque un cran de signal (`nummatches: 0 -> 1`) mais l’hypothèse échoue ensuite sur `pixel_scale_out_of_range[179.816]`. Interprétation: le prefilter précoce masque une piste réelle, mais la validation d’échelle finale reste le verrou suivant.
 
-## 2026-04-13 (accélération Near + benchmark ASTAP solved)
+- 2026-04-30 (A2-v11): prolongation après A2-v10. En strict hinted avec `scale_prefilter=OFF`, le signal `nummatches=1` est reproductible (quasi-candidat `d50_0819`, 12 inliers, RMS~1.36 px, scale ~179.8"/px). Le scale-rescue élargi déplace l’échec de `pixel_scale_out_of_range` vers `validation failed` mais ne solve pas. A/B parité (auto vs nominal-only) ne change pas ce quasi-candidat. Conclusion: verrou actuel sur un sous-gate de validation globale, pas sur la parité ni l’absence totale de match.
 
-### Avancées solve
-- Campagne near-only sur set `fresh` poussée jusqu'à **10/10**.
-- Le passage à 10/10 a été obtenu avec:
-  - élargissement de l'escalade de tolérance ISO ASTAP (ajout paliers `0.040`, `0.060`),
-  - assouplissement de la borne basse de conformance pixscale (`0.4 -> 0.18`).
-- Tests unitaires restés stables pendant les itérations (`tests/test_zeblindsolver.py`: 10 passed).
+- 2026-04-30 (A2-v12): instrumentation fine des sous-gates validation ajoutée (`validation_failed[rms_ok,inliers_ok,...]`) + raison géométrique détaillée sur guardrail. Probe ciblé (strict hinted, `quality_rms=1.4`) confirme le verrou final: quasi-solution dégénérée avec inliers quasi-colinéaires (`cov_area~5e-6`, `cond~5e14`) sur `d50_0819`. Conclusion durable: blocage principal actuel = dégénérescence géométrique des inliers, pas simple seuil RMS/inliers.
 
-### Benchmark demandé sur lot varié déjà ASTAP-solvé
-- Dataset: `/home/tristan/zemosaic/example/astap solved` (67 FITS).
-- Rapport: `/home/tristan/ZeSolver/reports/astap_solved_benchmark_iter1.json`.
-- Résultat:
-  - **55/67** succès (**82.1%**),
-  - médiane temps solve **18.84 s/image**,
-  - échecs dominants: rejets conformance/ZeMosaic liés au pixel scale.
-
-### Conclusion produit/perf
-- Fiabilité Near en hausse, mais débit encore trop loin d'ASTAP.
-- Priorité clarifiée avec Tristan: viser une architecture 10k-ready, fortement parallélisée, charge machine maximale (CPU/RAM/GPU/VRAM) avec garde-fous.
-
-
-## 2026-04-14 (mission ASTAP-main audit + ZeNear strict)
-
-### Modifications et actions réalisées
-
-- `zeblindsolver/metadata_solver.py`
-  - Correction de la sélection de tuiles Near: `_tile_intersects` basé sur overlap réel des bounds RA/Dec (et non simple critère centre+extent trop permissif).
-  - Portage et alignement renforcé du noyau ASTAP-ISO:
-    - `find_many_quads(mode=6)` rapproché du comportement source ASTAP observé,
-    - scan des tolérances ISO conservé/renforcé,
-    - scoring candidat enrichi avec proxy d'inliers rapides.
-  - Ajustements du center stepping Near:
-    - seuils de badness assouplis sur `eval_inliers` (>=4),
-    - correction d'un bug d'ordre d'évaluation (`eval_inliers0` utilisé avant affectation).
-- `zewcscleaner.py`
-  - Nettoyage de commentaires redondants et clarification des commentaires demandée.
-- Vérifications techniques
-  - `python -m py_compile zeblindsolver/metadata_solver.py` OK.
-  - `pytest tests/test_zeblindsolver.py -q` OK (10 passed).
-
-### Benchmarks exécutés
-
-- Benchmark ZeNear sur NGC6888 (16 images) après réintégration ASTAP-like:
-  - rapport: `reports/ngc6888_16_after_astap_like_port.json`
-  - résultat: **0/16** succès, `wall_s` ~129.48s, ~7.41 img/min.
-- Référence ASTAP CLI sur le même lot:
-  - rapport: `reports/ngc6888_16_astap_cli_probe.json`
-  - résultat: **10/16**.
-
-### Analyse produite et documentation
-
-- Audit source ASTAP-main effectué (lecture précise des unités Pascal coeur).
-- `AGENT.md` enrichi avec une section détaillée:
-  - méthode ASTAP pas à pas (constantes, fonctions, décisions),
-  - comparaison factuelle avec ZeNear actuel,
-  - écarts structurels identifiés (branches non-ASTAP + gates additionnels côté ZeSolver).
-
-### Conclusion technique à retenir
-
-- Le portage ASTAP-like a amélioré l'alignement algorithmique local, mais la parité globale n'est pas atteinte.
-- Écart principal restant: ZeNear actuel conserve encore des chemins et gates non ASTAP qui biaisent la comparaison 1:1.
-- Prochaine étape validée: implémenter un mode "ASTAP-ISO strict" réellement isolé pour benchmark de parité propre.
-
-
-## 2026-04-20 (implémentation ASTAP-ISO strict en cours)
-
-### Décision utilisateur
-- Tristan a explicitement demandé de continuer l’implémentation et la vérification (`"oui s'il te plait"`, puis `"tu peux continuer"`).
-
-### Travaux réalisés
-- Câblage complet du flag `near_astap_iso_strict` (CLI/UI/settings/runtime).
-- Retrait du hardcode `strict_astap_iso = False`.
-- En strict: neutralisation des branches non-ASTAP (pair-builder, quad-hypothesis non-ISO, RANSAC global, gates ZeMosaic/conformance).
-- Ajout de la bifurcation ASTAP `find_fit` (<180 quads) / `find_fit_using_hash` (>=180 quads).
-- Ajout du garde-fou `xy_sqr_ratio` (post-LSQ) et maintien d’une 2e passe type `match_nr`.
-- Instrumentation debug enrichie (`near_debug.jsonl`) avec événement `zenear_no_consensus`.
-
-### État mesuré
-- Tests unitaires ciblés stables: `tests/test_zeblindsolver.py` -> 10 passed.
-- Benchmark strict NGC6888 x16 au dernier état: 0/16 (écarts causaux encore ouverts sur consensus/validation).
-
-### Leçon durable
-- Le noyau strict est branché, mais la parité de résultat ASTAP n’est pas encore atteinte.
-- Le goulot n’est plus le câblage du mode strict, c’est la qualité du consensus géométrique strict sur ce lot.
-
-
-## 2026-04-20 (suite mission strict ASTAP-ISO, instrumentation causale)
-
-- Ajout d’une télémétrie de diagnostic fine dans `near_debug.jsonl` (`astap_iso_diag`) avec compteurs par tolérance et agrégats multi-appels (centers + pass2).
-- Les événements d’échec Near incluent désormais cette télémétrie (`no_transform`, `no_consensus`, `validation_fail`, `attempt`).
-- Observation terrain sur probe NGC6888:
-  - certains frames restent sans hypothèse exploitable (`ok_calls=0`),
-  - d’autres passent à une hypothèse partielle (inliers >0) mais échouent ensuite en consensus/validation (RMS trop élevé).
-- Le problème restant est désormais bien localisé: qualité géométrique des hypothèses strictes, pas manque de logs.
-
-## 2026-04-20 (ASTAP-ISO strict, convergence FOV + coût retries)
-
-### Avancées majeures
-- Le mode strict Near a été stabilisé avec conservation explicite du hint par FOV:
-  - priorité des sources FOV: `fov_override_deg` > header FITS (`FOV*`/`FIELD*`) > FOV dérivé scale,
-  - traçage dans `astap_iso_diag` via `fov_hint_source`.
-- Parité comportementale validée sur NGC6888 quand le hint FOV explicite est fourni:
-  - ZeNear strict + override per-frame = **10/16**, même partition de succès/échecs que le probe ASTAP historique.
-- Sans hint FOV explicite, le mode strict reste plus permissif/robuste sur ce lot (**16/16**), ce qui confirme que l’écart principal est lié à la stratégie FOV/windowing plutôt qu’au cœur quad/hash strict.
-
-### Implémentation technique durable
-- Retry auto-FOV strict ajouté puis durci:
-  - activé uniquement quand la source FOV est `scale` (pas d’écrasement des hints explicites),
-  - configurable (`strict_auto_fov_retry`, `strict_auto_fov_retry_scales`, `strict_auto_fov_retry_max_attempts`).
-- Optimisation coût retries:
-  - détection/skip des sous-ensembles catalogue dupliqués (`duplicate_subset`) pour éviter des appels `_astap_iso_hypothesis` redondants,
-  - ordre par défaut retuné des scales: `(1.25, 0.82, 1.6, 0.65, 2.4, 4.0)`.
-
-### Validation
-- `py_compile` OK.
-- `pytest -q tests/test_zeblindsolver.py` OK (10 passed).
-- Rapports clés générés:
-  - `reports/ngc6888_16_strict_fov_alignment_summary_v1.json`,
-  - `reports/ngc6888_16_strict_auto_fov_retry_v1.json`,
-  - `reports/ngc6888_16_strict_auto_fov_retry_tuned_defaults_v1.json`,
-  - `reports/ngc6888_16_strict_auto_fov_retry_smart_cost_v1.json`.
-
-### État global à retenir
-- Le cap produit demandé est tenu: hint FOV explicite conservé et prioritaire.
-- Le mode strict est désormais instrumenté et configurable pour piloter finement le compromis parité/coût.
-- Prochaine marche: déclenchement auto-FOV encore plus contextuel (piloté par `astap_iso_diag`) et validation sur lots multi-champs/capteurs.
-
-## 2026-04-20 (ASTAP-ISO strict, étape contextuelle)
-
-### Ce qui a été ajouté
-- Déclenchement auto-FOV strict désormais contextuel:
-  - activé seulement si `fov_hint_source=scale` (les hints FOV explicites restent prioritaires),
-  - retry conditionné par un support minimal (`stars_img>=24`, `quads_img>=3`),
-  - si l’hypothèse initiale n’a aucun indice (`best_refs=0` et `matches_raw=0`), ordre expansion-first + budget contextuel.
-- Nouveau garde-fou coût:
-  - `strict_auto_fov_retry_zero_ref_patience=3` (arrêt anticipé après zéro-refs répété),
-  - `strict_auto_fov_retry_max_attempts` conservé,
-  - skip `duplicate_subset` maintenu.
-
-### Impact mesuré
-- NGC6888 inchangé (bon signe de stabilité):
-  - strict sans hint explicite: 16/16,
-  - strict avec hint explicite per-frame: 10/16 aligné ASTAP (même partition).
-- Validation large (24 FITS multi-sources):
-  - strict retry ON: 23/24,
-  - strict retry OFF: 22/24,
-  - coût retry réduit (appels effectifs 9 -> 6 sur ce lot après garde-fou contextuel).
-
-### État durable
-- Le mode strict conserve la priorité du hint FOV explicite tout en gagnant une logique de retry plus intelligente.
-- On a maintenant un compromis robuste coût/fiabilité sur lots mixtes, avec instrumentation suffisante pour verrouiller des tests de non-régression dédiés.
-
-## 2026-04-20 (non-régression stricte FOV/retries verrouillée)
+- 2026-04-30 (A2-v13): ajout d’un guardrail géométrique précoce sur inliers provisoires (`inlier_count>=8`) pour rejeter plus tôt les hypothèses colinéaires. Gates OK (`py_compile`, `pytest` 2/2). Probe strict hinted: détection effective (`a2v13_geo_early_rejects=1`) mais résultat final inchangé (quasi-candidat dégénéré toujours rejeté). Le levier suivant doit agir en amont sur la construction des correspondances, pas uniquement sur les gates de rejet.
 
-### Ce qui a été verrouillé
-- Ajout de tests unitaires dédiés dans `tests/test_metadata_solver.py` pour garantir dans la durée:
-  - priorité des sources FOV (`override` > `header` > `scale`),
-  - activation des retries auto-FOV uniquement en contexte `scale` et support suffisant,
-  - arrêt anticipé sur répétition zéro-refs (`zero_refs_patience`).
+- 2026-04-30 (A2-v14): ajout d’un guard footprint 2D à l’acceptation `post_resolve`. Gates OK (`py_compile`, `pytest` 2/2). Probe strict hinted: le set post-resolve dégénéré est bien rejeté (`a2v14_postresolve_reject_footprint=1`, `post_resolve_hits=0`), mais une autre voie alimente encore la quasi-solution colinéaire (`nummatches=1`, rejet géométrique final inchangé). Prochaine action: imposer la même contrainte en amont sur `reassign_eval`/inlier-mask.
 
-### Validation
-- `pytest -q tests/test_metadata_solver.py` : 5 passed.
-- `pytest -q tests/test_zeblindsolver.py tests/test_metadata_solver.py` : 15 passed.
+- 2026-04-30 (A2-v15): extension du guard footprint 2D à la voie inliers globale (inlier_mask/reassign_eval/resolve_hit). Gates OK (`py_compile`, `pytest` 2/2). Probe strict hinted: rejet capturé (`a2v15_inlier_footprint_rejects=1`) et `post_resolve_hits=0`, mais pas de solve final (`nummatches=1`, rejet géométrique). Conclusion: les guards sont en place; la prochaine progression doit cibler la construction de correspondances non-colinéaires en amont.
 
-### Leçon durable
-- Les comportements critiques de parité strict (hint FOV explicite et retries contextuels) ne reposent plus uniquement sur validation manuelle/bench:
-  ils sont désormais couverts par des tests automatisés de non-régression.
+- 2026-04-30 (A2-v16): ajout d’un préfiltre anti-colinéaire avant hypothèse (footprint check + tentative de pruning extrêmes x/y). Gates OK (`py_compile`, `pytest` 2/2). Probe strict hinted: exécution confirmée (`a2v16_prefilter_checks=10`) mais aucun pruning appliqué (`pruned=0`), issue inchangée (`nummatches=1` puis rejet géométrique). Conclusion: il faut agir sur la génération de paires initiale, pas seulement filtrer après coup.
 
-## 2026-04-20 (benchmark multi-champs strict vs non-strict)
+- 2026-04-30 (A2-v17): ajout d’un mécanisme de diversité spatiale dans `_collect_tile_matches` (top-votes + extrêmes x/y) pour tenter d’éviter les sets de paires colinéaires dès la génération. Gates OK (`py_compile`, `pytest` 2/2). Probe strict hinted: issue inchangée (`nummatches=1` puis rejet géométrique colinéaire). Conclusion: nécessité d’un debug ciblé candidat/tile (`d50_0819`) pour comprendre la source exacte de la dégénérescence persistante.
 
-### Fait
-- Run comparatif ZeNear sur 56 brutes uniques (pool total disponible: 86 fichiers, 56 uniques par basename).
-- Configuration: backend CPU, `k_sigma=4.5`, `min_area=8`, `max_labels=1200`.
+- 2026-04-30 (A2-v18/A2-v18b): debug ciblé sur `d50_0819` confirmé (coverage extrêmement faible, inliers colinéaires) puis skip expérimental après premier hit dégénéré. Gates OK (`py_compile`, `pytest` 2/2). Effet: légère baisse du coût local (`post_resolve_attempts`), mais résultat final inchangé (`nummatches=1` puis rejet géométrique). Conclusion: problème systémique de construction d’hypothèses, pas simple blacklist d’un candidat.
 
-### Résultat clé
-- `astap_iso_strict=True` (strict): 45/56, ~25.55 img/min.
-- `astap_iso_strict=False` (non-strict): 0/56, ~1.64 img/min.
-- Le strict domine nettement ce lot, y compris sur NGC6888 où il dépasse l’oracle ASTAP historique (16/16 vs 10/16 sur le probe existant).
+- 2026-04-30 (A2-v19): ajout d’une réparation globale de dispersion (sous-ensemble extrêmes x/y + RANSAC dédié) quand le footprint inliers est insuffisant. Gates OK (`py_compile`, `pytest` 2/2). Probe strict hinted: tentative exécutée (`a2v19_spread_repair_attempts=1`) mais sans réussite (`hits=0`), issue inchangée (`nummatches=1` puis rejet géométrique).
 
-### Interprétation prudente
-- L’écart massif strict/non-strict suggère une régression ou un mode non-strict aujourd’hui hors envelope sur ces données réelles.
-- Priorité suivante: diagnostic ciblé du chemin non-strict (pourquoi 0/56) avant d’en faire un mode de fallback produit.
+- 2026-04-30 (A2-v20): production d’un packet ZeBlind structuré (`reports/zeblind_a2v20_compare_packet_20260430.json`) + diff face à une WCS Astrometry de référence. Signal clé confirmé: quasi-candidat ZeBlind reste à ~179.8"/px contre ~2.372"/px (écart ~75.8x), aligné avec la dégénérescence colinéaire et les rejets géométriques finaux.
 
-## 2026-04-20 (non-strict: itération seuils RMS terminée)
+- 2026-04-30 (A2-v21): export ciblé du candidat `d50_0819` (snapshot brut des paires) en NPZ/JSON. Résultat marquant: le set brut capturé (6 paires) présente un footprint large et un conditionnement modéré, donc la dégénérescence colinéaire observée en fin de chaîne semble émerger plus tard (phase de réassignation/filtrage final des inliers), pas au point de collecte brut.
 
-### Diagnostic durable
-- Cause principale du 0/56 non-strict confirmée: gate de validation RMS trop dur (`quality_rms=1`), avec majorité d'échecs en `validation_fail` plutôt qu'en `no_transform`.
+- 2026-04-30 (A2-v22): traçage 3 états sur `d50_0819` (`raw -> post_reassign -> final_guard`) réalisé. Signal clé: `raw` est spatialement étalé (bbox large, cond modéré) alors que `final_guard` est ultra-colinéaire (cov_area ~5e-6, cond ~5e14). Le collapse se produit donc pendant la construction des inliers/matches avant le guard final.
 
-### Sweep multi-champs (56 brutes uniques)
-- Projection depuis run de référence non-strict `quality_rms=500`:
-  - RMS 10 -> 4/56
-  - RMS 30 -> 7/56
-  - RMS 100 -> 24/56
-  - RMS 160 -> 33/56
-  - RMS 220 -> 49/56
-  - RMS 500 -> 52/56
-- Mais qualité des solves additionnels dégradée quand le seuil monte (RMS médian ~127.8 px, max ~422 px): gain de taux au prix d'un risque fort de faux positifs.
+- 2026-04-30 (A2-v23): instrumentation ciblée confirme que le collapse colinéaire est déjà acquis avant validation WCS (`pre_validate_inlier_mask`) et que la source de ce set est `reassign_eval` (12 inliers, cond ~5e14). Conclusion durable: l’anomalie principale est dans la logique de réassignation d’inliers, pas dans `_build_matches_array` ni le geometric guard final.
 
-### Règle pratique à retenir
-- Non-strict doit rester un mode de rescue avec profils explicites (safe/balanced/aggressive), pas un mode par défaut unique tant qu'on n'a pas un garde-fou qualité plus robuste que le simple seuil RMS global.
+- 2026-04-30 (A2-v24): instrumentation `reassign_eval` ajoutée. Le set final colinéaire (12 points) est confirmé en provenance logique `reassign_eval`, mais la branche locale principale mesurée peut afficher `in_re0=0`, suggérant que la source de ce set passe parfois par un autre path de réassignation. Le prochain verrou est donc la désambiguïsation stricte des chemins qui écrivent `reassign_src_idx/reassign_dst_idx`.
 
+- 2026-04-30 (A2-v25): désambiguïsation des chemins de réassignation terminée. Le set colinéaire final sur `d50_0819` est confirmé comme issu de `reassign_eval_main` (et non d’un path `resolve_hit`). Cette localisation ferme l’ambiguïté de provenance et cible directement la logique interne de sélection de `reassign_eval_main` pour la suite.
 
-## 2026-04-21 (clôture scope ASTAP-gap + préparation scale-up)
+- 2026-04-30 (A2-v26): ajout d’un garde-fou de dispersion avant acceptation `reassign_eval_main`. Sur le cas `d50_0819`, le set reassign dégénéré est bien refusé (`reassign_eval_accept=false`), mais l’échec final persiste via `inlier_mask` déjà colinéaire. Implication durable: la cause racine est en amont de `reassign_eval`, dans la construction du masque d’inliers initial.
 
-### Accompli
-- Mission parité ASTAP-ISO strict considérée accomplie pour le scope actuel.
-- Validation side-by-side confirmée sur co-solves NGC6888 avec écarts faibles:
-  - centre médian ~3.14",
-  - scale médian ~0.0034%,
-  - rotation médiane ~0.291°.
-- Lot manuel M106 mixte 50/50 préparé pour ZeMosaic:
-  - `/home/tristan/zemosaic/example/testzenear/`
-  - 15 ZeNear + 15 ASTAP, WCS injecté et manifest/audit produits.
+- 2026-04-30 (A2-v27): instrumentation de la genèse `inliers_mask` ajoutée (tolérance + quantiles d’erreur + footprint). Constat durable: le set inliers survivant reste ultra-colinéaire (cov_area ~5.3e-6) même quand `reassign_eval` est refusé. La correction doit donc cibler le flux `inlier_mask`/`img_in` lui-même via un garde-fou couverture et fallback candidat.
 
-### Leçon durable
-- Pour éviter le biais de comparaison solveur, il faut retirer les cartes WCS/SOLVER avant A/B puis résoudre à nouveau sur copies.
-- Les conclusions produit doivent distinguer explicitement deux cas:
-  - pipeline avec recalage stellaire aval (tolérance plus large),
-  - pipeline WCS-only (sensibilité accrue aux écarts angulaires/échelle en bord de champ).
+- 2026-04-30 (A2-v28): ajout d’un guard coverage précoce sur `inlier_mask`/`img_in`. Effet validé: le faux quasi-candidat colinéaire est stoppé avant validation (plus de rejet géométrique final), mais sans alternative immédiate (`nummatches` retombe à 0). Le prochain levier est un fallback explicite vers d’autres candidats après ce rejet coverage.
 
-### Nouveau cap prioritaire
-- Basculer la mission sur le scale-up 1k-10k images (débit + robustesse long-run) plutôt que continuer du micro-ajustement strict.
+- 2026-04-30 (A2-v29): fallback policy ajustée pour coverage reject (continuer l’exploration sans consommer le budget d’abort global low-support). Résultat: pas d’amélioration sur le cas cible (`hypothesis failed before validation`, `nummatches=0`). Implication: il faut maintenant injecter de la diversité d’hypothèses locale après reject plutôt que simplement passer au candidat suivant.
 
+- 2026-04-30 (A2-v30): implémentation d’un retry local diversifié après coverage reject (points extrêmes + refit robuste). Effet observé: le pipeline sort du blocage `nummatches=0` et repasse à `nummatches=1` avec rescue actif, mais échoue ensuite en validation RMS massive (~1102 px). Le verrou suivant est de filtrer les rescues non plausibles (RMS/échelle) avant verify.
 
-## 2026-04-21 (optimisation ZeNear M106, lot 50, phase ASTAP-vs-ZeNear)
+- 2026-04-30 (A2-v31): ajout d’un garde-fou de plausibilité RMS post-rescue (après A2-v30). Les rescues locaux aberrants sont désormais rejetés (RMS observé ~1116 px), ce qui assainit le flux mais ramène le cas à `nummatches=0`. La suite doit créer des hypothèses alternatives plausibles, pas seulement filtrer les mauvaises.
 
-### Résultats durables
-- Benchmark mono-champ M106 x50 stabilisé avec succès `50/50` ASTAP et `50/50` ZeNear.
-- Après optimisation (skip background en backend ASTAP + caches catalogue/lookup), ZeNear est passé d’environ `~2.50s` médian à une plage observée `~0.64–0.81s` médian selon run, tout en conservant la cohérence WCS (center/scale/rotation inchangés vs ASTAP).
+- 2026-04-30 (A2-v32): diversification des candidats implémentée via `candidate_limit_runtime` adaptatif après rejects coverage. Sur le probe cible, l’échec dominant se rapproche d’un cas solvable (validation borderline RMS 2.45 px avec inliers 4/4) plutôt que des collapses colinéaires extrêmes, ce qui ouvre une piste de rescue fine sur seuils borderline sous garde-fous stricts.
 
-### Décisions techniques retenues
-- Le coût dominant restant est `metadata_solver._detect_stars_astap_cli` (process externe ASTAP extract).
-- Un essai de downsample pré-extract ASTAP (binning x2 via FITS temporaire) a été implémenté en option mais s’est montré défavorable sur M106 (A/B 15 images: `bin1 ~1.04s` vs `bin2 ~1.38s` médian).
-- Décision: garder cette voie **désactivée par défaut** (`astap_extract_bin_factor=1`), sans l’imposer tant qu’une version sans surcoût I/O n’est pas disponible.
+- 2026-04-30 (A2-v33): ajout d’un pass strict de rescue RMS borderline avant acceptation (inliers + géométrie). Sur le cas cible, le mécanisme ne s’est pas activé et le meilleur rejet reste un borderline RMS avec échelle modèle non plausible (~11.62"/px vs attendu ~2.39"/px). Orientation suivante: filtrage de plausibilité d’échelle plus en amont.
 
-### Artefacts de référence
-- Bench x50: `reports/astap_vs_zenear_m106_mono_50_20260421_100613/`, `..._101821/`, `..._101947/`
-- Profil x15: `reports/profile_zenear_hotspots_m106_15_20260421_102117/`
 
-- A/B strict x15 backend détection: `astap` reste meilleur que `cpu` sur M106 (astap ~0.81s médiane, 15/15; cpu ~1.61s, 14/15), donc garder `detect_backend=astap` pour ce profil.
+- 2026-05-04 (A2-v34): ajout d’un garde-fou de plausibilité d’échelle **avant validation** pour hypothèses low-pairs (`<=10`) dans `zeblindsolver.py`, avec ratio modèle/ancre borné par défaut à `[0.35, 3.20]`. Instrumentation runtime ajoutée (`a2v34_scale_plausibility_*`). Gates techniques OK (`py_compile`, `pytest tests/test_backend_select.py tests/test_failures.py`). Probe runtime ciblé `RAW_Zenear_reference_001_...233459.fit` exécuté (`reports/zeblind_a2v34_probe_20260504.json`): échec solve maintenu (`success=0/1`), mais patch intégré sans régression de compilation/tests.
 
-- GUI ZeSolver: début du nettoyage post-virage, le mode simple masque désormais dynamiquement les options solver avancées (hints/search/formats/famille), avec resynchronisation Easy/Expert.
+- 2026-05-04 (A2-v35): itération post A2-v34 orientée exploration plutôt que rejet sec. Ajout d’un mode par défaut où les rejects `a2v34 scale plausibility` ne consomment plus automatiquement `failed_validations` (`blind_a2v35_scale_reject_counts_as_validation=false`) + boost de `candidate_limit_runtime` piloté par le volume de rejects scale (`blind_a2v35_scale_reject_candidate_boost_*`). Gates techniques OK (py_compile + 2 tests ciblés). Probe runtime comparatif (`zeblind_a2v35_probe_20260504.json`) sur le cas RAW ZeNear ref: solve-rate inchangé (0/1), candidats inchangés (40), temps légèrement plus lent; direction suivante = améliorer la génération d’hypothèses plausibles amont.
 
-- GUI cleanup (phase 2): en mode Easy, l’onglet Settings cache désormais les groupes experts (presets/FOV/reco/blind tuning) et les actions diagnostics Run blind/Run near; ces éléments restent disponibles en mode Expert.
+- 2026-05-04 (A2-v36): ajout d’un mécanisme amont `guided inlier expansion` pour hypothèses à échelle plausible avant échec `empty/too_few inliers` (tolérance guidée + garde coverage). Nouveaux flags `blind_a2v36_guided_inlier_expand_*` et métriques `a2v36_guided_expand_*`. Gates techniques OK (`py_compile`, tests ciblés 2/2). Probes runtime (`zeblind_a2v36_probe_20260504.json`, `zeblind_a2v36_probe2_20260504.json`) sans déblocage solve-rate (0/1 puis 0/2), direction suivante maintenue: contraindre la fabrication d’hypothèse par l’échelle attendue.
 
-- Début de modularisation GUI: logique de visibilité Easy/Expert extraite dans `zesolver/gui_profiles.py`, avec `zesolver.py` allégé et prêt pour extraction progressive des tabs.
+- 2026-05-04 (A2-v37): ajout d’un `scale-guided seed refit` pour hypothèses low-inliers à ratio d’échelle plausible (`blind_a2v37_seed_refit_*`) avec instrumentation dédiée (`a2v37_seed_refit_*`). Gates techniques OK (`py_compile`, tests ciblés 2/2). Probe runtime `reports/zeblind_a2v37_probe_20260504.json`: solve-rate inchangé (0/1) mais baisse du temps de tentative sur le cas cible (~57.72s vs ~67.29s sur A2-v36 à protocole identique), indiquant un gain de coût local sans déblocage solve.
 
-- Modularisation GUI (suite): section Blind tuning de l’onglet Settings extraite dans `zesolver/gui_settings_sections.py` (`build_blind_group`), validation syntaxe OK.
+- 2026-05-04 (pivot méthodologique appliqué): comparaison ZeBlind vs Astrometry online exécutée sur `RAW_Zenear_reference_001_...233459.fit` avec clé API locale (`~/.zesolver_settings.json`). Résultat mesuré: Astrometry `OK` ~20.44s vs ZeBlind `ERR` ~182.26s (`reports/zeblind_vs_astrometry_online_20260504_single_233459.json`). Trace différentielle locale générée (`reports/zeblind_vs_astrometry_diff_20260504_233459.md`) confirmant un blocage amont `hypothesis/empty_inliers`. Mission files mis à jour (`AGENT.md`, `followup.md`) avec découpage complet des étapes manquantes jusqu’à la parité stricte.
 
-- Modularisation GUI (phase 4): Presets/FOV/Reco de l’onglet Settings extraits dans `zesolver/gui_settings_sections.py` (`build_presets_fov_reco_groups`), compile check OK.
+- 2026-05-04 (A2-v38, cohérence logique Astrometry): activation par défaut dans `SolveConfig` des chemins `blind_astrometry_hit_pipeline_first_enabled` et `blind_astrometry_hit_pipeline_dedicated_enabled` pour privilégier la chaîne Astrometry-like avant fallback legacy. Gates OK (`py_compile`, tests ciblés 2/2). Probe `reports/zeblind_a2v38_probe_20260504.json`: solve-rate inchangé (0/1), mais activations pipelines dédiés confirmées (381 sur run direct), donc alignement structurel effectif.
 
-- Modularisation GUI (phase 5): callbacks Settings (preset apply, browse/save/build/run, sync DB tab) déplacés vers `zesolver/gui_settings_sections.py`; `zesolver.py` raccourci et compile check OK.
+- 2026-05-04 (A2-v39): pour coller à la logique Astrometry et éviter la boucle fine-tuning, désactivation par défaut de trois heuristiques A2 ad-hoc (`a2v34`, `a2v36`, `a2v37`) tout en gardant les pipelines Astrometry-like activés par défaut. Gates OK (`py_compile`, tests 2/2). Probe `zeblind_a2v39_probe_20260504.json`: solve-rate inchangé (0/1), perf proche de A2-v38. Export stage-by-stage oracle ajouté (`zeblind_stage_trace_oracle_233459_20260504.json`) pour M0.2.
 
-- Après extraction callbacks Settings, suppression d’un doublon de layout (`column.addLayout(form)` appelé deux fois dans `_build_settings_tab`) pour réduire le bruit/risque UI; compile check OK.
+- 2026-05-04 (M0.3/M0.4): miroir Astrometry détaillé généré pour le cas oracle (`astrometry_mirror_trace_233459_20260504.json`) avec timeline soumission/job + endpoints calibration/info. Rapport machine-readable de divergence ajouté (`zeblind_astrometry_divergence_233459_20260504.json`) confirmant la divergence la plus précoce côté ZeBlind: collapse `hypothesis/empty_inliers` avant verify. Checklist M0 clôturée dans `followup.md`.
 
-- Démarrage suppression code mort: retrait du widget legacy `preset_warning_label` (jamais visible) et des clés i18n orphelines `spec_warning_unknown`; compile check OK.
+- 2026-05-04 (M1.1a): patch causal unique appliqué pour garder le `code_rangesearch` actif par défaut (`blind_astrometry_code_rangesearch_adapt_disable_enabled=false`). Effet mesuré sur oracle 233459: disparition du cut auto (`auto_disabled 24->0`) et forte remontée du signal amont (`rangesearch_hits 0->1760`, `code_hit_objects_total 0->10312`), avec légère baisse de `empty_inliers` en `scale_only` (21->20). Solve-rate toujours 0/1 à ce stade, coût bench en hausse; prochaine cible = transformer ce signal en validations utiles.
 
-- Nettoyage code mort GUI: suppression de deux méthodes orphelines (`_gather_candidate_files`, `_refresh_file_list`) après vérification de non-référence, avec compile check OK et scan local sans méthode ZeSolverWindow orpheline restante.
+- 2026-05-04 (M1.1b): tentative bootstrap post-resolve renforcée (pass relaxé + refit sparse) avec instrumentation de distribution des paires. Outcome oracle: pas de solve, mais diagnostic causal plus net: chemin `post_resolve` plafonne à `fail_pairs_max=2`, empêchant d’atteindre le seuil inliers pour verify; `refit_inliers_max=0` sur ce chemin. Décision: déplacer l’effort vers M1.2 (fabrication des correspondances `resolve_matches`) plutôt que continuer à ajuster verify/seuils.
+- 2026-05-04 (M1.2 retry gate): activation systématique du retry relaxé post-resolve testée; résultat oracle inchangé (0 hit relaxé, `fail_pairs_max=2`). Apprentissage: le verrou n’est pas la condition `upstream_pair_rescue_hits`; la prochaine cible est la qualité/justesse de l’hypothèse (`rot_scale/translation`) avant `resolve_matches`.
+- 2026-05-04 (M1.4): ajout d’un bootstrap de refit indexé (pair-order) quand l’hypothèse tombe sous 4 inliers. Impact reproductible sur oracle: baisse `empty_inliers` (20->16), apparition de `post_resolve_hits` (3) et sortie du mode "hypothesis-only" vers des échecs en validation (RMS élevé ~18 px). Interprétation: progression causale réelle, prochain verrou = qualité géométrique des hypothèses refitées.
+- 2026-05-04 (M1.5): trois essais orientés baisse RMS (refit post-resolve, refit pré-WCS, assouplissement local retry low-pairs) n’ont pas montré de gain stable sur oracle; rollback effectué pour garder une base propre M1.4. État conservé: entrée verify partielle (post_resolve_hits=3) mais échec dominant en validation RMS (~18.486px pour 4 inliers).
+- 2026-05-04 (strict astrometry verify path): ajout d’un mode strict qui court-circuite des garde-fous maison sur le chemin resolve-hit (coverage reject a2v28, match_object_expand, conflict_resolution). Effet: `strict_verify_path_hits=3` et disparition des rejets coverage sur ce chemin, mais échec final inchangé en validation RMS (~18.486 pour 4 inliers). Conclusion durable: l’écart principal restant est la qualité des correspondances low-pairs en entrée `validate_solution`, pas les filtres de vérification ajoutés autour.
 
-- Nettoyage code mort étendu au core solveur: suppression de `ImageSolver._try_blind_shortcut` (non référencée), plus aucune occurrence des méthodes mortes retirées (`_try_blind_shortcut`, `_gather_candidate_files`, `_refresh_file_list`), compile check OK.
+- 2026-05-04 (Astrometry exact trace): ajout d’un dump décisionnel exact `zeblind.astrometry_exact_trace.v1` (combos/perm/metrics brut+final/décision), plus gate strict d’échelle quad en mode astrometry strict.
+- Probe 233459: rejet massif en amont côté Astrometry (`astrometry_quad_scale_gate_rejects` très élevé), avec reliquat de `skip_zero_inliers`; conclusion durable = dérive d’échelle principalement générée dès la construction des hypotheses quads, avant validate.
+- 2026-05-04 (collect trace approfondie): ajout d’un dump exact `_collect_tile_matches` avec provenance des votes (`support_sample` incluant `obs_hash`/`obs_quad_idx`/bucket/indices étoiles). Constat durable: plusieurs `obs_hash` saturés produisent des collisions massives (dizaines de milliers de buckets, >1k tiles), corrélées à la dérive d’échelle des pairsets.
+- 2026-05-04 (expérimentation contrôlée): mode opt-in `blind_collect_skip_saturated_hashes_enabled` testé; activé, il coupe quasi toute collecte (`pairing failed` + `no_votes`), ce qui confirme le poids causal des hashes saturés. Gardé désactivé par défaut pour préserver baseline.
 
-- Passe i18n ultra-safe réalisée: retrait de 10 clés de traduction orphelines (database_label, settings.cancel, solver.run.batch, astrometry submit/polling/job status) avec validation compile OK; les clés restantes à faible fréquence sont toutes utilisées via patterns dynamiques.
+- 2026-05-04 (strict probe 233459): added astrometry exact trace enrichment (`obs_quad_idx`, `obs_hash`, `obs_q`) + diagnostic-only quad-scale guard mode. Evidence shows frequent saturated observed hash components (notably q2=65535) on flagged hypotheses and transform precheck model scales far outside expected [1.79,2.99] (roughly 176..4359 arcsec), confirming scale-coherence failure as primary blocker.
 
-- Amélioration UX GUI validée: rétablissement des updates progressives en local via callback `on_result` (émission au fil de l’eau), ajout d’un lissage temps réel de la progress bar (timer 400ms), et copie automatique du log de run dans le dossier de sortie.
+- 2026-05-05 (Astrometry-conform strict pass): strict mode now disables non-astrometry hypothesis fallbacks by default (`blind_astrometry_strict_disable_nonastrometry_fallbacks=true`), uses global star pools for reassignment verify in astrometry path, and restores hard quad-scale guard (`blind_astrometry_quad_scale_guard_enabled=true`). On probe 233459 this removed many off-scale hypotheses early and reduced zero-inlier skips, but final blocker remains strict scale prefilter failures.
 
-- Ajustement logique backend GUI: local devient le défaut effectif, et le pipeline local applique désormais un fallback en 3 étages (ZeNear, puis ZeBlind, puis Astrometry uniquement si clé API disponible), avec progression GUI sans double comptage des fichiers.
-
-
-## 2026-04-22 -> 2026-04-23 (consolidation followup + AGENT)
-
-### Décisions produit confirmées
-- Cap validé avec Tristan: **protéger ZeNear** et concentrer les optimisations en **blind-only ZeBlind**.
-- Mission parité ASTAP-ISO (scope précédent) confirmée clôturée; nouveau cap prioritaire = throughput/robustesse lot massif.
-
-### Avancement ZeBlind confirmé
-- P0/P0bis/P1/P2/P3/P4/P5/P6 implémentés avec instrumentation et garde-fous (feature flags + logs causaux).
-- P4 depth ladder livré sous contraintes (caps 80/160/500, cap stage1, OFF en rescue, activation `degraded` uniquement).
-- P5 log-odds livré sous flag, conservé **OFF par défaut** (gain temps smoke mais risque solve-rate).
-- P6 budgets durs + tuning low-signal rescue2 livrés, puis seuils rendus plus conservateurs (`best_fail_inliers<=3`).
-
-### Résultats de validation (référence lot M106)
-- Baseline complète: `zesolver_run_20260423_091723_patch30s.cli.log` -> **29/30**, **718.2s**.
-- Candidate blind-only validée: `zesolver_run_20260423_163025_cand_lowsignal_full30_overwrite_REALPATH.cli.log` -> **29/30**, **693.3s**.
-- Échec inchangé: `...233232.fit`.
-- Delta validé: **-24.9s** à solve-rate identique (rapport `reports/zeblind_fullrun_compare_20260423_164257.md`).
-- Position utilisateur confirmée: run complet satisfaisant, candidat crédible pour **v1.0.0**.
-
-### Versioning + UX + cross-platform
-- Titre GUI versionné centralement via `APP_VERSION` (`pyproject.toml`) avec suffixe automatique `Vx.y.z` dans toutes les langues.
-- Icônes ZeSolver intégrées:
-  - assets générés: `icon/ZSicon.ico`, `icon/ZSicon.png`, `icon/ZSicon.icns` depuis `ZSicon.jpeg`,
-  - application icône au niveau `QApplication` + fenêtre GUI,
-  - sélection d’icône par OS (win/mac/linux) + compat runtime packagé (`sys._MEIPASS`).
-- Préflight macOS ajouté: `zesolver/macos_preflight.py` (imports, process pool, `zesolver.py --help`).
-- Packaging PyInstaller ajouté: `packaging/pyinstaller/build.py`, `packaging/pyinstaller/convert_icon.py`, docs associées.
-- README mis à jour (preflight macOS, packaging multi-OS, workflow icônes, checklist release v1.0.0).
-
-### État actif pour prochaine itération
-- Backlog blind-only restant prioritaire: P7 (parity lock fiable) et P8 (uniformisation/dédup verify).
-- Garder ZeNear stable/non-régressé pendant toute suite d’optimisation ZeBlind.
+- 2026-05-05 (audit Astrometry 2e passe): revue approfondie reconduite sur `astrometry-main` avec re-cartographie des appels (`solver/verify/tweak/onefield/engine`). Conclusion validée: pas de manque structurel nouveau sur le cœur `solver_run -> verify_hit -> solver_tweak2/reverify`, mais couverture étendue obligatoire sur les chemins connexes (verify-only/fake_match/predistort+pixel_xscale/entrypoints wrappers).
+- 2026-05-05 (mission checklist): `followup.md` enrichi avec une section dédiée `R8.6` pour verrouiller ces coins connexes critiques + item wrappers (`control-program.c`, `solver.i`) afin d’éviter tout angle mort de parité.
+- 2026-05-06 (R8.1 bloc 1): implémentation du noyau verify séquentiel Astrometry-like dans `zeblindsolver.py` via `_astrometry_verify_sequence_logodds` + états `THETA_*` + logique conflit/remplacement + cumul log-odds avec seuils bail/stop-looking.
+- 2026-05-06 (R8.1 bloc 1): branchement activé sur le chemin strict verify (`blind_astrometry_verify_sequential_enabled`, défaut actif), avec fallback conservé vers l’ancien scoring probabiliste hors strict.
+- 2026-05-06 (preuve immédiate): `python3 -m py_compile zeblindsolver/zeblindsolver.py` OK + smoke test synthétique documenté (`reports/r8_1_block1_20260506_0022.md`).
+- 2026-05-06 (R8.1 bloc 2): propagation des états `THETA_*` dans les traces ZeBlind via compteurs `prob_theta_*_total` et câblage vers `verify_hit_trace`, `astrometry_match_objects` et `verify_trace` (`theta_counts` transmis à `_update_verify_logodds`).
+- 2026-05-06 (R8.1 bloc 2, preuve): compile OK + smoke test synthétique montrant comptage explicite des états (`match/conflict/distractor/bailedout/stoppedlooking`). Rapport: `reports/r8_1_block2_20260506_0026.md`.

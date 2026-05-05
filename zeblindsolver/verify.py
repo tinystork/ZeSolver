@@ -101,7 +101,17 @@ def validate_solution(
         }
 
     scale_arcsec = float(scale_deg * 3600.0)
-    if scale_arcsec < 0.3 or scale_arcsec > 15.0:
+    try:
+        scale_min = float(thresholds.get("scale_min_arcsec", 0.3))
+    except Exception:
+        scale_min = 0.3
+    try:
+        scale_max = float(thresholds.get("scale_max_arcsec", 15.0))
+    except Exception:
+        scale_max = 15.0
+    scale_min = max(0.05, scale_min)
+    scale_max = max(scale_min + 1e-6, scale_max)
+    if scale_arcsec < scale_min or scale_arcsec > scale_max:
         return {
             "quality": "FAIL",
             "success": False,
@@ -141,12 +151,27 @@ def validate_solution(
         }
 
     rms_px = float(np.sqrt(np.mean((residuals_px[inlier_mask]) ** 2)))
-    success = rms_px <= float(thresholds.get("rms_px", 1.0)) and n >= int(thresholds.get("inliers", 60))
+    rms_thr = float(thresholds.get("rms_px", 1.0))
+    inlier_thr = int(thresholds.get("inliers", 60))
+    rms_ok = bool(rms_px <= rms_thr)
+    inliers_ok = bool(n >= inlier_thr)
+    success = bool(rms_ok and inliers_ok)
+    reason = None
+    if not success:
+        reason = f"validation_failed[rms_ok={int(rms_ok)},inliers_ok={int(inliers_ok)},rms={rms_px:.3f},rms_thr={rms_thr:.3f},inliers={n},inliers_thr={inlier_thr}]"
     return {
         "quality": "GOOD" if success else "FAIL",
         "success": success,
+        "reason": reason,
         "rms_px": rms_px,
         "inliers": n,
         "inliers_raw": int(matches.shape[0]),
         "pix_scale_arcsec": scale_arcsec,
+        "rms_threshold_px": rms_thr,
+        "inliers_threshold": inlier_thr,
+        "gate_rms_ok": rms_ok,
+        "gate_inliers_ok": inliers_ok,
+        "robust_tol_px": float(robust_tol),
+        "median_residual_px": float(med),
+        "mad_residual_px": float(mad),
     }
