@@ -376,6 +376,56 @@ Pour éviter les boucles de tests/fine-tuning:
 - limiter les probes à la validation d’un changement causal unique;
 - documenter explicitement pourquoi une itération est structurelle et non tuning.
 
+### Linear-first / Transverse-safe method (2026-05-14)
+
+Objectif: avancer sans s’éparpiller **et** éviter les régressions croisées.
+
+1. **Investigation linéaire (descente par étage)**
+   - Travailler un seul étage de rupture à la fois (ex: `runtime -> pre-callback -> callback`).
+   - Ne pas ouvrir un nouvel étage tant que l’étage courant n’a pas une preuve causale claire.
+
+2. **Delta causal unique**
+   - Une itération = un seul changement causal.
+   - Pas de mélange de patchs structurels + tuning dans la même passe.
+
+3. **Double gate obligatoire après chaque delta**
+   - **Gate A (local):** l’étage ciblé s’améliore réellement.
+   - **Gate B (transversal):** pas de régression sur un pack sentinelle fixe (mêmes cas/protocole/métriques).
+   - Si Gate B échoue: rollback immédiat.
+
+4. **Point d’entrée ISO verrouillé**
+   - Conserver un harness stable C vs ZeBlind (mêmes RAW, mêmes caps, WCS-strip, même protocole).
+   - Toute conclusion de parité doit être basée sur ce point d’entrée commun.
+
+5. **Preuve avant patch suivant**
+   - Avant de patcher l’étage N+1: publier un rapport diffable de l’étage N (cause, métriques, verdict GO/NO-GO).
+
+### First-divergence mirror-trace protocol (2026-05-14)
+
+Quand plusieurs deltas causaux restent NO-GO, **arrêter les perturbations globales** et pivoter vers une isolation stricte de la première divergence C↔ZeBlind.
+
+1. **Un seul RAW sentinelle d’abord**
+   - Travailler d’abord sur 1 RAW (cas dominant) en `hinted_wide`.
+   - Ne pas relancer le pack 4 RAW tant que la première divergence locale n’est pas explicitement identifiée.
+
+2. **Trace miroir candidate-par-candidate**
+   - Produire une trace ZeBlind détaillée (accept/reject + raison + métriques) sur la même fenêtre de candidats.
+   - Produire la trace Astrometry équivalente sur le même RAW.
+   - Aligner les deux traces par identité candidate (tile/parité/score/ordre).
+
+3. **Point de rupture primaire obligatoire**
+   - Le livrable attendu n’est pas un patch, mais la **première décision divergente** documentée.
+   - Inclure: entrée, décision C, décision ZeBlind, métriques exactes, et condition logique minimale qui diverge.
+
+4. **Patch seulement après divergence prouvée**
+   - Un patch n’est autorisé qu’après preuve écrite de divergence primaire.
+   - Le patch doit corriger uniquement cette condition (pas d’empilement d’heuristiques).
+
+5. **Validation en descente**
+   - Valider d’abord sur le RAW sentinelle.
+   - Puis seulement élargir au pack 4 RAW capés pour Gate B transversal.
+
+
 ## Addendum audit profondeur (2026-05-05) — couverture "sans trou noir"
 
 Pour la clôture de parité ZeBlind/Astrometry, la couverture minimale d’audit doit inclure **aussi** les chemins connexes souvent oubliés au premier passage:

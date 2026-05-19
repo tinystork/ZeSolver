@@ -136,6 +136,7 @@ def build_index_from_astap(
     quad_storage: str = "npz",
     tile_compression: str = "compressed",
     workers: int | None = None,
+    star_truncation_mode: str = "native_prefix",
 ) -> Path:
     db_root = Path(db_root).expanduser().resolve()
     index_root = Path(index_root).expanduser().resolve()
@@ -149,6 +150,9 @@ def build_index_from_astap(
     quad_fmt = (quad_storage or "npz").lower()
     if quad_fmt not in {"npz", "npz_uncompressed", "npy"}:
         raise ValueError("quad_storage must be 'npz', 'npz_uncompressed', or 'npy'")
+    trunc_mode = str(star_truncation_mode or "native_prefix").strip().lower()
+    if trunc_mode not in {"native_prefix", "brightest_mag"}:
+        raise ValueError("star_truncation_mode must be 'native_prefix' or 'brightest_mag'")
     save_tile = np.savez_compressed if compression == "compressed" else np.savez
     manifest_path = index_root / MANIFEST_FILENAME
     if quads_only:
@@ -200,14 +204,19 @@ def build_index_from_astap(
                 y_deg = y_deg[mask_mag]
                 ra = ra[mask_mag]
                 dec = dec[mask_mag]
+            # Preserve native ASTAP row order as sweep proxy by default.
+            sweep_rank = np.arange(int(stars.size), dtype=np.int32)
             if stars.size > max_stars:
-                order = np.argsort(stars["mag"])
-                order = order[:max_stars]
+                if trunc_mode == "brightest_mag":
+                    order = np.argsort(stars["mag"])[:max_stars]
+                else:
+                    order = np.arange(max_stars, dtype=np.int64)
                 stars = stars[order]
                 x_deg = x_deg[order]
                 y_deg = y_deg[order]
                 ra = ra[order]
                 dec = dec[order]
+                sweep_rank = sweep_rank[order]
             tile_path = tiles_dir / f"{tile_meta.key}.npz"
             save_tile(
                 tile_path,
@@ -216,6 +225,7 @@ def build_index_from_astap(
                 mag=stars["mag"].astype(np.float32, copy=False),
                 x_deg=x_deg.astype(np.float32, copy=False),
                 y_deg=y_deg.astype(np.float32, copy=False),
+                sweep_rank=sweep_rank.astype(np.int32, copy=False),
             )
             if stars.size:
                 bounds = _bounds_from_points(ra, dec, center_ra_deg)
@@ -251,6 +261,7 @@ def build_index_from_astap(
             "generated_at": datetime.utcnow().isoformat() + "Z",
             "db_root": str(db_root),
             "tile_count": len(tile_entries),
+            "star_truncation_mode": trunc_mode,
             "tiles": tile_entries,
         }
         manifest_path.write_text(json.dumps(manifest, indent=2))
