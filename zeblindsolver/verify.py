@@ -81,6 +81,7 @@ def validate_solution(
         thresholds = {"rms_px": 1.0, "inliers": 60}
     if matches.size == 0:
         return {"quality": "FAIL", "success": False, "reason": "no matches"}
+    parity_metrics_only = bool(thresholds.get("astrometry_parity_mode", False))
     try:
         world = wcs.wcs_pix2world(matches[:, :2], 0)
     except InvalidTransformError:
@@ -111,13 +112,20 @@ def validate_solution(
         scale_max = 15.0
     scale_min = max(0.05, scale_min)
     scale_max = max(scale_min + 1e-6, scale_max)
-    if scale_arcsec < scale_min or scale_arcsec > scale_max:
+    scale_in_range = bool(scale_min <= scale_arcsec <= scale_max)
+    if (not parity_metrics_only) and (not scale_in_range):
         return {
             "quality": "FAIL",
             "success": False,
-            "reason": f"pixel_scale_out_of_range[{scale_arcsec:.3f}]",
+            "reason": (
+                f"pixel_scale_out_of_range[scale={scale_arcsec:.3f},"
+                f"min={scale_min:.3f},max={scale_max:.3f}]"
+            ),
             "rms_px": float("inf"),
             "inliers": int(matches.shape[0]),
+            "pix_scale_arcsec": scale_arcsec,
+            "scale_min_arcsec": scale_min,
+            "scale_max_arcsec": scale_max,
         }
 
     residuals_px = residuals / max(scale_deg, 1e-12)
@@ -156,9 +164,20 @@ def validate_solution(
     rms_ok = bool(rms_px <= rms_thr)
     inliers_ok = bool(n >= inlier_thr)
     success = bool(rms_ok and inliers_ok)
+    if parity_metrics_only:
+        # Astrometry-parity mode: let sequential verify/logodds decide acceptance.
+        # Keep validation metrics for diagnostics, but do not reject on rms/inliers/scale.
+        success = True
     reason = None
     if not success:
         reason = f"validation_failed[rms_ok={int(rms_ok)},inliers_ok={int(inliers_ok)},rms={rms_px:.3f},rms_thr={rms_thr:.3f},inliers={n},inliers_thr={inlier_thr}]"
+    elif parity_metrics_only and (not rms_ok or not inliers_ok or not scale_in_range):
+        reason = (
+            "validation_metrics_only"
+            f"[rms_ok={int(rms_ok)},inliers_ok={int(inliers_ok)},"
+            f"scale_ok={int(scale_in_range)},rms={rms_px:.3f},"
+            f"inliers={n},scale={scale_arcsec:.3f}]"
+        )
     return {
         "quality": "GOOD" if success else "FAIL",
         "success": success,
@@ -169,8 +188,10 @@ def validate_solution(
         "pix_scale_arcsec": scale_arcsec,
         "rms_threshold_px": rms_thr,
         "inliers_threshold": inlier_thr,
+        "gate_scale_ok": scale_in_range,
         "gate_rms_ok": rms_ok,
         "gate_inliers_ok": inliers_ok,
+        "astrometry_parity_mode": bool(parity_metrics_only),
         "robust_tol_px": float(robust_tol),
         "median_residual_px": float(med),
         "mad_residual_px": float(mad),
