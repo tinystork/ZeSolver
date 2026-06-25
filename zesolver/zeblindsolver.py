@@ -310,6 +310,11 @@ def near_solve(
     elapsed = time.perf_counter() - start
     status_text = "succeeded" if solution.success else "failed"
     logger(f"[ZENEAR] {status_text}: {solution.message}")
+    orchestration_trace = {
+        "fallback_to_blind_requested": bool(fallback_to_blind),
+        "blind_fallback_attempted": False,
+        "blind_fallback_skipped_reason": "",
+    }
     result = BlindSolveResult(
         success=solution.success,
         message=solution.message,
@@ -321,7 +326,12 @@ def near_solve(
         output_path=fits_path,
         stats=dict(solution.stats or {}),
     )
+    result.setdefault("stats", {})
+    if isinstance(result["stats"], dict):
+        result["stats"]["near_orchestration"] = dict(orchestration_trace)
     if solution.success or not fallback_to_blind:
+        if not solution.success and not fallback_to_blind and isinstance(result.get("stats"), dict):
+            result["stats"]["near_orchestration"]["blind_fallback_skipped_reason"] = "fallback_disabled"
         return result
     if cancel_check and cancel_check():
         return BlindSolveResult(
@@ -370,6 +380,7 @@ def near_solve(
     blind_cfg.quality_inliers = max(12, int(getattr(blind_cfg, "quality_inliers", 40) or 40) // 2)
     blind_cfg.quality_rms = min(1.5, float(getattr(blind_cfg, "quality_rms", 1.2) or 1.2))
 
+    orchestration_trace["blind_fallback_attempted"] = True
     blind_result = blind_solve(
         fits_path,
         index_root,
@@ -381,4 +392,7 @@ def near_solve(
     prefix = f"near failed: {solution.message}"
     blind_message = blind_result["message"]
     blind_result["message"] = f"{prefix}; blind {blind_message}"
+    blind_result.setdefault("stats", {})
+    if isinstance(blind_result["stats"], dict):
+        blind_result["stats"]["near_orchestration"] = dict(orchestration_trace)
     return blind_result

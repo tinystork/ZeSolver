@@ -164,23 +164,18 @@ def validate_solution(
     rms_ok = bool(rms_px <= rms_thr)
     inliers_ok = bool(n >= inlier_thr)
     success = bool(rms_ok and inliers_ok)
-    if parity_metrics_only:
-        # Astrometry-parity mode: let sequential verify/logodds decide acceptance.
-        # Keep validation metrics for diagnostics, but do not reject on rms/inliers/scale.
-        success = True
+    metrics_only_progression = bool(parity_metrics_only and (not success))
     reason = None
     if not success:
-        reason = f"validation_failed[rms_ok={int(rms_ok)},inliers_ok={int(inliers_ok)},rms={rms_px:.3f},rms_thr={rms_thr:.3f},inliers={n},inliers_thr={inlier_thr}]"
-    elif parity_metrics_only and (not rms_ok or not inliers_ok or not scale_in_range):
+        reason_tag = "validation_metrics_only" if metrics_only_progression else "validation_failed"
         reason = (
-            "validation_metrics_only"
-            f"[rms_ok={int(rms_ok)},inliers_ok={int(inliers_ok)},"
-            f"scale_ok={int(scale_in_range)},rms={rms_px:.3f},"
-            f"inliers={n},scale={scale_arcsec:.3f}]"
+            f"{reason_tag}[rms_ok={int(rms_ok)},inliers_ok={int(inliers_ok)},"
+            f"scale_ok={int(scale_in_range)},rms={rms_px:.3f},rms_thr={rms_thr:.3f},"
+            f"inliers={n},inliers_thr={inlier_thr}]"
         )
     return {
         "quality": "GOOD" if success else "FAIL",
-        "success": success,
+        "success": bool(success),
         "reason": reason,
         "rms_px": rms_px,
         "inliers": n,
@@ -192,6 +187,8 @@ def validate_solution(
         "gate_rms_ok": rms_ok,
         "gate_inliers_ok": inliers_ok,
         "astrometry_parity_mode": bool(parity_metrics_only),
+        "validation_metrics_only": bool(metrics_only_progression),
+        "validation_progress_eligible": bool(metrics_only_progression),
         "robust_tol_px": float(robust_tol),
         "median_residual_px": float(med),
         "mad_residual_px": float(mad),

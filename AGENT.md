@@ -9,6 +9,23 @@ Objectif produit actuel:
 - Atteindre la **parité fonctionnelle ZeBlind vs Astrometry blind solver** en local et en Python pur.
 - **Ne pas toucher ZeNear** sauf correctif de non-régression strictement nécessaire.
 
+Mission produit durable du repo:
+- **Achever ZeSolver** avec deux contraintes non négociables :
+  - **ZeNear doit rester fonctionnel**
+  - **ZeBlind doit fonctionner comme Astrometry**
+
+Méthode de travail durable:
+- Travailler **de l'amont vers l'aval** pour identifier le **premier point de divergence causal**.
+- Éviter les itérations opportunistes sur des résiduels aval tant que le premier écart amont n'est pas isolé.
+- Un seul delta causal par itération, puis rejeu du même protocole.
+
+Discipline documentaire obligatoire à chaque itération:
+- `followup.md` est un **plan court orienté exécution**, pas un journal.
+- Chaque item réalisé dans `followup.md` doit être coché avec **`[X]`**.
+- Chaque item restant à faire dans `followup.md` doit être marqué **`[ ]`**.
+- À chaque itération complétée, **`memory.md` doit être renseigné** pour conserver la trace de ce qui a été accompli, validé, appris, ou écarté durablement.
+- Les conclusions durables vont dans `memory.md`; `followup.md` ne garde que l'orientation actuelle et le plan utile à dérouler.
+
 Portée obligatoire de l’audit parité:
 - Couvrir de façon explicite les briques de `astrometry-main/solver/` (solve loop, permutations, resolve, verify, tweak),
   ainsi que les dépendances utiles (`include/astrometry`, `libkd`, `util`).
@@ -17,7 +34,7 @@ Portée obligatoire de l’audit parité:
 
 Règles d’implémentation:
 - Reproduire fidèlement les équations et la sémantique du pipeline blind Astrometry (sans copier-coller de code source C).
-- Tracer chaque brique de parité dans `followup.md` avec checklist [ ]/[x].
+- Tracer chaque brique de parité dans `followup.md` avec checklist **`[ ]` / `[X]`**.
 - Toute itération doit laisser une trace accomplie dans `memory.md` + artefact de rapport dans `reports/`.
 
 ## Mission
