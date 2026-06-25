@@ -23,3 +23,6 @@ reports/
 test/
 tools/
 tests/
+
+# Local astrometry.net index files
+astrometry-indexes/

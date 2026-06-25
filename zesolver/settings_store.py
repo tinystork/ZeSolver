@@ -79,6 +79,9 @@ class PersistentSettings:
     blind_quality_inliers: int = 40
     blind_quality_rms: float = 1.2
     blind_fast_mode: bool = True
+    blind_index_scale_overlap_prefilter_enabled: bool = False
+    blind_index_scale_overlap_proxy_lo_frac: float = 0.05
+    blind_index_scale_overlap_proxy_hi_frac: float = 0.95
     # Near solver performance
     near_max_tile_candidates: int = 48
     near_tile_cache_size: int = 128
@@ -244,6 +247,9 @@ def load_persistent_settings() -> PersistentSettings:
         blind_quality_inliers=int(payload.get("blind_quality_inliers", 40)),
         blind_quality_rms=float(payload.get("blind_quality_rms", 1.2)),
         blind_fast_mode=bool(payload.get("blind_fast_mode", True)),
+        blind_index_scale_overlap_prefilter_enabled=bool(payload.get("blind_index_scale_overlap_prefilter_enabled", False)),
+        blind_index_scale_overlap_proxy_lo_frac=float(payload.get("blind_index_scale_overlap_proxy_lo_frac", 0.05)),
+        blind_index_scale_overlap_proxy_hi_frac=float(payload.get("blind_index_scale_overlap_proxy_hi_frac", 0.95)),
         near_max_tile_candidates=int(payload.get("near_max_tile_candidates", 48)),
         near_tile_cache_size=int(payload.get("near_tile_cache_size", 128)),
         near_detect_backend=str(payload.get("near_detect_backend", "auto")),

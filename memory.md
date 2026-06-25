@@ -3,6 +3,1545 @@
 > Règle: ce fichier contient uniquement ce qui a été fait/validé.
 > Le reste à faire est dans `followup.md`.
 
+## 2026-06-12 (S6, tronc local assaini avant nouveaux audits)
+
+- Le test synthétique cassé n'indiquait pas une régression solveur :
+  - `tests/test_synthetic.py::test_synthetic_index_produces_candidate` échouait parce que le fixture synthétique produit un WCS à ~`180"/px`, hors seuil par défaut `scale_max_arcsec=15`
+  - le test a été réaligné avec `scale_max_arcsec=300.0`
+- Validation locale après correction :
+  - `python3 -m py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `32 passed`
+
+## 2026-06-12 (S6, candidate-lock `d50_2823` confirme le front causal courant)
+
+- Un replay sentinelle plus propre a été lancé en mode **candidate-scoped** via `blind_forensic_force_tile_key='d50_2823'` :
+  - artefact :
+    - `reports/r47i_s6_candidate_lock_20260612_154254_d50_2823/`
+- Résultat durable :
+  - `candidate_order_head` et `candidate_try` restent verrouillés sur `d50_2823`
+  - `collect_ready` atteint `24` paires
+  - `astrometry_lookup_stage` garde `4` paires avec `lookup_ready=true`
+  - le premier front vivant sur cette tuile est bien `reject_perm_hash_gate`
+  - distribution utile observée dans l'`exact_trace` :
+    - `reject_perm_hash_gate=1884`
+    - `reject_not_better_than_best=208`
+    - `skip_zero_inliers=142`
+    - `accept_new_best=22`
+    - `perm_hash_qmax_abs_delta min = 2052`
+- Lecture durable :
+  - après neutralisation du bruit inter-tuile, le problème causal prioritaire n'est plus le ranking ;
+  - c'est bien le pruning `perm_hash_gate` sur la tête naturelle `d50_2823`.
+
+## 2026-06-12 (S6, micro-A/B `perm_hash 2048 -> 2304` sur `d50_2823`)
+
+- Un coupe-circuit forensic lecture-seule a été ajouté dans `zeblindsolver.py` :
+  - `blind_forensic_abort_after_astrometry_exact_trace_entries`
+  - défaut `0` / OFF
+  - rôle : borner les audits candidate-lock centrés sur `astrometry_exact_trace`
+- Validation locale après patch :
+  - `python3 -m py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `32 passed`
+- Un micro-A/B diffable a été obtenu sur la même tuile `d50_2823`, avec la même enveloppe forensic :
+  - `reports/r47i_s6_candidate_lock_forensic_20260612_155711_q2048_q2304_abort300/`
+  - `reports/r47i_s6_candidate_lock_forensic_20260612_155909_q2304_only_abort300/`
+- Résultat durable :
+  - `q2048` :
+    - `reject_perm_hash_gate=471`
+    - `reject_not_better_than_best=73`
+    - `skip_zero_inliers=17`
+    - `accept_new_best=3`
+    - `perm_hash_qmax_abs_delta min = 2052`
+  - `q2304` :
+    - `reject_perm_hash_gate=455`
+    - `reject_not_better_than_best=86`
+    - `skip_zero_inliers=20`
+    - `accept_new_best=3`
+    - `perm_hash_qmax_abs_delta min = 2326`
+- Lecture durable :
+  - le relâchement `2048 -> 2304` libère bien le petit paquet attendu `2052..2304` ;
+  - mais il ne change pas encore le nombre de `accept_new_best` ni ne fait émerger un nouvel aval validable ;
+  - le front causal vivant reste donc `perm_hash_gate`, seulement un peu plus relâché.
+
+## 2026-06-12 (S6, cran `2560` sur `d50_2823` : le front utile glisse en aval)
+
+- Artefact :
+  - `reports/r47i_s6_candidate_lock_forensic_20260612_161712_q2560_only_abort300/`
+- Résultat durable :
+  - `q2560` continue de réduire `reject_perm_hash_gate` (`444` vs `455` à `2304`)
+  - mais `accept_new_best` reste à `3`
+  - les candidats nouvellement libérés dans la bande `2305..2560` atteignent bien `pre_resolve/post_resolve`
+  - exemples relevés :
+    - `qdelta=2396`, `inliers_raw=1`, `rms≈2.42`
+    - `qdelta=2472`, `inliers_raw=0`
+    - `qdelta=2373`, `inliers_raw=2`, `rms≈1.76`
+    - `qdelta=2541`, `inliers_raw=0/1`
+  - ces candidats retombent ensuite surtout sur :
+    - `reject_not_better_than_best`
+    - `skip_zero_inliers`
+  - le `transition_dump` reste identique sur `2048/2304/2560` :
+    - `fail_reason=post_resolve_too_few_pairs`
+- Lecture durable :
+  - à ce stade, augmenter encore `perm_hash_max_qdelta` n'est plus la priorité ;
+  - le prochain front causal utile est l'aval immédiat des candidats désormais déverrouillés.
+
+## 2026-06-12 (S6, les quasi-bons candidats aval perdent surtout sur les inliers)
+
+- L'observabilité `reject_not_better_than_best` a été enrichie dans `zeblindsolver.py` :
+  - `best_rms_px_before`
+  - `metric_gap_vs_best`
+  - `inlier_gap_vs_best`
+  - `rms_gap_vs_best`
+- Validation locale après patch :
+  - `python3 -m py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `32 passed`
+- Rejeu utile :
+  - `reports/r47i_s6_candidate_lock_forensic_20260612_162453_q2560_gapprobe/`
+- Résultat durable :
+  - `reject_not_better_than_best=94`
+  - `metric_gap_vs_best` médian ≈ `-11.21`
+  - `inlier_gap_vs_best` médian = `-5`
+  - `rms_gap_vs_best` médian ≈ `+0.09 px`
+  - les cas les plus proches du meilleur courant sont tous à `5` inliers contre un meilleur à `6` :
+    - `seq 60` : `metric_gap≈-2.91`, `inlier_gap=-1`, `rms_gap≈-0.44`
+    - `seq 160` : `metric_gap≈-2.91`, `inlier_gap=-1`, `rms_gap≈-0.17`
+    - `seq 244` : `metric_gap≈-2.97`, `inlier_gap=-1`, `rms_gap≈+0.21`
+- Lecture durable :
+  - le front aval n'est pas principalement un problème de RMS ;
+  - il est dominé par un **déficit d'inliers** face au meilleur courant ;
+  - la prochaine investigation utile doit viser la cause de ce manque d'inliers.
+
+## 2026-06-12 (S6, comparaison source Astrometry : divergence probable de sémantique aval)
+
+- Référence relue :
+  - `doc/code.rst` Astrometry.net
+- Résumé durable :
+  - `resolve_matches()` appelle `solver_handle_hit()`
+  - `solver_handle_hit()` appelle `verify_hit()`
+  - `verify_hit()` appelle `real_verify_star_lists()` pour la comparaison vrai/faux match
+- Lecture durable :
+  - le corridor canonique Astrometry fait porter la décision sur la phase `verify`
+  - côté Ze, nous avons encore un comparateur local `hyp_metric` qui rejette déjà des candidats en `reject_not_better_than_best` avant le corridor final de confirmation
+  - la divergence la plus plausible n'est donc pas une déficience mathématique brute, mais un **écart de sémantique de sélection aval** entre notre comparateur local et la logique `verify_hit()` d'Astrometry.
+
+## 2026-06-12 (S6, probe near-best : le comparateur local n'est pas le verrou causal principal)
+
+- Un probe-only `near-best override`, défaut OFF, a été ajouté dans `zeblindsolver.py` :
+  - `blind_astrometry_probe_near_best_override_enabled`
+  - `blind_astrometry_probe_near_best_max_inlier_gap`
+  - `blind_astrometry_probe_near_best_min_metric_gap`
+  - `blind_astrometry_probe_near_best_max_rms_gap_px`
+- Validation locale après patch :
+  - `python3 -m py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `32 passed`
+- Rejeu diffable sur la même enveloppe candidate-lock `d50_2823` / `perm_hash=2560` :
+  - `reports/r47i_s6_candidate_lock_forensic_20260612_171213_q2560_nearbest_probe/`
+- Résultat durable :
+  - le probe laisse bien passer des quasi-`best` auparavant rejetés :
+    - baseline `q2560_gapprobe` :
+      - `accept_new_best=3`
+      - `reject_not_better_than_best=94`
+    - variante `nearbest_probe` :
+      - `accept_new_best=6`
+      - `accept_probe_near_best_override=6`
+      - `reject_not_better_than_best=85`
+  - mais le front final ne change pas :
+    - `stage_by_stage_counts.verify` reste `0`
+    - `transition_dump` reste `fail_reason=post_resolve_too_few_pairs`
+    - le dernier meilleur accepté reste le même qu'en baseline :
+      - `seq 462`
+      - `7 inliers`
+      - `rms≈1.94`
+- Lecture durable :
+  - `reject_not_better_than_best` comprimait effectivement trop tôt certaines hypothèses proches ;
+  - mais ce comparateur n'est pas, à lui seul, la cause racine active du non-solve ;
+  - le prochain front causal utile est désormais l'**entrée effective dans verify** et le support/pairing `post_resolve` du meilleur candidat final.
+
+## 2026-06-12 (S6, le `meta_seed` guard masque un candidat utile ; sans lui on atteint enfin `verify`)
+
+- Un switch probe-only, défaut ON, a été ajouté dans `zeblindsolver.py` :
+  - `blind_astrometry_meta_seed_carry_enabled`
+- Validation locale après patch :
+  - `python3 -m py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `32 passed`
+- Lecture runtime du candidat nominal `d50_2823` / `6.07"/px` :
+  - `astrometry_origin_prescreen` juge encore le **pool courant 4-point**
+  - alors que `transform_origin_meta` porte déjà un support `resolve_hit` de `19` paires (`7` inliers origine)
+  - sur ce prescreen 4-point, les résiduels explosent :
+    - `residual_px_med≈1690`
+    - `residual_px_max≈1708`
+- Probe `meta_seed carry OFF` :
+  - artefact :
+    - `reports/r47i_s6_candidate_lock_forensic_20260612_172811_q2560_no_meta_seed_carry/`
+  - résultat durable :
+    - `resolve_hit_meta_seed_rejected` disparaît ;
+    - mais le nominal retombe quand même en `empty_inliers`
+    - `verify` reste à `0`
+- Probe `meta_seed carry ON + plausibility guard OFF` :
+  - artefact :
+    - `reports/r47i_s6_candidate_lock_forensic_20260612_173032_q2560_meta_seed_noguard/`
+  - résultat durable :
+    - le carry transporte bien le vrai support utile :
+      - `source_pairs_original=19`
+      - `carried_pairs=19`
+      - `inlier_count=19`
+      - `residual_px_med≈3.01`
+      - `residual_px_max≈7.60`
+    - le chemin atteint enfin `verify` (`stage_by_stage_counts.verify = 1`)
+    - le blocage vivant devient un rejet aval explicite :
+      - `validation_failed[rms_ok=0,inliers_ok=1,scale_ok=1,rms=3.660,rms_thr=1.200,inliers=15,inliers_thr=7]`
+      - `pairs=18`
+      - `inliers=15`
+- Lecture durable :
+  - le guard de plausibilité `meta_seed` basé sur le prescreen 4-point rejette à tort un candidat utile ;
+  - le mécanisme de carry lui-même n'est pas le problème, il est au contraire nécessaire pour exposer le bon support `resolve_hit` ;
+  - une fois ce faux verrou levé en probe, le front causal vivant se déplace du corridor `meta_seed` vers un vrai **rejet RMS/validation** plus proche du `verify` canonique.
+
+## 2026-06-13 (S6, relâcher `quality_rms` seul ne ferme pas le front ; l'ancre d'échelle aval reste incohérente)
+
+- Un A/B strict packagé a été rejoué sur la même enveloppe candidate-lock `d50_2823` / `q2560` / `meta_seed guard OFF` :
+  - baseline packagée :
+    - `reports/r47i_s6_candidate_lock_forensic_20260613_015502_q2560_meta_seed_noguard_baselinepack/`
+  - variante RMS :
+    - `reports/r47i_s6_candidate_lock_forensic_20260613_015241_q2560_meta_seed_noguard_rms4000/`
+- Résultat durable :
+  - le meilleur candidat utile reste **strictement** `seq 462` dans les deux runs :
+    - `7` inliers
+    - `rms≈1.94`
+    - `model_scale_arcsec_final≈6.0708`
+  - relâcher `quality_rms` de `1.2 -> 4.0` ne déclenche aucun `record_match_callback`
+  - le support aval s'élargit (`15 -> 18` inliers) mais le solve reste bloqué
+  - les deux runs partagent la même incohérence d'échelle finale :
+    - `model_scale_arcsec≈6.078`
+    - `scale_anchor_arcsec≈24.214`
+    - `bounds_verify_arcsec≈15.436..39.226`
+    - `scale_ok=0`
+- Lecture durable :
+  - le seuil RMS dur n'est pas, à lui seul, la cause racine active ;
+  - le prochain front causal utile est désormais la **source de `scale_anchor_arcsec`** dans la validation finale, pas un nouveau relâchement RMS ou `perm_hash`.
+
+## 2026-06-13 (S6, contrat top-down formalisé : le soupçon `step0 non-carried` n'est pas une divergence prouvée)
+
+- Un audit de contrat top-down a été ajouté :
+  - `tools/r47i_s6_checkpoint_contract_audit.py`
+- Validation locale :
+  - `python3 -m py_compile tools/r47i_s6_checkpoint_contract_audit.py` OK
+- Artefact produit sur le baseline courant :
+  - `reports/r47i_s6_checkpoint_contract_audit_20260613_212249_r47i_s6_theta_core_probe_20260613_205329/summary.json`
+- Résultat durable :
+  - le contrat de comparaison est maintenant posé checkpoint par checkpoint avec :
+    - artefact Ze de référence
+    - source Astrometry de référence
+    - comparateurs attendus
+  - checkpoints méthodologiquement fermés :
+    - `input_stars_order` => fermé **par contrat source**
+    - `quad_geometry` => fermé
+    - `verify_pix2_scale` => fermé
+    - `verify_sequence_core` => fermé
+  - checkpoint restant ouvert :
+    - `verify_support_pre_step0`
+- Lecture durable :
+  - le fait que `verify` démarre sur une étoile **non portée** par le `carry support` n'est **pas**, à lui seul, une divergence Ze vs Astrometry ;
+  - le source C (`verify_get_test_stars`) conserve l'ordre des test-stars après `dedup` + retrait du quad + `RoR` et ne priorise pas le `carry support` ;
+  - le prochain cran utile n'est donc plus de re-questionner le tri Ze côté test-stars, mais d'obtenir/comparer un **état Astrometry homologue** du checkpoint `verify_support_pre_step0`.
+
+## 2026-06-13 (S6, premier pendant Astrometry blind runtime extrait sur le FITS sentinelle)
+
+- Un chemin runtime Astrometry local exploitable a été remis en service sur le FITS sentinelle `232102` :
+  - génération `.axy` via `solve-field --just-augment`
+  - exécution du binaire repo `astrometry-net-main/solver/astrometry-engine`
+  - config locale :
+    - `reports/r47i_s6_astrometry_verify_entry_probe_20260613_2130/backend.cfg`
+  - logs :
+    - `reports/r47i_s6_astrometry_verify_entry_probe_20260613_2130/engine.log`
+- Un parseur dédié a été ajouté :
+  - `tools/r47i_s6_astrometry_engine_verify_audit.py`
+- Validation locale :
+  - `python3 -m py_compile tools/r47i_s6_astrometry_engine_verify_audit.py` OK
+- Artefact synthèse :
+  - `reports/r47i_s6_astrometry_engine_verify_audit_20260613_213601_r47i_s6_astrometry_verify_entry_probe_20260613_2130/summary.json`
+- Résultat durable :
+  - le runtime Astrometry instrumenté émet bien des blocs `C_VERIFY_ENTRY` et `C_VERIFY_TERM`
+  - `entry_count = 27`
+  - l'entrée retenue juste avant `Got a new best match` est :
+    - `NT=123`
+    - `NR=19`
+    - `quad_field_head=[4,0,3,5]`
+    - `testperm_head=[1,2,7,12,11,6,8,9,16,19,13,17,10,14,23,21]`
+    - `refperm_head=[13,42,26,17,41,12,10,8,39,43,28,31,29,36,0,7]`
+- Lecture durable :
+  - un `testperm` Astrometry **canonique** n'est pas forcément monotone ;
+  - `verify_apply_ror()` peut réordonner les test-stars via `uniformize`, pas seulement filtrer ;
+  - cela invalide toute lecture trop forte du type « ordre monotone = forcément canonique » ;
+  - en revanche, ce pendant runtime est encore **même FITS mais pas même étage** que le sentry Ze `d50_2823`, donc il ne suffit pas encore à clore `verify_support_pre_step0`.
+
+## 2026-06-13 (S6, l'ancre `24.21\"/px` vient bien de `candidate_pairset_local`, mais cette pairset locale est elle-même incohérente)
+
+- Probe ciblé rejoué sur la même enveloppe candidate-lock `d50_2823` / `q2560` / `meta_seed guard OFF` :
+  - `reports/r47i_s6_candidate_lock_forensic_20260613_020005_q2560_meta_seed_noguard_anchorprobe/`
+- Résultat durable :
+  - `pairset_scale_precheck` montre bien :
+    - `scale_anchor_source = candidate_pairset_local`
+    - `scale_anchor_arcsec ≈ 24.214`
+    - `approx_scale_arcsec ≈ 2.393`
+    - `pairs = 12`
+  - la `pairset_local` disponible est très large :
+    - `median ≈ 24.214"/px`
+    - `p10 ≈ 3.65"/px`
+    - `p90 ≈ 40.36"/px`
+    - `span_implied_scale_arcsec ≈ 18.993`
+  - cette ancre candidate-locale reste incompatible avec le candidat utile transporté par `meta_seed` :
+    - `resolve_hit/model_scale_arcsec ≈ 6.071`
+    - `validation model_scale_arcsec ≈ 6.078`
+- Lecture durable :
+  - l'ancre aval incohérente n'est pas due à une fuite de source ou à une mauvaise consommation ;
+  - elle est **déjà mauvaise à la source** côté `candidate_pairset_local` ;
+  - le prochain front causal utile est donc la **construction/robustesse de la pairset-local scale anchor**, pas le seul gate RMS final.
+
+## 2026-06-13 (S6, le clamp d'ancre puis l'ouverture RMS atteignent enfin le vrai rejet `verify/logodds`)
+
+- Un switch probe-only, défaut OFF, a été ajouté dans `zeblindsolver.py` :
+  - `blind_astrometry_probe_resolve_hit_scale_anchor_enabled`
+- Validation locale après patch :
+  - `python3 -m py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `32 passed`
+- Probes durables :
+  - clamp d'ancre seul :
+    - `reports/r47i_s6_candidate_lock_forensic_20260613_020311_q2560_meta_seed_noguard_anchorclamp/`
+    - effet durable :
+      - `scale_ok` passe de `0 -> 1` à support inchangé
+      - l'ancre finale devient `anchor_source=probe_resolve_hit_model_scale`, `anchor_arcsec≈6.078`
+      - le rejet vivant retombe bien sur le RMS pur (`rms=3.660`, `rms_thr=1.200`)
+  - clamp d'ancre + `quality_rms=4.0` :
+    - `reports/r47i_s6_candidate_lock_forensic_20260613_020420_q2560_meta_seed_noguard_anchorclamp_rms4000/`
+    - le candidat utile reste rejeté sur le RMS (`rms=4.860 > 4.000`)
+  - clamp d'ancre + `quality_rms=5.0` :
+    - `reports/r47i_s6_candidate_lock_forensic_20260613_020530_q2560_meta_seed_noguard_anchorclamp_rms5000/`
+    - `validation_pairs` passe enfin `quality=GOOD`
+    - `record_match_callback.json` apparaît enfin
+    - le rejet final devient :
+      - `terminal_decision = reject_callback_no_positive_verify_match`
+      - `record_match_callback_reason = no_positive_verify_match`
+      - `onefield_final_logodds = -1.3862943611198908`
+      - `prob_matches = 0`
+      - `prob_theta_match_total = 0`
+- Lecture durable :
+  - la chaîne causale est maintenant beaucoup plus propre :
+    - ancre `candidate_pairset_local` incohérente
+    - puis gate RMS aval
+    - puis, une fois ces deux verrous probe levés, **vrai rejet `verify/logodds` sans support positif**
+  - le prochain front causal utile n'est donc plus le scale gate ni le seul RMS, mais le **corridor `verify` lui-même** (`prob_matches` / `MatchObj` / logodds).
+
+## 2026-06-13 (S6, snapshot verify diffable: une ouverture tardive existe, mais aucun préfixe positif ne se stabilise)
+
+- Un nouvel outil lecture-seule a été ajouté :
+  - `tools/r47i_s6_verify_snapshot_audit.py`
+  - rôle : résumer directement un report `verifydump` (`verify_debug_sets.json`, `verify_step_dump.json`, `record_match_callback.json`) pour classer vite le front vivant du corridor `verify`
+- Validation locale après ajout :
+  - `python3 -m py_compile tools/r47i_s6_verify_snapshot_audit.py` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `32 passed`
+- Rejeu utile sur le dernier artefact :
+  - source :
+    - `reports/r47i_s6_candidate_lock_forensic_20260613_021153_q2560_anchorclamp_rms5000_verifydump/`
+  - synthèse :
+    - `reports/r47i_s6_verify_snapshot_audit_20260613_085226_r47i_s6_candidate_lock_forensic_20260613_021153_q2560_anchorclamp_rms5000_verifydump/`
+- Résultat durable :
+  - `pool_source = field_native_astrometry_vs_tile_world`
+  - `test/ref = 38 / 12`
+  - `prob_logodds = -1.3862943611198908`
+  - le corridor Ze n'est pas un "zéro gate" absolu :
+    - `gate_pass_count = 1`
+    - `first_gate_pass_step = 17`
+  - mais aucun préfixe positif n'émerge quand même :
+    - `prob_matches = 0`
+    - `prob_theta_match_total = 0`
+    - `terminal_decision = reject_callback_no_positive_verify_match`
+  - distribution NN très défavorable sur ce snapshot :
+    - `nsig2 min ≈ 23.68`
+    - `nsig2 median ≈ 1636.77`
+    - `nsig2 max ≈ 8168.33`
+- Lecture durable :
+  - le callback n'est plus le suspect principal ;
+  - le front vivant est bien le **support verify natif lui-même** :
+    - soit les entrées `verify` (pool / ordre / sigma / géométrie) ne sont pas encore canoniques,
+    - soit la logique séquentielle `theta/logodds` diverge encore du C sur ce même snapshot.
+
+## 2026-06-13 (S6, le ref pool `verify` apparaît beaucoup plus compact que le test pool utile)
+
+- L'outil `tools/r47i_s6_verify_snapshot_audit.py` a été enrichi avec des métriques géométriques :
+  - empreinte spatiale `test/ref`
+  - distances au `quad_center`
+  - ratio de compacité `ref vs test`
+- Validation locale après enrichissement :
+  - `python3 -m py_compile tools/r47i_s6_verify_snapshot_audit.py` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `32 passed`
+- Rejeu utile :
+  - `reports/r47i_s6_verify_snapshot_audit_20260613_090357_r47i_s6_candidate_lock_forensic_20260613_021153_q2560_anchorclamp_rms5000_verifydump/`
+- Résultat durable :
+  - `test_xy_use` couvre quasiment tout le champ :
+    - span ≈ `954 x 1873 px`
+  - `ref_xy_use` est beaucoup plus compact :
+    - span ≈ `137 x 242 px`
+    - `ref_compact_vs_test_span_ratio ≈ 0.129`
+  - le `quad_center` du snapshot est à `(~1003.44, ~532.16)` ;
+  - les `ref_xy_use` gardés sont tous assez loin de ce centre :
+    - distance min/médiane/max ≈ `558.76 / 677.55 / 738.14 px`
+  - en parallèle, `validation` reste bonne :
+    - `pairs=18`
+    - `inliers=18`
+    - `rms≈4.86 px`
+  - mais le verify séquentiel reste quasi intégralement distractor-only :
+    - `gate_pass_count = 1`
+    - `prob_matches = 0`
+    - `prob_theta_match_total = 0`
+- Lecture durable :
+  - le verrou vivant se resserre encore côté **géométrie d'entrée verify** ;
+  - avant d'accuser davantage `theta/logodds`, il faut expliquer pourquoi le ref pool consommé par `verify` est si compact et si décentré par rapport au test pool utile, alors que la validation de la solution transportée reste bonne.
+
+## 2026-06-13 (S6, cause amont confirmée: le hard-cap natif à 12 refs cassait le support verify)
+
+- Comparatif source utile confirmé :
+  - Astrometry `verify_hit` ne pose pas de hard-cap minuscule sur le ref pool avant :
+    - in-image filtering
+    - quad exclusion
+    - sweep ordering
+    - RoR
+  - côté Ze, le chemin `field_native_astrometry_vs_tile_world` gardait encore un cap dur hérité :
+    - `blind_astrometry_verify_refstar_max_keep = 12`
+- Patch appliqué dans `zeblindsolver.py` :
+  - nouveau helper :
+    - `_native_verify_ref_pool_can_hard_cap(...)`
+  - règle durable :
+    - sur le chemin canonique/natif (`astrometry_native_verify_semantics_mode=True`), le cap précoce du ref pool est désormais désactivé
+    - il reste autorisé pour les chemins heuristiques non canoniques
+- Test ajouté :
+  - `tests/test_zeblindsolver.py::test_native_verify_ref_pool_hard_cap_disabled_on_canonical_paths`
+- Validation locale :
+  - `python3 -m py_compile zeblindsolver/zeblindsolver.py tests/test_zeblindsolver.py tools/r47i_s6_verify_snapshot_audit.py` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `33 passed`
+- Rejeu ciblé :
+  - run :
+    - `reports/r47i_s6_refpool_uncap_probe_20260613_102802/`
+  - audit snapshot :
+    - `reports/r47i_s6_verify_snapshot_audit_20260613_102849_r47i_s6_refpool_uncap_probe_20260613_102802/`
+- Résultat durable :
+  - avant patch :
+    - `ref_n = 12`
+    - `ref_compact_vs_test_span_ratio ≈ 0.129`
+    - `gate_pass_count = 1`
+    - `prob_matches = 0`
+    - `prob_theta_match_total = 0`
+    - `terminal_decision = reject_callback_no_positive_verify_match`
+  - après patch :
+    - `ref_n = 377`
+    - `ref_compact_vs_test_span_ratio ≈ 1.055`
+    - `gate_pass_count = 17`
+    - `prob_matches = 1`
+    - `prob_theta_match_total = 6`
+    - `terminal_decision = accept_keep`
+    - `success = true`
+- Lecture durable :
+  - le premier point de rupture amont était bien la **compaction artificielle du ref pool natif** ;
+  - une fois ce verrou levé, le corridor `verify` redevient capable de former un support positif réel sur `d50_2823` ;
+  - le prochain écart amont évident restant est `mo_scale_native`, toujours reconstruit depuis `quadpix_median_px` au lieu d'une vraie source canonique `arcsec/pix`.
+
+## 2026-06-13 (S6, `mo_scale_native` et `verify_pix2` sont maintenant recâblés sur une vraie échelle canonique)
+
+- Patch appliqué dans `zeblindsolver.py` :
+  - nouveau helper :
+    - `_resolve_native_mo_scale_arcsec_px(...)`
+  - règle durable :
+    - sur le chemin natif/canonique, `mo_scale_native` et `verify_pix2` préfèrent désormais :
+      - `model_scale_arcsec`
+      - puis `pix_scale_arcsec`
+    - le fallback `quadpix_median_px` ne reste autorisé que hors chemin canonique
+- Tests ajoutés :
+  - `test_resolve_native_mo_scale_prefers_wcs_scale_on_native_path`
+  - `test_resolve_native_mo_scale_keeps_pixel_geom_on_noncanonical_path`
+  - `test_resolve_native_mo_scale_prefers_pix_scale_if_model_missing_on_native_path`
+- Validation locale :
+  - `python3 -m py_compile zeblindsolver/zeblindsolver.py tests/test_zeblindsolver.py` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `36 passed`
+- Rejeu utile après fix ref-pool seul :
+  - `reports/r47i_s6_refpool_uncap_probe_20260613_102802/`
+  - audit :
+    - `reports/r47i_s6_verify_snapshot_audit_20260613_102849_r47i_s6_refpool_uncap_probe_20260613_102802/`
+  - état durable intermédiaire :
+    - `verify_scale_arcsec_px_for_pix2 = 180.689`
+    - `verify_scale_source_for_pix2 = mo_scale_native`
+    - `mo_scale_source = quadpix_median_px`
+    - `prob_logodds ≈ -1.12448`
+    - `nsig2 min/median/max ≈ 1.3966 / 12.5812 / 144.94`
+- Rejeu utile après fix `mo_scale_native` + `verify_pix2` :
+  - `reports/r47i_s6_verifypix2_probe_20260613_103813/`
+  - audit :
+    - `reports/r47i_s6_verify_snapshot_audit_20260613_103857_r47i_s6_verifypix2_probe_20260613_103813/`
+- Résultat durable :
+  - `mo_scale = 6.077758799729469`
+  - `mo_scale_source = model_scale_arcsec_native`
+  - `verify_scale_arcsec_px_for_pix2 = 6.077758799729469`
+  - `verify_scale_source_for_pix2 = model_scale_arcsec_native`
+  - légère amélioration mesurée du corridor `verify` à pool comparable :
+    - `prob_logodds ≈ -1.12448 -> -1.10100`
+    - `nsig2 min ≈ 1.3966 -> 1.3820`
+    - `nsig2 median ≈ 12.5812 -> 12.4497`
+    - `nsig2 max ≈ 144.94 -> 143.42`
+  - `callback` reste positif :
+    - `accept_keep`
+    - `prob_matches = 1`
+    - `prob_theta_match_total = 6`
+- Lecture durable :
+  - le gros faux écart sémantique de scale est maintenant refermé ;
+  - le gain est réel mais modeste, ce qui indique que le verrou suivant n'est plus un mauvais `arcsec/pix` grossier ;
+  - le prochain front amont utile est le modèle `testsigma` / gamma-like (`quad_center`, `Q2`, variance radiale), avant de descendre davantage dans `theta/logodds`.
+- 2026-06-13 (S6, quad geometry native): le comparatif `verify.c` a confirmé un écart de sémantique encore vivant dans `quad_center/Q2`.
+  - Astrometry `verify_get_quad_center(vf, mo, ...)` prend strictement :
+    - `centerpix = midpoint(A,B)` avec `A=mo->field[0]`, `B=mo->field[1]`
+    - `Q2 = dist2(A, centerpix)`
+  - Côté Ze, le chemin natif utilisait encore la moyenne des `4` ancres puis la moyenne des distances au centre.
+  - Patch durable appliqué :
+    - nouveau helper `zeblindsolver.py::_resolve_verify_quad_geometry_px(...)`
+    - en mode natif/canonique :
+      - `quad_center/Q2` basculent sur `midpoint(AB)` + `dist2(A, midpoint(AB))`
+    - hors chemin canonique :
+      - conservation du comportement centroid/mean-radius existant
+  - Tests ajoutés :
+    - `test_resolve_verify_quad_geometry_uses_ab_midpoint_on_native_path`
+    - `test_resolve_verify_quad_geometry_keeps_centroid_on_noncanonical_path`
+    - `test_resolve_verify_quad_geometry_requires_two_points`
+  - Validation locale :
+    - `python3 -m py_compile zeblindsolver/zeblindsolver.py tests/test_zeblindsolver.py tools/r47i_s6_verify_snapshot_audit.py` OK
+    - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `39 passed`
+  - Rejeu utile :
+    - `reports/r47i_s6_quadab_probe_20260613_110322/`
+  - Lecture durable :
+    - la géométrie native bascule bien sur la forme canonique :
+      - avant : `quad_center_px=[1003.44, 532.16]`, `quad_q2_px2=15234.68`, `quad_center_source=collect_pref_pair_idx_quad`
+      - après : `quad_center_px=[1020.88, 616.40]`, `quad_q2_px2=15382.70`, `quad_center_source=matchobj_ab_midpoint_native`
+    - sur ce rejeu, le support `verify` observé est :
+      - `test/ref = 43 / 223`
+      - `ref_dist_to_quad_center min ≈ 38.41 px`
+      - `prob_logodds ≈ -1.38629`
+      - `gate_pass_count = 11`
+      - `theta_match_count = 5`
+      - `nsig2 min/median/max ≈ 0.333 / 25.32 / 244.01`
+  - Leçon durable :
+    - le patch `AB midpoint` est correctement branché et déplace la géométrie du corridor natif dans le sens Astrometry ;
+    - mais le verdict causal sur l’amélioration effective du score `verify` reste provisoire tant qu’on n’a pas un A/B strictement identique sur code courant avec la vieille géométrie centroid forcée comme témoin.
+- 2026-06-13 (S6, A/B borné midpoint vs centroid): l’A/B strictement identique sur code courant a finalement été rejoué avec un runner borné dédié.
+  - Outil ajouté :
+    - `tools/r47i_s6_bounded_verify_probe.py`
+    - usage durable :
+      - lancer un `blind_solve` S6 avec dumps `verify_*`
+      - éviter les solveurs pendants une fois les artefacts utiles écrits
+  - Artefacts utiles :
+    - midpoint canonique :
+      - `reports/r47i_s6_quadab_bounded_midpoint_long_20260613_112416/`
+    - centroid forcé témoin :
+      - `reports/r47i_s6_quadab_bounded_centroid_long_20260613_112416/`
+  - Invariant A/B obtenu :
+    - même `runtime_cfg`
+    - même `verify_pix2_input = 2.5870715472637387`
+    - même `verify_scale_arcsec_px_for_pix2 = 6.077758799729469`
+    - même `test/ref = 38 / 395`
+    - seul delta utile :
+      - `quad_center/Q2`
+  - Résultat durable :
+    - `midpoint AB` :
+      - `quad_center_source = matchobj_ab_midpoint_native`
+      - `prob_logodds ≈ -0.98933`
+      - `gate_pass_count = 15`
+      - `theta_match_count = 6`
+      - `nsig2 min/median/max ≈ 0.272 / 12.510 / 141.713`
+    - `centroid` forcé :
+      - `quad_center_source = forced_quad_geometry_json`
+      - `prob_logodds ≈ -1.15296`
+      - `gate_pass_count = 19`
+      - `theta_match_count = 8`
+      - `nsig2 min/median/max ≈ 0.238 / 10.931 / 143.424`
+  - Leçon durable forte :
+    - la géométrie canonique `midpoint AB` améliore bien le score final `verify` **malgré moins de matches instantanés et moins de gate passes**
+    - donc le résiduel prioritaire n’est plus un simple problème de “quantité de matches”
+    - le prochain front utile descend désormais dans la **qualité séquentielle `theta/logodds`** et la façon dont les matches/distractors s’additionnent.
+- 2026-06-13 (S6, diff séquentiel verify): un outil de diff pas-à-pas a été ajouté pour comparer deux snapshots `verify`.
+  - Outil ajouté :
+    - `tools/r47i_s6_verify_sequence_diff.py`
+  - Artefact utile :
+    - `reports/r47i_s6_verify_sequence_diff_20260613_113505_r47i_s6_quadab_bounded_midpoint_long_20260613_112416_vs_r47i_s6_quadab_bounded_centroid_long_20260613_112416/summary.json`
+  - Lecture durable :
+    - le premier avantage du mode `midpoint AB` n’apparaît **pas** au premier flip `match/distractor`, mais dès le **step 0** :
+      - `midpoint` :
+        - `nsig2 ≈ 4.8949`
+        - `delta_logodds ≈ -0.98933`
+        - `logfg ≈ -15.53413`
+      - `centroid` :
+        - `nsig2 ≈ 5.4294`
+        - `delta_logodds ≈ -1.15296`
+        - `logfg ≈ -15.69775`
+    - c’est ce premier match qui fixe déjà le meilleur préfixe :
+      - `prob_logodds midpoint ≈ -0.98933`
+      - `prob_logodds centroid ≈ -1.15296`
+    - les divergences plus tardives existent mais deviennent secondaires comme cause racine :
+      - premier écart `gate_pass` à `i=3`
+      - premier `match_flip` à `i=7` (`midpoint=distractor`, `centroid=match`)
+  - Lecture durable sur `testsigma²` :
+    - le gain vient d’abord du profil radial consommé sur les toutes premières étoiles utiles :
+      - step `0` :
+        - `sigma2 midpoint ≈ 145.80`
+        - `sigma2 centroid ≈ 131.44`
+      - step `7` :
+        - `sigma2 midpoint ≈ 281.13`
+        - `sigma2 centroid ≈ 317.55`
+    - le recâblage `midpoint AB` ne rend pas tout le préfixe plus permissif ;
+    - il améliore surtout la **première étoile utile**, ce qui suffit à relever le meilleur préfixe.
+  - Leçon durable forte :
+    - le front prioritaire n’est plus “plus de matches” ;
+    - il est maintenant le **profil `testsigma²` et/ou l’ordre des premières test-stars** qui déterminent la qualité du tout premier préfixe `verify`.
+- 2026-06-13 (S6, quad leakage fix): une divergence source-vs-source plus amont a été confirmée puis refermée dans `verify_get_test_stars` côté Ze.
+  - Astrometry enlève explicitement les `mo->field[i]` du quad après déduplication.
+  - Côté Ze, le retrait des quad stars passait encore par `img_in` générique, ce qui laissait survivre au moins une vraie étoile du quad d’hypothèse dans `test_xy_use`.
+  - Preuve runtime avant patch :
+    - `reports/r47i_s6_testperm_sigma_probe_20260613_173945/verify_debug_sets.json`
+    - `mo_quadpix[0] = [1000.323974609375, 494.0926208496094]`
+    - apparaissait encore exactement dans `test_xy_use`
+  - Patch durable appliqué :
+    - le retrait des quad stars préfère désormais les **vraies ancres d’hypothèse** (`collect_pref_pair_idx_quad`) au lieu de `img_in`
+    - instrumentation ajoutée en plus :
+      - `teststarid_px`
+      - `teststarid_use`
+  - Validation locale :
+    - `python3 -m py_compile ...` OK
+    - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `40 passed`
+  - Rejeu utile :
+    - `reports/r47i_s6_quadremoval_probe_20260613_174218/`
+  - Résultat durable :
+    - après patch, aucune des `mo_quadpix[:4]` n’apparaît plus exactement dans `test_xy_use`
+    - mais `prob_logodds` reste encore négatif (`≈ -1.38629`)
+    - donc la fuite du quad était une divergence réelle, mais pas le dernier verrou causal
+  - Leçon durable :
+    - le front vivant retombe bien sur l’**ordre des premières test-stars utiles** et/ou leur **profil `testsigma²` précoce**
+    - pas sur un retour à la vieille géométrie ni sur le quad leakage lui-même.
+
+## 2026-06-07 (S6, le bloqueur vivant revalidé est bien le pairset scale gate produit)
+
+- Une réinstrumentation courte du corridor `post-collect -> pre-resolve_hit` a été ajoutée dans `zeblindsolver.py` :
+  - événements `collect_ready`, `astrometry_lookup_stage`, `astrometry_no_transform`
+  - enrichissement des `candidate_skip` sur `strict_pairset_scale_gate_reject`
+- Probe borné produit rejoué :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260607_002531_postcollect_probe_20260607/`
+- Résultat durable :
+  - sur le sentinelle M106 `...232102.fit`, `product` atteint `collect_ready` pour `hinted/S/d50_2725` avec `19` paires ;
+  - il est ensuite coupé avant Astrometry par `strict_pairset_scale_gate_reject` ;
+  - le garde voit un pairset réduit à `10` paires avec `span_implied_scale_arcsec ≈ 14.287`, au-dessus de la borne haute `≈ 11.963`.
+- Comparatif borné `product` vs `matched_probe` :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260607_002630_pairset_compare_20260607/`
+  - `matched_probe` garde le pairset (`keep_pairset`) puis entre bien dans `astrometry_lookup_stage`, `astrometry_origin_prescreen`, `resolve_hit_meta_seed_*` sur le même `d50_2725`.
+- Ablation minimale validée :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260607_002850_no_pairset_gate_probe_20260607/`
+  - avec **seulement** `blind_pairset_scale_gate_enabled=False`, le chemin produit entre lui aussi dans Astrometry et publie des `pre_resolve_hit/post_resolve_hit` sur `d50_2725`.
+- Conclusion durable :
+  - le premier bloqueur causal vivant n'est plus “entre collect et resolve_hit” de façon vague ;
+  - c'est bien le **pairset scale gate produit** qui élimine `d50_2725` avant Astrometry ;
+  - une fois ce garde levé isolément, le résiduel suivant visible remonte à `reject_perm_hash_gate`.
+
+## 2026-06-07 (S6, rescope minimal appliqué: le front pairset gate est franchi en produit)
+
+- Un rescope minimal a été appliqué dans `zeblindsolver.py` :
+  - le `pairset scale gate` reste observé/dumpé ;
+  - mais il ne peut plus **hard-reject** quand le corridor strict Astrometry est prêt (`lookup_ready=true`).
+- Helper dédié ajouté :
+  - `_pairset_scale_gate_can_hard_reject(...)`
+- Validation locale :
+  - `python3 -m py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py` => `28 passed`
+- Probe produit borné rejoué :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260607_005919_scoped_pairset_gate_20260607/`
+- Résultat durable :
+  - `product_pairset_scale_precheck.json` montre sur `hinted/S/d50_2725` :
+    - `decision=keep_pairset`
+    - `lookup_ready=true`
+    - `pairset_gate_hard_reject_enabled=false`
+    - `pairset_gate_hard_reject_suppressed=true`
+  - `product_phase_handoff.json` atteint bien `astrometry_lookup_stage` sur `d50_2725`
+  - `product_resolve_hit_preresolve.json` et `product_transition_dump.json` confirment l'entrée réelle dans `resolve_hit`
+  - `product_astrometry_exact_trace.raw.json` fait alors remonter comme premier résiduel aval visible :
+    - `reject_perm_hash_gate`
+  - `product_validation_pairs.json` montre ensuite un rejet de validation sur le candidat nominal `resolve_hit` (`pairs=18`, `rms≈4.254`)
+- Conclusion durable :
+  - le front `preastrometry_scale_gate_gap` est maintenant franchi sur le chemin produit ;
+  - la priorité causale suivante devient `perm_hash_gate`, puis la validation du candidat `resolve_hit`.
+
+## 2026-06-07 (S6, le `perm_hash_gate` est relâché modérément mais pas supprimé)
+
+- L'outil `tools/r47i_s6_m106_first_divergence_audit.py` a été enrichi avec deux variantes minimales :
+  - `product_permhash2048`
+  - `product_no_permhash`
+- A/B borné sur le sentinelle courant `d50_2725` :
+  - baseline utile : `reports/r47i_s6_m106_first_divergence_audit_20260607_010508_product_permhash_ab_20260607/`
+  - lecture sur `product` avant delta :
+    - `reject_perm_hash_gate=473`
+    - `reject_not_better_than_best=25`
+    - `skip_zero_inliers=16`
+    - `accept_new_best=3`
+    - le candidat nominal utile reste `resolve_hit`, puis échoue en validation (`pairs=18`, `rms≈4.254`)
+- Variante `product_permhash2048` :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260607_010715_product_permhash2048_only_20260607/`
+  - résultat durable :
+    - `reject_perm_hash_gate` baisse (`411` dans cette fenêtre bornée)
+    - `accept_new_best` monte légèrement (`5`)
+    - le corridor reste structuré et continue d'émettre `pre_resolve_hit/post_resolve_hit`
+- Variante `product_no_permhash` :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260607_010801_product_no_permhash_only_20260607/`
+  - résultat durable :
+    - le front `reject_perm_hash_gate` disparaît
+    - mais la fenêtre se diffuse surtout en `reject_not_better_than_best` et `skip_zero_inliers`
+    - sans réexposer rapidement un meilleur candidat aval propre
+- Décision produit appliquée :
+  - `blind_astrometry_strict_perm_hash_max_qdelta` passe par défaut de `1536` à `2048`
+- Validation après patch :
+  - `py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py` => `28 passed`
+  - probe produit :
+    - `reports/r47i_s6_m106_first_divergence_audit_20260607_010959_product_permhash2048_default_20260607/`
+  - lecture durable :
+    - le front reste dominé par `reject_perm_hash_gate`, mais plus relâché :
+      - `reject_perm_hash_gate=458`
+      - `reject_not_better_than_best=34`
+      - `skip_zero_inliers=20`
+      - `accept_new_best=5`
+    - le même candidat nominal aval reste visible (`resolve_hit_direct`, validation échouée `pairs=18`, `rms≈4.254`)
+- Conclusion durable :
+  - `perm_hash_gate` n'est pas un simple garde à supprimer ;
+  - un relâchement modéré (`2048`) garde une structure causale lisible ;
+  - la suppression totale n'est pas retenue comme direction produit par défaut.
+
+## 2026-06-07 (S6, le garde de plausibilité `meta_seed` redevient le défaut produit)
+
+- L'outil `tools/r47i_s6_m106_first_divergence_audit.py` a été enrichi avec une variante minimale :
+  - `product_meta_seed_guard`
+- Probe dédié :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260607_011916_product_meta_seed_guard_only_20260607/`
+- Résultat durable utile :
+  - le début du corridor reste identique sur `d50_2725` :
+    - `candidate_try`
+    - `collect_ready`
+    - `astrometry_lookup_stage`
+  - mais le vieux faux aval visible ne revient plus rapidement dans la fenêtre lue :
+    - pas de `transition_dump` ni `validation_pairs` précoces pour `d50_2725`
+    - l'`exact_trace` partielle écrite sur `d50_2725` est nettement plus courte (`228` lignes au moment de lecture, contre `517` sur la base produit comparable)
+    - distribution lue :
+      - `reject_perm_hash_gate=197`
+      - `reject_not_better_than_best=15`
+      - `skip_zero_inliers=12`
+      - `accept_new_best=4`
+  - le `phase_handoff` montre déjà que le budget recommence à passer au candidat suivant `d50_2822`.
+- Lecture causale combinée avec la preuve antérieure du 2026-06-05 :
+  - le garde `blind_astrometry_meta_seed_carry_plausibility_guard_enabled` coupe bien le carry permissif `resolve_hit_meta_seed` qui ramenait la fausse validation nominale `d50_2725`.
+- Décision produit appliquée :
+  - `blind_astrometry_meta_seed_carry_plausibility_guard_enabled` passe par défaut à `True`
+- Validation après patch :
+  - `py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py` => `28 passed`
+  - probe produit relancé :
+    - `reports/r47i_s6_m106_first_divergence_audit_20260607_012238_product_meta_seed_guard_default_20260607/`
+  - lecture utile au stade partiel :
+    - le corridor produit démarre sainement sur `d50_2725`
+    - aucun signal précoce de régression de câblage n'apparaît avant arrêt du probe
+- Conclusion durable :
+  - le faux carry permissif `meta_seed` n'est plus traité comme mode produit par défaut ;
+  - le prochain front utile à traiter devient le premier candidat/résiduel réexposé après cette coupure, probablement `d50_2822` dans la fenêtre bornée actuelle.
+
+## 2026-06-01 (S6, M106 end-to-end requalifie le risque produit)
+
+- Un runner dédié de validation oracle M106 a été ajouté :
+  - `tools/r47i_s6_m106_blind_oracle_compare.py`
+  - rôle : copier les FITS du lot propre M106, retirer le WCS sur les copies, lancer ZeBlind courant, puis comparer directement aux WCS oracle par nom de fichier.
+- Validation end-to-end M106 lancée en **baseline produit** sur le lot validé/oracle ASTAP :
+  - au moins `5` FITS échantillonnés couvrant début et fin de série ont été exécutés ;
+  - résultats observés :
+    - `...232102.fit` -> `no valid solution` (~`98.6s`)
+    - `...232144.fit` -> `no valid solution` (~`96.6s`)
+    - `...232205.fit` -> `no valid solution` (~`83.4s`)
+    - `...232247.fit` -> `no valid solution` (~`83.7s`)
+    - `...233644.fit` -> `no valid solution` (~`106.4s`)
+- Test ciblé complémentaire sur `...232102.fit` avec les **3 hypothèses S5.5 toutes activées** :
+  - `skip_hinted_wide_reentry_after_hinted`
+  - `skip_blind_carryover_after_scale_only`
+  - `skip_blind_carryover_after_hinted`
+  - résultat : toujours `no valid solution` (~`91.6s`).
+- Conclusion durable :
+  - la fermeture `S5` en probe-only strict ne se traduit pas encore en parité solve blind produit sur M106 ;
+  - les trois hypothèses produit issues de `S5.5`, prises seules même cumulées, ne suffisent pas à rétablir un solve réel sur le case de tête M106 ;
+  - `S6` doit donc être traité comme une vraie réouverture de l'écart end-to-end, pas comme une simple formalité de confirmation.
+
+## 2026-06-02 (S6, l'écart sentinelle M106 se requalifie d'abord en enveloppe de config amont)
+
+- Sur le case sentinelle `...232102.fit`, une ablation courte Ze-vs-Ze a confirmé que le tout premier drift amont ne vient pas du solveur profond tout entier mais d'abord de l'enveloppe de config utilisée :
+  - baseline produit : `row0 = pairs_collected_initial=19`, `code_lookup_hits=33646`, `hypothesis=2`, `verify=0`, échec ;
+  - variante `downsample=3` seule : `row0 = 9 / 12150`, `hypothesis=5`, `verify=6`, échec conservé ;
+  - paquet `A_detect_amont` (`downsample`, `max_stars=180`, `max_quads=2800`, `max_candidates=20`, `detect_k_sigma=3.2`, `pixel_tolerance=6.0`) : `row0 = 3 / 10930`, soit alignement sur le probe strict, mais échec final encore présent.
+- Lecture durable :
+  - `single_pass_newpoint` n'explique pas le gap produit ;
+  - le drift `code_lookup_hits / pairs_collected_initial` observé dès la première ligne est d'abord un **config envelope gap** amont ;
+  - l'échec final sentinelle ne se réduit pas à ce drift-là, puisqu'il survit même une fois le front amont réaligné.
+- Outillage consolidé :
+  - `tools/r47i_s6_m106_first_divergence_audit.py` exporte désormais le diff de config amont pertinent et peut classer ce cas en `config_envelope_gap` quand le tuple/callsite de tête est partagé mais que l'enveloppe de config diverge.
+
+## 2026-06-02 (S6, noyau canonique resserré: `native_verify + tosolve` suffit déjà)
+
+- Micro-ablations sentinelle M106 poursuivies sur `...232102.fit` après séparation des paquets `A_detect_amont` et `B_guards_accept`.
+- Résultat durable supplémentaire :
+  - `blind_astrometry_native_verify_semantics_enabled=True` + `blind_anodds_tosolve=1e-3` suffit déjà à restaurer un succès sentinelle en enveloppe produit :
+    - `solution found (level=S, parity=mirror) (phase=hinted)`
+    - `row0` reste produit : `pairs_collected_initial=19`, `code_lookup_hits=33646`
+  - `blind_prob_verify_enabled=False` n'est pas suffisant, même combiné avec la famille `blind_anodds_*`.
+- Lecture causale durable :
+  - le vrai levier côté `G2` est `native_verify_semantics`, pas la simple désactivation `prob_verify`;
+  - le singleton `anodds_tosolve` est particulièrement puissant car, en mode Astrometry strict, il rabaisse aussi les seuils dérivés `tokeep` puis `toprint` via les clamps internes.
+- Rejeu avec drift amont réaligné :
+  - `native_verify + tosolve + A_detect_amont` réussit aussi ;
+  - `row0` retombe alors sur le probe (`pairs_collected_initial=3`, `code_lookup_hits=10930`).
+- Conclusion durable :
+  - le succès sentinelle peut être rétabli **sans** corriger d'abord `A_detect_amont` ;
+  - `A_detect_amont` reste donc un écart d'enveloppe amont séparé, pas le bloqueur causal principal du solve sur ce case.
+
+## 2026-06-02 (S6, le singleton gagnant est réel mais trop permissif en multicase)
+
+- Vérification des singletons restants sur le sentinelle `...232102.fit` :
+  - `native_verify + totune` : échec
+  - `native_verify + tokeep` : échec
+  - `native_verify + toprint` : échec
+- Conséquence durable :
+  - `native_verify + tosolve` est bien le **singleton minimal unique** observé à ce stade sur le sentinelle.
+- Généralisation courte sur `5` FITS M106 anciennement en échec baseline (`232102`, `232144`, `232205`, `232247`, `233644`) :
+  - avec `native_verify + tosolve` seul :
+    - `5/5 success`
+    - `5/5 false_positive` contre l'oracle WCS
+  - avec `native_verify + tosolve + A_detect_amont` :
+    - encore `5/5 success`
+    - encore `5/5 false_positive`
+    - mais avec des dérives centre/échelle souvent moins extrêmes.
+- Lecture durable :
+  - le noyau minimal rétablit une **acceptation**, pas encore une **solution correcte** ;
+  - `A_detect_amont` aide à calmer le front amont, mais ne règle pas la permissivité de l'acceptation.
+- Direction pratique validée :
+  - le prochain cran utile n'est plus d'ouvrir davantage le solveur ;
+  - c'est de **resserrer le corridor d'acceptation** autour de `native_verify + tosolve`, probablement via un `tosolve` moins permissif ou un garde-fou compatible `native_verify`.
+
+## 2026-06-02 (S6, M1 refermé proprement sur le chemin `native_verify`)
+
+- Le correctif `M1` a été implémenté de façon volontairement étroite dans `zeblindsolver.py` :
+  - en mode `blind_astrometry_native_verify_semantics_enabled=True`, la résolution initiale d'échelle ne laisse plus `config.pixel_scale_arcsec` primer devant les indices locaux ;
+  - l'ordre de priorité a été resserré vers les hints locaux (`header`, `range hint`, optique), puis seulement la config globale ;
+  - une ancre locale `candidate_pairset_local` peut désormais réaligner `scale_anchor_arcsec` avant la verify sur le chemin canonique native.
+- L'observabilité de provenance a été ajoutée dans `scale_policy` :
+  - `approx_scale_source`
+  - `scale_anchor_initial_source`
+  - `scale_anchor_current_source`
+- Le point dépendant `M2` a été traité sans élargir la portée :
+  - l'interdiction du fallback `empty_inliers_fallback_all_finite` est maintenant centralisée et testée explicitement sur le chemin `native_verify` ;
+  - aucun changement n'a été propagé au strict/product non-native à ce stade, pour éviter une dérive latérale non auditée.
+- Vérification accomplie :
+  - `py_compile` OK ;
+  - tests ciblés `resolve_scale_arcsec / pairset_local_scale_summary / empty_inliers_fallback / onefield` passés ;
+  - replay sentinelle `reports/r47i_s6_false_positive_logodds_validity_audit_20260602_184636_sentinel232102_m1_native_anchor/summary.json` :
+    - `success=false`
+    - `message=no valid solution`
+    - `oracle_status=fail_no_wcs`
+- Conclusion durable :
+  - le patch `M1` ne réouvre pas le faux positif historique sur `...232102.fit` ;
+  - la prochaine vérification utile n'est plus “est-ce que ça réaccepte à tort ?”, mais “est-ce que `candidate_pairset_local` est bien la source réellement consommée sur le candidat causal quand elle existe ?”.
+
+## 2026-06-02 (S6, la source locale est consommée mais l'ancre reste partagée entre candidats)
+
+- Un nouvel audit dédié a été ajouté :
+  - `tools/r47i_s6_scale_anchor_source_audit.py`
+- Rejeu sentinelle publié :
+  - `reports/r47i_s6_scale_anchor_source_audit_20260602_200546_sentinel232102_anchor_source_d502725/summary.json`
+- Résultat durable :
+  - `candidate_pairset_local` n'est pas ignoré ; il est bien consommé sur le chemin `native_verify`.
+  - Mais l'ancre d'échelle finale reste **globale et mutable** à l'échelle du run, donc elle peut être écrasée par un autre candidat plus tard.
+- Lecture causale utile sur le sentinelle :
+  - pour `d50_2725`, le pairset local publie `scale_anchor_arcsec ≈ 9.7089846` avec `scale_anchor_source = candidate_pairset_local`;
+  - pourtant la `scale_policy` finale du run finit à `scale_anchor_current_arcsec ≈ 24.2138844`, également marquée `candidate_pairset_local`;
+  - cette valeur finale correspond en pratique au pairset local d'un autre candidat du même run (`d50_2823`), pas à `d50_2725`.
+- Conclusion durable :
+  - le vrai résiduel après `M1` n'est plus "source locale ignorée" ;
+  - c'est désormais un problème plus précis d'**ancre locale partagée entre candidats** ;
+  - la prochaine correction utile doit donc scoper l'ancre par candidat/tentative avant toute propagation au strict non-native.
+
+## 2026-06-02 (S6, la contamination inter-candidats est fermée, mais l'état final du run ne suffit pas pour lire la consommation locale)
+
+- Le chemin `native_verify` a été refermé sur ce point :
+  - l'ancre d'échelle de travail est maintenant réinitialisée par candidat/tentative, au lieu de rester mutable à l'échelle du run.
+- Rejeu sentinelle après ce scoping :
+  - `reports/r47i_s6_scale_anchor_source_audit_20260602_221106_sentinel232102_anchor_source_d502725_scoped/summary.json`
+- Résultat durable :
+  - la contamination inter-candidats disparaît ;
+  - mais, sur un run sans solution finale, la `scale_policy` exportée en fin de run retombe sur l'ancre initiale `header_scale_arcsec`, donc elle ne permet plus à elle seule de conclure si `candidate_pairset_local` a été réellement consommé pendant la tentative du candidat causal.
+- Pour lever cet angle mort, l'observabilité a été étendue dans `hypothesis_probe_trace` avec :
+  - `approx_scale_arcsec/source`
+  - `scale_anchor_arcsec/source`
+- Audit candidate-level publié :
+  - `reports/r47i_s6_scale_anchor_source_audit_20260602_221809_sentinel232102_anchor_source_d502725_scoped_probe/summary.json`
+- Lecture durable sur `d50_2725` :
+  - classification : `pairset_local_consumed_candidate_trace_only`
+  - l'ancre locale `candidate_pairset_local` est bien consommée pendant les tentatives du candidat causal ;
+  - les lignes `hypothesis_probe_trace` montrent `scale_anchor_arcsec ≈ 9.7089846` et `scale_anchor_source = candidate_pairset_local` ;
+  - le résumé final du run restant à `header_scale_arcsec ≈ 2.392674...` est donc un **angle mort d'observabilité finale**, pas une preuve que `M1` serait ignoré.
+- Conclusion durable :
+  - la piste “M1 non consommé” est désormais fermée ;
+  - le prochain résiduel utile à traiter redevient un problème de transform / géométrie d'inliers sur `d50_2725`, pas un problème de provenance d'ancre.
+
+## 2026-06-02 (S6, le résiduel canonique devient une incohérence seed-vs-residual sur `d50_2725`)
+
+- Audit ciblé publié :
+  - `tools/r47i_s6_effective_fit_geometry_audit.py`
+  - `reports/r47i_s6_effective_fit_geometry_audit_20260602_223944_sentinel232102_d502725_fitgeom/summary.json`
+- Résultat durable :
+  - la classification utile est `plausible_scale_but_geometry_no_inliers`
+  - `d50_2725` échoue avant `verify`, avec `0` ligne `verify_hit_trace`
+  - le ratio `model_scale / scale_anchor_local` n'est pas la cause dominante :
+    - nominal `≈ 1.0737`
+    - mirror `≈ 1.1742`
+  - en revanche les résidus du fit explosent immédiatement par rapport à la tolérance `2.5 px` :
+    - nominal : `residual_px_med ≈ 26.66`, `max ≈ 542.94`
+    - mirror : `residual_px_med ≈ 949.11`, `max ≈ 1233.75`
+- Point causal à retenir :
+  - la même trace indique pourtant `transform_origin_source = astrometry`
+  - avec un seed apparemment “bon” :
+    - nominal : `transform_origin_inliers = 8`, `transform_origin_rms_px ≈ 1.85`
+    - mirror : `transform_origin_inliers = 4`, `transform_origin_rms_px ≈ 1.28`
+  - le résiduel vivant n'est donc plus un problème d'ancre, ni même d'échelle brute ;
+  - c'est une **incohérence entre le seed de transform retenu et le contrôle résiduel final** ensuite appliqué dans Ze.
+- Lecture source utile :
+  - côté Astrometry C, le seed passe par `MatchObj.quadpix/quadxyz` puis entre dans `verify_hit()`
+  - côté Ze, le candidat `d50_2725` casse avant l'étape équivalente de `verify_hit`
+  - la prochaine comparaison source doit viser le portage du transform “astrometry” et sa continuité jusqu'au test résiduel, pas la logique probabiliste aval.
+
+## 2026-06-02 (S6, l'incohérence seed-vs-residual est maintenant localisée à un changement de pool)
+
+- Audit ciblé publié :
+  - `tools/r47i_s6_astrometry_seed_residual_incoherence_audit.py`
+  - `reports/r47i_s6_astrometry_seed_residual_incoherence_audit_20260602_230608_sentinel232102_d502725_seed_residual_forced/summary.json`
+- Résultat durable sur `d50_2725` :
+  - classification : `astrometry_seed_residual_incoherence`
+  - le seed `astrometry` retenu est réellement bon dans son propre régime d'évaluation :
+    - `resolve_hit_source = resolve_hit`
+    - `resolve_hit_kept = 38`
+    - `inliers_final = 8`
+    - `rms_px_final ≈ 1.84699`
+    - `model_scale_arcsec_final ≈ 12.11577`
+  - le screen aval Ze retombe pourtant ensuite sur :
+    - `8` paires globales seulement
+    - `0` inlier
+    - `residual_px_med ≈ 26.66`
+    - `residual_px_max ≈ 542.94`
+- Conclusion durable :
+  - le seed n'est pas le premier coupable ;
+  - l'incohérence vivante est maintenant localisée dans un **changement de pool/correspondance** entre :
+    - le seed `astrometry` scoré sur `resolve_hit`
+    - et le contrôle résiduel final Ze recomputé sur `img_points/tile_points` globaux
+  - la prochaine correction utile doit préserver le même pool/correspondance jusqu'au screen résiduel quand `transform_origin_source = astrometry`, avant toute reprise des réglages produit.
+
+## 2026-06-05 (S6, l'audit `matched-envelope` devient un outil borné rejouable)
+
+- Après réévaluation de trajectoire, le sentinelle M106 n'a pas encore livré de divergence amont interprétable entre `product` et `probe` :
+  - l'audit `reports/r47i_s6_m106_first_divergence_audit_20260605_104603_loop_reaudit_20260605/` retombe toujours en `config_envelope_gap`.
+- Pour éviter de rester bloqué sur des one-liners inline lents et opaques, `tools/r47i_s6_m106_first_divergence_audit.py` a été durci :
+  - sélection de variantes via `--variants product,matched_probe,probe`
+  - budgets runtime via `--hard-max-candidates` et `--hard-max-validations`
+  - publication d'un artefact JSON par variante (`<variant>_result.json`) même si le run complet n'est pas allé au bout.
+- Rejeu canonique micro publié :
+  - `python3 tools/r47i_s6_m106_first_divergence_audit.py --label matched_envelope_micro_cli_20260605 --variants product,matched_probe --trace-max 8 --hard-max-candidates 1 --hard-max-validations 2`
+  - artefact : `reports/r47i_s6_m106_first_divergence_audit_20260605_110512_matched_envelope_micro_cli_20260605/`
+- Lecture durable déjà acquise sans attendre la fin de `matched_probe` :
+  - `product_result.json` confirme que la tête bornée reste `hinted/S/nominal/d50_2725` avec enveloppe produit (`phase_local_rank`, `33646`, `19`) ;
+  - `matched_probe` reste nettement plus coûteux que `product` même sous cap `1/2`, donc la suite doit être pilotée comme audit borné outillé, pas comme boucle interactive d'attente.
+
+## 2026-06-05 (S6, le `matched-envelope` réaligne bien la tête; le drift vivant descend d'un cran)
+
+- L'outil `tools/r47i_s6_m106_first_divergence_audit.py` a été encore durci pour publier aussi, par variante, des artefacts **live** utilisables avant la fin du solve :
+  - `<variant>_runtime_cfg.json`
+  - `<variant>_meta_seed_probe.json`
+  - `<variant>_astrometry_exact_trace.raw.json`
+  - `<variant>_validation_pairs.json`
+- Sur le micro-run aligné :
+  - dossier : `reports/r47i_s6_m106_first_divergence_audit_20260605_110512_matched_envelope_micro_cli_20260605/`
+  - `product_result.json` garde en tête :
+    - `hinted / nominal / d50_2725`
+    - `candidate_vote_score = 33646`
+    - `pairs_collected_initial = 19`
+  - `matched_probe_meta_seed_probe.json` montre déjà, pendant l'exécution :
+    - `phase = hinted`
+    - `parity = nominal`
+    - `tile = d50_2725`
+    - `score = 33646`
+    - puis un carry `resolve_hit_meta_seed_carried` à `38` paires
+  - `matched_probe_astrometry_exact_trace.raw.json` démarre aussi sur `hinted / nominal / d50_2725`.
+- Conclusion durable :
+  - le gros drift de tête vu sur l'ancien `probe` (`33646 -> 10930`, `19 -> 3`) n'est pas le résiduel causal sous le sous-espace `matched-envelope` ;
+  - une fois l'enveloppe réalignée, la divergence utile descend **après** la sélection du top-candidat `d50_2725`, probablement dans le corridor `prescreen / resolve_hit / verify / accept`.
+
+## 2026-06-05 (S6, la première divergence utile sous `matched-envelope` est un saut `hinted -> hinted_wide`)
+
+- Un deuxième run live dédié `product` a été publié :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_1127_product_live_probe/`
+- Un diff synthétique a été produit :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_110512_matched_envelope_micro_cli_20260605/checkpoint_drift_compare.json`
+- Lecture durable :
+  - même tête alignée amont :
+    - `product_head0 = hinted / nominal / d50_2725 / score=33646`
+    - `matched_probe_first_live = hinted / nominal / d50_2725 / score=33646`
+  - mais `product` diverge dès le **premier checkpoint live** :
+    - `product_first_live = hinted_wide / nominal / d50_2726 / score=14108`
+    - `product_first_validation = hinted_wide / nominal / d50_2726 / pairs=23 / rms≈4.181`
+  - en face, `matched_probe` reste sur le corridor attendu :
+    - `hinted / nominal / d50_2725`
+    - `first_validation = pairs=38 / rms≈6.166`
+- Conclusion durable :
+  - sous `matched-envelope`, la première divergence exploitable n'est plus un `config_envelope_gap` ni un simple drift de score ;
+  - c'est maintenant un **`wiring_gap` inter-phase / inter-tuile** :
+    - le produit saute de `hinted/d50_2725` vers `hinted_wide/d50_2726` avant validation, alors que `matched_probe` reste sur le top-candidat publié.
+
+## 2026-06-05 (S6, le `wiring_gap` se resserre entre `collect` et `resolve_hit`)
+
+- Instrumentation d'audit ajoutée dans le solveur et branchée dans le runner :
+  - `blind_phase_handoff_dump_path`
+  - `blind_collect_matches_exact_dump_path`
+  - `blind_astrometry_transition_dump_path`
+- Artefacts publiés :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_1145_product_handoff_probe/`
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_1157_product_transition_probe/`
+  - synthèse :
+    - `reports/r47i_s6_m106_first_divergence_audit_20260605_1157_product_transition_probe/hinted_d2725_collect_to_transition_gap.json`
+- Lecture durable :
+  - `product` partage bien avec `matched_probe` tout le préfixe utile :
+    - `phase_start(hinted)`
+    - `phase_variant_select(first_pass)`
+    - `candidate_order_head`
+    - `candidate_try(hinted / nominal / d50_2725 / score=33646)`
+  - `_collect_tile_matches` confirme ensuite pour ce même candidat :
+    - `stage=scalar_final`
+    - `pairs_selected=19`
+    - `votes_total=35`
+  - malgré cela, `product` n'émet ensuite ni :
+    - `resolve_hit transition` pour `hinted/d50_2725`
+    - ni `exact_trace` pour `hinted/d50_2725`
+  - la première transition/exact-trace visible repart directement sur :
+    - `hinted_wide / nominal / d50_2726`
+- Conclusion durable :
+  - le résiduel vivant n'est plus “saut de phase” au sens large ;
+  - il est désormais localisé plus finement dans le corridor **post-collect / pré-resolve_hit** du chemin `product` sur `hinted/d50_2725`.
+
+## 2026-06-01 (S5.10/S5.11, strict28 refermé en probe-only)
+
+- Validation multicase stricte relancée sur le pool complet couvert (`28` FITS) :
+  - strict28 initial :
+    - `reports/r47i_s5_upstream_trace_probe_20260601_2205_strict28/summary.json`
+    - `reports/r47i_s5_multicase_head_residual_audit_20260601_221221/summary.json`
+    - `reports/r47i_s5_upstream_diff_audit_20260601_2212/summary.json`
+  - strict28 bis après ciblage `hinted -> blind` :
+    - `reports/r47i_s5_upstream_trace_probe_20260601_2227_strict28_hintedblind/summary.json`
+    - `reports/r47i_s5_multicase_head_residual_audit_20260601_223243/summary.json`
+    - `reports/r47i_s5_upstream_diff_audit_20260601_2232/summary.json`
+- Résultat durable :
+  - strict28 initial : `28/28` FITS résolus, `27/28` têtes entièrement C-like ;
+  - strict28 bis : `28/28` FITS résolus, `0/28` résiduel de tête ;
+  - `S5.10` est donc fermé sur ce protocole probe-only strict.
+- Résiduel strict-lot ciblé puis refermé :
+  - FITS : `...232924.fit`
+  - candidat : `d50_2823`
+  - séquence utile : `hinted:first_pass(nominal) -> blind:first_pass(nominal)` sur le même `(candidate, level)`
+  - audits ciblés :
+    - `reports/r47i_s5_tuple_semantic_diff_audit_d50_2823_20260601_221304/summary.json`
+    - `reports/r47i_s5_same_candidate_transition_audit_d50_2823_20260601_221304/summary.json`
+- Outillage probe-only prolongé :
+  - ajout du flag expérimental `blind_s5_skip_blind_carryover_after_hinted_enabled`
+  - plomberie CLI associée dans `tools/r47i_s5_upstream_trace_probe.py`
+- Vérification clé :
+  - la fermeture single-fit est confirmée par `reports/r47i_s5_multicase_head_residual_audit_20260601_222545/summary.json`
+  - `d50_2625` peut remonter ensuite, mais il est classé `c_like_parity_pair`, pas résiduel causal de tête.
+- Conclusion durable :
+  - le dernier résiduel strict-lot visible relevait encore d’un carryover d’orchestration Ze `hinted -> blind`, pas d’un nouveau manque de lecture du source Astrometry ;
+  - `S5.11` est fermé sur ce protocole probe-only strict ;
+  - la question restante n’est plus d’isoler un nouveau résiduel strict, mais de décider quels skips probe-only méritent ou non une hypothèse de correction produit.
+
+## 2026-06-01 (S5.5, tri des skips probe-only)
+
+- Audit de décision publié :
+  - `reports/r47i_s5_skip_hypothesis_audit_20260601_234255/summary.md`
+  - `reports/r47i_s5_skip_hypothesis_audit_20260601_234255/summary.json`
+- Résultat durable :
+  - trois flags ont un support causal multicase propre via fermeture par delta à un seul flag :
+    - `skip_hinted_wide_reentry_after_hinted`
+    - `skip_blind_carryover_after_scale_only`
+    - `skip_blind_carryover_after_hinted`
+  - ils deviennent des **hypothèses de correction produit** crédibles, mais restent OFF par défaut tant qu’ils ne sont pas validés hors probe-only.
+- Le reste de la batterie S5 est reclassé en **compression-only / investigation-only** :
+  - `skip_blind_reentry_after_scale_only`
+  - `skip_hinted_widened_reentry_after_first_pass`
+  - `skip_scale_only_widened_reentry_after_first_pass`
+  - `skip_blind_widened_reentry_after_first_pass`
+  - `skip_blind_carryover_after_hinted_wide`
+  - `skip_hinted_widened_only_tuples`
+  - `skip_scale_only_widened_only_tuples`
+  - `skip_blind_widened_only_tuples`
+- Lecture durable :
+  - les flags retenus comme hypothèses produit sont tous des re-émissions inter-phase `first_pass` sur le même `(candidate, level)` ;
+  - les flags relégués servent surtout à compresser des widened-pass ou des sentinelles locales pour rendre le diff C-vs-Ze lisible ;
+  - l’investigation S5 amont peut donc être considérée close côté probe-only, avec relais naturel vers `S6`.
+
+## 2026-06-01 (S5, audit multicase fiabilisé puis broad12 refermé à 12/12)
+
+- Les audits multicase ciblés ont été corrigés :
+  - `tools/r47i_s5_tuple_semantic_diff_audit.py`
+  - `tools/r47i_s5_same_candidate_transition_audit.py`
+  - ils acceptent désormais `--result-index` et `--fits-substring` au lieu de retomber silencieusement sur `results[0]`.
+- Conséquence immédiate :
+  - le résiduel large-lot `d50_2824` a été requalifié sur le vrai FITS `...233356.fit` :
+    - `reports/r47i_s5_tuple_semantic_diff_audit_d50_2824_20260601_190506/summary.json`
+    - `reports/r47i_s5_same_candidate_transition_audit_d50_2824_20260601_190506/summary.json`
+  - lecture durable corrigée :
+    - carryover `scale_only:first_pass(mirror) -> blind:first_pass(nominal)` ;
+    - même `candidate_key`, même `level`, même `perm_head` ;
+    - pas un widened-pass.
+- Nouveau flag probe-only ajouté dans `zeblindsolver.py` :
+  - `blind_s5_skip_blind_carryover_after_scale_only_enabled`
+  - plomberie CLI dans `tools/r47i_s5_upstream_trace_probe.py` :
+    - `--skip-blind-carryover-after-scale-only`
+- Vérification single-fit utile :
+  - sur `...233356.fit`, activer ce skip retire bien `d50_2824` de la tête sans casser le solveur ; le succès retombe sur `scale_only`.
+- Replay broad12 publié :
+  - `reports/r47i_s5_upstream_trace_probe_20260601_1907_broad12_scaleblind/summary.json`
+  - `reports/r47i_s5_multicase_head_residual_audit_20260601_191051/summary.json`
+  - `reports/r47i_s5_upstream_diff_audit_20260601_1910/summary.json`
+- Résultat durable :
+  - `12/12` FITS résolus ;
+  - `0/12` résiduel de tête ;
+  - audit multicase `closed`.
+- Conclusion durable :
+  - avec l’audit multicase fiabilisé et le skip `scale_only -> blind`, le broad12 est fermé sur ce protocole probe-only ;
+  - le prochain cran utile n’est plus un audit source Astrometry générique, mais une validation multicase stricte.
+
+## 2026-06-01 (S5, validation multicase large après fermeture de d50_2823)
+
+- Validation multicase élargie relancée sur `12` FITS avec la batterie probe-only cumulée :
+  - `reports/r47i_s5_upstream_trace_probe_20260601_1814_broad12/summary.json`
+  - `reports/r47i_s5_multicase_head_residual_audit_20260601_182050/summary.json`
+  - `reports/r47i_s5_upstream_diff_audit_20260601_1820/summary.json`
+- Résultat durable :
+  - `12/12` FITS résolus ;
+  - `11/12` têtes entièrement C-like ;
+  - diversité des phases terminales conservée (`scale_only=6`, `hinted=2`, `hinted_wide=2`, `blind=2`).
+- Nouveau résiduel survivant isolé :
+  - `d50_2824`
+  - classe `candidate_carryover`
+  - `blind:first_pass`
+  - présent comme premier résiduel sur `1/12` FITS (`...233356.fit`).
+- Qualification ciblée publiée :
+  - `reports/r47i_s5_tuple_semantic_diff_audit_d50_2824_20260601_182134/summary.json`
+  - `reports/r47i_s5_same_candidate_transition_audit_d50_2824_20260601_182134/summary.json`
+- Lecture durable :
+  - le lot large ne réouvre ni le résiduel `d50_2823` ni un widened-pass dominant ;
+  - le survivant `d50_2824` est un carryover `scale_only:first_pass(mirror) -> blind:first_pass(nominal)`, avec `perm_head` stable ;
+  - la prochaine itération utile doit cibler `d50_2824`, pas rouvrir un audit générique du source Astrometry.
+
+## 2026-06-01 (S5, skip probe-only hinted widened-only)
+
+- Nouveau flag expérimental ajouté dans `zeblindsolver.py` :
+  - `blind_s5_skip_hinted_widened_only_tuples_enabled`
+  - portée volontairement étroite : mode opt-in, saut des tuples `hinted:widened_pass` sans équivalent `hinted:first_pass`, sans changer le comportement produit par défaut.
+- Le probe S5 sait maintenant activer ce mode via `tools/r47i_s5_upstream_trace_probe.py --skip-hinted-widened-only-tuples`.
+- Audit de qualification du dernier widened-only avant patch :
+  - `reports/r47i_s5_tuple_semantic_diff_audit_d50_2823_20260601_174342/summary.json`
+  - `reports/r47i_s5_same_candidate_transition_audit_d50_2823_20260601_174342/summary.json`
+  - lecture durable : `d50_2823` n'était plus un same-candidate transition, mais un pur `hinted:widened_pass` sans contrepartie `first_pass`.
+- Expérience cumulée publiée :
+  - `reports/r47i_s5_upstream_trace_probe_20260601_1745/summary.json`
+  - `reports/r47i_s5_remaining_head_order_audit_20260601_174555/summary.json`
+- Résultat durable :
+  - la tête de trace tombe de `10` à `8` lignes ;
+  - `d50_2823` disparaît bien comme widened-only opportuniste ;
+  - `d50_2822` ne reste plus qu'en `hinted:first_pass` ;
+  - il ne reste plus qu'un seul résiduel non C-like : `d50_2725` en carryover `hinted_wide:first_pass(nominal) -> blind:first_pass(mirror)`.
+- Conséquence durable :
+  - la compression probe-only S5 est presque au plancher sur ce FITS ;
+  - le prochain diff utile ne porte plus sur un widened-pass, mais sur le dernier carryover inter-phase/inter-parité.
+
+## 2026-06-01 (S5, d50_2725 devient le dernier résiduel)
+
+- Artefacts publiés :
+  - `reports/r47i_s5_tuple_semantic_diff_audit_d50_2725_20260601_174627/summary.json`
+  - `reports/r47i_s5_same_candidate_transition_audit_d50_2725_20260601_174627/summary.json`
+- Lecture durable :
+  - `d50_2725` apparaît deux fois seulement dans la tête `1745` :
+    - `hinted_wide:first_pass` / `nominal`
+    - `blind:first_pass` / `mirror`
+  - `code_lookup_hits` et `pairs_collected_initial` restent identiques (`3005`, `52`) ;
+  - le différentiel restant porte surtout sur `phase`, `parity` et `use_ra_filter`.
+- Conséquence durable :
+  - le prochain questionnement S5 n'est plus “faut-il supprimer un widened-pass ?” ;
+  - c'est “ce carryover `hinted_wide -> blind` du même candidat est-il encore un artefact Ze ou déjà une divergence acceptable/attendue vis-à-vis du `solver.c` ?”.
+
+## 2026-06-01 (S5, fermeture same-FITS complète en probe-only)
+
+- Nouveau flag expérimental ajouté dans `zeblindsolver.py` :
+  - `blind_s5_skip_blind_carryover_after_hinted_wide_enabled`
+  - portée volontairement étroite : mode opt-in, saut des tuples `blind:first_pass` déjà vus en `hinted_wide:first_pass` pour le même `(candidate_key, level)`, sans changer le comportement produit par défaut.
+- Le probe S5 sait maintenant activer ce mode via `tools/r47i_s5_upstream_trace_probe.py --skip-blind-carryover-after-hinted-wide`.
+- Expérience cumulée publiée :
+  - `reports/r47i_s5_upstream_trace_probe_20260601_1753/summary.json`
+  - `reports/r47i_s5_remaining_head_order_audit_20260601_175404/summary.json`
+- Résultat durable :
+  - la tête same-FITS du sentinelle M106 est désormais entièrement classée C-like par `remaining_head_order_audit` (`residual_row_count=0`) ;
+  - `d50_2725` disparaît comme dernier carryover inter-phase visible ;
+  - un nouveau candidat `d50_2625` remonte en fin de tête, mais sans ouvrir de résiduel non C-like dans ce protocole.
+- Audit complémentaire publié :
+  - `reports/r47i_s5_stage_callsite_mapping_audit_20260601_1754/summary.json`
+  - lecture durable : `phase_order_break_count=0`, `callsite_contract_break_count=0`.
+
+## 2026-06-01 (S5, smoke multicase court après fermeture same-FITS)
+
+- Nouvel outil ajouté : `tools/r47i_s5_multicase_head_residual_audit.py`.
+  - but : classer, par FITS, la tête résiduelle d’un probe S5 multi-résultats et isoler le résiduel dominant qui généralise réellement.
+- Smoke multicase court relancé sur `3` FITS avec le protocole probe-only maximal :
+  - `reports/r47i_s5_upstream_trace_probe_20260601_1755/summary.json`
+  - `reports/r47i_s5_multicase_head_residual_audit_20260601_175730/summary.json`
+  - `reports/r47i_s5_upstream_diff_audit_20260601_1756/summary.json`
+- Résultat durable :
+  - `3/3` FITS résolus ;
+  - `1/3` FITS reste entièrement C-like sur la tête ;
+  - `2/3` FITS rouvrent le même premier résiduel : `d50_2823`, classe `same_tuple_reentry`, en `hinted_wide:first_pass`.
+- Lecture durable :
+  - le nettoyage same-FITS sur M106 est réel, mais pas encore complètement généralisé ;
+  - le prochain vrai sujet S5 n’est plus `d50_2725`, mais la réémission multicase `hinted:first_pass -> hinted_wide:first_pass` du tuple `d50_2823`.
+
+## 2026-06-01 (S5, d50_2823 ciblé puis multicase court refermé)
+
+- Nouveau flag expérimental ajouté dans `zeblindsolver.py` :
+  - `blind_s5_skip_hinted_wide_reentry_after_hinted_enabled`
+  - portée volontairement étroite : mode opt-in, saut des tuples `hinted_wide:first_pass` déjà vus en `hinted` pour le même `(candidate_key, parity, level)`, sans changer le comportement produit par défaut.
+- Le probe S5 sait maintenant activer ce mode via `tools/r47i_s5_upstream_trace_probe.py --skip-hinted-wide-reentry-after-hinted`.
+- Lecture causale validée avant patch :
+  - le résiduel dominant multicase `1755` était bien `d50_2823`, classe `same_tuple_reentry`, séquence `hinted:first_pass -> hinted_wide:first_pass`, sur `2/3` FITS.
+- Smoke multicase court relancé après ajout du skip :
+  - `reports/r47i_s5_upstream_trace_probe_20260601_1805/summary.json`
+  - `reports/r47i_s5_multicase_head_residual_audit_20260601_180609/summary.json`
+  - `reports/r47i_s5_upstream_diff_audit_20260601_1806/summary.json`
+- Résultat durable :
+  - `3/3` FITS résolus ;
+  - `0/3` FITS avec résiduel de tête ;
+  - l’audit multicase passe à `status=closed`.
+- Conclusion durable :
+  - le next-step “diff C-vs-Ze sur la réémission `hinted -> hinted_wide` de `d50_2823`” était bien le bon ;
+  - il a permis d’identifier un problème d’orchestration Ze, pas un nouveau besoin d’audit générique du source Astrometry.
+
+## 2026-06-01 (compaction documentaire du backlog)
+
+- `followup.md` a été réécrit en version compacte pour redevenir un vrai plan vivant :
+  - S1/S2/S3/S4 résumés en statut synthétique,
+  - S5 recentré sur le seul résiduel amont utile (`d50_2822` en `hinted:widened_pass`),
+  - l'historique détaillé fermé retiré du backlog actif.
+- Décision durable de doc :
+  - `followup.md` doit rester court et orienté prochain delta causal,
+  - les chronologies fermées et les expérimentations déjà démontrées vivent dans `memory.md` + `reports/`, pas dans le backlog courant.
+
+## 2026-06-01 (S5, d50_2822 précisé par audit same-candidate)
+
+- Correctif outillage appliqué dans `tools/r47i_s5_tuple_semantic_diff_audit.py` :
+  - les rangs `candidate_rank_global=0` et `newpoint=0` ne sont plus écrasés par des fallbacks faux ;
+  - l'audit détecte maintenant explicitement les transitions intra-phase `first_pass -> widened_pass`.
+- Artefact propre publié : `reports/r47i_s5_tuple_semantic_diff_audit_d50_2822_20260601_173403/summary.json`.
+- Lecture durable obtenue sur la tête `1315` :
+  - `d50_2822` n'est plus un vague résiduel “hinted” ;
+  - le premier écart utile est précisément `hinted:first_pass(S) -> hinted:widened_pass(S)` ;
+  - sur cette transition, le `perm_head` reste identique et seul `levels_to_use` s'élargit (`[S] -> [S,M]`).
+- Conséquence durable :
+  - le prochain diff S5 doit comparer cette transition intra-phase même-candidat avant de rouvrir des questions plus larges de réentrée inter-phase.
+
+## 2026-06-01 (S5, audit transitionnel d50_2822)
+
+- Nouvel outil ajouté : `tools/r47i_s5_same_candidate_transition_audit.py`.
+  - but : publier les deltas exacts entre lignes consécutives d'un même tuple S5, sans rebrancher l'instrumentation runtime.
+- Artefact publié : `reports/r47i_s5_same_candidate_transition_audit_d50_2822_20260601_173552/summary.json`.
+- Lecture durable :
+  - transition 1 utile = `rank 0 -> 1`, `first_pass:S -> widened_pass:S`, même `perm_head`, widening `[S] -> [S,M]`, `pairs_collected_initial 57 -> 59`;
+  - transition 2 = `rank 1 -> 2`, toujours `widened_pass` mais `level S -> M`, `code_lookup_hits 2797 -> 1`, avec changement de `perm_head`.
+- Conséquence durable :
+  - le premier diff causal à mener dans le code n'est pas le saut vers `level M`, mais bien le passage `first_pass:S -> widened_pass:S` dans `hinted`.
+
+## 2026-05-24 (S1 forced replay harness, critères S1 systématiques)
+
+- Patch ciblé `tools/r47i_s1_forced_payload_full_replay.py` pour rendre la sortie `summary` robuste même quand OFF termine en échec global:
+  - extraction systématique des métriques S1 depuis `refpool_trace` / `forensic_rows`,
+  - fallback `verify_entry_nt/nr` via forensic (`prob_verify_nt/nr`) si `hit_off` absent,
+  - publication explicite dans `summary.{json,md}` de `prob_distractor_rate_effective`, `ror_enabled/applied`, `prob_match_nsig2_cap`.
+- Rejeu validé: `reports/r47i_s1_forced_payload_full_replay_case055_20260524_1145/summary.{json,md}`.
+  - ON/OFF alignés au terminal: `reason_code=accept_logodds_gate`, `accept_logodds=11.010719844475592`, `verify_entry_nt/nr=51/12`.
+  - Critères S1 visibles côté ON/OFF: `distractor≈0.25`, `RoR=true/true`, `nsig2_cap=25.0`.
+- `first_divergence.key=None` sur ce case.
+
+## 2026-06-01 (S5 canonical upstream, filtre code-continuous neutralisé)
+
+- Patch causal appliqué dans `zeblindsolver.py` pour la parité amont S5:
+  - nouveau `canonical_disable_code_continuous_filter` actif en `astrometry_native_verify_semantics_mode`,
+  - effet: le préfiltre Ze `blind_astrometry_code_continuous_filter_enabled` n’élimine plus les candidats sur le chemin canonique natif.
+- Validation syntaxique: `python3 -m py_compile zeblindsolver/zeblindsolver.py zeblindsolver/verify.py zesolver.py` OK.
+- Probe same-FITS publié: `reports/r47i_s5_upstream_trace_probe_20260601_1201/summary.json`.
+  - Changement observé: le case de référence se ferme désormais avec `success=true` et `message=... phase=scale_only` sur ce protocole S5.
+  - Le rejet antérieur `perm_null_reason=code_continuous_log_delta_reject` disparaît de la tête de trace.
+- Instrumentation complémentaire ajoutée juste après dans `zeblindsolver.py`:
+  - `perm_null_reason="skip_no_seed_slices"` sur le `continue` où aucun `obs_slices` ne survit avant permutation.
+- Probe final post-instrumentation publié: `reports/r47i_s5_upstream_trace_probe_20260601_1203/summary.json`.
+  - Résultat durable: `pre_perm_n=5`, tous concentrés sur `pass_tag='widened_pass'` avec `perm_null_reason='skip_no_seed_slices'`.
+- Instrumentation seed-path ajoutée ensuite dans `zeblindsolver.py` et probe publié: `reports/r47i_s5_upstream_trace_probe_20260601_1208/summary.json`.
+  - Constat clé: sur les lignes `pre_perm`, `seed_code_hit_count=0`, `seed_ordered_hit_count=0`, `seed_strict_recover_attempted=true`, `seed_strict_recover_added=0`.
+  - Cause racine: en mode canonique, désactiver le filtre continu coupait aussi le calcul de `obs_code`, donc plus de matière pour le `rangesearch`/`strict_hash_recover`.
+- Correctif causal appliqué dans `zeblindsolver.py`:
+  - `obs_code` reste calculé dès qu’il est requis par le seed-path (`code_rs_enabled` ou `strict_mode_effective`), même si le filtre Ze `code_continuous_filter` reste désactivé pour la parité.
+- Probe post-correctif publié: `reports/r47i_s5_upstream_trace_probe_20260601_1209/summary.json`.
+  - Résultat durable: `pre_perm_n=0` sur la tête de trace same-FITS.
+  - Lecture durable: le résiduel `skip_no_seed_slices` était un artefact de l’itération de parité, pas un verrou solver amont fondamental sur ce case.
+- Suite logique validée:
+  - arrêter de micro-itérer ce candidat same-FITS;
+  - passer à une validation multicase stricte S5 pour voir si ce nettoyage amont tient hors du case de référence.
+
+## 2026-06-01 (S5 callsite/permutation, fermeture de l’angle mort sur trace frais)
+
+- Instrumentation runtime S5 enrichie dans `zeblindsolver.py`:
+  - ajout d’un champ `perm_callsite_label` qui encode explicitement `phase`, `pass_tag`, `level`, `agg_levels`, `levels_to_use`, `use_px_spec` et `use_ra_filter`.
+- Outillage S5 consolidé:
+  - `tools/r47i_s5_upstream_trace_probe.py` republie maintenant `trace_head_firstfit.json` pour le premier FITS du probe;
+  - `tools/r47i_s5_callsite_permutation_audit.py` et `tools/r47i_s5_math_permutation_audit.py` prennent le dernier trace S5 disponible par défaut au lieu de dépendre du dump figé `20260527_1008`.
+- Validation syntaxique: `python3 -m py_compile zeblindsolver/zeblindsolver.py tools/r47i_s5_upstream_trace_probe.py tools/r47i_s5_callsite_permutation_audit.py tools/r47i_s5_math_permutation_audit.py` OK.
+- Probe same-FITS relancé: `reports/r47i_s5_upstream_trace_probe_20260601_1215/summary.json` avec trace frais `trace_head_firstfit.json`.
+- Audit callsite/permutation relancé: `reports/r47i_s5_callsite_permutation_audit_20260601_1216/summary.json`.
+  - Résultat durable: `first_callsite_gap=null`, `preperm_rows_missing_reason=[]`, statut `closed`.
+- Audits de consolidation relancés sur le même trace:
+  - `reports/r47i_s5_stage_callsite_mapping_audit_20260601_1218/summary.json` => mapping stage/callsite fermé (`status=closed`).
+  - `reports/r47i_s5_permutation_callsite_audit_20260601_1221/summary.json` => variantes widened/aggregate reclassées comme attendues, `perm_inconsistency_count=0`, `status=closed`.
+  - `reports/r47i_s5_tuple_semantic_diff_audit_20260601_1221/summary.json` => `pass_tag` déjà disponible sur les tuples ciblés; le prochain diff utile est C-vs-Ze sur tuple identique, sans nouvelle instrumentation.
+- Audit maths/permutation relancé: `reports/r47i_s5_math_permutation_audit_20260601_1216/summary.json`.
+  - Résultat durable: toutes les checks source/runtime utiles restent vertes sur le trace frais.
+- Lecture durable:
+  - le gap historique `same_candidate_same_parity_perm_shift` était un faux positif créé par un vieux trace S5 incomplet et un audit qui mélangeait des callsites distincts;
+  - avec le trace frais + le label de callsite, l’angle mort permutation/callsite est refermé et le prochain step utile redevient le diff C-vs-Ze à candidat identique.
+
+## 2026-06-01 (S5 tuple C-vs-Ze, reclassement du résiduel en phase re-entry)
+
+- Audit tuple S5 enrichi dans `tools/r47i_s5_tuple_semantic_diff_audit.py`:
+  - support par défaut du dernier `trace_head_firstfit.json`,
+  - résumé par parité du tuple cible,
+  - détection explicite des cas `phase_reentry_without_perm_shift`.
+- Audit relancé: `reports/r47i_s5_tuple_semantic_diff_audit_20260601_1231/summary.json`.
+  - Sur `d50_2628`, les `perm_head` restent stables par parité (`nominal=[1,0,2,3]`, `mirror=[0,1,2,3]`).
+  - Le tuple est réémis 4 fois par parité via `scale_only/first_pass`, `scale_only/widened_pass`, `blind/first_pass`, `blind/widened_pass`.
+  - Le résiduel utile n’est donc plus un drift de permutation mais une **ré-entrée multi-phase du même tuple** incompatible avec la lecture la plus stricte de la boucle monotone `solver.c`.
+- Suite logique durable:
+  - le prochain delta causal S5 doit cibler l’isolation/suppression de cette ré-émission post-`scale_only` dans un protocole contraint, avant tout retuning produit.
+
+## 2026-06-01 (S5 expérience probe-only, suppression de la ré-entrée blind après scale_only)
+
+- Nouveau flag expérimental ajouté dans `zeblindsolver.py`:
+  - `blind_s5_skip_blind_reentry_after_scale_only_enabled`
+  - portée volontairement étroite: mode opt-in, saut des tuples déjà vus en `scale_only` lorsqu’ils reviennent en phase `blind`, sans changer le comportement produit par défaut.
+- Le probe S5 sait maintenant activer ce mode via `tools/r47i_s5_upstream_trace_probe.py --skip-blind-reentry-after-scale-only`.
+- Expérience publiée: `reports/r47i_s5_upstream_trace_probe_20260601_1234/summary.json`.
+  - `d50_2628` ne revient plus en `blind`; la queue de trace est remplacée par d’autres tuples (`d50_2824`, `d50_2725`).
+- Audit tuple relancé: `reports/r47i_s5_tuple_semantic_diff_audit_20260601_1236/summary.json`.
+  - `target_rows_count` passe de `8` à `4`,
+  - `target_seen_in_blind=false`,
+  - `perm_head` reste stable par parité,
+  - le résiduel utile sur ce case se réduit maintenant à `scale_only:first_pass -> widened_pass`.
+- Lecture durable:
+  - la ré-émission post-`scale_only` du tuple cible est bien un résiduel d’orchestration isolable;
+  - le prochain delta causal S5 doit viser la ré-émission intra-`scale_only`, pas les maths de permutation.
+
+## 2026-06-01 (S5 expérience probe-only, suppression de la ré-entrée widened après first_pass)
+
+- Nouveau flag expérimental ajouté dans `zeblindsolver.py`:
+  - `blind_s5_skip_scale_only_widened_reentry_after_first_pass_enabled`
+  - portée volontairement étroite: mode opt-in, saut d’un tuple déjà vu en `scale_only:first_pass` lorsqu’il revient en `scale_only:widened_pass`, sans changer le comportement produit par défaut.
+- Le probe S5 sait maintenant activer ce mode via `tools/r47i_s5_upstream_trace_probe.py --skip-scale-only-widened-reentry-after-first-pass`.
+- Expérience cumulée publiée: `reports/r47i_s5_upstream_trace_probe_20260601_1240/summary.json`.
+  - `d50_2628` ne survit plus qu’en `scale_only:first_pass`, une fois par parité.
+  - la solution du probe reste `success=true`, mais le terminal de ce run passe en `phase=blind`, preuve que l’espace libéré est repris par d’autres tuples au lieu d’être simplement supprimé du solve.
+- Audit tuple relancé: `reports/r47i_s5_tuple_semantic_diff_audit_20260601_1240/summary.json`.
+  - `target_rows_count=2`,
+  - `target_seen_in_blind=false`,
+  - `target_phase_reentry_detected=false`,
+  - `perm_head` reste stable par parité.
+- Lecture durable:
+  - sur le tuple sentinelle `d50_2628`, l’angle mort S5 `callsite/permutation/phase_reentry` est désormais refermé dans ce protocole contraint;
+  - le prochain diff utile doit se déplacer du tuple sentinelle vers les nouveaux tuples qui prennent la relève dans la tête de trace (`d50_2824`, `d50_2625`, `d50_2725`).
+
+## 2026-06-01 (S5 expérience probe-only, suppression de la ré-entrée blind:widened après blind:first_pass)
+
+- Nouveau flag expérimental ajouté dans `zeblindsolver.py`:
+  - `blind_s5_skip_blind_widened_reentry_after_first_pass_enabled`
+  - portée volontairement étroite: mode opt-in, saut d’un tuple déjà vu en `blind:first_pass` lorsqu’il revient en `blind:widened_pass`, sans changer le comportement produit par défaut.
+- Le probe S5 sait maintenant activer ce mode via `tools/r47i_s5_upstream_trace_probe.py --skip-blind-widened-reentry-after-first-pass`.
+- Expérience cumulée publiée: `reports/r47i_s5_upstream_trace_probe_20260601_1309/summary.json`.
+  - `d50_2625` ne survit plus qu’en `blind:first_pass`, une fois par parité.
+  - la widened blind du même run est reprise par un nouveau tuple `d50_2821`, ce qui confirme que le solve continue à remplir la tête résiduelle au lieu de simplement perdre des lignes.
+- Audit tuple relancé: `reports/r47i_s5_tuple_semantic_diff_audit_20260601_1310/summary.json` (cible `d50_2625`).
+  - `target_rows_count=2`,
+  - `target_seen_in_blind=true`,
+  - `target_phase_reentry_detected=false`,
+  - `perm_head` reste stable par parité.
+- Lecture durable:
+  - les tuples sentinelles `d50_2628` et `d50_2625` sont maintenant ramenés à des flux `first_pass` simples dans ce protocole contraint;
+  - le prochain diff utile doit se déplacer vers les successeurs qui occupent encore la tête résiduelle (`d50_2824`, `d50_2821`) et le cas transversal `d50_2822`.
+
+## 2026-06-01 (S5 audit de la tête résiduelle, sans nouveau patch runtime)
+
+- Nouvel outil ajouté: `tools/r47i_s5_remaining_head_order_audit.py`.
+  - but: classer chaque ligne de la tête S5 résiduelle comme `c_like_first_occurrence`, `same_tuple_widened_reentry`, `widened_candidate_carryover`, `widened_new_candidate`, etc., sans rouvrir l’instrumentation runtime.
+  - point pratique fixé dans l’outil: les paires de parité `first_pass` sont reclassées comme **non résiduelles**, et les artefacts tuple multi-cibles ont maintenant un nom de sortie stable par `candidate_key`.
+- Audit publié: `reports/r47i_s5_remaining_head_order_audit_20260601_134051/summary.json` sur le trace `reports/r47i_s5_upstream_trace_probe_20260601_1309/trace_head_firstfit.json`.
+- Résultat durable:
+  - premier résiduel causal restant = `d50_2822`, `row_index=1`, `phase=hinted`, `pass_tag=widened_pass`, classe `same_tuple_widened_reentry`;
+  - compteurs résiduels utiles:
+    - `same_tuple_widened_reentry=2`
+    - `widened_candidate_carryover=5`
+    - `widened_new_candidate=2`
+  - candidats dominants du résiduel:
+    - `d50_2822` (4 lignes),
+    - `d50_2824` (2),
+    - `d50_2821` (2),
+    - `d50_2725` (1).
+- Lecture durable:
+  - après nettoyage probe-only de `d50_2628` et `d50_2625`, le prochain diff utile S5 doit se concentrer sur `d50_2822` côté `hinted:first_pass -> hinted:widened_pass`;
+  - `d50_2824` et `d50_2821` deviennent des successeurs résiduels secondaires, pas le premier écart causal.
+
+## 2026-06-01 (S5 expérience probe-only, suppression des widened-only tuples)
+
+- Nouveaux flags expérimentaux ajoutés dans `zeblindsolver.py`:
+  - `blind_s5_skip_scale_only_widened_only_tuples_enabled`
+  - `blind_s5_skip_blind_widened_only_tuples_enabled`
+  - portée volontairement étroite: mode opt-in, saut des tuples émis uniquement en `widened_pass` sans équivalent `first_pass` dans la même phase.
+- Le probe S5 sait maintenant activer ce mode via `tools/r47i_s5_upstream_trace_probe.py --skip-scale-only-widened-only-tuples --skip-blind-widened-only-tuples`.
+- Expérience cumulée publiée: `reports/r47i_s5_upstream_trace_probe_20260601_1315/summary.json`.
+  - La tête de trace passe de `16` lignes (`1309`) à `10`.
+  - `newpoint` reste monotone et l’audit global reste vert: `reports/r47i_s5_newpoint_permutation_gap_audit_20260601_1316/summary.json` (`first_causal_gap=null`).
+  - La structure résiduelle devient:
+    - `d50_2822` dans `hinted` seulement (`first_pass` + `widened_pass`);
+    - `d50_2628` dans `scale_only:first_pass` seulement;
+    - `d50_2824` et `d50_2725` dans `blind:first_pass`.
+- Audits tuple publiés sur cette tête résiduelle:
+  - `reports/r47i_s5_tuple_semantic_diff_audit_d50_2822_20260601_131622/summary.json`
+  - `reports/r47i_s5_tuple_semantic_diff_audit_d50_2824_20260601_131622/summary.json`
+  - `reports/r47i_s5_tuple_semantic_diff_audit_d50_2725_20260601_131622/summary.json`
+- Lecture durable:
+  - les widened-only opportunistes n’étaient pas indispensables pour produire une tête diffable;
+  - le prochain diff utile peut désormais se faire directement sur la tête `1315`, sans ajouter de nouvelle instrumentation ni de nouveau flag de skip dans l’immédiat.
+
+## 2026-05-26 (S3.1 démarrage, onefield accept-machine)
+
+- Premier bloc S3.1 traité dans `zeblindsolver.py` (alignement `onefield`):
+  - `record_match_callback` intègre désormais `nsolves_sofar` avec seuil configurable `blind_nsolves_required` (et CLI associée `--blind-nsolves-required`).
+  - La sélection `best_solution` est passée en logique `logodds-first` (priorité `solve_logodds`, puis `accept_logodds`, puis `prob_logodds`), avec fallback inliers/RMS seulement à égalité.
+  - Le dedup runtime multi-solution privilégie maintenant le score logodds et utilise `fieldfile/fieldnum` quand disponibles (fallback local sinon).
+- Contrôle de non-régression syntaxique validé: `python3 -m py_compile zeblindsolver/zeblindsolver.py` OK.
+- Statut durable: S3.1 lancé concrètement; reste à valider par artefact runtime ciblé et à finir la parité stricte `best_match_solves/remove_duplicate_solutions`.
+
+## 2026-05-24 (S1 micro-runner verify-only)
+
+- Nouveau micro-runner ajouté: `tools/r47i_s1_verify_only_replay.py`.
+  - Entrée: bundle forced d’un artefact S1 (`forced_test/ref/perms` + `on/off_verify_sets` + `on/off_refpool_trace`).
+  - Comportement: rejeu **verify/accept uniquement** via `_astrometry_verify_sequence_logodds` (sans repasser par la recherche candidat amont).
+- Artefact de preuve publié: `reports/r47i_s1_verify_only_replay_case055_20260524_1156/summary.{json,md}`.
+  - ON/OFF strictement identiques en verify-only (`verify_logodds=11.010719844475592`, `accept_band=below_toprint`, `reason_code=accept_logodds_gate`).
+  - `first_divergence=None`.
+- Conséquence durable: sur ce case et ce bundle figé, la divergence n’est plus amont; le comportement résiduel est purement séquentiel verify/accept et déjà aligné ON/OFF.
+
+## 2026-05-24 (S1 bundle pré-verify enrichi)
+
+- Harness `tools/r47i_s1_forced_payload_full_replay.py` enrichi pour produire un bundle pré-verify plus complet: `forced_preverify_bundle.json`.
+- Artefact de référence: `reports/r47i_s1_forced_payload_full_replay_case055_20260524_1252/`.
+  - Bundle contient: `test_xy_use/ref_xy_use/testsigma2_use`, `refperm/testperm`, `quad_center/q2`, `pix2`, `fieldcenter/radius`.
+  - `refstarid` désormais alimenté (head IDs dérivés depuis `on_refpool_trace.trace[*].gid_head`).
+  - `mo_star/mo_field` restent `null` (non exportés nativement par le runtime actuel).
+
+## 2026-05-23 (S1 harness same-hit candidate replay)
+
+- Instrumentation durable ajoutée dans `zeblindsolver.py` pour S1:
+  - `object_index` propagé dans `candidate_ctx`, `verify_hit_trace` et `astrometry_match_objects`;
+  - export explicite des champs utiles de rejeu/parité dans `astrometry_match_objects` et `verify_hit_trace` (`verify_entry_*`, `verify_refperm_*`, `prob_testsigma_*`, `prob_quad_q2_px2`, `prob_verify_steps`).
+- Harness de rejeu S1 ajouté: `tools/r47i_s1_samehit_candidate_replay.py`.
+  - Capacité validée: auto-sélection d’un candidat `accept_logodds_gate` compatible avec le `manifest` de l’index actif, puis replay OFF/ON et publication `ab_summary.{json,md}`.
+- Artefact durable publié:
+  - `reports/r47i_s1_samehit_candidate_replay_case055_20260523_1000b/ab_summary.{json,md}`.
+- Résultat factuel de ce run:
+  - candidat ON trouvé/rejoué: `phase=hinted`, `level=S`, `parity=nominal`, `tile=d50_2823`, `reason_code=accept_logodds_gate`;
+  - métriques ON exportées: `NT/NR=51/1`, `testsigma_mode=gamma_like`, `quad_q2_px2=15324.2865`, séquence `theta_head`, `best/worst logodds`;
+  - OFF ne reproduit pas encore le même hit (terminal `no valid solution`), donc protocole S1 iso-candidat toujours ouvert.
+
+## 2026-05-22 (S0 mode exclusivity audit + angle mort)
+
+- Audit S0/S1 publié: `reports/r47i_s0_mode_exclusivity_audit_20260522_0752/summary.{md,json}`.
+- Portée scannée: 6 artefacts `ab_summary.json` (`r47i_s0*` + `r47i_s1*`), 12 lignes OFF/ON contrôlées.
+- Verdict validé: **PASS**. Sur toutes les probes, `strict_mode_effective=true`, `non_parity_mode_effective=false`, `exact_preverify_effective=false`, `verify_only_injected_effective=false`, avec cohérence OFF (`native_effective=false`) / ON (`native_effective=true`).
+- Mise à jour backlog: item S0 « mode exclusif utilisé dans les probes de parité » coché `[x]` dans `followup.md`.
+- Angle mort ajouté dans `followup.md`: le gate `a2v34 scale plausibility` n’est pas explicitement forcé OFF par `astrometry_native_verify_semantics` (il dépend encore d’un flag config), ce qui peut réintroduire un rejet Ze pré-verify en mode canonique si mal paramétré.
+- Correctif appliqué ensuite dans `zeblindsolver.py`: ajout d’un disable canonique explicite `canonical_disable_a2v34_scale_plausibility` en mode natif, instrumentation `mode_profile` associée (`canonical_disable_a2v34_scale_plausibility` + note `disabled_a2v34_scale_plausibility_in_native_mode`), et garde runtime du gate `a2v34`.
+- Validation du delta: `python3 -m py_compile zeblindsolver/zeblindsolver.py zeblindsolver/verify.py` => OK.
+- Artefact de patch publié: `reports/r47i_s0_a2v34_canonical_disable_20260522_0756/summary.{md,json}`.
+- Correctif suivant appliqué dans `zeblindsolver.py`: disable canonique explicite du `scale hard filter` (`canonical_disable_scale_hard_filter`) avec forçage runtime `hard_filter_enabled_runtime=False` en mode natif + télémétrie `mode_profile` (`canonical_disable_scale_hard_filter`, note `disabled_scale_hard_filter_in_native_mode`).
+- Validation du delta: `python3 -m py_compile zeblindsolver/zeblindsolver.py zeblindsolver/verify.py` => OK.
+- Artefact de patch publié: `reports/r47i_s0_scalehard_canonical_disable_20260522_0815/summary.{md,json}`.
+- Probe rapide ON/OFF publié: `reports/r47i_s0_scalehard_modeprofile_probe_fast_20260522_0819/ab_summary.{md,json}`.
+- Constat durable associé: sur ce chemin d'échec rapide, `mode_profile` n'est pas présent dans `sol.stats` (clés canoniques absentes), donc l'observabilité runtime des disables canoniques reste incomplète tant que ce point n'est pas corrigé.
+- Correction durable de ce constat: le `mode_profile` runtime est exporté sous `sol.stats["astrometry_semantics"]["mode_profile"]` (et non en top-level `sol.stats["mode_profile"]`) sur ces chemins d'échec.
+- Audit runtime OFF/ON publié: `reports/r47i_s0_canonical_disable_runtime_audit_20260522_0859/ab_summary.{md,json}`.
+  - Résultat validé: `on_all_true=true`, `off_all_false=true` pour tous les flags `canonical_disable_*` attendus.
+  - Lecture durable: le chemin canonique s'exécute bien avec les courts-circuits ciblés neutralisés; le blocage restant S0 n'est plus l'observabilité des disables mais le court-circuit `validate_solution()` avant accept gate natif.
+- Audit global post-compaction relancé (mission + blocage S0): confirmation causale que `validate_solution()` peut encore court-circuiter la chaîne native `verify -> accept` via plusieurs callsites (`main`, `validate_scale_rescue`, `a2v33`, `tweak2`, `posthit_tan_refit`, `posthit_sip`).
+- Angle mort complémentaire ajouté au backlog: `preverify_center_prior` peut encore rejeter pré-transaction en présence de hints/config (pas neutralisé explicitement par `astrometry_native_verify_semantics`).
+- Plan S0 enrichi dans `followup.md`: neutralisation canonique explicite des rescues/réécritures non Astrometry (`validate_scale_rescue`, `a2v33_borderline_rms`, `tweak2_verify`, `posthit_tan_refit`, `posthit_sip`) + neutralisation explicite `preverify_center_prior` avec trace `mode_profile`.
+- Clarification d'usage index: `astrometry-indexes/` (fichiers `.fits` téléchargés) ne contient pas de `manifest.json` et ne peut pas être consommé directement par `solve_blind` (qui attend un index Ze avec manifest), d'où usage d'un index Ze local `reports/forensic_case055_subset96/index` pour les probes runtime.
+
+## 2026-05-21 (reprise mission + probe S1 same-hit)
+
+- Reprise du chantier après interruption avec relecture croisée de `followup.md`, des artefacts `r47i_s0_*` et du code actif `zeblindsolver.py`.
+- Validation de base après reprise: `python3 -m py_compile zeblindsolver/zeblindsolver.py zeblindsolver/verify.py` => OK.
+- Probe ciblé S1 publié dans `reports/r47i_s1_verify_entry_forced_tile_case055_20260521_1430/` pour essayer d'obtenir un comparatif OFF/ON sur un même hit via tile-lock forcé `d50_3018`.
+- Résultat durable de ce probe: le tile-lock seul ne suffit pas encore à fabriquer un protocole `same-hit verify-entry` stable.
+  - OFF retombe sur `strict_pairset_scale_gate_reject` (`pairing=10`, `verify_hit_trace_count=0`).
+  - ON natif ne retrouve même pas le hit post-pairset attendu et échoue plus tôt en `hypothesis failed before validation` (`hypothesis=10`, `verify_hit_trace_count=0`).
+  - Aucun dump `blind_verify_forensic_dump_path` n'a été produit, preuve que l'entrée verify n'a pas été atteinte sur ce harness.
+- Lecture durable: la prochaine brique causale n'est pas un nouveau tuning verify, mais la construction d'un **harness de rejeu du même candidat** (capture/replay du candidat natif qui atteint `accept_logodds_gate`) avant de poursuivre S1/S2.
+
+## 2026-05-20 (audit élargi Astrometry vs ZeBlind + refonte followup)
+
+- Relecture consolidée de l'audit source-à-source Astrometry vs ZeBlind avec recentrage sur les écarts **encore ouverts** réellement structurants.
+- Conclusion durable reformulée: le trou restant n'est pas un simple paramètre, mais un ensemble cohérent d'écarts de sémantique entre notre chemin Ze courant et le vrai chemin Astrometry.
+- Relecture complémentaire validée ensuite sur `solver.c / verify.c / onefield.c / engine.c` : certains écarts de parité devaient être explicités noir sur blanc dans `followup.md`, en particulier
+  - le chemin `solver_verify_sip_wcs()` / `fake_match` (injection verify sur tous les index, `distance_from_quad_bonus=FALSE`, sémantique fake-match distincte),
+  - la politique exacte `record_match_callback / best_match / best_match_solves / remove_duplicate_solutions`,
+  - la matérialisation du hit avant verify (`quadfile_get_stars -> startree_get -> fit_tan_wcs -> set_center_and_radius`) et la collecte ref `bounding circle -> inside image` avec sémantique `NRall / NRimage / NR`.
+- Ordre de mise en oeuvre désormais clarifié et validé dans `followup.md` : **verrouiller d'abord l'aval canonique sur candidat figé** (`S0 -> S4`), puis seulement **remonter vers l'amont solver** (`S5`) et finir par validation end-to-end / smoke Seestar (`S6`). Lecture durable: commencer par `A2/A3` trop tôt compliquerait inutilement le chantier et brouillerait les causalités.
+- Premier delta S0 implémenté dans `zeblindsolver.py` : quand `blind_astrometry_native_verify_semantics_enabled=1` sous chemin strict, le runtime force désormais un **profil canonique unique** pour éviter les mélanges silencieux avec `blind_astrometry_exact_validation_preverify_parity_enabled`, `blind_non_parity_mode_enabled`, `blind_verify_only_injected_wcs_enabled` et le relâchement `strict_disable_nonastrometry_fallbacks`; les artefacts exportent maintenant `requested vs effective` + `mode_profile_notes` pour rendre ces overrides visibles.
+- Deuxième delta S0 implémenté dans `zeblindsolver.py` : plusieurs courts-circuits Ze restés actifs même en mode natif ont été explicitement neutralisés côté runtime effectif et exposés dans le `mode_profile`, notamment `strict_pair_pool_expand`, `pair_scale_prefilter`, `scale_prefilter`, `strict_require_perm_hash_match`, `strict_slot_align`, `strict_resolve_hit_relaxed_retry`, `resolve_hit_pool_adaptive_fallback`, `strict_resolve_hit_seed_fallback` et `empty_inliers_fallback`.
+- Gap de backlog clarifié dans `followup.md` : il ne suffisait pas de publier `requested vs effective` au niveau macro, il fallait aussi tracer quels **courts-circuits Ze résiduels** sont forcés OFF dans le profil canonique natif.
+- Rerun S0 court publié dans `reports/r47i_s0_canonical_ab_case055_short_20260520_200006/ab_summary.json` : OFF et ON restent alors bloqués avant verify (`verify_hit_trace_count=0`), avec dominance `pairing`, preuve que le prochain écart causal n’était pas encore dans l’aval verify.
+- Diagnostic ciblé S0 ensuite : le vrai prochain bloqueur du chemin canonique natif était encore `strict_pairset_scale_gate_reject` (documenté dans `reports/r47i_s0_pairset_gap_and_canonical_shift_20260520_2012.md`). Correction appliquée dans `zeblindsolver.py` : désactivation runtime explicite de `blind_pairset_scale_gate_enabled` et `blind_pairset_scale_recenter_enabled` quand `blind_astrometry_native_verify_semantics_enabled=1`, avec publication dans `mode_profile`.
+- Signal causal post-patch validé : après neutralisation du pairset gate, le chemin natif ON ne meurt plus sur `strict_pairset_scale_gate_reject` mais atteint des rejets plus aval de type `blind accept-logodds below toprint`; la prochaine cible utile se situe donc désormais dans la chaîne verify/accept native, plus dans le pairset gate.
+- Artefact S0 de lecture rapide publié dans `reports/r47i_s0_mode_profile_off_on_20260520_2016.md`, pour figer le comparatif OFF/ON `requested vs effective` du profil canonique sans devoir replonger dans le JSON brut.
+- Familles d'écarts désormais verrouillées comme backlog principal:
+  - entrées verify encore mixtes (`inlier_pairs` vs `full field stars / full projected index stars`),
+  - ordre/composition des pools (`refperm`, exclusion quad stars, ordre test-stars),
+  - géométrie native du quad (`quad_center`, `Q2`, RoR),
+  - modèle probabiliste (`distractor=0.25`, `testsigma²` Astrometry réel),
+  - machine d'acceptation exacte (`verify -> tune -> re-verify -> accept`) sans gates Ze parasites,
+  - fidélité de traversée amont `newpoint/add_stars/try_permutations/startobj/endobj`,
+  - orchestration solver autour de `solver.c / control-program.c / onefield.c / engine.c`.
+- `followup.md` a été entièrement remanié pour refléter cette checklist de parité complète et séparer clairement :
+  - ce qui relève du **chemin canonique Astrometry**,
+  - de ce qui relève plus tard du tuning produit Ze.
+- Vérification utile sur les indexes locaux: le dossier `projects/ZeSolver/astrometry-indexes/` ne contient actuellement que `4100/index-4110..4119`.
+- Lecture durable sur couverture Seestar: ce set couvre seulement les quads ~`60..2000` arcmin, ce qui est insuffisant/au mieux limite pour un FOV Seestar typique (~`76 x 43` arcmin, diagonale ~`88` arcmin) ; les plages plus petites `4107/4108/4109` et probablement `5206/5205` (voire `5204`) restent les candidats naturels à ajouter.
+
 ## 2026-05-18 (oracle ASTAP sur EQ/IRCUT)
 
 - Mise en place d'un lot oracle local à partir de `/home/tristan/zemosaic/example/organized/EQ/IRCUT` : 30 copies FITS nettoyées WCS dans `reports/eq_ircut_cleanbench_20260518_230249/data`.
@@ -747,3 +2286,1626 @@
     - ON strict global: échec `no valid solution`.
     - Conclusion validée: le strict refperm global est **trop agressif** en l’état (risque de régression solve-rate), non activable en prod tel quel.
   - Décision durable: conserver ce chemin en expérimental (OFF par défaut) et ne poursuivre qu’avec garde-fous/fallback explicites.
+
+- 2026-05-23 (S0 validate short-circuit instrumentation v2):
+  - Extension d’instrumentation appliquée dans `zeblindsolver.py` autour de `validate_solution()`:
+    - ajout `blocked_stage` normalisé par callsite;
+    - ajout `fail_class` normalisé;
+    - ajout export agrégé `validate_short_circuit_inventory` (total, `by_stage`, `by_fail_class`, `by_stage_fail_class`) dans `stats` succès + échec.
+  - Validation technique immédiate: `python3 -m py_compile zeblindsolver/zeblindsolver.py zeblindsolver/verify.py` OK.
+  - Constat runtime provisoire: probes courts bornés (`reuse_existing_wcs=OFF` + caps durs + timeout) restent majoritairement en timeout amont, empêchant encore la publication d’un inventaire runtime diffable stable des branches réellement bloquantes.
+  - Décision de pilotage: marquer l’étape “instrumentation” comme faite dans `followup.md`, conserver séparément l’étape “publication inventaire runtime diffable” comme ouverte avec blocage explicite.
+
+- 2026-05-23 (S0 validate runtime inventory + semantics split):
+  - Inventaire runtime diffable finalement publié sur `case055` OFF/ON: `reports/r47i_s0_validate_blocking_inventory_case055_20260523_0230/ab_summary.{md,json}`.
+  - Signal capturé côté ON: `validate_callsite_counts={\"validate_base\": 18}` ; `validate_short_circuit_count=0` sur ce probe, avec export agrégé stable `validate_short_circuit_inventory`.
+  - Scission sémantique appliquée dans `_validate_solution_traced(...)`:
+    - `metrics_only` (passthrough non bloquant) pour échecs métriques en mode canonique natif;
+    - `hard_fail_structural` conservé pour cas structurels (pas de matches / WCS inutilisable / résidu non exploitable).
+  - Champs runtime ajoutés: `validate_semantics_mode`, `validate_reason_code`, `validate_blocked_stage`, `validate_fail_class`, `validate_metrics_only_passthrough`, `validate_original_*`.
+  - Probe de contrôle post-split: `reports/r47i_s0_validate_semantics_split_case055_20260523_0238/ab_summary.{md,json}`.
+
+- 2026-05-23 (S0 neutralisation rescues de validation non-Astrometry):
+  - En mode canonique natif, neutralisation explicite appliquée sur:
+    - `validate_scale_rescue`
+    - `a2v33_borderline_rms`
+    - `tweak2_verify`
+    - `posthit_tan_refit`
+    - `posthit_sip`
+  - Implémentation: garde runtime `not astrometry_native_verify_semantics_mode` ajoutée sur ces branches dans `zeblindsolver.py`.
+  - Vérification probe ON: `reports/r47i_s0_native_disable_validation_rescues_case055_20260523_0245/summary.{md,json}`.
+  - Résultat: compteurs agrégés de rescues neutralisés tous à `0` sur ce cas (`validate_callsite_counts` reste concentré sur `validate_base`).
+
+- 2026-05-23 (S0 neutralisation preverify_center_prior en canonique):
+  - Ajout d’un disable canonique explicite `canonical_disable_preverify_center_prior` dans `zeblindsolver.py`.
+  - Gate `preverify_center_prior` désormais court-circuité quand `astrometry_native_verify_semantics_mode=True`.
+  - Trace ajoutée dans `astrometry_semantics.mode_profile`: `canonical_disable_preverify_center_prior`.
+  - Probe ON `case055`: `reports/r47i_s0_disable_center_prior_case055_20260523_0250/summary.{md,json}`.
+  - Vérification runtime: `native_verify_semantics_effective=true` et `canonical_disable_preverify_center_prior=true`.
+
+- 2026-05-23 (S0 transaction/accept-gate guardrails):
+  - Passage transactionnel canonique renforcé: dans `_solver_handle_hit_transaction_runtime(...)` + `_solver_handle_hit_postverify_transaction_runtime(...)`, un échec `metrics_only` peut être promu pour laisser dérouler `postverify -> stage_pipeline -> accept_gate` quand verify est calculable.
+  - Champs diagnostics ajoutés: `validate_metrics_passthrough_count`, `validate_metrics_passthrough_trace_head`, et marqueurs de passthrough transaction/postverify.
+  - Garde-fou natif ajouté avant `validate_gate`: si `quality=FAIL` provient d’un motif validate-like et qu’aucun `accept_gate` n’a encore été exécuté, promotion contrôlée + ré-exécution `stage_pipeline` (anti-court-circuit pré-accept).
+  - Probes de contrôle:
+    - `reports/r47i_s0_force_stage_pipeline_metrics_passthrough_case055_20260523_0300/summary.{md,json}`
+    - `reports/r47i_s0_preaccept_validate_guard_case055_20260523_0310/summary.{md,json}`
+  - Sur `case055`, les triggers restent à `0` (garde-fous non activés), mais la mécanique est déployée et traçable.
+
+- 2026-05-23 (S0 A/B same-hit post-guard, clôture bloc validate):
+  - A/B same-hit OFF/ON publié: `reports/r47i_s0_samehit_ab_post_guard_case055_20260523_0320/ab_summary.{md,json}`.
+  - Baseline de comparaison intégrée: `reports/r47i_s0_validate_blocking_inventory_case055_20260523_0230/ab_summary.json`.
+  - Résultat durable:
+    - `validate_short_circuit_count` reste `0` avant/après (OFF et ON);
+    - divergence OFF/ON documentée (native effectif ON uniquement côté canonique);
+    - décision finale + provenance runtime publiées (terminal `validate_gate:fail` sur ce cas ON, sans court-circuit validate amont).
+  - `followup.md` mis à jour: item global S0 “sortir les rejets Ze non Astrometry” coché sur base de la preuve artefactée.
+
+- 2026-05-23 (S1 same-hit forced payload continuation, post-crash):
+  - Artefact de rejeu OFF forcé publié: `reports/r47i_s1_forced_payload_off_probe_case055_20260523_1028/summary.{json,md}`.
+    - Candidat: `hinted/S/nominal/d50_2823`.
+    - ON: `reason_code=accept_logodds_gate` (`accept_logodds=-1.386...`).
+    - OFF forcé: `reason_code=validation_failed` (échec RMS), divergence causale conservée.
+  - Nouveau harness dédié créé: `tools/r47i_s1_forced_payload_full_replay.py` pour rejouer ON->OFF avec payload verify complet.
+  - Blocage observabilité confirmé: sur runs ON de contrôle (`tmp_dbg_sets_manual_20260523_1042/1046`), `on_refpool_trace.json` est bien produit (avec `verify_input_final`) mais `on_verify_sets.json`/`on_forensic_rows.json` restent absents.
+  - Patch instrumentation ajouté dans `zeblindsolver.py`: dump `pre_verify_call` branché sur `blind_astrometry_verify_debug_dump_sets_path` avant l’appel verify; malgré cela le dump attendu ne sort pas sur ce cas, ce qui indique un court-circuit amont/latéral restant à localiser.
+
+## 2026-05-23 (S1 full-payload unblock + nouveau blocage OFF pré-verify)
+
+- Correctif runtime appliqué dans `zeblindsolver.py` (`_solver_handle_hit_postverify_transaction_runtime`): remplacement de l’usage hors-scope `phase_name` dans les dumps pre/post-verify par un label local dérivé de `stats`.
+- Effet durable: disparition du crash de dump `verify_dump_error[... name 'phase_name' is not defined]` observé sur `case055` en mode forensic strict.
+- Validation technique: `python3 -m py_compile zeblindsolver/zeblindsolver.py tools/r47i_s1_forced_payload_full_replay.py` OK.
+- Artefact de preuve S1 full-payload publié: `reports/r47i_s1_forced_payload_full_replay_case055_20260523_1255/summary.{json,md}`.
+  - `on_verify_sets.json` et `on_forensic_rows.json` générés avec payload complet (`test=51`, `ref=12`, perms `51/12`).
+  - Divergence OFF/ON toujours présente au premier point causal: `reason_code` (`ON=accept_logodds_gate`, `OFF=pixel_scale_out_of_range[scale=1.328,min=1.525,max=15.000]`).
+- Lecture durable: le verrou S1 n’est plus l’observabilité des dumps; le nouveau verrou est un gate Ze d’échelle pré-verify côté OFF qui empêche l’entrée verify malgré payload forcé.
+
+- 2026-05-25 (S1 strict: gel des façonnages verify non C-like):
+  - Patch appliqué dans `zeblindsolver/zeblindsolver.py` pour renforcer `blind_astrometry_s1_strict_enforce`.
+  - Nouveau garde-fou runtime: en mode canonique natif S1 (hors forced replay), lever `s1_invalid[verify_pool_noncanonical_shaping:*]` si un shaping local Ze modifie le pool verify (`verify_local_ref_recenter`, `verify_refstar_cap`, `verify_teststar_filter`, `verify_testperm_reorder`).
+  - Effet recherché: empêcher silencieusement les dérives non-Astrometry dans la phase S1 aval et rendre ces écarts immédiatement diffables via `s1_invalid_reason`.
+  - Validation technique: `python3 -m py_compile zeblindsolver/zeblindsolver.py` OK.
+
+- 2026-05-25 (validation runtime du garde-fou S1 pool-shaping):
+  - Probe artefacté: `reports/r47i_s1_poolshape_probe_case055_20260525_0720/summary.json`.
+  - Injection volontaire de shaping local non C-like (`verify_local_ref_recenter` actif) en mode canonique natif S1.
+  - Le candidat ciblé est rejeté avec `s1_invalid[verify_pool_noncanonical_shaping:verify_local_ref_recenter]` au stage `validate_gate` (trace `verify_hit_trace`).
+  - Point d’observabilité: sur ce run global, le drapeau top-level `stats.s1_invalid` peut rester `false`; la preuve robuste est la raison candidate-stage dans la trace.
+
+- 2026-05-25 (S1 canonical: suppression fallback inlier-only):
+  - Durcissement appliqué dans `zeblindsolver.py`: en `astrometry_native_verify_semantics_mode`, le fallback verify via `matches_array` est retiré (plus de chemin fonctionnel `inlier_fallback_matches_array`).
+  - En cas de pool natif indisponible, le run strict est explicitement invalidé (`s1_invalid[verify_native_pool_unavailable]`) au lieu d’un fallback silencieux.
+  - Validation harness: `reports/r47i_s1_forced_payload_full_replay_case055_20260525_0734/summary.json` conserve la parité OFF/ON (`first_divergence=None`, `accept_logodds_gate` des deux côtés).
+
+- 2026-05-25 (S1 strict collect-ref hardening):
+  - Renforcement du garde-fou `blind_astrometry_s1_strict_enforce` sur la collecte ref canonique.
+  - Les fallbacks heuristiques de pool sont désormais explicitement classés non-canoniques et bloquants (`s1_invalid`) quand la collecte native stricte est attendue:
+    - `refpool_source_from_collect_n`
+    - `refpool_source_cap_n`
+    - `strict_no_seed_mapping`
+  - Objectif: rapprocher l’item S1 « collecte ref verify_hit C stricte sans fallback heuristique » d’une clôture artefactable.
+  - Validation: `python3 -m py_compile zeblindsolver/zeblindsolver.py` OK.
+
+- 2026-05-25 (S1: collecte ref canonique durcie):
+  - En mode S1 strict natif, la collecte ref est désormais contrainte au parcours canonique scope WCS -> projection WCS -> inside-image, avec invalidation explicite si signaux non canoniques.
+  - Nouveaux marqueurs non canoniques injectés dans `verify_ref_collect_noncanonical`: `verify_ref_mode_noncanonical[...]`, `mirror_scope_source_noncanonical[...]`, `external_ref_pool_enabled`.
+  - Le scope global ref est forcé actif en strict (pas de dépendance à un flag config externe pour activer le comportement attendu en S1).
+  - Validation ON/OFF verte sur case055: `reports/r47i_s1_forced_payload_full_replay_case055_20260525_0752/summary.json` (`first_divergence=None`, `accept_logodds_gate` des deux côtés).
+
+- 2026-05-25 (S1 strict MatchObj guard):
+  - Ajout d’un garde-fou bloquant sur la matérialisation MatchObj en mode canonique natif.
+  - Si `mo_native_source` vaut `nearest_*`/`none`, on lève `s1_invalid[verify_matchobj_not_materialized:*]`.
+  - Interprétation durable: l’export `mo.star/mo.field` ne suffit plus; la clôture S1 exige désormais une provenance non-proxy explicite.
+
+- 2026-05-25 (S1: matérialisation MatchObj avant verify):
+  - `zeblindsolver.py` utilise maintenant en priorité `collect_pref_pair_idx` pour matérialiser les ancres `mo.star/mo.field` (quad) au lieu d’un proxy nearest.
+  - Nouvelles sorties observabilité ajoutées: `mo_quadpix`, `mo_quadxyz`, `mo_scale` (en plus de `mo_star/mo_field/mo_native_source`).
+  - Sur case055, la source est bien `mo_native_source=collect_pref_pair_idx` et la parité ON/OFF reste intacte (`reports/r47i_s1_forced_payload_full_replay_case055_20260525_0848/summary.json`).
+
+- 2026-05-25 (S1 strict MatchObj completeness):
+  - Après le guard source non-proxy, ajout d’un guard de complétude structurelle MatchObj.
+  - Les runs S1 natifs échouent désormais si le bundle `mo` n’est pas complet (4/4 + scale), ce qui verrouille la preuve attendue avant clôture.
+  - Instrumentation `verify_matchobj_source/field_n/star_n/quadpix_n/quadxyz_n/scale` publiée dans les stats verify.
+
+- 2026-05-25 (S1 strict closure revalidée):
+  - `r47i_s1_canonical_strict_closure_case055_20260525_1011/summary.json` passe `all_ok=true`.
+  - Ajustement nécessaire du checker de clôture: accepter le `pool_source` canonique runtime actuel (`field_mirror_global_refscope_tile_world_gidperm`) en plus de l’ancien libellé strict.
+  - La parité OFF/ON reste inchangée sur case055 (first_divergence none, fingerprint identique, verify-only divergence none).
+
+- 2026-05-25 (lisibilité backlog):
+  - `followup.md` enrichi d’un bloc en tête `Backlog opératoire lisible (pilotage)` avec files `NOW/NEXT/LATER`.
+  - Objectif: pilotage rapide sans perdre l’historique détaillé S0..S5 plus bas dans le fichier.
+  - Convention pratique: exécuter d’abord `NOW`, ne remonter à `NEXT` qu’après artefact vert sur `NOW`.
+
+- 2026-05-25 (audit S2 vs Astrometry):
+  - Revue S2 effectuée, couverture globalement solide, mais 3 angles morts explicites ajoutés au backlog:
+    1) assertions runtime d’invariants canonique S2 (anti-fallback silencieux),
+    2) validation multi-cas (au-delà de case055),
+    3) audit stabilité numérique verify/log-odds (ties, NaN/inf, clipping).
+  - `followup.md` mis à jour dans la section S2.
+
+- 2026-05-25 (S2 item complété):
+  - `quad_center`/`Q2` sont désormais calculés prioritairement depuis le vrai quad d'hypothèse (indices image issus de `collect_pref_pair_idx`) au lieu de `img_in` head-only.
+  - Nouvelle provenance runtime: `quad_center_source=collect_pref_pair_idx_quad`.
+  - Non-régression parité validée sur case055: `reports/r47i_s1_forced_payload_full_replay_case055_20260525_2355/summary.json` (`first_divergence=None`, `accept_logodds_gate` ON/OFF).
+
+- 2026-05-25 (S2.2 item complété):
+  - `pix2` verify est maintenant calculé explicitement selon la forme Astrometry auditable: `verify_pix2 = verify_pix^2 + (index_jitter/scale)^2` (plus de formulation implicite via `hypot`).
+  - Nouvelles traces exportées dans les dumps pre/post verify: `verify_pix2_base`, `verify_pix2_jitter_term`, `verify_pix2_input`, `verify_index_jitter_arcsec`, `verify_scale_arcsec_px_for_pix2`.
+  - Probe de validation: `reports/r47i_s1_forced_payload_full_replay_case055_20260525_2358/summary.json` reste vert en parité (`first_divergence=None`, `s1_invalid_any=false`).
+  - Angle mort ouvert en S2: verrouiller la source stricte de `mo.scale` pour ce calcul (éviter fallback implicite quand la valeur native MatchObj est disponible).
+
+## 2026-05-26 00:20 — S2 audit rapide vs Astrometry
+- Relecture croisée `astrometry-net-main/solver/verify.c` vs `zeblindsolver.py` (zone verify/tests sigma).
+- Confirmation runtime de `S2.1` (gamma-like avec vrai quad hypothèse `collect_pref_pair_idx_quad`) via artefact `r47i_s1_forced_payload_full_replay_case055_20260525_2355`.
+- Confirmation runtime de `S2.2` (`verify_pix2 = verify_pix^2 + (index_jitter/mo.scale)^2`).
+- `S2.3` confirmé (`first_divergence=None` même candidat OFF/ON).
+- Backlog mis à jour: `S2.1`/`S2.3` cochés; reste S2.4/S2.5 comme prochains blocs critiques.
+
+- 2026-05-26 (S2.4 partiel):
+  - RoR est maintenant rebranché sur le `Q2` exact du quad hypothèse quand disponible (`quad_q2_px2`), au lieu d’une estimation percentile `test_xy`.
+  - Ajout de traçabilité runtime: `ror_q2_source` (`hypothesis_quad_q2` / fallback explicite), exporté dans `on_refpool_trace.json`.
+  - Validation non-régression ON/OFF: `reports/r47i_s1_forced_payload_full_replay_case055_20260526_0034/summary.json` conserve `first_divergence=None`.
+  - Vérification trace: `on_refpool_trace.json` expose `ror_q2_source=hypothesis_quad_q2` et `ror_q2_px2` cohérent avec le quad forcé.
+
+## 2026-05-26 01:02 — S2.4 audit RoR/effective-area
+- Audit artefacté publié: `reports/r47i_s2_ror_effective_area_audit_20260526_0102/summary.{md,json}`.
+- Confirmé: formule `verify_get_ror2` et calcul `effective_area_px2` alignés code-level avec Astrometry.
+- Ouvert: preuve runtime diffable du sous-chemin `uniformize bins -> effective area` (équivalence non encore démontrée).
+- Backlog maintenu lisible: S2.4 reste ouvert, S2.5 inchangé.
+
+- 2026-05-26 (S2.4 clôturé):
+  - Instrumentation RoR enrichie dans `zeblindsolver.py` avec entrées/sorties explicites de `verify_get_ror2` (`ror_input_area_px2`, `ror_input_sigma2_px2`, `ror_input_distractor_rate`, `ror_input_nr`, `ror2_px2`).
+  - Audit runtime publié: `reports/r47i_s2_ror_effective_area_audit_20260526_0106/summary.{md,json}`.
+  - Résultats: `ror_q2_source=hypothesis_quad_q2` ON/OFF, recomputation `verify_get_ror2` conforme au runtime ON/OFF, `effective_area_px2` aligné ON/OFF sur case055.
+
+## 2026-05-26 01:11 — S2.4 uniformize/bins gap verrouillé
+- Audit dédié publié: `reports/r47i_s2_uniformize_bins_gap_audit_20260526_0111/summary.{md,json}`.
+- Conclusion claire: le runtime verify ZeBlind n’a pas encore l’équivalent de la branche Astrometry `uniformize bins -> effective area`.
+- Décision de pilotage: garder S2.4 ouvert; prochain delta causal unique = implémenter cette branche puis revalider OFF/ON diffable.
+
+- 2026-05-26 (S2.5 partiel):
+  - Harness `r47i_s1_forced_payload_full_replay.py` enrichi avec dump `on/off_verify_steps.json` (trace séquentielle log-odds + seuils accept/bail/stoplooking).
+  - Audit publié: `reports/r47i_s2_logodds_chain_audit_20260526_0118/summary.{md,json}`.
+  - Résultat: séquence log-odds ON/OFF alignée sur case055 (`first_divergence=None`, seuils identiques, pas de bail/stoplooking déclenché).
+  - Gap restant identifié: preuve explicite `min_validations` incomplète en canonique strict (branche `verify_policy_trace` non alimentée côté ON sur ce case).
+
+- 2026-05-26 (S2.5 clôturé):
+  - `zeblindsolver.py` exporte désormais `verify_logodds_min_validations` dans `blind_verify_step_dump_path` (entrée diffable ON/OFF de la chaîne log-odds).
+  - Harness `r47i_s1_forced_payload_full_replay.py` conserve `on/off_verify_steps.json` pour audit runtime explicite des seuils `accept/bail/stoplooking`.
+  - Audit final S2.5: `reports/r47i_s2_logodds_chain_audit_20260526_0122/summary.{md,json}` avec alignement ON/OFF sur `accept/bail/stoplooking/min_validations` (`min_validations=8`) et `first_divergence=None` sur case055.
+
+## 2026-05-26 01:32 — S2.4 premier item manquant traité
+- Vérification backlog: incohérence détectée (S2.4 marqué fait en tête alors que gap bins encore ouvert).
+- Correctif code appliqué dans `zeblindsolver.py`:
+  - nouvelle branche runtime `uniformize bins -> effective area` dans `_apply_verify_ror_filter`,
+  - sizing bins HEALPix approx + filtrage RoR bin-centers + `effA` proportion de bins,
+  - exports runtime `ror_uniformize_bins_used/nw/nh/goodbins_n`.
+  - nouveau paramètre config `blind_astrometry_verify_index_cutnside`.
+- Probe publié: `r47i_s1_forced_payload_full_replay_case055_20260526_0132`.
+- Résultat: champs présents dans `on/off_refpool_trace.json`, mais bins non activés sur ce cas (`ror_uniformize_bins_used=false`) ; S2.4 reste ouvert pour preuve active.
+
+- 2026-05-26 (S2 angle mort mo.scale -> pix2 résorbé):
+  - `zeblindsolver.py` sélectionne désormais explicitement la source de scale pour `pix2` (`model_scale_arcsec` prioritaire, `pix_scale_arcsec_fallback` explicite seulement en secours) au lieu d’un fallback implicite.
+  - Nouvelle traçabilité exportée: `verify_scale_source_for_pix2` dans `on/off_verify_sets.json`.
+  - Validation run: `reports/r47i_s1_forced_payload_full_replay_case055_20260526_0137/summary.json` (`first_divergence=None`, `s1_invalid_any=false`).
+
+## 2026-05-26 01:40 — S2.4 fermé sur preuve runtime active
+- Harness patché pour injecter `blind_astrometry_verify_index_cutnside` via env `ZB_VERIFY_INDEX_CUTNSIDE`.
+- Probe validé: `r47i_s1_forced_payload_full_replay_case055_20260526_0140`.
+- Résultat clé: `ror_uniformize_bins_used=true` côté ON/OFF (trace runtime), sans régression terminale (`first_divergence=None`, `accept_logodds_gate` des deux côtés).
+- Décision: `S2.4` clôturé; prochain manque S2 = verrouillage source native `mo.scale` pour `verify_pix2` (éviter fallback implicite).
+
+- 2026-05-26 (S2 term-pollution check validé):
+  - Audit diffable publié: `reports/r47i_s2_term_pollution_audit_20260526_0142/summary.{md,json}`.
+  - Constat clé: `verify_pix2_input` et `logbg` alignés ON/OFF; `index_jitter` identique; source scale explicite `model_scale_arcsec` (pas de fallback implicite).
+  - Les écarts restants (`verify_pix2_jitter_term`, `verify_scale_arcsec_px_for_pix2`, `field_radius_px`) proviennent de la géométrie/scale runtime du candidat, pas d’une pollution par defaults Ze.
+
+## 2026-05-26 01:48 — S2 verify_pix2 source hardening
+- `verify_pix2` durci pour prioriser `mo_scale_native` quand disponible (source exportée `verify_scale_source_for_pix2`).
+- Nouveau garde-fou runtime: en natif canonique strict, fallback silencieux de scale interdit si une source native est attendue (`s2_invalid[verify_pix2_scale_fallback_under_native]`).
+- Probe validé: `r47i_s1_forced_payload_full_replay_case055_20260526_0148` avec `first_divergence=None` et terminal `accept_logodds_gate` ON/OFF.
+
+- 2026-05-26 (S2 invariants runtime validés):
+  - Audit publié: `reports/r47i_s2_runtime_invariants_audit_20260526_0206/summary.{md,json}`.
+  - Les invariants de source scale/pix2 sont maintenant contrôlés par garde-fou runtime (`s2_invalid[...]`) et vérifiés sur le run de référence sans régression parité.
+
+## 2026-05-26 02:11 — S2 clôture opérationnelle
+- Validation multicase publiée: `r47i_s2_multicase_native_probe_20260526_0209` (3 cas, invariants verify cohérents).
+- Audit stabilité numérique publié: `r47i_s2_numeric_stability_audit_20260526_0211` (pass: aucun NaN/inf/logodds/nsig2 invalide sur les traces scannées).
+- Décision backlog: S2 marqué clos; focus bascule sur S3.1 (onefield accept machine).
+
+## 2026-05-26 08:30 — S3.1 itération callback onefield (logodds-first + identité champ)
+- Patch ciblé appliqué dans `zeblindsolver.py`:
+  - `record_match_callback` enregistre maintenant `fieldfile` et `fieldnum` dans `onefield_solution_records` (au lieu d’un enregistrement centré `tile` uniquement).
+  - insertion callback triée par `solve_logodds` décroissant (fallback append si score non fini), au lieu d’un append brut.
+- Vérification locale: `python3 -m py_compile zeblindsolver/zeblindsolver.py` OK.
+- Impact attendu: rapprochement de la sémantique onefield `best_match`/dedup par identité de champ avant la finalisation stricte `best_match_solves` + `remove_duplicate_solutions`.
+
+## 2026-05-26 08:38 — S3.1 gap de câblage fermé (best_match_solves)
+- `blind_best_match_solves_enabled` n’était utilisé qu’au runtime via `getattr`, sans exposition explicite config/CLI.
+- Correctif appliqué:
+  - ajout du champ dans `SolveConfig`,
+  - ajout de l’argument CLI `--blind-best-match-solves-enabled`,
+  - injection explicite dans la construction `SolveConfig(...)`.
+- Complément dedup: tri final des solutions dédupliquées par score logodds décroissant pour un ordre stable onefield-like.
+- Vérifications: `py_compile` OK + `SolveConfig().blind_best_match_solves_enabled == True`.
+
+## 2026-05-26 08:25 — S3.1 itération best_match_solves + dedup strict
+- Patch complémentaire `zeblindsolver.py`:
+  - propagation explicite de `record_match_callback_solve_pass` dans `solution.stats` (accept/reject tosolve).
+  - `_is_solution_better_onefield(...)` priorise les solutions `solve_pass` (flag `blind_best_match_solves_enabled`, défaut True), puis logodds/inliers/RMS.
+  - `_remove_duplicate_solutions_runtime(...)` ne déduplique plus sur fallback `tile`; dedup seulement si identité `fieldfile/fieldnum` valide.
+- Validation rapide:
+  - `python3 -m py_compile zeblindsolver/zeblindsolver.py` OK.
+  - probe S1 republié: `reports/r47i_s1_forced_payload_full_replay_case055_20260526_0824/summary.json` (pas de régression invariants S1, mais cas non discriminant pour multi-solves car rejet `accept_logodds_gate`).
+
+## 2026-05-26 08:52 — S3.1 preuve intermédiaire via probe onefield renforcé
+- `tools/r47i_s3_onefield_multisol_probe.py` renforcé pour ajouter un discriminant synthétique contrôlé de la policy onefield (dedup + tri).
+- Artefact publié: `reports/r47i_s3_onefield_multisol_probe_20260526_0851/summary.{md,json}`.
+- Résultat:
+  - runtime réel case055: `onefield_solution_records_n=0` (toujours non discriminant),
+  - discriminant synthétique: `pass=true` (`output_n=3`, gagnant `A/1` à `solve_logodds=-0.7`, ordre décroissant, unresolved identity conservée).
+- Conclusion opérationnelle: la logique policy est validée sur jeu contrôlé, mais la clôture S3.1 reste dépendante d’un cas runtime avec multi-solutions effectives (`n>1`).
+
+- 2026-05-26 (S3.1 blocage runtime confirmé):
+  - scan borné `reports/tmp_*.fit` avec config permissive onefield (`blind_best_hit_only=0`, seuils très bas) sur index `forensic_case055_subset96/index`.
+  - résultats observés avant timeout: `onefield_solution_records=0` et `collected_hits_runtime=0` sur tous les fichiers traités.
+  - implication: pour clôturer S3.1, il faut changer de couple `input/index_root` (subset forensic actuel trop pauvre pour générer des multi-hits exploitables).
+
+## 2026-05-26 09:31 — S3 recommandations pratiques exécutées (11/12/13)
+- S3.11 audit couverture réalisé: `reports/r47i_s3_index_coverage_audit_20260526_0925.json`.
+  - `tmp_case055_nowcs.fit`: RA=184.775, Dec=47.447, scale~2.393"/px, FOV~1.276°.
+  - subset96: seulement 2 tuiles candidates (`d50_2725`, `d50_2823`) -> couverture serrée.
+- S3.12 index dédié local construit depuis `~/zesolver_index`:
+  - sortie: `reports/r47i_s3_case055_dedicated_index_v1/index`,
+  - cône élargi ~4.59°, 9 tuiles sélectionnées autour du cas.
+- S3.13 probe rejoué sur couple FITS+index dédié:
+  - artefact: `reports/r47i_s3_onefield_multisol_probe_20260526_0929/summary.json`,
+  - résultat: toujours `onefield_records_n=0`.
+- Tentative complémentaire sur index complet `~/zesolver_index` lancée mais non concluante en temps interactif (timeout long), à reprendre avec exécution bornée instrumentée.
+
+- 2026-05-26 (S3.12 extension index dédié):
+  - nouvel index local `r47i_s3_case055_dedicated_index_v2` construit depuis `~/zesolver_index` avec cônes cumulés (~4.59°, ~7.66°, 12.0°) pour augmenter la densité locale.
+  - couverture résultante: `selected_tile_n=38` (vs 9 pour v1).
+  - probe S3 sur v2 lancé; exécution plus longue que la fenêtre interactive courte, résultat final à récupérer/valider.
+
+- 2026-05-26 (S3 index dédié v3 + probe rapide):
+  - index `r47i_s3_case055_dedicated_index_v3` construit depuis `~/zesolver_index` avec seeds multi-FITS historiques M106 + case055.
+  - couverture v3 reste `selected_tile_n=38` (mêmes tuiles utiles que v2 sur cette zone).
+  - smoke probe rapide publié: `reports/r47i_s3_onefield_multisol_probe_fast_20260526_1023/summary.json` -> `onefield_records_n=0`.
+  - implication: le blocage S3.1 n’est probablement plus un problème de couverture locale brute; il faut maintenant un cas FITS/candidat qui passe la chaîne jusqu’au callback onefield.
+
+## 2026-05-26 11:37 — Audit profondeur S3 (verrou pré-callback identifié)
+- Drilldown publié: `reports/r47i_s3_gap_drilldown_20260526_1137.json`.
+- Résultat: `verify_hit_trace_len=0` et `reject_reason_class_counts={'other':58}` sur un FITS M106 historisé.
+- Top rejets: `strict_transform_scale_precheck_reject` avec `scale_ratio_hint` très élevé (jusqu’à ~400), avant entrée dans `verify_hit`.
+- Lecture: le blocage S3 est principalement un verrou de precheck scale/transform (alignement pipeline), plus qu’un problème simple de qualité image ou de couverture locale index.
+
+## 2026-05-26 08:29 — Probe runtime post-patch S3.1
+- Artefact: `reports/r47i_s1_forced_payload_full_replay_case055_20260526_0829`.
+- OFF/ON restent alignés (`first_divergence=None`) avec même terminal `accept_logodds_gate`, même `accept_logodds=-1.3862943611198908`, même `verify_entry_nt/nr=49/83`, `s1_invalid_any=false`.
+- Interprétation: les ajustements callback/best-match/dedup appliqués ce matin n’ont pas cassé la parité runtime sur le case de référence.
+
+## 2026-05-26 08:40 — S3.1 preuve multi-solutions: gap dataset
+- Outil ajouté: `tools/r47i_s3_onefield_multisol_probe.py` pour forcer un run `best_hit_only=0` et auditer `best_match_solves` + dedup `fieldfile/fieldnum`.
+- Run probe: `reports/r47i_s3_onefield_multisol_probe_20260526_0840` => `raw_solution_records=0` (`collected_hits_runtime=0`) même avec fallback permissif.
+- Audit des artefacts existants: aucune trace `raw_solution_records > 1` dans `reports/**`; les traces historiques trouvées sont à `1` uniquement.
+- Conclusion durable: la clôture S3.1 nécessite un cas/index qui produit réellement plusieurs callbacks acceptables; sans cela, on ne peut pas prouver runtime `best_match_solves/remove_duplicate_solutions` au-delà du câblage code.
+
+## 2026-05-26 09:12 — S3.1 preuve unitaire multi-solutions (fallback pragmatique)
+- Les probes runtime sur datasets courants n’ont pas fourni de cas `raw_solution_records>1`; impossible de conclure exclusivement par artefact run-time multi-hit à ce stade.
+- Refactor ciblé: extraction de la logique onefield score+dedup en fonctions pures réutilisées par le runtime:
+  - `_onefield_logodds_score_from_row`
+  - `_onefield_dedup_rows`
+- Tests unitaires ajoutés et passants (`pytest -k onefield`) pour valider explicitement un scénario multi-solutions simulé (dedup par `fieldfile/fieldnum`, conservation du meilleur score, tri score décroissant).
+- Décision: conserver ce filet de preuve déterministe tant qu’un dataset runtime multi-hit robuste n’est pas identifié.
+
+## 2026-05-26 09:49 — Audit couverture index S3
+- Script ajouté: `tools/r47i_s3_index_coverage_audit.py` (calcule RA/Dec/rayon depuis WCS FITS puis compte les tuiles sélectionnées dans chaque manifest).
+- Artefact: `reports/r47i_s3_index_coverage_audit_20260526_0949`.
+- Constat durable: sur les 3 FITS `forensic_oracle_*`, les 2 index testés (`forensic_case055_subset96`, `forensic_m106_reference_v1`) donnent exactement la même couverture: `2/3` couverts, `1/3` hors couverture (`tiles_selected=0`), et un cas à couverture minimale (`1` tuile).
+- Interprétation: ce n’est pas seulement un problème de tuning solver; la qualité de preuve runtime S3 dépend d’un couple dataset/index mieux aligné (couverture multi-tuile suffisante).
+
+## 2026-05-26 10:08 — S3 runtime: coverage filtrée mais toujours 0 callback
+- Nouveau script: `tools/r47i_s3_select_fits_by_coverage.py` (sélectionne automatiquement les FITS ayant au moins `N` tuiles candidates pour un manifest).
+- Sur `forensic_m106_reference_v1` avec `min_tiles=2`, un seul FITS passe (`reports/r47i_s3_select_fits_by_coverage_20260526_1004`).
+- Probe onefield relancé sur ce FITS avec réutilisation WCS désactivée dans la config probe (`blind_reuse_existing_solved_wcs=False`) ; artefact `r47i_s3_onefield_multisol_probe_20260526_1008`.
+- Résultat: toujours `raw_solution_records=0`; la couverture minimale seule ne déclenche pas de callback multi-hit.
+- Conclusion durable: pour fermer S3 runtime, il faut un couple dataset/index conçu pour générer des candidats valides concurrents, pas seulement un index qui couvre géométriquement le champ.
+
+## 2026-05-26 10:48 — Batch probe S3 robuste (timeouts par FITS)
+- Outil créé: `tools/r47i_s3_batch_probe_from_coverage.py`, piloté par `summary.json` d’audit coverage.
+- Ajout clé: exécution `solve_blind` en process enfant avec timeout par FITS (`--per-fit-timeout-s`) pour garantir un verdict même si un solve est trop long.
+- Run: `reports/r47i_s3_batch_probe_from_coverage_20260526_1048` (2 FITS, `min_tiles=1`, timeout 90s) => 2 timeouts, aucun callback (`raw_solution_records` non observé).
+- Leçon durable: le blocage S3 runtime n’est pas seulement la couverture géométrique; le coût de solve sur ces FITS/index empêche même d’atteindre la phase callback dans une fenêtre probe raisonnable.
+
+## 2026-05-26 11:47 — Probe ultracourt S3
+- Le batch probe coverage supporte maintenant `--profile ultrashort` pour stress-test callback sous timeout court.
+- Run `r47i_s3_batch_probe_from_coverage_20260526_1147` (2 FITS, timeout 45s/FITS) => 2 timeouts, aucun `raw_solution_records`.
+- Conclusion durable: sur ces FITS/index, même la stratégie ultracourte n’atteint pas la phase callback; il faut un index S3 reconstruit/focalisé pour réduire drastiquement le coût de recherche.
+
+## 2026-05-26 12:25 — Index S3 focalisé validé mais callbacks toujours inatteignables
+- Rebuild focalisé `s3_focused_index_20260526_1200` corrigé avec `sampler=pairwise_multiscale_v1`; l’erreur de compatibilité précédente est levée.
+- Coverage audit sur ce nouvel index: 2/2 FITS couverts (`tiles 6` et `1`).
+- Malgré cela, batch probe ultracourt (45s/FITS) reste à 2 timeouts, sans `raw_solution_records`.
+- Leçon durable: le verrou S3 courant est un verrou de coût/latence avant callback; la prochaine étape doit réduire le coût warmup/search ou utiliser un sous-lot runtime encore plus léger pour atteindre au moins un callback observé.
+
+## 2026-05-26 13:22 — S3 focused index: verdict callback négatif sans timeout
+- Probe `r47i_s3_batch_probe_from_coverage_20260526_1322` sur index focalisé (`min_tiles=2`, 1 FITS, timeout 120s) terminé sans timeout.
+- Résultat runtime: `success=false`, `raw_solution_records=0`, `dedup_solution_records=0`, `collected_hits_runtime=0`.
+- Conséquence: même quand le solve aboutit temporellement, aucun hit n’atteint la machine onefield callback sur ce setup; la prochaine étape doit instrumenter/ouvrir explicitement la trajectoire pré-callback (pas seulement retoucher index/timeout).
+
+## 2026-05-26 14:56 — S3: chaîne de verrous pré-callback confirmée
+- Le batch probe expose maintenant un diagnostic pré-callback (`reason_counts`, `stage_counts`, `terminal_event`).
+- Séquence observée sur index focalisé:
+  1) baseline probe -> `validation_failed` (validate_gate),
+  2) RMS relâché -> `verify_prob_failed`,
+  3) prob verify désactivé -> terminal `center_prior` fail.
+- Aucun run n’atteint encore `record_match_callback` (`raw_solution_records=0`), mais l’ordre causal des verrous est désormais explicite.
+- Étape logique suivante: profil probe “pre_callback_open_path” pour ouvrir simultanément ces verrous et obtenir un premier callback runtime avant toute optimisation produit.
+
+## 00:50 — S5 upstream diff audit (multicase)
+- Artefact publié: `reports/r47i_s5_upstream_diff_audit_20260527_0047/{summary.md,summary.json}`.
+- Résultat robuste: `first_divergence.index=0` sur toutes les paires de FITS sentinelles (4 FITS).
+- Lecture durable: ce signal confirme une variabilité amont immédiate inter-images (candidate_key/hits/pairs), mais ne constitue pas une preuve de divergence Ze-vs-C au sens strict car la comparaison est faite entre FITS différents.
+- Règle de suite: pour isoler un écart causal S5 exploitable, comparer le même FITS (Ze vs référence C, ou Ze vs Ze contraint en ordre canonique single-pass newpoint).
+
+## 2026-05-27 09:00 — S5 single-pass newpoint trace mode
+- Ajout d’un mode d’instrumentation upstream ZeBlind pour S5: `blind_s5_upstream_single_pass_newpoint_enabled`.
+- Effet validé sur même FITS M106 + même index S3 élargi: `newpoint` ne reset plus entre phases dans la trace head (`0..15` sur les 16 premières lignes), avec source explicite `single_pass_trace_cursor`.
+- Artefacts: `r47i_s5_upstream_trace_probe_20260527_0859` + compare `r47i_s5_singlepass_newpoint_compare_20260527_0900`.
+- Limite connue: l’audit `r47i_s5_newpoint_permutation_gap_audit.py` attend encore `upstream_solver_trace_head` en top-level et ne lit pas directement `results[].trace_head`; adaptation nécessaire pour l’automatisation stricte.
+## 2026-05-27 09:57 — S5 audit auto aligné probe format
+- `tools/r47i_s5_newpoint_permutation_gap_audit.py` supporte désormais les deux entrées: legacy `upstream_solver_trace_head` et probe `results[0].trace_head`.
+- Validation auto sur `r47i_s5_upstream_trace_probe_20260527_0859`: verdict `closed` avec `newpoint_global_non_decreasing=true` et `first_causal_gap=null`.
+- Conséquence: le verrou “reset newpoint inter-phases” est désormais traité et vérifiable automatiquement sur le protocole S5 courant.
+## 2026-05-27 10:04 — S5 permutation/callsite audit
+- Trace upstream ZeBlind enrichie avec marqueurs callsite (`use_px_spec`, `use_ra_filter`, `agg_levels`).
+- Probe même FITS/index relancé (`r47i_s5_upstream_trace_probe_20260527_1004`).
+- Audit dédié `r47i_s5_permutation_callsite_audit_20260527_1004`:
+  - tuples répétés détectés (`multi_seen_count=5`),
+  - incohérences callsite sur ces tuples (`callsite_inconsistency_count=5`),
+  - aucune divergence de tête de permutation (`perm_inconsistency_count=0`).
+- Implication: le prochain différentiel S5 doit prioriser la sémantique callsite/pipeline plutôt qu’un tuning permutation head.
+## 2026-05-27 10:18 — S5 callsite drift classifié (pas de régression)
+- Nouvel audit `r47i_s5_callsite_drift_audit_20260527_1018` sur le probe S5 courant.
+- Les 5 dérives callsite détectées sont classées `expected_widening` (élargissement monotone de `agg_levels/levels_to_use`), avec `unexpected_count=0`.
+- Conséquence: pas de régression callsite pipeline sur ce périmètre; prochain différentiel S5 doit cibler le mapping stage/callsite C-vs-Ze.
+## 2026-05-27 10:25 — S5 stage/callsite mapping validé
+- Audit dédié `r47i_s5_stage_callsite_mapping_audit_20260527_1025` exécuté sur le probe S5 courant.
+- Résultat: aucun break d’ordre de phase et aucun break de contrat callsite (`0/0`), statut clos.
+- Implication: le prochain différentiel S5 doit viser la sémantique C-vs-Ze intra-tuple candidat, pas une incohérence de transitions phase/callsite.
+## 2026-05-27 10:33 — S5 tuple semantic diff (d50_2628)
+- Audit `r47i_s5_tuple_semantic_diff_audit_20260527_1033` publié sur le trace S5 courant.
+- `d50_2628` apparaît 8 fois (`scale_only=4`, `blind=4`), ce qui confirme une réutilisation inter-phases cohérente avec l’orchestration Ze (widening de level sets), pas un artefact isolé de permutation.
+- L’écart C-vs-Ze restant à ce stade est structurel de flux (single-pass C vs passes phasées Ze), donc le next step utile est d’introduire un tag trace `first_pass/widened_pass` pour corréler précisément les issues d’acceptation.
+## 2026-05-27 10:42 — S5 pass-tag activé et auditable
+- `pass_tag` (`first_pass`/`widened_pass`) est maintenant injecté dans la trace upstream et dans `stage_by_stage.hypothesis`.
+- Artefacts: `r47i_s5_upstream_trace_probe_20260527_1041` + `r47i_s5_pass_tag_acceptance_audit_20260527_1042`.
+- Résultat de l’audit: `first_pass` et `widened_pass` sont tous deux visibles côté hypothèses, mais l’export `hypothesis` est encore principalement `prevalidate`; il faut propager le tag sur `verify/verify_hit` pour corréler directement avec l’acceptation finale.
+## 2026-05-27 10:58 — S5 pass_tag verify_hit: blocage de propagation callsite
+- Malgré propagation `pass_tag` dans `candidate_ctx` + `verify_trace` + `verify_hit` builders, l’audit `r47i_s5_pass_tag_acceptance_audit_20260527_1058` donne encore `verify_hit_rows_by_pass_tag={'unknown':30}`.
+- Interprétation durable: sur ce protocole, les callsites `_emit_hit_event` majoritaires alimentent `verify_hit` sans contexte candidat taggé.
+- Next utile: patch ciblé des callsites `_emit_hit_event` dominants pour forcer `context.pass_tag`, puis re-run audit pour obtenir une mesure finale first_pass vs widened_pass.
+## 2026-05-27 11:30 — S5 pass_tag: fallback insuffisant, callsites à patcher explicitement
+- Même après fallback runtime renforcé dans `_emit_hit_event`, audit `r47i_s5_pass_tag_acceptance_audit_20260527_1130` reste à `verify_hit_rows_by_pass_tag={'unknown':30}`.
+- La matrice `unknown_stage_phase_counts` isole les cibles exactes (`validate_base`, `accept`, `hit_resolve_chain` sur hinted/hinted_wide/scale_only/blind).
+- Conclusion durable: next patch doit injecter `pass_tag` explicitement au niveau des callsites `_emit_hit_event` dominants, pas seulement via fallback global.
+## 2026-05-27 11:59 — S5 fermeture angle mort pre_perm->perm_emitted
+- Patch runtime trace dans `zeblindsolver.py`: `perm_null_reason` par défaut passé à `no_quad_survived_preperm_gates` pour les lignes restant en stage `pre_perm`.
+- Reprobe same-FITS/index: `projects/ZeSolver/reports/r47i_s5_upstream_trace_probe_20260527_1159/summary.json`.
+- Outcome explicite extrait du trace head: `PRE_PERM_N=5`, `PRE_PERM_REASON_COUNTS={'no_quad_survived_preperm_gates': 5}`, `PRE_PERM_LEVELS={'M': 5}`.
+- Conclusion durable: le non-pass `pre_perm -> perm_emitted` observé sur ce protocole est expliqué par un filtrage pré-permutation (aucun quad survivant), pas par une dérive de permutation/callsite.
+## 2026-05-27 21:01 — S5 pass_tag verify_hit: loup fermé
+- Re-run complet same-FITS/index: `projects/ZeSolver/reports/r47i_s5_upstream_trace_probe_20260527_2101/summary.json` + `projects/ZeSolver/reports/r47i_s5_pass_tag_acceptance_audit_20260527_2101/summary.json`.
+- Résultat clé: `verify_hit_rows_by_pass_tag` n’est plus `unknown` et devient `{'first_pass':16,'widened_pass':14}`; `verify_hit_unknown_stage_phase_counts={}` et `verify_hit_unknown_callsite_counts={}`.
+- Conclusion durable: la chaîne de propagation `pass_tag` vers `verify_hit` est désormais opérationnelle sur le protocole S5 courant; l’angle mort d’observabilité est levé.
+## 2026-05-27 22:52 — S5 guardrail widened-pass: verdict no-go par défaut
+- Implémentation opt-in ajoutée (`blind_s5_widened_pass_code_log_relax_enabled`, `blind_s5_widened_pass_code_log_relax_multiplier`) + support A/B dans `tools/r47i_s5_upstream_trace_probe.py`.
+- A/B OFF vs ON(x1.35) sur same-FITS: aucun effet (`success` inchangé, `pre_perm` inchangé).
+- Sweep ON (`x1.35/x1.75/x2.25`) montre un effet seulement à `x2.25` (disparition `pre_perm` sur ce cas), mais audit runtime OFF vs ON(x2.25) montre surtout plus de widened-pass (`verify_hit_n 30 -> 36`, `widened_pass 14 -> 20`) sans gain de succès.
+- Décision durable: ne pas activer ce guardrail en produit par défaut (default OFF), le garder uniquement comme levier d’investigation.
+
+## 2026-06-02 11:33 — S6 audit Astrometry ciblé: divergences onefield/callback à fermer avant retuning
+- Pour le lot M106, le problème utile n'est plus “obtenir un success” mais comprendre pourquoi `native_verify + tosolve` produit `5/5 false_positive`.
+- Une passe d'audit source Astrometry focalisée sur `solver_handle_hit` / `record_match_callback` / `compare_matchobjs` / `remove_duplicate_solutions` a mis en avant trois divergences runtime Ze à traiter avant tout nouveau sweep de seuils:
+  - identité onefield non canonique: fallback `fieldfile = tile_key`, donc dédup/ranking par tuile au lieu de par field;
+  - tri onefield non canonique: insertion sur le seul `solve_logodds`, alors qu'Astrometry trie par `(fieldfile, fieldnum, logodds desc)`;
+  - score callback non unifié: le callback Ze choisit explicitement `prob_logodds` en mode strict au lieu de consommer un unique `mo->logodds` final comme Astrometry.
+- Règle durable S6: ne plus retweaker `blind_anodds_tosolve` à l'aveugle tant que ces divergences de sémantique onefield ne sont pas fermées.
+
+## 2026-06-02 11:39 — S6 R1/R2 fermés côté runtime onefield
+- `R1` implémenté: le runtime onefield injecte désormais une identité canonique issue de `input_fits` (`fieldfile=str(input_fits)`, `fieldnum=0`) au lieu de retomber sur `tile_key`.
+- `R2` implémenté: insertion et dédup des `onefield_solution_records` basculées sur une clé Astrometry-like `(fieldfile, fieldnum, logodds desc)`.
+- Vérification locale: `python3 -m py_compile` OK et `pytest -q tests/test_zeblindsolver.py -k onefield` => `4 passed`.
+- Prochaine marche utile: `R3`, c'est-à-dire unifier le score final consommé par gate d'acceptation, callback et ranking.
+
+## 2026-06-02 11:41 — S6 R3 amorcé sans retuning
+- Un `onefield_final_logodds` explicite est maintenant publié au niveau finalize/post-tune.
+- Le callback onefield et le ranking/dedup runtime le consomment désormais en priorité avant `solve_logodds` / `accept_logodds` / `prob_logodds`.
+- Conclusion pratique: le chantier R3 a quitté le stade “conceptuel”; le prochain travail utile est de vérifier sur run réel que gate d'acceptation, callback et artefacts exportés lisent bien cette même valeur.
+
+## 2026-06-02 11:50 — S6 R3 validé sur run réel, faux positifs inchangés sur sous-lot 2
+- Run réel sentinelle `232102` publié dans `reports/r47i_s6_r3_score_probe_20260602_1150`:
+  - `accept_logodds = onefield_final_logodds = accept_gate_logodds_used = record_match_callback_logodds`
+  - `accept_gate_logodds_matches_onefield_final=true`
+  - `onefield_final_logodds_consistent_with_accept=true`
+- Conclusion durable: la divergence de sémantique gate/callback est bien fermée sur le sentinelle.
+- Replay partiel `R4` sur `232102 + 232144` publié dans `reports/r47i_s6_r4_subset2_after_r3_20260602_1150/summary.json`:
+  - `2/2 success`
+  - `2/2 false_positive`
+  - même cohérence parfaite du score unique sur les deux FITS.
+- Lecture durable: après fermeture de `R1/R2/R3`, le résiduel S6 n'est plus une divergence de sémantique onefield; c'est désormais un problème plus directement math/logodds sur la mauvaise solution acceptée.
+
+## 2026-06-02 13:30 — S6 audit math/logodds: faux positif accepté mais non soutenu
+- Audit dédié publié: `reports/r47i_s6_false_positive_logodds_validity_audit_20260602_133050_sentinel232102/summary.json`
+- Classification durable: `threshold_permissive_unsupported_accept`.
+- Constat clé:
+  - la chaîne de score est cohérente (`accept = final = gate = callback = -1.386294`);
+  - mais la verify maths ne soutient pas la solution:
+    - `prob_matches=0`
+    - `prob_theta_match_total=0`
+    - `prob_theta_distractor_total=18`
+    - head `prob_verify_steps` = distractors only
+    - support MatchObj dégénéré (`field/star/quadpix/quadxyz = 2`)
+    - géométrie aberrante malgré `quality=GOOD` (`inliers=2`, `rms_px≈790.7`)
+- Règle durable: ne plus formuler le résiduel S6 comme “mauvais seuil de callback”; le vrai prochain cran est d'expliquer où un support verify dégénéré cesse d'être rejeté et reste pourtant éligible à `accept_keep`.
+
+## 2026-06-02 13:45 — S6 point causal source: `verify.py` force déjà le faux positif en `GOOD`
+- Le premier point causal utile a été isolé plus bas que le wrapper runtime:
+  - dans `zeblindsolver/verify.py`, `validate_solution(...)` force `success=True` quand `astrometry_parity_mode=True`;
+  - en mode parity metrics-only, la fonction supprime aussi la raison (`reason=None`) même si `rms_ok=0` ou `inliers_ok=0`.
+- Conséquence durable observée sur le sentinelle `232102`:
+  - le faux positif arrive déjà avec `quality=GOOD` **avant** tout passthrough runtime additionnel, malgré:
+    - `inliers=2`
+    - `rms_px≈790.7`
+    - `prob_matches=0`
+    - `prob_theta_match_total=0`
+    - `prob_theta_distractor_total=18`
+    - `verify_matchobj_*_n=2`
+- Lecture durable:
+  - le wrapper `metrics_only_passthrough` n'est plus le suspect racine principal sur ce cas;
+  - le prochain patch doit viser d'abord la requalification source dans `verify.py`, en séparant clairement:
+    - progression canonique éventuelle,
+    - et validation réellement `GOOD`.
+
+## 2026-06-02 14:01 — S6 patch de séparation de contrat: plus de faux `GOOD`, mais le sentinelle retombe sans solution
+- Correctif appliqué dans `zeblindsolver/verify.py`:
+  - en mode `astrometry_parity_mode`, un échec métrique (`rms/inliers`) ne force plus `success=True`;
+  - le validateur publie maintenant explicitement:
+    - `validation_metrics_only=true`
+    - `validation_progress_eligible=true`
+  - tout en gardant `quality=FAIL`.
+- Correctif compagnon appliqué dans `zeblindsolver/zeblindsolver.py`:
+  - les wrappers natifs ne transforment plus ces cas `metrics_only` en `quality=GOOD`;
+  - la progression canonique se fait désormais via une éligibilité explicite, séparée de la qualité de validation ;
+  - si un candidat franchit quand même l'accept gate, il peut être marqué `accepted_despite_validation_fail=true` sans falsifier `quality`.
+- Vérification ciblée réussie:
+  - `python3 -m py_compile` OK sur les fichiers touchés ;
+  - `pytest -q tests/test_synthetic.py::test_validate_solution_parity_mode_keeps_fail_quality_but_marks_progress tests/test_zeblindsolver.py -k onefield` => `4 passed`.
+- Replay sentinelle outillé publié:
+  - `reports/r47i_s6_false_positive_logodds_validity_audit_20260602_140132_sentinel232102_contractshift_rerun/summary.json`
+- Résultat durable:
+  - le sentinelle `232102` ne produit plus le faux positif précédemment accepté ;
+  - il retombe maintenant à `success=false`, `message=no valid solution`, `oracle_status=fail_no_wcs`.
+- Lecture durable:
+  - la promotion silencieuse `FAIL -> GOOD` faisait bien partie du chemin causal du faux positif ;
+  - la retirer change le comportement de recherche de façon réelle (run plus long, plus aucune solution acceptée sur ce case) ;
+  - le prochain cran utile n'est pas un retuning de seuils, mais l'identification de l'étage précis où ce sentinelle cesse désormais de survivre.
+
+## 2026-06-02 14:15 — S6 comparaison post-contrat: le faux positif fermé expose un résiduel transform/scale sur `d50_2725`
+- Comparaison directe cadrée entre :
+  - ancien faux positif accepté :
+    - `reports/forensic_oracle_232102_20260518_2342/summary.json`
+    - `success=true`, `tile_key=d50_2725`, `phase=hinted`, `prob_logodds=24.176`
+    - oracle faux positif avec `center_sep_arcsec≈14576.9` et `scale_ratio≈3.88`
+  - run forensique post-séparation de contrat :
+    - `reports/r47i_s6_contractshift_forensic_20260602_141607/validation_pairs.json`
+    - `reports/r47i_s6_contractshift_forensic_20260602_141607/wcs_coherence.json`
+- Constat durable:
+  - le candidat/famille `d50_2725` remonte encore après patch ;
+  - il n'est plus promu artificiellement en `GOOD`, mais il apparaît maintenant comme un échec mathématique/cohérence clair.
+- Signaux utiles relevés sur `d50_2725` après patch :
+  - branche nominale :
+    - `pairs=5`
+    - `quality=FAIL`
+    - `validate_rms_px≈191.0`
+    - `model_scale_arcsec≈13.55`
+    - `anchor_scale_arcsec≈2.39`
+    - `wcs_residual_max_arcsec≈3638.8`
+  - branche mirror :
+    - `pairs=6`
+    - `quality=FAIL`
+    - `validate_rms_px≈2184.6`
+    - `model_scale_arcsec≈23.98`
+    - `anchor_scale_arcsec≈2.39`
+    - `wcs_residual_max_arcsec≈61084.3`
+- Lecture durable:
+  - après fermeture du faux `GOOD`, le résiduel S6 le plus crédible n'est plus un simple problème de seuil d'acceptation ;
+  - il reste vraisemblablement une **approximation mathématique préjudiciable** dans le support transform/scale/cohérence WCS du candidat `d50_2725` ;
+  - la suite utile doit cibler ce différentiel mathématique avant tout nouveau retuning `anodds/tosolve`.
+
+## 2026-06-02 14:30 — S6 audit `d50_2725`: deux sources d'erreur concrètes avant tout patch math plus profond
+- Source d'erreur `E1` isolée :
+  - ancien faux positif accepté `d50_2725` évalué avec une ancre d'échelle `scale_anchor_current_arcsec=9.56`, alors que :
+    - le pairset du même case publie déjà `approx_scale_arcsec=2.39`
+    - le run post-contrat recale l'ancre autour de `2.392674`
+  - Lecture durable :
+    - une ancre d'échelle non canonique a contribué à laisser `model_scale_arcsec=9.216` passer comme `scale_ok`.
+- Source d'erreur `E2` isolée :
+  - l'ancien faux positif accepté passe par le statut `empty_inliers_fallback_all_finite` avec `pairs=15`, `inliers=15`, `model_scale_arcsec=9.216`.
+  - Lecture code durable :
+    - en chemin strict Astrometry, `zeblindsolver.py` peut encore promouvoir `finite_mask_empty` quand `inlier_count<=0`, donc transformer une absence d'inliers géométriques en support verify dense.
+  - Lecture durable :
+    - ce fallback est un vrai générateur de faux support mathématique et a probablement alimenté le faux positif historique `d50_2725`.
+- Règle de pilotage durable :
+  - avant tout patch “math plus profond” sur transform/scale, fermer d'abord :
+    - la provenance d'ancre d'échelle non canonique (`E1`)
+    - puis la promotion `empty_inliers_fallback_all_finite` (`E2`)
+  - seulement après cela, réévaluer le résiduel transform/scale restant sur `d50_2725`.
+
+## 2026-06-03 01:20 — S6 `astrometry`/Ze: résiduel vivant resserré jusqu'au carry effectif des paires `resolve_hit`
+- Le résiduel S6 n'est plus à cadrer comme un simple problème d'ancre, de scale global ou de source Astrometry ignorée.
+- L'audit causal durable de référence reste :
+  - `reports/r47i_s6_astrometry_seed_residual_incoherence_audit_20260602_230608_sentinel232102_d502725_seed_residual_forced/summary.json`
+  - lecture utile :
+    - seed `astrometry` bon sur `d50_2725` (`resolve_hit.kept=38`, `inliers_final=8`, `rms_px≈1.85`)
+    - effondrement aval Ze (`pairs=8`, `inliers=0`, `residual_px_med≈26.66`, `residual_px_max≈542.94`)
+- Nouvelle lecture code durable :
+  - dans le fallback `meta_seed_inliers`, Ze réestimait bien le transform à partir des couples `resolve_hit_src_indices/dst_indices`,
+  - mais ne réinjectait pas ces indices `dst` dans la chaîne aval ;
+  - si `post_resolve` ne sauvait pas ensuite le candidat, le solveur pouvait rechuter vers un masque source-only puis un appariement index-locké faux.
+- Correctif minimal appliqué :
+  - conservation locale `meta_seed_src_idx/meta_seed_dst_idx`
+  - réinjection explicite en `reassign_src_idx/reassign_dst_idx`
+  - nouvelle provenance aval : `resolve_hit_meta_seed`
+- Règle de pilotage durable :
+  - le prochain audit doit maintenant vérifier si ce carry explicite suffit à empêcher la rechute index-lockée ;
+  - si l'échec persiste, le front suivant devient strictement `post_resolve / reassign_eval`, sans rouvrir d'audit Astrometry large.
+
+## 2026-06-04 13:10 — S6 `resolve_hit` pair-pool carry: le rejet rapide change de forme, mais le chemin doit être borné
+- Le correctif `meta_seed` a été renforcé : quand le seed `astrometry` fournit des couples `resolve_hit_src_indices/dst_indices`, le contrôle aval ne garde plus seulement les indices en `reassign_*`; il restreint aussi le pool local à ces couples appariés (`img_points[src] -> tile_points[dst]`) et remappe les indices en coordonnées locales `0..N-1`.
+- Vérifications courtes accomplies :
+  - `python -m py_compile zeblindsolver/zeblindsolver.py zeblindsolver/verify.py` OK ;
+  - `python -m pytest tests/test_zeblindsolver.py -q` => `19 passed`.
+- Rejeu causal borné :
+  - `timeout 150s python tools/r47i_s6_astrometry_seed_residual_incoherence_audit.py --tile d50_2725 --label sentinel232102_d502725_pairpoolcarry`
+  - artefact partiel : `reports/r47i_s6_astrometry_seed_residual_incoherence_audit_20260604_130200_sentinel232102_d502725_pairpoolcarry/`
+  - résultat : timeout `150s` sans `summary.json/stats_full.json`.
+- Lecture durable :
+  - le carry du pool `resolve_hit` modifie bien le comportement par rapport au rejet rapide historique, mais ne ferme pas encore S6 ;
+  - le prochain travail doit borner/observer le bloc immédiatement après `resolve_hit_meta_seed` pour savoir si `empty_inliers` est supprimé puis remplacé par une recherche trop longue, ou si une rechute ultérieure se produit dans `post_resolve / verify`.
+
+## 2026-06-04 13:35 — S6 `resolve_hit` global-point carry validé jusqu'à l'entrée validation
+- Le premier patch `pair-pool carry` était encore incomplet : les indices `resolve_hit_src/dst` appartenaient au référentiel global `image_positions/tile_positions`, alors que le screen aval recevait déjà un petit pool de `8` paires. Le clipping des indices contre ce petit pool empêchait de porter correctement les correspondances.
+- Correctif appliqué :
+  - au moment de créer `transform_origin_meta`, Ze stocke maintenant aussi `resolve_hit_src_points` et `resolve_hit_dst_points` depuis le pool global réellement utilisé par `resolve_hit`;
+  - le fallback aval consomme ces coordonnées appariées directement, puis remappe les indices locaux en `0..N-1`.
+- Probe borné ajouté :
+  - `blind_s6_meta_seed_probe_dump_path`;
+  - option d'audit `--probe-break-on-seed` pour atteindre rapidement le screen aval du seed causal sans changer le défaut produit.
+- Artefact utile :
+  - `reports/r47i_s6_astrometry_seed_residual_incoherence_audit_20260604_133138_sentinel232102_d502725_reassignsourceprobe_breakseed/meta_seed_probe.json`
+- Résultat durable sur `hinted/S/nominal/first_pass` :
+  - avant carry : `pairs=8`, `inlier_count=0`, `resolve_hit_src_count=38`, `residual_px_med≈187`;
+  - après carry : `carried_pairs=38`, `inlier_count=38`, `model_scale_arcsec≈12.11577`, `residual_px_med≈4.93`;
+  - entrée pré-validation : `img_in_pairs=38`, `tile_in_pairs=38`, `world_in_pairs=38`, `reassign_source=resolve_hit`, `reassign_path_tag=resolve_hit_direct`.
+- Conclusion durable :
+  - la rupture de référentiel `resolve_hit` -> petit pool indexé est corrigée jusqu'à l'entrée validation ;
+  - le résiduel vivant descend maintenant vers la validation/native-verify de ces 38 paires, pas vers la génération du seed ni le transport des correspondances.
+
+## 2026-06-05 01:05 — S6 `native_verify/validate`: les 38 paires sont cohérentes mais oracle-fausses
+- Le carry des coordonnées monde a été complété : `resolve_hit_dst_world_points` transporte maintenant les RA/Dec absolues, tandis que `tile_points` reste en plan tangent. Cela supprime le faux RMS géant observé quand `validate_solution` recevait des coordonnées tangent-plane comme si elles étaient des coordonnées monde.
+- Probe défaut sur `d50_2725` :
+  - `reports/r47i_s6_astrometry_seed_residual_incoherence_audit_20260605_005506_sentinel232102_d502725_worlddump_default/validation_pairs.json`
+  - `pairs=38`, `inliers=38`, `rms_px≈6.166`, `model_scale_arcsec≈12.123`
+  - rejet par `validate_base` : `rms_ok=0`, `inliers_ok=1`, `scale_ok=1`, seuil `rms_thr=2.000`
+  - résidu WCS sur les 38 RA/Dec reçues : médiane ≈`55.9"` / p90 ≈`87.7"` / max ≈`119.8"`.
+- Probe audit-only avec `quality_rms=8` :
+  - `reports/r47i_s6_astrometry_seed_residual_incoherence_audit_20260605_005013_sentinel232102_d502725_validatepass_rms8/`
+  - `validate_base` passe, puis l'acceptation arrive avec `prob_matches=0`, `prob_distractors=1`, `prob_theta_match_total=0`, `prob_theta_distractor_total=18`, log-odds final ≈`-1.386`.
+  - comparaison oracle ASTAP : `false_positive`, centre décalé ≈`7680"`, `corner_max≈18551"`, scale ratio ≈`5.107`.
+- Lecture durable :
+  - les 38 paires portées par `resolve_hit` sont auto-cohérentes dans le mauvais repère/hypothèse, mais ne valident pas le vrai WCS du FITS ;
+  - le seuil RMS produit à `2px` protège ici contre une fausse solution ; le relâcher à `8px` serait dangereux sans autre garde-fou ;
+  - le `probabilistic verify` confirme le manque de support : le premier préfixe est déjà un distracteur (`theta=-1`, `prob_matches=0`), mais reste accepté en audit-only parce que `tosolve=1e-3` abaisse `tokeep` à ≈`-6.907` alors que le meilleur distracteur vaut ≈`-1.386`;
+  - le front suivant n'est pas de retuner `quality_rms`, mais d'aligner la logique Astrometry pour rejeter ce faux `resolve_hit` plus tôt ou construire un vrai support MatchObj quand le candidat est authentique.
+
+## 2026-06-05 01:10 — Garde-fou ZeNear pendant la suite S6 ZeBlind
+- Risque clarifié avec Tristan :
+  - les travaux S6 en cours sont ZeBlind-only en accès direct (`blind_astrometry_*`, `resolve_hit`, `native_verify`, `solve_blind`) et ne doivent pas modifier le solve Near pur ;
+  - la zone à risque est indirecte : un Near qui échoue puis bascule en fallback Blind peut changer de comportement si le contrat `validate/native_verify` de ZeBlind est durci ou réparé.
+- Règle durable avant promotion d'un correctif S6 :
+  - conserver le fallback blind immédiat de ZeNear ;
+  - ne pas toucher aux modules/configs Near pour résoudre ce front S6 ;
+  - relancer explicitement un protocole `testzenear`/Near+fallback avec comptage séparé `Near success`, `Blind fallback success`, `fail` ;
+  - si régression ZeNear observée après un ZeBlind fonctionnel, chercher d'abord dans le comportement fallback Blind et non dans le solve Near pur.
+
+## 2026-06-05 01:20 — S6 audit summary remis au niveau du diagnostic courant
+- L'outil `tools/r47i_s6_astrometry_seed_residual_incoherence_audit.py` ne doit plus présenter l'ancienne cause `global img_points/tile_points pool` comme diagnostic actif quand les dumps montrent le nouvel état.
+- Mise à jour appliquée :
+  - lecture de `validation_pairs.json` dans la synthèse ;
+  - classification défaut : `validate_rejects_unsupported_resolve_hit` quand les 38 paires atteignent validation, mais échouent `rms_ok=0` et ont zéro support probabiliste ;
+  - classification probe relâché : `unsupported_accept_under_relaxed_probe_threshold` quand `quality_rms=8` fait accepter un préfixe distracteur sans `prob_matches`.
+- Vérification de classification sur artefacts existants :
+  - défaut `worldcarry_validateprobe_breakseed` => `validate_rejects_unsupported_resolve_hit`;
+  - `validatepass_rms8` => `unsupported_accept_under_relaxed_probe_threshold`.
+
+## 2026-06-05 01:25 — S6 garde-fou callback: plus de succès sans support verify positif
+- Contrat Astrometry clarifié :
+  - `verify_hit()` peut calculer/remplir le support MatchObj quand `K >= logaccept`;
+  - le statut "solution" reste contrôlé plus tard par `toprint/tokeep/tosolve` dans `solver_handle_hit` / `onefield`.
+- Correctif/garde-fou Ze appliqué :
+  - nouveau flag config `blind_astrometry_require_positive_verify_match_for_solve=True`;
+  - en mode Astrometry strict, `_record_match_callback_runtime()` rejette un candidat si `prob_matches=0` et `prob_theta_match_total=0`, même si un probe a abaissé `tosolve`;
+  - terminal explicite : `reject_callback_no_positive_verify_match`;
+  - dump d'audit ajouté : `blind_record_match_callback_dump_path`.
+- Probe RMS8 de contrôle :
+  - `reports/r47i_s6_astrometry_seed_residual_incoherence_audit_20260605_012235_sentinel232102_d502725_rms8_callbackdump/record_match_callback.json`
+  - le faux `d50_2725` reste `validate=GOOD` sous RMS8 (`38` paires, `rms≈6.166`) mais le callback le rejette :
+    - `solve_pass=False`
+    - `record_match_callback_reason=no_positive_verify_match`
+    - `logodds≈-1.386`, `tosolve≈-6.907`
+    - `prob_matches=0`, `prob_theta_match_total=0`
+- Lecture durable :
+  - les probes relâchés peuvent encore servir à atteindre une zone de code, mais ne peuvent plus transformer un préfixe distracteur en faux succès ;
+  - prochain front S6 : après neutralisation du faux `resolve_hit`, vérifier quel candidat vient ensuite, ou remonter l'écart vers génération/ordre/support des hypothèses.
+
+## 2026-06-05 01:35 — S6 après neutralisation: réémission du même faux `resolve_hit`
+- Probe de suite :
+  - `reports/r47i_s6_astrometry_seed_residual_incoherence_audit_20260605_012539_sentinel232102_d502725_after_false_resolvehit/`
+- Observation :
+  - après le premier rejet `reject_callback_no_positive_verify_match`, le solveur réémet le même faux nominal (`hinted/S/nominal`, `resolve_hit`, `38` paires, `rms≈6.166`, `model_scale≈12.123`, `logodds≈-1.386`, `prob_matches=0`);
+  - la branche miroir atteint aussi validation mais échoue massivement (`11` paires, `rms≈2252.8`, `scale_ok=0`);
+  - aucune signature de candidat authentique distinct n'émerge dans cette fenêtre.
+- Garde-fou ajouté :
+  - registre runtime des signatures déjà rejetées sans support positif ;
+  - les réémissions identiques sont maintenant rejetées avant nouveau callback comme `reject_duplicate_no_positive_verify_match`;
+  - probe `...013022...duplicate_guard` confirme une première entrée `no_positive_verify_match`, puis une entrée `duplicate_no_positive_verify_match`.
+- Lecture durable :
+  - le front S6 descend maintenant vers l'orchestration/réentrée du même faux `resolve_hit` entre passages/phases ;
+  - prochaine étape utile : empêcher ou classifier plus tôt cette re-entry de signature unsupported, puis vérifier si un vrai candidat apparaît derrière.
+
+## 2026-06-05 08:45 — S6 recheck: le doublon faux atteint encore `validate` avant le garde-fou aval
+- Petit refactor de sûreté/testabilité appliqué :
+  - extraction module-level de `_unsupported_verify_reject_signature()` et `_should_reject_duplicate_no_positive_verify_match()`;
+  - couverture unitaire ajoutée pour la stabilité de signature et la logique `seen_signature -> reject`.
+- Vérifications courtes :
+  - `python3 -m py_compile zeblindsolver/zeblindsolver.py tests/test_zeblindsolver.py` OK ;
+  - `pytest -q tests/test_zeblindsolver.py` passe à `23 passed`.
+- Rerun sentinelle de contrôle :
+  - `reports/r47i_s6_astrometry_seed_residual_incoherence_audit_20260605_083646_sentinel232102_d502725_duplicate_guard_recheck/`
+- Lecture causale utile tirée des artefacts partiels déjà écrits :
+  - `validation_pairs.json` contient encore **deux** entrées identiques pour le faux nominal `hinted/S/nominal/d50_2725` (`38` paires, `rms≈6.166`, `reason=validation_metrics_only[...]`) ;
+  - donc le garde-fou `reject_duplicate_no_positive_verify_match` coupe bien l'acceptation tardive, mais ne supprime pas encore la **réémission amont vers validate**.
+- Conclusion durable :
+  - le prochain delta causal ne doit plus viser le callback final ;
+  - il doit classifier/couper plus tôt la réentrée unsupported, idéalement avant une deuxième validation identique, puis vérifier si un candidat authentique émerge derrière.
+
+## 2026-06-05 09:10 — S6 pre-validate guard: le doublon `d50_2725` ne repaie plus une 2e validation identique
+- Correctif appliqué :
+  - ajout d'une signature `prevalidate` dérivée du candidat (`tile/level/parity/source`, échelle, erreur médiane, head des points image/tile) ;
+  - stockage de cette signature quand un candidat est rejeté au callback pour `no_positive_verify_match` ;
+  - nouveau court-circuit amont avant `_validate_solution_traced("validate_base", ...)` si la même signature unsupported réapparaît.
+- Vérifications :
+  - `python3 -m py_compile zeblindsolver/zeblindsolver.py tests/test_zeblindsolver.py` OK ;
+  - `pytest -q tests/test_zeblindsolver.py` passe à `25 passed`.
+- Probe sentinelle :
+  - `reports/r47i_s6_astrometry_seed_residual_incoherence_audit_20260605_090434_sentinel232102_d502725_prevalidate_guard_v2/`
+- Lecture causale utile :
+  - `validation_pairs.json` ne contient plus qu'une seule entrée pour le faux `hinted/S/nominal/d50_2725` (`38` paires, `rms≈6.166`) ;
+  - avant le patch, le rerun de contrôle en montrait deux ;
+  - le cran “couper la 2e validation identique” est donc refermé.
+- Conclusion durable :
+  - le prochain front S6 n'est plus la duplication au niveau `validate` ;
+  - il faut maintenant auditer ce qui arrive après cette première occurrence rejetée : soit un nouveau candidat utile émerge, soit la boucle amont reste enfermée sur `d50_2725` sans repasser par `validate`.
+
+## 2026-06-05 10:38 — S6 dédup validation confirmée, mais la boucle amont reste enfermée sur `d50_2725`
+- Renforcement appliqué :
+  - nouvelle règle de dédup fondée sur “signature `prevalidate` déjà vue une fois en validation” ;
+  - ce garde-fou agit avant une 2e `validate`, indépendamment du callback final ;
+  - test unitaire ajouté pour `_should_reject_duplicate_prevalidate_validation()`.
+- Vérifications :
+  - `python3 -m py_compile zeblindsolver/zeblindsolver.py tests/test_zeblindsolver.py` OK ;
+  - `pytest -q tests/test_zeblindsolver.py` passe à `26 passed`.
+- Probe sentinelle :
+  - `reports/r47i_s6_astrometry_seed_residual_incoherence_audit_20260605_103412_sentinel232102_d502725_prevalidate_validation_dedup/`
+- Lecture utile :
+  - `meta_seed_probe.json` ne montre plus que `first_pass/nominal` pour `d50_2725` ;
+  - `validation_pairs.json` n'a qu'une seule validation `d50_2725` ;
+  - mais `astrometry_exact_trace.raw.json` reste très majoritairement bloqué sur `d50_2725` (fenêtre lue dominée par `hinted/S/nominal`, queue en `reject_not_better_than_best`).
+- Conclusion durable :
+  - la duplication de validation est refermée ;
+  - la nouvelle première divergence causale vivante est une **boucle amont de réélection sur la même tuile** (`accept_new_best / reject_not_better_than_best`) plutôt qu'un problème de `validate` ou de callback.
+
+## 2026-06-05 10:50 — Réévaluation de trajectoire S6: la comparaison amont reste dominée par un `config_envelope_gap`
+- Audit relancé :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_104603_loop_reaudit_20260605/`
+- Résultat utile :
+  - `probe` et `product` échouent tous deux, mais la première divergence reste classée `config_envelope_gap` ;
+  - sur le même tuple initial `hinted/S/nominal/d50_2725`, les têtes diffèrent déjà fortement en enveloppe runtime :
+    - `newpoint_source`: `phase_local_rank` vs `single_pass_trace_cursor`
+    - `code_lookup_hits`: `33646` vs `10930`
+    - `pairs_collected_initial`: `19` vs `3`
+  - le diff de config frontière est encore trop large pour lire proprement la boucle `d50_2725` comme un gap solver pur (`downsample`, `max_stars`, `max_quads`, `pixel_tolerance`, `prob_verify`, `native_verify semantics`, seuils anodds, gardes d'échelle, `single_pass_newpoint`, etc.).
+- Conclusion durable :
+  - avant de continuer l'autopsie locale sur `accept_new_best / reject_not_better_than_best`, il faut produire un audit **matched-envelope** ;
+  - règle de méthode S6 mise à jour : si la première divergence remonte `config_envelope_gap`, on n'interprète pas la boucle amont comme cause racine tant qu'on n'a pas aligné l'enveloppe runtime minimale entre `product` et `probe`.
+
+## 2026-06-05 12:15 — S6 requalifié plus finement en `preperm_wiring_gap` sur `d50_2725`
+- Outillage d'audit enrichi :
+  - `tools/r47i_s6_m106_first_divergence_audit.py` publie maintenant `resolve_hit_preresolve` par variante ;
+  - la tête upstream exporte aussi `perm_null_reason`.
+- Probes :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_120547_product_preresolve_probe_20260605/`
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_120814_product_preperm_reason_probe_20260605/`
+  - synthèse : `.../hinted_d2725_preperm_gap.json`
+- Lecture utile :
+  - `hinted / nominal / d50_2725` garde bien un `collect scalar_final` avec `19` paires et `35` votes ;
+  - mais il n'atteint ensuite ni `pre_resolve_hit`, ni `exact_trace` ;
+  - la ligne upstream correspondante reste bloquée en :
+    - `perm_callsite_stage=pre_perm`
+    - `perm_null_reason=no_quad_survived_preperm_gates`
+    - `seed_obs_slices_initial=0`
+    - `seed_final_obs_slices=0`
+- Conclusion durable :
+  - le résiduel vivant S6 n'est plus simplement “entre collect et resolve_hit” ;
+  - il est maintenant localisé comme un **`preperm_wiring_gap`** :
+    - le candidat survit au collect,
+    - puis ne construit aucun seed slice / aucune permutation exploitable côté `product`,
+    - avant toute entrée dans `resolve_hit`.
+
+## 2026-06-05 12:23 — S6 encore resserré: `d50_2725` meurt avant astrometry sur `pairset_scale_gate`
+- Instrumentation supplémentaire ajoutée pour la tête upstream :
+  - `astrometry_lookup_ready`
+  - `level_slices_count`
+  - compteurs `preperm_*`
+  - `seed_strict_recover_*`
+- Le protocole S6 exporte maintenant aussi :
+  - `pairset_scale_precheck`
+  - `transform_scale_precheck`
+  - `scale_hard_reject`
+- Probes :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_121838_product_preperm_counters_probe_20260605/`
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_122127_product_preastrometry_gate_probe_20260605/`
+  - synthèse : `.../hinted_d2725_preastrometry_gate_gap.json`
+- Lecture utile :
+  - le tuple `hinted / nominal / d50_2725` garde bien `collect scalar_final` (`19` paires, `35` votes) ;
+  - mais la tête upstream montre ensuite :
+    - `astrometry_lookup_ready=true`
+    - `level_slices_count=7762`
+    - `preperm_quad_iterations=0`
+  - donc il ne faut plus chercher la première mort dans `pre_perm` / `obs_slices` ;
+  - la coupure vivante est plus amont dans `product_pairset_scale_precheck.json` :
+    - deux rejets `reject_pairset_scale_gate` sur `hinted / nominal / d50_2725`
+    - `pairs=10` au moment du garde
+    - `span_implied_scale_arcsec≈14.287` > `gate_hi≈11.963`
+- Conclusion durable :
+  - le résiduel vivant S6 est requalifié de `preperm_wiring_gap` vers **`preastrometry_scale_gate_gap`** ;
+  - le corridor `d50_2725` est coupé par le `pairset_scale_gate` avant toute itération astrometry.
+
+## 2026-06-05 16:00 — S6 remonte encore d'un cran: le vrai delta vivant est le `pair_scale_prefilter` produit
+- Audit pair-flow borné :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_155735_product_pairflow_probe_v2_20260605/`
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_155735_matched_probe_pairflow_probe_v2_20260605/`
+  - synthèse : `.../pairflow_prefilter_vs_native_gap.json`
+- Lecture utile :
+  - sur `hinted / nominal / d50_2725`, `product` passe de `19` paires collectées à `10` après `pair_scale_prefilter` (`9` paires retirées), puis échoue au `pairset_scale_gate` avec ancre `header_scale_arcsec` ;
+  - le bloc `blind_astrometry_add_stars_inbox` ne peut même plus s'exécuter ensuite, car le corridor tombe sous `min_pairs=12` ;
+  - sur le même tuple, `matched_probe/native` garde `18` paires, utilise l'ancre locale `candidate_pairset_local` et ne subit pas de `pairset_scale_gate` (`gate_bounds_arcsec=null`).
+- Conclusion durable :
+  - le résiduel vivant S6 n'est plus à lire d'abord comme un simple `pairset_scale_gate` ;
+  - le premier delta causal exploitable est désormais un **`product_pair_scale_prefilter_gap`** en amont immédiat du gate.
+
+## 2026-06-05 16:30 — Le front S6 `d50_2725` bascule déjà avec le seul flag natif
+- Micro-probe dédié :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_162433_native_flag_only_micro_20260605/`
+  - synthèse : `.../native_flag_only_bridge_verdict.json`
+- Lecture utile :
+  - variante testée = `product` + seul `blind_astrometry_native_verify_semantics_enabled=True` ;
+  - sur le même tuple `hinted / nominal / d50_2725`, ce seul flag suffit déjà à reproduire le comportement pairset natif :
+    - `pairs=18`
+    - `scale_anchor_source=candidate_pairset_local`
+    - `decision=keep_pairset`
+    - `gate_bounds_arcsec=null`
+- Conclusion durable :
+  - les autres relaxations de `matched_probe` ne sont pas nécessaires pour fermer ce front pré-astrometry ;
+  - le résiduel vivant est donc mieux classé comme **gap de politique/mode porté par `blind_astrometry_native_verify_semantics_enabled`**, avant d'être un bug math indépendant.
+
+## 2026-06-05 16:55 — Split des gardes S6: `pair_scale_prefilter` et `pairset_scale_gate` suffisent chacun séparément à réouvrir l'aval
+- Micro-probes dédiés :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_164842_guard_split_micro_20260605/` (`no_pair_prefilter`)
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_165024_no_pairset_gate_micro_20260605/`
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_165024_no_pair_prefilter_no_gate_micro_20260605/`
+  - synthèse : `.../guard_split_verdict.json`
+- Lecture utile :
+  - `pair_scale_prefilter OFF` seul :
+    - le `pairset_scale_precheck` ne rejette plus `d50_2725` ; il passe en `recenter_keep` (`18 -> 10`) ;
+    - le tuple atteint ensuite `pre_resolve_hit`, `exact_trace`, puis la même validation fausse aval (`18` paires, `16` inliers, `rms≈4.254`).
+  - `pairset_scale_gate OFF` seul :
+    - le tuple passe en `keep_pairset` avec le pool produit de `10` paires ;
+    - il atteint lui aussi `pre_resolve_hit`, `exact_trace`, puis la même validation fausse aval.
+  - `prefilter+gate OFF` :
+    - restaure `18` paires avant astrometry, comme `native_flag_only`, mais sans ancre locale requise pour franchir ce front précis.
+- Conclusion durable :
+  - le blocage initial était bien un **bundle de gardes pré-astrometry**, pas un manque de permutations ou un bug math amont ;
+  - dès qu'on retire l'un des deux gardes, le front vivant redescend sur le faux candidat aval `d50_2725` déjà connu.
+
+## 2026-06-05 19:05 — Priorité produit minimale S6: `pairset_scale_gate` passe devant `pair_scale_prefilter`
+- Tri produit figé via :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_165024_no_pairset_gate_micro_20260605/minimal_lever_priority_verdict.json`
+- Lecture utile :
+  - `pairset_scale_gate OFF` seul déverrouille `d50_2725` sans recourir au `recenter_keep` ni modifier la construction du pair-pool ;
+  - `pair_scale_prefilter OFF` seul déverrouille aussi, mais au prix d'un passage `recenter_keep` (`18 -> 10`) plus bruité ;
+  - le bundle complet (`prefilter+gate OFF` ou mode natif) n'est utile que pour restaurer le pool natif de `18` paires avant astrometry, pas pour réexposer le front aval.
+- Conclusion durable :
+  - pour les prochains probes contrôlés orientés correction produit minimale, le **levier prioritaire** à surveiller est `pairset_scale_gate` ;
+  - le front vivant principal redevient le faux `resolve_hit`/validation `d50_2725` (`18` paires, `16` inliers, `rms≈4.254`).
+
+## 2026-06-05 19:15 — Le vrai front vivant suivant est un carry `resolve_hit_meta_seed` malgré prescreen nul
+- Synthèse dédiée :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_165024_no_pairset_gate_micro_20260605/resolve_hit_direct_false_carry_gap.json`
+- Lecture utile :
+  - une fois le bundle pré-astrometry levé, les variantes `no_pairset_gate` et `no_pair_prefilter_no_gate` convergent vers le même aval ;
+  - dans les deux cas, `astrometry_origin_prescreen` est déjà mauvais :
+    - `inlier_count=0`
+    - résiduels très élevés
+    - seulement `8` ou `10` paires au prescreen ;
+  - malgré cela, le bloc `resolve_hit_meta_seed_carried` promeut `18` correspondances originales, puis `resolve_hit_direct` mène à la même fausse validation (`18` paires, `16` inliers, `rms≈4.254`).
+- Conclusion durable :
+  - le front vivant principal n'est plus le bundle de gardes d'échelle lui-même ;
+  - il est maintenant mieux classé comme **`resolve_hit_meta_seed_carry_gap`** : carry trop permissif d'un direct-path malgré un prescreen astrometry déjà non plausible.
+
+## 2026-06-05 19:30 — Un garde de plausibilité coupe bien le faux carry `d50_2725` et réexpose `d50_2822`
+- Implémentation d'audit étroite ajoutée dans `zeblindsolver.py` :
+  - `blind_astrometry_meta_seed_carry_plausibility_guard_enabled=False` par défaut
+  - seuils configurables :
+    - `blind_astrometry_meta_seed_carry_require_origin_inliers`
+    - `blind_astrometry_meta_seed_carry_max_origin_prescreen_residual_px`
+    - `blind_astrometry_meta_seed_carry_max_origin_prescreen_residual_max_px`
+- Variante probe-only ajoutée dans `tools/r47i_s6_m106_first_divergence_audit.py` :
+  - `no_pairset_gate_meta_seed_guard`
+- Artefact de synthèse :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_192637_meta_seed_guard_only_20260605/meta_seed_guard_verdict.json`
+- Résultat durable :
+  - sur `hinted / nominal / d50_2725`, le même `astrometry_origin_prescreen` reste à `pairs=10`, `inlier_count=0`, `residual_px_med≈1274.69`, `residual_px_max≈1971.82` ;
+  - avec le garde activé, ce tuple est maintenant publié comme `resolve_hit_meta_seed_rejected` au lieu d'être promu en `resolve_hit_meta_seed_carried` ;
+  - la fausse branche aval `resolve_hit_direct -> validation d50_2725` ne réapparaît plus dans ce probe ;
+  - le front suivant réexposé devient une validation `hinted / nominal / d50_2822` qui échoue très bruyamment (`pairs=10`, `inliers=7`, `rms≈250.75`).
+- Conclusion durable :
+  - c'est la preuve la plus nette à ce stade que le faux aval `d50_2725` dépendait bien du carry `meta_seed` permissif ;
+  - le prochain front utile à lire n'est plus `d50_2725`, mais `d50_2822` après coupure du carry.
+
+## 2026-06-05 21:25 — Le dedup-all d'audit coupe le leak `d50_2822` et réexpose `d50_2823`
+- Nouveau flag d'audit ajouté dans `zeblindsolver.py` :
+  - `blind_prevalidate_duplicate_reject_all_sources_enabled=False` par défaut
+- Nouvelle variante d'audit ajoutée dans `tools/r47i_s6_m106_first_divergence_audit.py` :
+  - `no_pairset_gate_meta_seed_guard_dedup_all`
+- Artefact de synthèse :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_212412_meta_seed_guard_dedup_all_only_20260605/meta_seed_guard_dedup_all_verdict.json`
+- Résultat durable :
+  - sous `meta_seed_guard`, `d50_2822` était déjà réexposé comme loud-fail `inlier_mask`, mais rejoué de façon identique et inutile ;
+  - le dedup pré-validation standard ne l'arrêtait pas, car il ne s'appliquait qu'aux sources `resolve_hit` ;
+  - avec `dedup_all`, `d50_2725` et `d50_2822` restent bien rejetés côté `meta_seed`, `d50_2822` ne consomme plus qu'une seule validation, et le budget libéré réexpose `d50_2823`.
+- Lecture utile sur le nouveau front :
+  - `phase_handoff` montre maintenant `candidate_try` jusqu'à `d50_2823` en `hinted / S / nominal / first_pass` ;
+  - `resolve_hit_preresolve` sur `d50_2823` publie un gros volume d'événements `pre_resolve_hit/post_resolve_hit` source `astrometry_quad` ;
+  - `astrometry_exact_trace.raw.json` sur `d50_2823` devient le nouveau gros foyer actif, sans encore atteindre `validate` au budget `1/2`.
+- Conclusion durable :
+  - le prochain front vivant utile n'est plus `d50_2822` mais **`d50_2823` dans le corridor `astrometry_quad -> pre_resolve_hit`** ;
+  - `dedup_all` reste pour l'instant un levier d'audit, pas une décision produit.
+
+## 2026-06-05 21:40 — Le gap de portage plausible se resserre sur les invariants de `verify_hit`
+- Comparatif source local utile :
+  - `astrometry-net-main/solver/solver.c`
+  - `astrometry-net-main/solver/verify.c`
+  - `astrometry-net-main/include/astrometry/verify.h`
+- Lecture durable :
+  - Astrometry fait de `verify_hit()` l'autorité centrale de décision :
+    - calcul des `logodds`
+    - `bail`
+    - `stoplooking`
+    - acceptation seulement si `K >= logaccept`
+    - rejet final encore revalidé dans `solver.c` si `mo->logodds < logratio_tokeep`
+  - ZeSolver, au contraire, laisse encore plusieurs promotions latérales vivre autour de l'astrometry loop :
+    - `resolve_hit_meta_seed`
+    - `resolve_hit_direct`
+    - `reassign_eval`
+    - dédup pré-validation dépendante de la source
+- Conclusion durable :
+  - le problème le plus crédible du portage n'est pas un concept faux, mais un **affaiblissement des invariants de verify/accept** par rapport au corridor canonique Astrometry ;
+  - la prochaine étape à fort ROI est d'inventorier précisément quels invariants Astrometry impose avant promotion et lesquels ZeSolver relâche ou court-circuite.
+
+## 2026-06-05 21:50 — Premier inventaire concret des invariants relâchés chez ZeSolver
+- Invariants source plausiblement affaiblis pendant le portage :
+  - autorité unique de verify insuffisamment centralisée ;
+  - matérialisation trop précoce de "quasi-correspondances" avant acceptation terminale ;
+  - monotonie plus faible entre seuil d'entrée verify et seuil final de keep ;
+  - recyclage excessif des branches faibles via `relaxed/bootstrap/rescue` ;
+  - discipline de rejet encore partiellement dépendante de `reassign_source` ;
+  - exigence de "positive verify match" pas encore appliquée comme contrat global.
+- Conclusion durable :
+  - la cible prioritaire n'est pas de retoucher encore les maths locales ;
+  - la cible prioritaire devient la **restauration d'un contrat de verify/accept plus proche d'Astrometry**.
+
+## 2026-06-05 22:10 — Le clamp strict de pré-promotion ne devient pas le front causal principal sur la fenêtre bornée
+- Probe-only ajouté :
+  - `blind_astrometry_strict_prepromotion_source_clamp_enabled=False` par défaut
+  - variante `no_pairset_gate_meta_seed_guard_dedup_all_strict_prepromo`
+- Artefacts utiles :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_220441_strict_prepromo_probe_20260605/`
+- Résultat durable :
+  - sous `trace_max=2`, le clamp strict ne remplace pas encore la tête causale ;
+  - `d50_2725`, `d50_2822` et `d50_2823` restent tous rejetés côté `resolve_hit_meta_seed` ;
+  - `d50_2822` reste le seul loud-fail en validation (`inlier_mask`, `10` paires, `7` inliers, `rms≈250.75`) ;
+  - `d50_2823` demeure le nouveau foyer actif surtout en `astrometry_quad` / `resolve_hit_preresolve`, sans validation atteinte dans cette fenêtre.
+- Conclusion durable :
+  - l'hypothèse "promotions latérales non canoniques" reste pertinente structurellement, mais elle n'explique pas à elle seule le front vivant courant sous budget borné ;
+  - le prochain audit utile doit descendre plus bas dans le couloir `astrometry_quad` de `d50_2823`.
+
+## 2026-06-05 22:20 — Le `perm_hash_gate` est un garde de pruning budgétaire, pas juste un faux blocage local
+- Nouvelle variante probe-only :
+  - `no_pairset_gate_meta_seed_guard_dedup_all_no_permhash`
+- Artefacts utiles :
+  - `reports/r47i_s6_m106_first_divergence_audit_20260605_221501_no_permhash_probe_20260605/`
+- Résultat durable :
+  - sur le stack strict précédent, `d50_2823` était dominé dans l'`exact_trace` par `reject_perm_hash_gate` ;
+  - quand on coupe ce garde, `d50_2823` disparaît de la fenêtre écrite, et le budget se reconcentre sur `d50_2725` et `d50_2822` ;
+  - `phase_handoff` ne montre plus que `d50_2725` puis `d50_2822` ;
+  - `resolve_hit_preresolve` explose surtout sur :
+    - `d50_2822` (`pre_resolve_hit/post_resolve_hit`)
+    - `d50_2725` (`pre_resolve_hit/post_resolve_hit`)
+- Conclusion durable :
+  - `perm_hash_gate` est ambivalent :
+    - il peut sur-pruner localement ;
+    - mais il empêche aussi les vieux faux fronts d'absorber tout le budget ;
+  - un retrait produit brut de ce garde serait dangereux sans mécanisme de remplacement plus canonique.
+
+## 2026-06-05 22:30 — `d50_2725` et `d50_2822` restent devant surtout par score/ranking amont et support brut
+- Lecture durable du probe `no_permhash` :
+  - `candidate_order_head` expose des scores bruts très défavorables à `d50_2823` :
+    - `d50_2725 = 33646`
+    - `d50_2822 = 17252`
+    - `d50_2823 = 11602`
+  - sans `perm_hash_gate`, `d50_2823` ne parvient même plus jusqu'au `pairset_scale_precheck` dans la fenêtre bornée ;
+  - `d50_2725` et `d50_2822` gardent au contraire un support amont plus gros :
+    - `d50_2725` atteint `pairset_scale_precheck` avec `10` paires
+    - `d50_2822` avec `15` paires
+  - `resolve_hit_preresolve` se concentre massivement sur eux, surtout `d50_2822`.
+- Conclusion durable :
+  - leur compétitivité observée n'est pas principalement une supériorité de validate aval ;
+  - elle est surtout portée par un **avantage de ranking initial + volume de pair-pool/support** ;
+  - la suite doit donc auditer aussi le mécanisme de ranking, pas seulement les gardes de pruning.
+
+## 2026-06-05 22:45 — Le ranking Ze ajoute bien deux couches non canoniques au-dessus du score brut
+- Observabilité renforcée dans `zeblindsolver.py` :
+  - `candidate_order_effective_head`
+  - `candidate_order_reranked_head`
+- Résultat durable sur les probes `no_permhash` :
+  - le `candidate_order_head` brut ne décrivait pas encore l'ordre réellement essayé ;
+  - avec `soft_prior` ON, le premier rerank remet `d50_2725` puis `d50_2822` devant `d50_2823` ;
+  - avec `soft_prior` OFF, `candidate_try` partait encore sur `d50_2725`, ce qui a permis d'isoler un second rerank caché via `blind_candidate_rerank_top_k` et `_quick_candidate_likelihood(...)`.
+- Probe décisif :
+  - variante ajoutée :
+    - `no_pairset_gate_meta_seed_guard_dedup_all_no_permhash_no_softprior_no_rerank`
+  - artefact :
+    - `reports/r47i_s6_m106_first_divergence_audit_20260605_224538_no_permhash_no_softprior_no_rerank_probe_20260605/`
+  - lecture durable :
+    - sans `soft_prior` **et** sans `candidate_rerank`, `candidate_try` repart bien sur `d50_2823` en premier ;
+    - `pairset_scale_precheck` le montre encore vivant (`4` paires, `decision=keep_pairset`) ;
+    - `resolve_hit_preresolve` et `astrometry_exact_trace` se recentrent aussi sur `d50_2823` dans la même fenêtre ;
+    - l'avance artificielle de `d50_2725` / `d50_2822` provenait donc du corridor de ranking Ze ajouté après le score brut, pas du score brut seul.
+- Conclusion durable :
+  - pour approcher un chemin **identique à Astrometry**, il faut désormais auditer ce `candidate_rerank` comme probable heuristique Ze non canonique ;
+  - la question centrale n'est plus seulement "quel garde remplace `perm_hash_gate` ?", mais aussi "quel ranking intermédiaire doit disparaître ou être recâblé vers un vrai critère de verify canonique".
+
+## 2026-06-05 23:05 — Astrometry n'expose pas d'équivalent au `candidate_rerank` Ze avant verify
+- Comparatif source utile :
+  - Astrometry : `solver.c` suit le corridor
+    - `try_all_codes`
+    - `try_permutations`
+    - `resolve_matches`
+    - `solver_handle_hit`
+    - `verify_hit`
+  - pré-filtres observés avant `verify_hit` :
+    - permutations géométriques
+    - `abscale`
+    - bornes RA/Dec
+  - pas d'équivalent trouvé à un rerank de tête basé sur une vraisemblance RANSAC locale avant verify.
+- Côté Ze, l'heuristique incriminée est explicite :
+  - `blind_candidate_rerank_top_k`
+  - `_quick_candidate_likelihood(...)`
+- Probe décisif complémentaire avec pruning conservé :
+  - variante :
+    - `no_pairset_gate_meta_seed_guard_dedup_all_no_softprior_no_rerank`
+  - artefact :
+    - `reports/r47i_s6_m106_first_divergence_audit_20260605_230557_permhash_on_no_softprior_no_rerank_probe_20260605/`
+  - résultat durable :
+    - en gardant `perm_hash_gate` mais en neutralisant `soft_prior` + `candidate_rerank`, `candidate_try` repart sur `d50_2823` ;
+    - `pairset_scale_precheck` garde `d50_2823` vivant ;
+    - `resolve_hit_preresolve` se reconcentre sur `d50_2823` ;
+    - l'`exact_trace` montre ensuite clairement `reject_perm_hash_gate` sur ce même candidat.
+- Conclusion durable :
+  - le ranking Ze et le pruning `perm_hash_gate` sont désormais séparés proprement ;
+  - dans un chemin de parité Astrometry, `candidate_rerank` doit être considéré comme heuristique Ze à neutraliser ou supprimer, puis le front suivant à traiter devient le `perm_hash_gate`.
+
+## 2026-06-05 23:20 — Le seuil du `perm_hash_gate` agit comme un couperet quantifié très structurant
+- Probe minimal ajouté :
+  - variante :
+    - `no_pairset_gate_meta_seed_guard_dedup_all_no_softprior_no_rerank_permhash2048`
+  - artefact :
+    - `reports/r47i_s6_m106_first_divergence_audit_20260605_232011_permhash2048_probe_20260605/`
+- Résultat durable :
+  - avec `soft_prior` et `candidate_rerank` déjà neutralisés, relever seulement `blind_astrometry_strict_perm_hash_max_qdelta` de `1536` à `2048` laisse `d50_2823` en tête ;
+  - `resolve_hit_preresolve` reste centré sur `d50_2823` ;
+  - les rejets `reject_perm_hash_gate` sur `d50_2823` chutent fortement (`1479 -> 471`) ;
+  - le plus petit rejet restant est `2052`, ce qui montre que le relâchement a effectivement libéré tout le paquet juste sous le nouveau seuil ;
+  - `d50_2822` disparaît de l'`exact_trace` écrit dans cette fenêtre.
+- Conclusion durable :
+  - le `perm_hash_gate` n'est pas seulement une heuristique de rejet binaire ;
+  - son seuil quantifié a un effet massif sur la topologie de la fenêtre de recherche ;
+  - un relâchement modéré semble libérer du signal utile sans réouvrir immédiatement les vieux faux fronts, ce qui en fait un bon candidat d'audit calibré pour la suite.
+
+## 2026-06-13 02:35 — `mo_scale_native` diverge bien d'Astrometry, mais n'explique pas le zéro-match `verify`
+- Comparatif source confirmé :
+  - Astrometry remplit `mo->scale` depuis le WCS (`tan_pixel_scale`), donc en vrai `arcsec/pix`.
+  - Ze reconstruisait encore un `mo_scale_native` à partir d'une médiane de distances en **pixels image**, ce qui est une divergence sémantique réelle.
+- Probe-only ajouté :
+  - `blind_astrometry_probe_native_mo_scale_from_model_enabled`
+  - il recale `mo_scale_native` et `verify_pix2_scale_source` sur `model_scale_arcsec`.
+- Résultat durable :
+  - sur le replay forensic ouvert jusqu'à `verify`, la valeur utilisée par `verify_pix2` passe bien de `180.689` à `4.433`.
+  - mais sur le **même pool figé** `test_xy/ref_xy`, le rejeu pur de la séquence `verify` reste inchangé :
+    - `prob_theta_match_total = 0`
+    - `prob_ibailed = 17`
+    - `prob_steps = 18`
+    - `prob_logodds_last = -24.953298500158034`
+  - le seul effet mesuré est un gonflement faible de `sigma²` (~`+1.99%`) via `index_jitter / mo_scale`.
+- Conclusion durable :
+  - `mo_scale_native` doit rester dans l'inventaire des écarts Ze vs Astrometry ;
+  - mais pour `d50_2823`, ce n'est **pas** le verrou causal principal du `no_positive_verify_match` ;
+  - le prochain front utile reste le **pool verify / support géométrique positif**, pas `mo_scale`.
+
+## 2026-06-13 20:23 — Ordre des test-stars et `testsigma²` blanchis comme cause dominante sur `d50_2823`
+- Relecture source Astrometry ciblée validée :
+  - le champ est trié par flux avant `verify` ;
+  - `verify_get_test_stars()` ne change ensuite l’ordre que par :
+    - déduplication
+    - retrait du quad
+    - `uniformize` éventuel
+    - RoR
+  - `testsigma²` canonique est bien :
+    - `verify_pix2 * (1 + R² / Q²)`
+- Côté Ze :
+  - un tri flux-desc stable de parité Astrometry a été câblé ;
+  - le rejeu `reports/r47i_s6_fluxsort_probe_20260613_202233/` reste inchangé vs baseline quad-removal ;
+  - le diff séquentiel confirme qu’aucun delta `verify` n’apparaît sur ce cas.
+- Conclusion durable :
+  - sur le cas vivant `d50_2823`, l’ordre des premières test-stars n’est pas le verrou causal actif ;
+  - le modèle `testsigma²` n’est plus non plus le doute méthodologique dominant ;
+  - les résiduels `uniformize/reorder` côté source ne sont pas actifs ici car :
+    - `blind_astrometry_verify_index_cutnside = 0`
+    - le `verify_teststar_filter` Ze-side ne s’active pas sur le chemin natif strict courant.
+- Direction utile suivante :
+  - auditer en priorité la sémantique `RoR / effective_area` avant de replonger plus bas dans `theta/logodds`.
+
+## 2026-06-13 20:34 — `RoR / effective_area` était bien un écart causal restant
+- Comparatif source confirmé :
+  - Astrometry `verify_apply_ror()` recalcule `effective_area` par comptage de bins, même quand `index_cutnside = 0` revient à une grille `1x1`.
+  - Ze utilisait encore un fallback disque :
+    - `effA = min(area, π * ror²)`
+- Patch durable appliqué :
+  - `_apply_verify_ror_filter()` calcule désormais la grille `uniformize` canonique pour `effective_area` même à `cutnside=0`.
+  - Le filtrage des étoiles reste inchangé :
+    - bins seulement si `nw>1 || nh>1`
+    - sinon RoR radial direct
+- Validation locale :
+  - `py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `42 passed`
+  - test ajouté :
+    - `test_apply_verify_ror_filter_uses_bin_area_fallback_at_cutnside_zero`
+- Rejeu borné utile :
+  - `reports/r47i_s6_ror_effa_probe_20260613_203138/`
+  - diff :
+    - `reports/r47i_s6_verify_sequence_diff_20260613_203300_r47i_s6_fluxsort_probe_20260613_202233_vs_r47i_s6_ror_effa_probe_20260613_203138/summary.json`
+- Résultat durable :
+  - le préfixe `verify` s’améliore réellement :
+    - `prob_logodds` : `-1.38629 -> -0.98933`
+    - `gate_pass_count` : `11 -> 19`
+    - `theta_match_count` : `5 -> 8`
+  - le step `0` bascule de `distractor` à `match` avec `nsig2` nettement meilleur.
+- Conclusion durable :
+  - `RoR / effective_area` était bien un faux écart Ze-vs-Astrometry encore causal ;
+  - une fois refermé, il devient plus crédible de redescendre ensuite sur les derniers résiduels `verify_pix2` / `theta-logodds` que de revenir soupçonner `testperm`.
+
+## 2026-06-13 20:42 — `verify_pix2` blanchi sur le baseline courant ; front vivant = `theta/logodds`
+- Observabilité ajoutée dans `verify_debug_sets` pour tracer explicitement :
+  - `verify_model_scale_arcsec_input`
+  - `verify_pix_scale_arcsec_input`
+  - `verify_mo_scale_arcsec_px_for_pix2`
+  - `mo_model_scale_arcsec_input`
+  - `mo_pix_scale_arcsec_input`
+- Probe utile :
+  - `reports/r47i_s6_pix2_obs_probe_20260613_204225/`
+- Résultat durable :
+  - sur le baseline courant, `verify_pix2` consomme bien :
+    - `model_scale_arcsec = 6.077758799729469`
+    - `pix_scale_arcsec = 6.077758799729469`
+    - `verify_scale_arcsec_px_for_pix2 = 6.077758799729469`
+  - `mo_scale_native` suit la même valeur :
+    - `mo_scale = 6.077758799729469`
+    - `mo_scale_source = probe_model_scale_arcsec`
+- Conclusion durable :
+  - le doute sur `verify_pix2` n’est plus le front vivant du baseline courant ;
+  - l’ancienne valeur `4.433...` appartient à un artefact plus ancien/obsolète pour cette branche ;
+  - la prochaine comparaison utile doit maintenant porter directement sur la séquence `real_verify_star_lists()` vs `_astrometry_verify_sequence_logodds()`.
+
+## 2026-06-13 20:48 — Observabilité `theta/logodds` enrichie ; aucune branche `conflict` active sur le baseline courant
+- Relecture du préfixe utile courant :
+  - sur `r47i_s6_ror_effa_probe_20260613_203138`, la séquence active n’utilise pas la branche `conflict` ;
+  - le front vivant reste donc un préfixe `match` / `distractor`, pas une réaffectation de match déjà pris.
+- Patch durable d’observabilité :
+  - `oldj_dbg` et `keepfg_dbg` sont désormais correctement renseignés si un conflit survient ;
+  - `verify_step_dump.json` expose aussi les résumés utiles au niveau entrée :
+    - `prob_best_i`
+    - `prob_ibailed`
+    - `prob_istopped`
+    - `prob_matches`
+    - `prob_conflicts`
+    - `prob_distractors`
+    - `prob_steps`
+    - `prob_theta_match_total`
+    - `prob_theta_conflict_total`
+    - `prob_theta_distractor_total`
+- Validation locale :
+  - `py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `42 passed`
+- Conclusion durable :
+  - cette itération ne change pas la logique de score ;
+  - elle prépare une comparaison beaucoup plus propre avec le source Astrometry si un doute mathématique ressurgit sur `theta/logodds`.
+
+## 2026-06-13 20:55 — Le cœur `theta/logodds` est stable ; le front vivant repart aux entrées/support
+- Probe utile :
+  - `reports/r47i_s6_theta_core_probe_20260613_205329/`
+  - diff strict :
+    - `reports/r47i_s6_verify_sequence_diff_20260613_205432_r47i_s6_ror_effa_probe_20260613_203138_vs_r47i_s6_theta_core_probe_20260613_205329/summary.json`
+- Résultat durable :
+  - avec les mêmes entrées (`verify_pix2`, `test_n`, `ref_n`), la séquence `theta/logodds` est strictement identique :
+    - `prob_logodds = -0.989333722091672`
+    - `gate_pass_count = 19`
+    - `theta_match_count = 8`
+    - aucun `step_delta`
+  - résumé utile :
+    - `prob_best_i = 0`
+    - `prob_ibailed = 25`
+    - `prob_conflicts = 0`
+- Conclusion durable :
+  - sur le baseline courant, le miroir Python du cœur `verify` n’est pas le verrou causal actif ;
+  - la suite utile doit remonter aux **entrées/support** qui déterminent le premier préfixe utile, en particulier le voisin NN et la géométrie locale du step `0`.
+
+## 2026-06-13 21:02 — `followup.md` a été volontairement reset en plan top-down court
+- Décision de pilotage validée :
+  - arrêter d'utiliser `followup.md` comme journal semi-historique ;
+  - conserver l'historique accompli dans `memory.md` ;
+  - transformer `followup.md` en tableau de bord court orienté :
+    - premier point de divergence
+    - plan top-down
+    - sortie livrable
+- Lecture durable :
+  - le sprint n'est plus piloté comme une suite de coupes dichotomiques locales ;
+  - la méthode officielle devient :
+    - cas sentinelle fixe
+    - checkpoints amont -> aval
+    - arrêt sur le premier écart causal
+    - un seul delta puis rejeu de la colonne complète.
+
+## 2026-06-13 21:13 — Premier checkpoint ouvert top-down désormais matérialisé
+- Nouvel outil ajouté :
+  - `tools/r47i_s6_first_divergence_topdown_audit.py`
+- Validation locale :
+  - `python3 -m py_compile tools/r47i_s6_first_divergence_topdown_audit.py` OK
+- Audit utile publié :
+  - `reports/r47i_s6_first_divergence_topdown_audit_20260613_211325_r47i_s6_theta_core_probe_20260613_205329/summary.json`
+- Résultat durable :
+  - checkpoints déjà blanchis / fermés sur le baseline courant :
+    - `input_stars_order`
+    - `quad_geometry`
+    - `verify_pix2_scale`
+    - `verify_sequence_core`
+  - **premier checkpoint encore ouvert** :
+    - `verify_support_pre_step0`
+  - classification actuelle du premier front ouvert :
+    - divergence de **support `verify`**
+    - pas une divergence du cœur `theta/logodds`
+- Lecture durable :
+  - le premier point à investiguer maintenant n'est plus un résiduel diffus ;
+  - c'est explicitement le **support exact `test/ref` et le voisin NN du step 0** avant le cœur séquentiel.
+
+## 2026-06-13 21:52 — Astrometry dispose maintenant d'un harness direct `verify_hit()` ; le vrai trou restant est l'injection de l'hypothèse Ze
+- Outil de lecture ajouté :
+  - `tools/r47i_s6_astrometry_engine_verify_audit.py`
+- Premier constat durable obtenu sur le runtime Astrometry blind du même FITS :
+  - le `testperm` canonique peut être **non monotone**
+  - `verify_apply_ror()` peut réordonner via `uniformize`
+  - donc un ordre Ze monotone n'est pas, à lui seul, un argument de non-parité
+- Un essai `solve-field --verify` avec une WCS candidate reconstruite depuis Ze a été lancé :
+  - artefact :
+    - `reports/r47i_s6_astrometry_verify_from_ze_wcs_20260613_2140/`
+  - lecture durable :
+    - ce chemin ne fournit pas encore un checkpoint homologue Ze ;
+    - quand la WCS candidate ne passe pas, Astrometry retombe sur une résolution blind puis produit un `matchfile` canonique Astrometry.
+- Un vrai harness Astrometry direct sur `verify_hit()` a été remis en état :
+  - `astrometry-net-main/solver/verify-paths.c` modernisé en mode utile `matchfile + index`
+  - `astrometry-net-main/solver/Makefile` complété avec une cible `verify-paths`
+  - compile réussie de `astrometry-net-main/solver/verify-paths`
+- Rejeu autonome validé :
+  - commande `verify-paths -i index-4107.fits -m zeverify.match -f zeverify.axy`
+  - log :
+    - `reports/r47i_s6_astrometry_verify_from_ze_wcs_20260613_2140/verify_paths.log`
+  - audit :
+    - `reports/r47i_s6_astrometry_engine_verify_audit_20260613_215213_r47i_s6_astrometry_verify_from_ze_wcs_20260613_2140/summary.json`
+- Résultat durable du harness direct :
+  - checkpoint Astrometry canonique proprement figé :
+    - `NT=123`
+    - `NR=19`
+    - `NTall=127`
+    - `NRall=44`
+    - `quad_field_head=[4,0,3,5]`
+    - `testperm_head=[1,2,7,12,11,6,8,9,16,19,13,17,10,14,23,21]`
+    - `refperm_head=[13,42,26,17,41,12,10,8,39,43,28,31,29,36,0,7]`
+    - `verify: logodds 128.438`, `19 matches`, `0 conflicts`, `54 distractors`, `besti=72`
+- Lecture durable :
+  - on ne manque plus d'un outil Astrometry au bon étage ;
+  - le verrou méthodologique restant est maintenant beaucoup plus précis :
+    - **produire/injecter l'équivalent Ze du `matchfile` / `MatchObj`**
+    - puis comparer `verify_support_pre_step0` à type d'entrée strictement identique.
+
+## 2026-06-14 00:57 — Premier écart Ze vs Astrometry matérialisé au même étage : support `verify_hit()`
+- Instrumentation ajoutée dans `zeblindsolver.py` pour exporter les données nécessaires à un `MatchObj` Ze homologué :
+  - `field_xy_all_native` / `field_xy_all_native_n`
+  - `ref_world_all_native` / `ref_world_all_native_n`
+- Outil ajouté :
+  - `tools/r47i_s6_build_ze_matchfile.py`
+  - rôle : reconstruire un `.axy`, un `.match` et une WCS TAN Astrometry à partir du `verify_debug_sets.json` Ze.
+- Probe Ze utile :
+  - `reports/r47i_s6_ze_matchobj_worlddump_probe_20260614_005416/`
+- Matchfile Ze reconstruit :
+  - `reports/r47i_s6_ze_matchfile_20260614_005704_r47i_s6_ze_matchobj_worlddump_probe_20260614_005416/`
+  - fit TAN depuis les paires Ze projetées :
+    - `ref_fit_n=417`
+    - `fit_rms_px≈0.185`
+    - `fit_median_px≈0.123`
+    - `fit_max_px≈0.656`
+    - `fit_scale_arcsec_px≈6.073`
+- Rejeu Astrometry direct sur le `MatchObj` Ze :
+  - log :
+    - `reports/r47i_s6_ze_matchfile_20260614_005704_r47i_s6_ze_matchobj_worlddump_probe_20260614_005416/verify_paths_ze.log`
+  - audit :
+    - `reports/r47i_s6_astrometry_engine_verify_audit_20260614_005744_r47i_s6_ze_matchfile_20260614_005704_r47i_s6_ze_matchobj_worlddump_probe_20260614_005416/summary.json`
+- Résultat durable :
+  - Astrometry sur le `MatchObj` Ze produit :
+    - `quad_field_head=[1,68,152,244]`
+    - `NTall=439`
+    - `NRall=247`
+    - `NT=434`
+    - `NR=134`
+    - `testperm_head=[0,16,30,65,28,4,6,92,55,61,241,15,23,17,46,42]`
+    - `refperm_head=[222,154,245,164,95,234,175,110,44,46,176,183,58,53,178,160]`
+    - `logodds=-1.38629`, `0 matches`, `0 conflicts`, `1 distractor`
+  - Le miroir Ze courant sur la même hypothèse consomme au contraire :
+    - `prob_verify_nt=48`
+    - `prob_verify_nr=395`
+    - `prob_logodds≈-0.98933`
+- Conclusion durable :
+  - le premier écart causal n'est plus une incertitude méthodologique ni le cœur `theta/logodds` ;
+  - il est maintenant matérialisé au checkpoint `verify_support_pre_step0` ;
+  - Ze construit un support de vérification différent d'Astrometry :
+    - test side trop réduit car il part d'un sous-ensemble pré-filtré au lieu du champ image complet ;
+    - ref side trop large car il part du pool tile/world Ze au lieu du pool index projeté par champ/rayon comme `verify_hit()`.
+- Prochain delta unique :
+  - réaligner la construction du support Ze sur Astrometry avant toute nouvelle analyse aval.
+
+## 2026-06-14 01:26 — Premier delta d'alignement support appliqué ; le front se resserre sur le ref-pool
+- Patch appliqué dans `zeblindsolver.py` :
+  - en mode `astrometry_native_verify_semantics`, le test-pool part maintenant du champ image complet au lieu d'être capé par `blind_astrometry_verify_teststar_max_keep`
+  - le ref-scope par champ/rayon WCS est activé automatiquement en mode native, avec suppression du padding Ze `*1.10` sur le rayon
+  - export ajouté :
+    - `ref_world_px`
+    - `ref_world_px_n`
+  - cet export permet de reconstruire un `MatchObj` propre avec les RA/Dec réellement alignés sur `ref_xy_px`
+- Outil mis à jour :
+  - `tools/r47i_s6_build_ze_matchfile.py` consomme `ref_world_px` en priorité
+  - fallback ajouté pour les IDs globaux Ze encodés `(tile_index << 32) + local_star_id`
+- Validation locale :
+  - `python3 -m py_compile zeblindsolver/zeblindsolver.py tools/r47i_s6_build_ze_matchfile.py` OK
+- Probe principal après patch :
+  - `reports/r47i_s6_native_support_refworld_probe_20260614_012409/`
+  - Ze support effectif :
+    - `field_xy_all_native_n=439`
+    - `test_xy_px=435`
+    - `ref_xy_px=123`
+    - `prob_verify_nt=435`
+    - `prob_verify_nr=123`
+    - `prob_logodds=-1.3862943611198908`
+- Matchfile propre reconstruit :
+  - `reports/r47i_s6_ze_matchfile_20260614_012525_r47i_s6_native_support_refworld_probe_20260614_012409/summary.json`
+  - fit WCS :
+    - `ref_fit_n=123`
+    - `ref_id_mode=direct_ref_world_px`
+    - `fit_rms_px≈0.076`
+    - `fit_median_px≈0.059`
+    - `fit_scale_arcsec_px≈6.073`
+- Oracle Astrometry `verify-paths` sur ce nouveau `MatchObj` Ze :
+  - log :
+    - `reports/r47i_s6_ze_matchfile_20260614_012525_r47i_s6_native_support_refworld_probe_20260614_012409/verify_paths_ze.log`
+  - audit :
+    - `reports/r47i_s6_astrometry_engine_verify_audit_20260614_012557_r47i_s6_ze_matchfile_20260614_012525_r47i_s6_native_support_refworld_probe_20260614_012409/summary.json`
+  - Astrometry reconstruit :
+    - `NTall=439`
+    - `NRall=248`
+    - `NT=434`
+    - `NR=134`
+    - `quad_field_head=[1,68,152,244]`
+    - `logodds=-1.38629`
+- Conclusion durable :
+  - le delta a refermé la grosse divergence test-pool (`48 -> 435`, proche du `434` Astrometry)
+  - le checkpoint `verify_support_pre_step0` n'est pas encore fermé
+  - le premier sous-écart restant est désormais le **ref-pool/index source** :
+    - Ze native actuel : `NR=123`
+    - Astrometry oracle depuis le même `MatchObj` : `NR=134`
+  - il reste aussi un micro-écart test/RoR :
+    - Ze `NT=435`
+    - Astrometry `NT=434`
+- Prochain delta logique :
+  - brancher ou reproduire une source ref-pool strictement Astrometry (`startree_search_for` / index 4107), puis seulement ensuite traiter le `435 -> 434`.
+
+## 2026-06-14 01:42 — Support C forcé dans Ze : le cœur séquentiel est blanchi, le front restant est amont
+- Instrumentation Astrometry ajoutée :
+  - `astrometry-net-main/solver/verify.c` peut écrire un dump complet du support consommé par `verify_hit()` via `C_VERIFY_SUPPORT_DUMP=/path/support.json`
+  - le dump contient :
+    - `testperm`
+    - `refperm`
+    - `test_xy`
+    - `ref_xy`
+    - `testsigma2`
+    - `refstarid`
+    - `NT/NR/NTall/NRall`
+- Validation compilation :
+  - `make verify-paths` OK après modification de `verify.c`
+- Oracle C extrait sur le `MatchObj` Ze propre :
+  - `reports/r47i_s6_ze_matchfile_20260614_012525_r47i_s6_native_support_refworld_probe_20260614_012409/c_verify_support.json`
+  - valeurs :
+    - `NT=434`
+    - `NR=134`
+    - `NTall=439`
+    - `NRall=248`
+    - `testperm_head=[0,16,30,65,28,4,6,92,55,61,241,15,23,17,46,42]`
+    - `refperm_head=[223,155,246,165,93,235,176,108,45,47,177,184,59,54,179,161]`
+- Injection/replay Ze ajouté :
+  - `zeblindsolver.py` accepte maintenant `testsigma2` dans le JSON `blind_astrometry_verify_forced_teststars_json_path`
+  - en mode `blind_astrometry_verify_forced_inputs_always_enabled`, ce profil `testsigma2` est utilisé tel quel pour le replay C
+- Probe de contrôle sans `testsigma2` forcé :
+  - `reports/r47i_s6_forced_c_support_probe_20260614_013814/`
+  - support fermé (`NT=434`, `NR=134`) mais step 0 divergeait :
+    - Ze classait le premier voisin en `match`
+    - Astrometry le classait en `distractor`
+  - cause : variance Ze trop large sur ce step
+- Probe de contrôle avec support + `testsigma2` C forcés :
+  - `reports/r47i_s6_forced_c_support_sigma_probe_20260614_014048/`
+  - résultat :
+    - `prob_verify_nt=434`
+    - `prob_verify_nr=134`
+    - `prob_logodds=-1.3862943611198908`
+    - `prob_matches=0`
+    - `prob_conflicts=0`
+    - `prob_distractors=1`
+    - step `0` = `distractor`
+- Conclusion durable :
+  - à support `test/ref` et profil `testsigma²` identiques, le miroir Python Ze reproduit le préfixe Astrometry observé
+  - le cœur séquentiel `theta/logodds` est donc blanchi pour ce checkpoint
+  - le front causal restant est strictement amont :
+    - produire le ref-pool Astrometry `startree_search_for` en Python
+    - reproduire le profil `testsigma²` Astrometry sans injection forcée
+
+## 2026-06-14 02:03 — Delta amont fermé : `verify_pix2` Astrometry + `testperm` uniformize
+- Divergence math identifiée :
+  - Astrometry `verify-paths` initialise `pix2=1.0`, puis ajoute `(index_jitter / mo.scale)^2`
+  - Ze réutilisait `blind_prob_sigma_px=1.6`, donc `verify_pix2_base=2.56`
+  - effet : `testsigma²` trop large et step 0 pouvait être classé `match` au lieu de `distractor`
+- Patch Ze appliqué :
+  - nouveau champ config `blind_astrometry_verify_pix_base_px=1.0`
+  - en mode `astrometry_native_verify_semantics` / replay forcé, `verify_pix2_base` utilise ce défaut Astrometry au lieu de `blind_prob_sigma_px`
+- Divergence d'ordre test-stars identifiée :
+  - Astrometry appelle `verify_uniformize_field()` dans `verify_apply_ror()`
+  - cette fonction réordonne `testperm` en balayant les bins row-major par couches, elle ne filtre pas seulement par RoR
+  - Ze filtrait les bins mais ne reproduisait pas cette permutation
+  - Ze perdait aussi `_testperm0` en remplaçant les IDs par `arange(...)`
+- Patch Ze appliqué :
+  - port de la permutation `verify_uniformize_field()` dans `_apply_verify_ror_filter`
+  - conservation du vrai `_testperm0` après dédup/retrait du quad
+  - résolution automatique du `CUTNSIDE` par niveau si la config vaut `0` :
+    - `S=156`
+    - `M=110`
+    - `L=78`
+- Probe de validation :
+  - `reports/r47i_s6_auto_cutnside_pixbase_probe_20260614_020139/`
+  - runtime original conservé (`blind_astrometry_verify_index_cutnside=0`) ; l'auto-résolution donne le comportement attendu
+  - `verify_pix2_input=1.0270715472637384`
+  - `testperm_head` Ze = Astrometry :
+    - `[0,16,30,65,28,4,6,92,55,61,241,15,23,17,46,42,...]`
+  - `testsigma²` de tête collé au C à environ `0.002` près
+  - step 0 :
+    - `theta_label=distractor`
+    - `cum_logodds=-1.3862943611198908`
+- Front restant après ce delta :
+  - test/RoR queue : Ze garde un extra test `295` (`NT=435` vs Astrometry `434`)
+  - front principal : refpool/index source toujours divergent
+    - Ze `NR=123`
+    - Astrometry `NR=134`
+    - refstarid Ze et C n'ont pas encore le même espace d'identifiants
+- Prochaine étape logique :
+  - reproduire ou exporter strictement la source `startree_search_for()` / sweep-sort Astrometry pour fermer `NR 123 -> 134`
+  - seulement ensuite traiter le micro-résidu `NT 435 -> 434`
+
+## 2026-06-14 07:20 — Delta test-stars fermé : dédup Astrometry `verify_deduplicate_field_stars()`
+- Résidu du checkpoint `verify_support_pre_step0` isolé :
+  - Ze gardait une étoile test supplémentaire, original id `295`, à `x≈6.659`, `y≈1902.537`
+  - Astrometry ne la garde pas dans `c_verify_support.json`
+  - comparaison canonique :
+    - Ze avant patch : `NT=435`
+    - Astrometry : `NT=434`
+- Cause source confirmée dans `astrometry-net-main/solver/verify.c` :
+  - `verify_get_test_stars()` appelle `verify_deduplicate_field_stars(v, vf, 1.0)` avant retrait des étoiles du quad
+  - ce filtre retire les étoiles tardives dans l'ordre d'entrée si elles sont dans le rayon `testsigma` d'une étoile plus précoce
+  - pour le sentry, `295` est proche de `75` :
+    - `d²≈166.873`
+    - `testsigma²(75)≈179.633`
+    - donc `295` doit être supprimée
+- Patch Ze appliqué :
+  - ajout du helper `_astrometry_verify_dedup_teststar_indices()`
+  - utilisation en mode `astrometry_native_verify_semantics` avant retrait du quad
+  - replay forcé laissé intact pour ne pas redédupliquer les payloads C déjà figés
+- Validation :
+  - check isolé sur le payload `r47i_s6_auto_cutnside_pixbase_probe_20260614_020139` retire exactement `[295]`
+  - probe runtime `reports/r47i_s6_cdedup_probe_20260614_071553/` :
+    - `NT=434`
+    - `295` absent de `teststarid_use`
+  - `python3 -m py_compile zeblindsolver/zeblindsolver.py tools/r47i_s6_build_ze_matchfile.py`
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `43 passed`
+- Lecture durable :
+  - le sous-écart test-stars/RoR est fermé
+  - le front actif du checkpoint reste strictement le ref-pool/index :
+    - cible Astrometry canonique : `NR=134`, `NRall=248`, `refperm_head=[223,155,246,165,...]`
+    - Ze doit reproduire la source `startree_search_for()` / ordre ref avant de redescendre dans `verify`
+
+## 2026-06-24 — Source ref-pool Astrometry reproduite en Python ; checkpoint support fermé
+
+- Une implémentation Python pure du star-tree FITS Astrometry a été ajoutée :
+  - lecture des chunks `kdtree_lr_stars`, `kdtree_split_stars`, `kdtree_range_stars`, `kdtree_data_stars` et `sweep`
+  - décodage natif `u32`
+  - parcours KD-tree équivalent à `startree_search_for(..., KD_OPTIONS_SMALL_RADIUS)`
+  - retour des IDs natifs dans l'ordre du parcours
+- Le chemin a été branché explicitement dans `astrometry_native_verify_semantics` via :
+  - `blind_astrometry_startree_index_path`
+- Un écart amont supplémentaire a été identifié et corrigé :
+  - Ze réduisait encore le rayon du champ avec `approx_scale_deg * 1.15`
+  - ce clamp n'existe pas dans le chemin `verify_hit()` Astrometry
+  - il est maintenant désactivé en mode natif
+- Validation sentinelle `M106 / d50_2823` :
+  - avant correction rayon : `NRall=51`, `NR=48`
+  - après correction : Ze `NT=434`, `NR=134`, `NRall=247`
+  - oracle C homologue : `NT=434`, `NR=134`, `NRall=247`
+  - `testperm` identique
+  - même ensemble de références utiles
+  - même premier résultat `logodds=-1.38629436`
+- Les seules différences de permutation restantes sont à l'intérieur de groupes de même `sweep` :
+  - Astrometry utilise `qsort_r`, non stable sur les égalités
+  - Ze garde un tri stable/déterministe
+  - ce résidu n'est pas une divergence sémantique contractuelle
+- Artefact :
+  - `reports/r47i_s7_startree_parity_closure_20260624/summary.md`
+- Validation locale :
+  - `python3 -m py_compile` OK
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py` => `44 passed`
+- Le prochain front autorisé est désormais :
+  - smoke multicase ZeBlind court
+  - puis garde-fou complet `testzenear`
+
+## 2026-06-24 — Smoke multicase startree et garde-fou ZeNear court
+
+- Le smoke multicase historique à 3 FITS a été rejoué avec et sans la nouvelle source startree :
+  - contrôle courant : `2/3`
+  - startree natif : `1/3`
+  - échec commun : `233520`
+  - seul delta : `232350`
+- L'écart `232350` a été audité :
+  - le contrôle acceptait une hypothèse à seulement `4` inliers et RMS `≈27.16 px`
+  - son support probabiliste positif venait de `2` matches faibles dans le pool tile-world
+  - le pool startree canonique donne `0` match positif et empêche la promotion
+  - conclusion : rejet d'un faux positif probable, pas régression d'une solution canonique
+- Garde-fou ZeNear court sur 5 FITS :
+  - `4/5` succès
+  - débit `≈18.58 images/min`
+  - échec unique `234013` : `near solver could not estimate a similarity transform`
+  - cet échec appartient à une classe déjà observée avant le patch blind-only
+- L'outil `bench_zenear_from_list.py` a été réparé :
+  - suppression de l'ancien chemin figé `/home/tristan/ZeSolver`
+  - import désormais résolu depuis la racine réelle du dépôt
+- Verdict :
+  - aucune régression ZeNear attribuable au startree
+  - le tuning produit blind-only peut être rouvert prudemment
+  - le `testzenear` complet reste à exécuter
+- Artefact :
+  - `reports/r47i_s7_multicase_and_zenear_guard_20260624/summary.md`
+
+## 2026-06-24 — Garde-fou testzenear complet et double fallback Blind corrigé
+
+- Le lot canonique propre de `30` FITS a été retrouvé dans :
+  - `reports/eq_ircut_cleanbench_20260518_230249/data`
+- Garde-fou ZeNear isolé, paramètres CPU courants :
+  - `20/30`
+  - `141.97 s`
+  - `12.68 images/min`
+  - les `10` échecs sont tous `near solver could not estimate a similarity transform`
+- Garde-fou batch produit sur copies explicitement nettoyées de tout WCS :
+  - `580` cartes supprimées
+  - `0` fichier avec WCS avant lancement
+  - `22/30` résolus par Near, soit la même cardinalité Near que la baseline historique
+  - `8` non-résolus : `232945`, `233027`, `233048`, `233130`, `233211`, `233232`, `233828`, `234013`
+- Le run global a été borné après environ `42 min 09 s` :
+  - `0` succès Blind
+  - `8` premiers échecs Blind terminés
+  - seconde phase Blind encore active
+  - RSS observé jusqu'à `≈3.4 GiB`
+  - recherches globales répétées avec environ `1240–1269` candidats de niveau S
+- Cause orchestration isolée :
+  - la phase Near process appelle `solve_path(..., allow_blind_fallback=False)`
+  - `_run_index_near_solver()` ignorait ce contrat tant que `near_defer_blind_fallback=false`
+  - chaque échec Near lançait donc un Blind interne, puis repartait dans la phase Blind batch
+- Correctif ciblé dans `zesolver.py` :
+  - `allow_blind_fallback=False` force désormais le différé vers la phase Blind batch
+  - le comportement séquentiel `allow_blind_fallback=True` conserve le fallback Blind immédiat
+- Tests ajoutés :
+  - batch : appels Near `[False, False]`, aucun Blind interne
+  - séquentiel : appels `[False, False, True]`, fallback immédiat conservé
+  - `2 passed`
+  - garde-fous ZeBlind existants : `44 passed`
+- Artefact :
+  - `reports/r47i_s7_testzenear_full_product_clean_20260624/summary.md`
+- Prochain pas unique :
+  - smoke produit borné sur les `8` non-résolus pour mesurer un seul passage Blind par image avant tout nouveau benchmark complet.
+
+## 2026-06-24 — Smoke produit Blind borné et concurrence RAM-adaptative
+
+- Le smoke batch produit a été rejoué sur les `8` non-résolus canoniques :
+  - `8/8` Near correctement différés vers la phase Blind
+  - seulement `6` démarrages Blind, correspondant aux `6` workers disponibles
+  - les `2` derniers sont restés en file
+  - aucun second passage Blind observé
+- Le run à `6` workers a été borné à `1200 s` :
+  - succès : `0`
+  - fichiers terminés : `0`
+  - RSS maximal : `≈3.2 GiB`
+  - chaque worker est descendu jusqu'aux recherches globales coûteuses
+  - causes candidates dominantes : validations à `4–7` inliers mais RMS très élevé
+- Cause runtime isolée :
+  - la phase Blind héritait directement du nombre de workers Near
+  - sur la machine à `7.52 GiB`, cela lançait `6` recherches lourdes concurrentes
+- Correctif produit dans `zesolver.py` :
+  - dimensionnement Blind séparé et borné par la RAM
+  - caps : `2/3/4/6/8` workers selon les classes `8/16/32/64/>64 GiB`
+  - override manuel via `ZE_BLIND_WORKERS`
+- Probe de validation à `2` workers, borné à `240 s` :
+  - stratégie loggée : `workers=2`
+  - démarrages Blind : `2`
+  - RSS maximal : `≈2.0 GiB`, soit `-37.5 %` face au run à 6 workers
+  - aucun doublon
+- Validation :
+  - `48 passed`
+  - `py_compile` OK
+  - `git diff --check` OK
+- Artefact :
+  - `reports/r47i_s7_product_blind8_bounded_20260624/summary.md`
+- Prochain pas unique :
+  - smoke multicase avec oracle WCS qualité pour séparer vrais succès, faux positifs et coût des échecs avant tout tuning de budgets.

@@ -1309,6 +1309,32 @@ def _system_memory_gb() -> Optional[float]:
     return None
 
 
+def _auto_blind_worker_count(requested_workers: int, ram_gb: Optional[float] = None) -> int:
+    """Bound concurrent blind solves independently from the lighter Near phase."""
+    requested = max(1, int(requested_workers or 1))
+    override = str(os.environ.get("ZE_BLIND_WORKERS", "") or "").strip()
+    if override:
+        try:
+            return max(1, min(requested, int(override)))
+        except ValueError:
+            logging.warning("Ignoring invalid ZE_BLIND_WORKERS=%r", override)
+
+    total_ram_gb = _system_memory_gb() if ram_gb is None else ram_gb
+    if total_ram_gb is None:
+        return min(requested, 4)
+    if total_ram_gb <= 8.0:
+        cap = 2
+    elif total_ram_gb <= 16.0:
+        cap = 3
+    elif total_ram_gb <= 32.0:
+        cap = 4
+    elif total_ram_gb <= 64.0:
+        cap = 6
+    else:
+        cap = 8
+    return max(1, min(requested, cap))
+
+
 def _format_bytes(value: Optional[int]) -> str:
     if value is None:
         return "n/a"
@@ -2905,6 +2931,9 @@ class ImageSolver:
                     for v in getattr(self.config, "dev_depth_ladder_caps", (80, 160, 500))
                     if isinstance(v, (int, float)) and int(v) > 0
                 ) or (80, 160, 500),
+                blind_index_scale_overlap_prefilter_enabled=bool(getattr(self.config, "blind_index_scale_overlap_prefilter_enabled", False)),
+                blind_index_scale_overlap_proxy_lo_frac=float(getattr(self.config, "blind_index_scale_overlap_proxy_lo_frac", 0.05) or 0.05),
+                blind_index_scale_overlap_proxy_hi_frac=float(getattr(self.config, "blind_index_scale_overlap_proxy_hi_frac", 0.95) or 0.95),
             )
 
             quality_profile, quality_metrics = self._select_blind_quality_profile(
@@ -3519,7 +3548,9 @@ class ImageSolver:
                     and bool(self.config.blind_enabled)
                     and not (self._cancelled() if self._cancel_event else False)
                 ):
-                    defer_blind = bool(getattr(self.config, "near_defer_blind_fallback", False)) and (not allow_blind_fallback)
+                    defer_blind = (not allow_blind_fallback) or bool(
+                        getattr(self.config, "near_defer_blind_fallback", False)
+                    )
                     if defer_blind:
                         logging.info(
                             "[ZENEAR] near attempts exhausted for %s; deferring blind fallback to batch blind phase",
@@ -4128,6 +4159,14 @@ class BatchSolver:
         if self.config.blind_enabled and self.config.overwrite and final_unresolved:
             unresolved_paths = [p for p in self.files if p in final_unresolved]
             phase2_unresolved: dict[Path, ImageSolveResult] = {}
+            blind_workers = _auto_blind_worker_count(workers_base, ram_gb=ram_gb)
+            logging.info(
+                "Blind auto strategy: workers=%d base_workers=%d ram_gb=%s override=%s",
+                blind_workers,
+                workers_base,
+                f"{ram_gb:.2f}" if isinstance(ram_gb, float) else "n/a",
+                str(os.environ.get("ZE_BLIND_WORKERS", "") or "auto"),
+            )
 
             def _emit_phase2(path: Path, result: ImageSolveResult) -> None:
                 solved = (result.status == "solved") or (
@@ -4145,7 +4184,7 @@ class BatchSolver:
                 unresolved_paths,
                 lambda p: self.solver.solve_path_blind_only(p, near_failure=final_unresolved.get(p)),
                 _emit_phase2,
-                phase_workers=workers_base,
+                phase_workers=blind_workers,
                 phase_name="phase-blind-thread",
             )
             for item in yield_queue:
@@ -7791,6 +7830,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                     for v in getattr(settings, "dev_depth_ladder_caps", (80, 160, 500))
                     if isinstance(v, (int, float)) and int(v) > 0
                 ) or (80, 160, 500),
+                blind_index_scale_overlap_prefilter_enabled=bool(getattr(settings, "blind_index_scale_overlap_prefilter_enabled", False)),
+                blind_index_scale_overlap_proxy_lo_frac=float(getattr(settings, "blind_index_scale_overlap_proxy_lo_frac", 0.05) or 0.05),
+                blind_index_scale_overlap_proxy_hi_frac=float(getattr(settings, "blind_index_scale_overlap_proxy_hi_frac", 0.95) or 0.95),
             )
             self._blind_worker = BlindRunner(
                 fits_path=sample_path,

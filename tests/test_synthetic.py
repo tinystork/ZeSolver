@@ -63,9 +63,31 @@ def test_synthetic_index_produces_candidate(synthetic_index, synthetic_star_cata
 
     matches = np.column_stack((image_points, np.column_stack((ra_deg, dec_deg))))
     wcs, _ = fit_wcs_tan(matches)
-    stats = validate_solution(wcs, matches, thresholds={"rms_px": 1.0, "inliers": 4})
+    stats = validate_solution(
+        wcs,
+        matches,
+        thresholds={"rms_px": 1.0, "inliers": 4, "scale_max_arcsec": 300.0},
+    )
     assert stats["quality"] == "GOOD"
     assert stats["rms_px"] < 1.0
+
+
+def test_validate_solution_parity_mode_keeps_fail_quality_but_marks_progress(synthetic_index, synthetic_star_catalog):
+    positions, _mags = synthetic_star_catalog
+    ra_deg, dec_deg = _load_tile_arrays(synthetic_index)
+    image_points = positions.astype(np.float32)
+    matches = np.column_stack((image_points, np.column_stack((ra_deg, dec_deg))))
+    wcs, _ = fit_wcs_tan(matches)
+    stats = validate_solution(
+        wcs,
+        matches,
+        thresholds={"rms_px": 1.0, "inliers": 10, "astrometry_parity_mode": True},
+    )
+    assert stats["quality"] == "FAIL"
+    assert stats["success"] is False
+    assert stats["validation_metrics_only"] is True
+    assert stats["validation_progress_eligible"] is True
+    assert str(stats["reason"]).startswith("validation_metrics_only[")
 
 
 def test_tally_candidates_respects_allowed_tiles(synthetic_index, synthetic_star_catalog):
