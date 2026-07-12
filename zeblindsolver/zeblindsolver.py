@@ -31,6 +31,9 @@ import json
 import logging
 import math
 import os
+import shutil
+import subprocess
+import tempfile
 import time
 import zlib
 from itertools import combinations, permutations
@@ -41,8 +44,12 @@ from typing import Any, Callable, Iterable, Mapping, Optional
 import threading
 
 import numpy as np
+from astropy import units as u
+from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.wcs import WCS
+from astropy.wcs.utils import fit_wcs_from_points
+from scipy.spatial import cKDTree
 
 from .asterisms import hash_quads, sample_quads
 from .astrometry_startree import load_astrometry_startree, xyz_to_radec
@@ -52,7 +59,9 @@ from .image_prep import build_pyramid, downsample_image, read_fits_as_luma, remo
 from .fits_utils import parse_angle
 from .matcher import SimilarityStats, SimilarityTransform, estimate_similarity_RANSAC
 from .matcher import _derive_similarity  # quad-based hypothesis helper
+from .quad_code_diagnostic import build_astrometry_quad_records
 from .quad_index_builder import QuadIndex, load_manifest, lookup_hashes, select_tiles_in_cone
+from .quad_index_4d import ASTROMETRY_AB_CODE_4D_SCHEMA, Quad4DIndex
 from .levels import LEVEL_MAP, QuadLevelSpec, set_bucket_cap_overrides
 from .star_detect import detect_stars
 from .verify import validate_solution
@@ -133,6 +142,10 @@ class SolveConfig:
     fail_attempt_min_validations: int = 18
     fail_attempt_max_best_inliers: int = 4
     fail_attempt_min_candidates: int = 20
+    # Optional wall-clock cap for the complete blind attempt. Zero keeps the
+    # historical unlimited behavior. The deadline is also propagated through
+    # internal ladders via the composed cancel callback.
+    blind_global_hard_budget_s: float = 0.0
     global_budget_fast_s: float = 8.0
     global_budget_slow_s: float = 18.0
     blind_astrometry_try_all_codes_mode: bool = True
@@ -172,6 +185,28 @@ class SolveConfig:
     blind_astrometry_code_rangesearch_grid_bin: float = 0.12
     blind_astrometry_code_rangesearch_grid_radius_bins: int = 1
     blind_astrometry_code_rangesearch_allow_experimental_backends: bool = False
+    # P2.2 experimental Astrometry-like AB/C/D 4D runtime route. OFF by default.
+    quad_hash_schema: str = "opposite_edge_ratio_8bit_v1"
+    blind_astrometry_4d_index_enabled: bool = False
+    blind_astrometry_4d_index_path: str = ""
+    blind_astrometry_4d_code_tol: float = 0.015
+    blind_astrometry_4d_max_hits: int = 2000
+    blind_astrometry_4d_max_hits_per_image_quad: int = 8
+    blind_astrometry_4d_max_hypotheses: int = 2000
+    blind_astrometry_4d_image_strategy: str = "log_spaced"
+    blind_astrometry_4d_match_radius_px: float = 3.0
+    blind_astrometry_4d_source_policy: str = "standard_runtime"
+    # P2.10/P2.11 experimental bounded multi-index 4D interface. Empty/OFF by default.
+    # Consumed only when quad_hash_schema == astrometry_ab_code_4d_v1.
+    blind_astrometry_4d_index_paths: tuple[str, ...] = ()
+    blind_astrometry_4d_validation_catalog_policy: str = "source_tile"
+    blind_astrometry_4d_accept_policy: str = "first_accept"
+    blind_astrometry_4d_max_accepts: int = 64
+    blind_astrometry_4d_trace_candidate_enabled: bool = False
+    blind_astrometry_4d_trace_candidate_rank: int = 0
+    blind_astrometry_4d_trace_candidate_origin_tile: str = ""
+    blind_astrometry_4d_trace_candidate_image_quad_indices: tuple[int, ...] = ()
+    blind_astrometry_4d_trace_candidate_catalog_quad_indices: tuple[int, ...] = ()
     blind_astrometry_code_rangesearch_adapt_disable_enabled: bool = False
     blind_astrometry_code_rangesearch_adapt_disable_after_candidates: int = 12
     blind_astrometry_code_rangesearch_adapt_disable_after_validations: int = 0
@@ -228,6 +263,10 @@ class SolveConfig:
     blind_astrometry_resolve_hit_hybrid_max_pairs: int = 96
     blind_astrometry_resolve_hit_preresolve_dump_path: str = ""
     blind_astrometry_resolve_hit_preresolve_dump_max_entries: int = 400
+    blind_astrometry_resolve_hit_diag_dump_path: str = ""
+    blind_astrometry_resolve_hit_diag_dump_max_entries: int = 400
+    blind_astrometry_probe_post_resolve_initial_pool_diag_enabled: bool = False
+    blind_astrometry_post_resolve_initial_pool_enabled: bool = False
     blind_astrometry_meta_seed_carry_plausibility_guard_enabled: bool = True
     blind_astrometry_meta_seed_carry_require_origin_inliers: bool = True
     blind_astrometry_meta_seed_carry_max_origin_prescreen_residual_px: float = 64.0
@@ -375,8 +414,12 @@ class SolveConfig:
     blind_astrometry_transition_dump_pairs_cap: int = 64
     blind_astrometry_transition_dump_include_failures: bool = True
     blind_pairset_scale_gate_enabled: bool = True
+    blind_pairset_scale_anchor_promote_enabled: bool = True
+    blind_pairset_scale_anchor_max_ratio_from_approx: float = 1.8
     blind_astrometry_quad_scale_guard_enabled: bool = True
     blind_astrometry_saturated_hash_seed_bypass_enabled: bool = True
+    blind_astrometry_exact_hash_first_enabled: bool = True
+    blind_astrometry_exact_hash_identity_perm_enabled: bool = True
     blind_astrometry_observed_unsaturated_first_enabled: bool = True
     blind_pairset_scale_recenter_enabled: bool = True
     blind_pairset_scale_recenter_min_pairs: int = 6
@@ -475,6 +518,29 @@ class SolveConfig:
     blind_hypothesis_rank_high_rms_penalty_enabled: bool = True
     blind_hypothesis_rank_high_rms_px: float = 8.0
     blind_hypothesis_rank_high_rms_penalty_weight: float = 4.0
+    blind_hypothesis_rank_resolve_hit_support_enabled: bool = True
+    blind_hypothesis_rank_resolve_hit_support_weight: float = 1.25
+    blind_hypothesis_rank_resolve_hit_support_max_boost: float = 8.0
+    blind_hypothesis_rank_resolve_hit_self_rms_penalty_enabled: bool = False
+    blind_hypothesis_rank_resolve_hit_self_rms_start_px: float = 1.2
+    blind_hypothesis_rank_resolve_hit_self_rms_penalty_weight: float = 1.8
+    blind_hypothesis_rank_resolve_hit_self_rms_penalty_max: float = 6.0
+    blind_astrometry_native_resolve_hit_support_early_exit_enabled: bool = True
+    blind_astrometry_native_resolve_hit_support_early_exit_min_pairs: int = 4
+    blind_astrometry_native_resolve_hit_support_early_exit_strong_min_pairs: int = 4
+    blind_astrometry_native_resolve_hit_support_early_exit_max_self_rms_px: float = 0.0
+    blind_astrometry_native_resolve_hit_support_lookahead_enabled: bool = False
+    blind_astrometry_native_resolve_hit_support_lookahead_max_extra_buckets: int = 48
+    blind_astrometry_native_resolve_hit_support_lookahead_max_s: float = 8.0
+    blind_astrometry_meta_seed_carry_guard_on_refit_enabled: bool = True
+    blind_astrometry_meta_seed_prune_refit_enabled: bool = True
+    blind_astrometry_meta_seed_prune_refit_max_exhaustive_pairs: int = 10
+    blind_astrometry_meta_seed_extend_enabled: bool = False
+    blind_astrometry_meta_seed_extend_min_pairs: int = 6
+    blind_astrometry_meta_seed_extend_min_gain: int = 1
+    blind_astrometry_meta_seed_extend_max_points: int = 256
+    blind_astrometry_meta_seed_extend_max_pairs: int = 96
+    blind_astrometry_meta_seed_extend_max_rms_px: float = 2.0
     blind_hypothesis_rank_scale_hotspot_penalty_enabled: bool = False
     blind_hypothesis_rank_scale_hotspot_penalty_specs: tuple[str, ...] = ()
     blind_hypothesis_rank_scale_hotspot_overshoot_start: float = 2.0
@@ -666,6 +732,19 @@ class SolveConfig:
     blind_match_object_expand_tol_factor: float = 1.35
     blind_star_quality_filter: bool = True
     blind_star_min_sep_px: float = 0.0
+    # Experimental P0.21 source-list gate, inspired by astrometry.net
+    # augment-xylist/resort/uniformize. Disabled by default.
+    blind_astrometry_source_list_gate_enabled: bool = False
+    blind_astrometry_source_list_gate_boxes: int = 10
+    blind_astrometry_source_list_gate_max_sources: int = 0
+    blind_astrometry_source_list_gate_min_keep_ratio: float = 0.05
+    blind_astrometry_external_image2xy_enabled: bool = False
+    blind_astrometry_external_image2xy_command: str = "image2xy"
+    blind_astrometry_external_image2xy_offset_xy: float = -1.0
+    blind_astrometry_external_image2xy_max_sources: int = 0
+    blind_astrometry_external_image2xy_strict: bool = False
+    blind_astrometry_external_image2xy_after_internal_fail_enabled: bool = False
+    blind_astrometry_external_image2xy_internal_first_budget_s: float = 0.0
     blind_verify_uniformize_pairs: bool = True
     # Astrometry-like verify uniformize bin sizing (HEALPix cut nside).
     # 0 disables runtime bin-based effective-area branch.
@@ -1081,6 +1160,89 @@ def _sort_stars_for_astrometry_parity(stars: np.ndarray) -> np.ndarray:
         return arr
     order = np.argsort(-flux, kind="stable")
     return arr[order]
+
+
+def _astrometry_interleaved_resort_order(flux: np.ndarray, background: np.ndarray) -> list[int]:
+    """Approximate astrometry.net's resort-xylist interleaving."""
+    n = int(np.asarray(flux).shape[0])
+    if n <= 1:
+        return list(range(max(0, n)))
+    f = np.asarray(flux, dtype=np.float64).reshape(-1)
+    bg = np.asarray(background, dtype=np.float64).reshape(-1)
+    if bg.shape[0] != f.shape[0]:
+        bg = np.zeros_like(f)
+    raw = f + bg
+    by_flux = list(np.argsort(-f, kind="stable"))
+    by_raw = list(np.argsort(-raw, kind="stable"))
+    out: list[int] = []
+    seen: set[int] = set()
+    for a, b in zip(by_flux, by_raw):
+        for idx in (int(a), int(b)):
+            if idx not in seen:
+                seen.add(idx)
+                out.append(idx)
+    for idx in by_flux + by_raw:
+        idx = int(idx)
+        if idx not in seen:
+            seen.add(idx)
+            out.append(idx)
+    return out
+
+
+def _load_external_image2xy_stars(
+    source_path: Path,
+    *,
+    command: str = "image2xy",
+    offset_xy: float = -1.0,
+    fwhm_px: float = 2.0,
+    max_sources: int = 0,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    """Load an Astrometry image2xy source list as Ze star detections."""
+    exe = shutil.which(str(command or "image2xy"))
+    if not exe:
+        raise RuntimeError(f"image2xy command not found: {command!r}")
+    with tempfile.TemporaryDirectory(prefix="zeblind_image2xy_") as tmp:
+        xy_path = Path(tmp) / "sources.xy.fits"
+        cmd = [exe, "-O", "-o", str(xy_path), str(source_path)]
+        proc = subprocess.run(cmd, text=True, capture_output=True, check=False)
+        if proc.returncode != 0:
+            msg = (proc.stderr.strip() or proc.stdout.strip() or f"exit {proc.returncode}")
+            raise RuntimeError(f"image2xy failed: {msg}")
+        with fits.open(xy_path, memmap=False) as hdul:
+            data = None
+            for hdu in hdul[1:]:
+                if getattr(hdu, "data", None) is not None and getattr(hdu.data, "dtype", None) is not None:
+                    names = set(hdu.data.dtype.names or ())
+                    if {"X", "Y", "FLUX"}.issubset(names):
+                        data = hdu.data
+                        break
+            if data is None:
+                raise RuntimeError("image2xy output missing X/Y/FLUX table")
+            x = np.asarray(data["X"], dtype=np.float64)
+            y = np.asarray(data["Y"], dtype=np.float64)
+            flux = np.asarray(data["FLUX"], dtype=np.float64)
+            names = set(data.dtype.names or ())
+            background = np.asarray(data["BACKGROUND"], dtype=np.float64) if "BACKGROUND" in names else np.zeros_like(flux)
+    order = _astrometry_interleaved_resort_order(flux, background)
+    if max_sources and int(max_sources) > 0:
+        order = order[: int(max_sources)]
+    dtype = [("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")]
+    stars = np.zeros(len(order), dtype=dtype)
+    off = float(offset_xy)
+    stars["x"] = (x[order] + off).astype(np.float32)
+    stars["y"] = (y[order] + off).astype(np.float32)
+    stars["flux"] = flux[order].astype(np.float32)
+    stars["fwhm"] = np.full(len(order), max(0.1, float(fwhm_px)), dtype=np.float32)
+    meta = {
+        "enabled": True,
+        "command": str(exe),
+        "source_count_raw": int(x.shape[0]),
+        "source_count": int(stars.shape[0]),
+        "offset_xy": float(off),
+        "stdout": proc.stdout.strip(),
+        "stderr": proc.stderr.strip(),
+    }
+    return stars, meta
 
 
 def _blind_geometric_guardrails(
@@ -1820,63 +1982,25 @@ def _astrometry_permutation_orders(max_orders: int) -> list[np.ndarray]:
 
 
 def _quad_ratio_code(points4: np.ndarray) -> np.ndarray | None:
-    """Continuous 3-ratio quad code compatible with hash geometry."""
-    pts = np.asarray(points4, dtype=np.float64)
-    if pts.shape != (4, 2) or not np.all(np.isfinite(pts)):
-        return None
-    a, b, c, d = pts
-    def _dist(u: np.ndarray, v: np.ndarray) -> float:
-        return float(np.hypot(float(u[0] - v[0]), float(u[1] - v[1])))
-    d12 = _dist(a, b)
-    d34 = _dist(c, d)
-    d13 = _dist(a, c)
-    d24 = _dist(b, d)
-    d14 = _dist(a, d)
-    d23 = _dist(b, c)
-    eps = 1e-12
-    if d12 <= eps or d34 <= eps or d13 <= eps or d24 <= eps or d14 <= eps or d23 <= eps:
-        return None
-    return np.asarray([
-        float(d12 / (d34 + eps)),
-        float(d13 / (d24 + eps)),
-        float(d14 / (d23 + eps)),
-    ], dtype=np.float64)
+    """Continuous code matching the active permutation-invariant hash."""
+    from .asterisms import opposite_edge_ratio_code
+
+    return opposite_edge_ratio_code(points4)
 
 
 
 
 
 def _hash_from_ordered_quad_points(points4: np.ndarray) -> int | None:
-    """Compute Astrometry-style 64-bit quad hash from ordered points A,B,C,D."""
-    pts = np.asarray(points4, dtype=np.float64)
-    if pts.shape != (4, 2) or not np.all(np.isfinite(pts)):
+    """Compute the active v3 invariant 64-bit quad hash from four points."""
+    code = _quad_ratio_code(points4)
+    if code is None:
         return None
-    a, b, c, d = pts
-    def _dist(u: np.ndarray, v: np.ndarray) -> float:
-        return float(np.hypot(float(u[0] - v[0]), float(u[1] - v[1])))
-    d12 = _dist(a, b)
-    d34 = _dist(c, d)
-    d13 = _dist(a, c)
-    d24 = _dist(b, d)
-    d14 = _dist(a, d)
-    d23 = _dist(b, c)
-    eps = 1e-8
-    if d12 <= eps or d34 <= eps or d13 <= eps or d24 <= eps or d14 <= eps or d23 <= eps:
-        return None
-    r12 = float(d12 / (d34 + eps))
-    r13 = float(d13 / (d24 + eps))
-    r14 = float(d14 / (d23 + eps))
-    def _q(v: float) -> int:
-        lo, hi = 0.25, 4.0
-        vv = min(max(float(v), lo), hi)
-        norm = (vv - lo) / (hi - lo)
-        return int(round(norm * 65535.0))
-    q1 = _q(r12)
-    q2 = _q(r13)
-    q3 = _q(r14)
-    cross_z = float((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]))
-    parity = 1 if cross_z >= 0.0 else 0
-    hv = (int(q1) << 48) | (int(q2) << 32) | (int(q3) << 16) | int(parity)
+    q1, q2, q3 = (
+        int(round(min(max(float(value), 0.0), 1.0) * 255.0))
+        for value in code
+    )
+    hv = (int(q1) << 48) | (int(q2) << 32) | (int(q3) << 16)
     return int(hv)
 
 
@@ -2140,6 +2264,9 @@ def _resolve_hit_correspondences(
     strict_relaxed_retry_max_pairs_factor: int = 3,
     strict_prune_enabled: bool = True,
     strict_prune_tol_factor: float = 2.5,
+    diag_dump_path: str = "",
+    diag_context: Mapping[str, Any] | None = None,
+    diag_dump_max_entries: int = 400,
 ) -> tuple[np.ndarray, np.ndarray, dict[str, int | float]] | None:
     """Approximate Astrometry resolve_matches: one-to-one correspondences under hypothesis.
 
@@ -2150,16 +2277,105 @@ def _resolve_hit_correspondences(
     dst_c = np.asarray(dst_all_c, dtype=np.complex128)
     n_src = int(src_c.shape[0])
     n_dst = int(dst_c.shape[0])
+
+    def _jsonable(value: Any) -> Any:
+        try:
+            if isinstance(value, np.ndarray):
+                return value.tolist()
+            if isinstance(value, np.generic):
+                return value.item()
+            if isinstance(value, complex):
+                return {"real": float(value.real), "imag": float(value.imag)}
+            if isinstance(value, (list, tuple)):
+                return [_jsonable(v) for v in value]
+            if isinstance(value, dict):
+                return {str(k): _jsonable(v) for k, v in value.items()}
+        except Exception:
+            return str(value)
+        return value
+
+    def _finite_percentiles(arr: np.ndarray, percentiles: tuple[float, ...] = (0.0, 10.0, 50.0, 90.0, 100.0)) -> dict[str, float | None]:
+        try:
+            x = np.asarray(arr, dtype=np.float64)
+            x = x[np.isfinite(x)]
+            if x.size <= 0:
+                return {f"p{int(p):02d}": None for p in percentiles}
+            return {f"p{int(p):02d}": float(np.percentile(x, p)) for p in percentiles}
+        except Exception:
+            return {f"p{int(p):02d}": None for p in percentiles}
+
+    def _dump_diag(reason: str, extra: dict[str, Any] | None = None) -> None:
+        path_s = str(diag_dump_path or "").strip()
+        if not path_s:
+            return
+        try:
+            dp = Path(path_s)
+            obj = {"schema": "zeblind.resolve_hit_diag_dump.v1", "entries": []}
+            if dp.exists():
+                try:
+                    prev = json.loads(dp.read_text(encoding="utf-8"))
+                    if isinstance(prev, dict) and isinstance(prev.get("entries"), list):
+                        obj = prev
+                except Exception:
+                    pass
+            entry = {
+                "reason": str(reason),
+                "n_src": int(n_src),
+                "n_dst": int(n_dst),
+                "tol_deg": float(tol_deg),
+                "max_points": int(max_points),
+                "max_pairs": int(max_pairs),
+                "astrometry_iso": bool(astrometry_iso),
+                "strict_subset_mode": str(strict_subset_mode),
+                "strict_dst_prefilter_enabled": bool(strict_dst_prefilter_enabled),
+                "context": _jsonable(dict(diag_context or {})),
+            }
+            try:
+                ctx = dict(diag_context or {})
+                obs_combo_dbg = [int(v) for v in list(ctx.get("obs_combo") or [])]
+                tile_combo_dbg = [int(v) for v in list(ctx.get("tile_combo") or [])]
+                if obs_combo_dbg and tile_combo_dbg and len(obs_combo_dbg) == len(tile_combo_dbg):
+                    pair_dist: list[float | None] = []
+                    for si, di in zip(obs_combo_dbg, tile_combo_dbg):
+                        if 0 <= int(si) < int(src_c.shape[0]) and 0 <= int(di) < int(dst_c.shape[0]):
+                            pred_i = complex(rot_scale) * src_c[int(si)] + complex(translation)
+                            dist_i = abs(pred_i - dst_c[int(di)])
+                            pair_dist.append(float(dist_i) if math.isfinite(float(dist_i)) else None)
+                        else:
+                            pair_dist.append(None)
+                    entry["context_pair_dist_deg"] = pair_dist
+                    entry["context_pair_in_bounds"] = [
+                        bool(0 <= int(si) < int(src_c.shape[0]) and 0 <= int(di) < int(dst_c.shape[0]))
+                        for si, di in zip(obs_combo_dbg, tile_combo_dbg)
+                    ]
+            except Exception:
+                pass
+            if extra:
+                entry.update(_jsonable(extra))
+            obj.setdefault("entries", []).append(entry)
+            max_entries = max(1, int(diag_dump_max_entries or 400))
+            if len(obj["entries"]) > max_entries:
+                obj["entries"] = obj["entries"][-max_entries:]
+            dp.parent.mkdir(parents=True, exist_ok=True)
+            dp.write_text(json.dumps(obj, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
     if n_src < 4 or n_dst < 4:
+        _dump_diag("too_few_input_points")
         return None
 
     thr = float(max(1e-10, tol_deg))
+    diag_extra: dict[str, Any] = {
+        "thr_initial_deg": float(thr),
+    }
 
     if bool(astrometry_iso):
         src_idx = np.arange(n_src, dtype=np.int64)
         dst_idx = np.arange(n_dst, dtype=np.int64)
         pred = rot_scale * src_c[src_idx] + translation
         if pred.size <= 0 or dst_c.size <= 0:
+            _dump_diag("empty_prediction_or_destination", diag_extra)
             return None
         # Radius-first candidate prefilter: keep stars that are plausibly matchable.
         dst_prefilter_used = False
@@ -2192,6 +2408,16 @@ def _resolve_hit_correspondences(
                 else:
                     src_idx = np.asarray(ord_nn[:k_take], dtype=np.int64)
             pred = rot_scale * src_c[src_idx] + translation
+            diag_extra.update({
+                "subset_mode_effective": str(mode),
+                "k_take": int(k_take),
+                "src_keep_radius_count": int(np.count_nonzero(keep_mask)),
+                "src_selected_count": int(src_idx.size),
+                "src_selected_head": [int(v) for v in np.asarray(src_idx[:24], dtype=np.int64).tolist()],
+                "nn_all_percentiles_deg": _finite_percentiles(nn_all),
+                "nn_selected_percentiles_deg": _finite_percentiles(nn_all[src_idx] if src_idx.size > 0 else np.zeros(0, dtype=np.float64)),
+                "nn_head_deg": [float(v) for v in np.asarray(nn_all[src_idx[:16]], dtype=np.float64).tolist()] if src_idx.size > 0 else [],
+            })
 
             if bool(strict_dst_prefilter_enabled) and dmat_all.size > 0:
                 nn_dst = np.min(dmat_all, axis=0)
@@ -2210,10 +2436,23 @@ def _resolve_hit_correspondences(
                     if ord_dst.size >= 4:
                         dst_idx = np.asarray(ord_dst[:k_dst], dtype=np.int64)
                         dst_prefilter_used = True
+                diag_extra.update({
+                    "dst_prefilter_used": bool(dst_prefilter_used),
+                    "dst_selected_count": int(dst_idx.size),
+                    "dst_thr_deg": float(dst_thr),
+                    "dst_nn_percentiles_deg": _finite_percentiles(nn_dst),
+                    "dst_selected_head": [int(v) for v in np.asarray(dst_idx[:24], dtype=np.int64).tolist()],
+                })
         except Exception:
             k_take = int(max(8, min(max_points, n_src)))
             src_idx = np.arange(n_src, dtype=np.int64)[:k_take]
             pred = rot_scale * src_c[src_idx] + translation
+            diag_extra.update({
+                "subset_exception_fallback": True,
+                "k_take": int(k_take),
+                "src_selected_count": int(src_idx.size),
+                "src_selected_head": [int(v) for v in np.asarray(src_idx[:24], dtype=np.int64).tolist()],
+            })
 
         dst_sel = dst_c[dst_idx]
     else:
@@ -2226,8 +2465,16 @@ def _resolve_hit_correspondences(
             dst_idx = dst_idx[:n_keep]
         pred = rot_scale * src_c[src_idx] + translation
         dst_sel = dst_c[dst_idx]
+        diag_extra.update({
+            "subset_mode_effective": "first_n_non_iso",
+            "src_selected_count": int(src_idx.size),
+            "dst_selected_count": int(dst_idx.size),
+            "src_selected_head": [int(v) for v in np.asarray(src_idx[:24], dtype=np.int64).tolist()],
+            "dst_selected_head": [int(v) for v in np.asarray(dst_idx[:24], dtype=np.int64).tolist()],
+        })
 
     if pred.size == 0 or dst_sel.size == 0:
+        _dump_diag("empty_selected_prediction_or_destination", diag_extra)
         return None
 
     li, lj, ld, mutual_kept = _greedy_global_pairing(
@@ -2236,6 +2483,15 @@ def _resolve_hit_correspondences(
         thr=thr,
         max_pairs=max_pairs,
     )
+    diag_extra.update({
+        "greedy_pairs": int(li.size),
+        "greedy_mutual_kept": int(mutual_kept),
+        "greedy_dist_percentiles_deg": _finite_percentiles(ld),
+        "greedy_src_local_head": [int(v) for v in np.asarray(li[:24], dtype=np.int64).tolist()],
+        "greedy_dst_local_head": [int(v) for v in np.asarray(lj[:24], dtype=np.int64).tolist()],
+        "greedy_src_global_head": [int(v) for v in np.asarray(src_idx[li[:24]], dtype=np.int64).tolist()] if li.size > 0 else [],
+        "greedy_dst_global_head": [int(v) for v in np.asarray(dst_idx[lj[:24]], dtype=np.int64).tolist()] if lj.size > 0 else [],
+    })
 
     if li.size < 4 and bool(astrometry_iso) and bool(strict_relaxed_retry):
         thr_relaxed_s = float(max(thr * max(1.0, float(strict_relaxed_retry_tol_factor)), thr + 1e-10))
@@ -2246,9 +2502,20 @@ def _resolve_hit_correspondences(
             thr=thr_relaxed_s,
             max_pairs=mp_relaxed_s,
         )
+        diag_extra.update({
+            "strict_relaxed_retry_attempted": True,
+            "strict_relaxed_thr_deg": float(thr_relaxed_s),
+            "strict_relaxed_max_pairs": int(mp_relaxed_s),
+            "strict_relaxed_pairs": int(li_s.size),
+            "strict_relaxed_mutual_kept": int(mutual_kept_s),
+            "strict_relaxed_dist_percentiles_deg": _finite_percentiles(ld_s),
+            "strict_relaxed_src_global_head": [int(v) for v in np.asarray(src_idx[li_s[:24]], dtype=np.int64).tolist()] if li_s.size > 0 else [],
+            "strict_relaxed_dst_global_head": [int(v) for v in np.asarray(dst_idx[lj_s[:24]], dtype=np.int64).tolist()] if lj_s.size > 0 else [],
+        })
         if li_s.size > li.size:
             li, lj, ld, mutual_kept = li_s, lj_s, ld_s, mutual_kept_s
             thr = thr_relaxed_s
+            diag_extra["strict_relaxed_retry_used"] = True
 
     if li.size >= 4 and bool(astrometry_iso) and bool(strict_prune_enabled):
         try:
@@ -2267,8 +2534,15 @@ def _resolve_hit_correspondences(
                     ld = ld[km]
                     # keep thr at prune scale for diag consistency
                     thr = thr_pr
-        except Exception:
-            pass
+                diag_extra.update({
+                    "strict_prune_attempted": True,
+                    "strict_prune_kept": int(np.count_nonzero(km)),
+                    "strict_prune_input_pairs": int(src0.shape[0]),
+                    "strict_prune_thr_deg": float(thr_pr),
+                    "strict_prune_err_percentiles_deg": _finite_percentiles(err0),
+                })
+        except Exception as exc:
+            diag_extra["strict_prune_exception"] = str(exc)
 
     if li.size < 4 and (not bool(astrometry_iso)):
         # Adaptive retry in non-strict mode.
@@ -2282,8 +2556,18 @@ def _resolve_hit_correspondences(
         if li2.size > li.size:
             li, lj, ld, mutual_kept = li2, lj2, ld2, mutual_kept2
             thr = thr_relaxed
+        diag_extra.update({
+            "non_iso_relaxed_attempted": True,
+            "non_iso_relaxed_pairs": int(li2.size),
+            "non_iso_relaxed_dist_percentiles_deg": _finite_percentiles(ld2),
+        })
 
     if li.size < 4:
+        diag_extra.update({
+            "final_pairs": int(li.size),
+            "final_thr_deg": float(thr),
+        })
+        _dump_diag("too_few_pairs_after_greedy", diag_extra)
         return None
 
     keep_src = src_idx[li]
@@ -2305,6 +2589,7 @@ def _resolve_hit_correspondences(
                 if int(np.sum(km)) >= 4 and int(np.sum(km)) < int(src_pts.shape[0]):
                     src_pts = src_pts[km]
                     dst_pts = dst_pts[km]
+                    diag_extra["non_iso_robustification_kept"] = int(src_pts.shape[0])
 
     diag = {
         "kept": int(src_pts.shape[0]),
@@ -2320,6 +2605,13 @@ def _resolve_hit_correspondences(
         "dst_indices": np.asarray(keep_dst, dtype=np.int64),
         "source": "resolve_hit",
     }
+    diag_extra.update({
+        "final_pairs": int(src_pts.shape[0]),
+        "final_thr_deg": float(thr),
+        "src_indices": np.asarray(keep_src, dtype=np.int64),
+        "dst_indices": np.asarray(keep_dst, dtype=np.int64),
+    })
+    _dump_diag("success", diag_extra)
     return src_pts, dst_pts, diag
 
 def _permutation_hypothesis_rescue(
@@ -3898,6 +4190,142 @@ def _filter_blind_input_stars(
     return out, stats
 
 
+def _astrometry_uniformize_order_xy(
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    approx_boxes: int = 10,
+) -> tuple[np.ndarray, dict[str, float | int]]:
+    """Return astrometry.net-style uniformize order for an already sorted list."""
+    n = int(x.shape[0])
+    boxes = max(1, int(approx_boxes or 1))
+    if n <= 1:
+        return np.arange(n, dtype=np.int64), {
+            "input": n,
+            "boxes": boxes,
+            "nx": 1,
+            "ny": 1,
+            "max_bin_len": n,
+        }
+    finite = np.isfinite(x) & np.isfinite(y)
+    if not np.any(finite):
+        return np.arange(n, dtype=np.int64), {
+            "input": n,
+            "boxes": boxes,
+            "nx": 1,
+            "ny": 1,
+            "max_bin_len": n,
+        }
+    x0 = float(np.min(x[finite]))
+    x1 = float(np.max(x[finite]))
+    y0 = float(np.min(y[finite]))
+    y1 = float(np.max(y[finite]))
+    w = max(0.0, x1 - x0)
+    h = max(0.0, y1 - y0)
+    if w <= 0.0 or h <= 0.0:
+        return np.arange(n, dtype=np.int64), {
+            "input": n,
+            "boxes": boxes,
+            "nx": 1,
+            "ny": 1,
+            "max_bin_len": n,
+        }
+    nx = int(max(1, round(w / math.sqrt((w * h) / float(boxes)))))
+    ny = int(max(1, round(float(boxes) / float(nx))))
+    ix = np.clip(np.floor((x - x0) / w * float(nx)), 0, nx - 1).astype(np.int64)
+    iy = np.clip(np.floor((y - y0) / h * float(ny)), 0, ny - 1).astype(np.int64)
+    bin_ids = iy * int(nx) + ix
+    bins: list[list[int]] = [[] for _ in range(int(nx * ny))]
+    for idx, bid in enumerate(bin_ids):
+        if 0 <= int(bid) < len(bins):
+            bins[int(bid)].append(int(idx))
+    max_len = max((len(b) for b in bins), default=0)
+    order: list[int] = []
+    for row_idx in range(max_len):
+        this_row = [b[row_idx] for b in bins if row_idx < len(b)]
+        this_row.sort()
+        order.extend(this_row)
+    if len(order) != n:
+        seen = set(order)
+        order.extend([i for i in range(n) if i not in seen])
+    return np.asarray(order, dtype=np.int64), {
+        "input": n,
+        "boxes": boxes,
+        "nx": int(nx),
+        "ny": int(ny),
+        "max_bin_len": int(max_len),
+    }
+
+
+def _astrometry_source_list_gate(
+    stars: np.ndarray,
+    *,
+    image_shape: tuple[int, int],
+    approx_boxes: int = 10,
+    max_sources: int = 0,
+    min_keep_ratio: float = 0.05,
+) -> tuple[np.ndarray, dict[str, float | int | bool]]:
+    """Experimental source-list shaping before observed quad generation.
+
+    This mirrors the useful part of astrometry.net's augment-xylist sequence for
+    Ze stars: finite positive sources, flux ordering, spatial uniformization, and
+    then a final cap. It intentionally stays conservative and disabled by default.
+    """
+    if stars.size == 0:
+        return stars, {"enabled": True, "input": 0, "kept": 0, "removed": 0}
+    arr = np.asarray(stars)
+    finite = (
+        np.isfinite(arr["x"])
+        & np.isfinite(arr["y"])
+        & np.isfinite(arr["flux"])
+        & np.isfinite(arr["fwhm"])
+        & (arr["flux"] > 0.0)
+    )
+    finite_count = int(np.count_nonzero(finite))
+    arr = arr[finite]
+    if arr.size == 0:
+        return arr, {"enabled": True, "input": int(stars.size), "kept": 0, "removed": int(stars.size)}
+    h, w = int(image_shape[0]), int(image_shape[1])
+    inside = (
+        (np.asarray(arr["x"], dtype=np.float64) >= 0.0)
+        & (np.asarray(arr["x"], dtype=np.float64) < float(w))
+        & (np.asarray(arr["y"], dtype=np.float64) >= 0.0)
+        & (np.asarray(arr["y"], dtype=np.float64) < float(h))
+    )
+    inside_count = int(np.count_nonzero(inside))
+    arr = arr[inside]
+    if arr.size == 0:
+        return arr, {"enabled": True, "input": int(stars.size), "kept": 0, "removed": int(stars.size)}
+
+    flux = np.asarray(arr["flux"], dtype=np.float64)
+    primary_order = np.argsort(-flux, kind="stable")
+    arr = arr[primary_order]
+    uni_order, uni_stats = _astrometry_uniformize_order_xy(
+        np.asarray(arr["x"], dtype=np.float64),
+        np.asarray(arr["y"], dtype=np.float64),
+        approx_boxes=max(1, int(approx_boxes or 1)),
+    )
+    arr = arr[uni_order]
+
+    requested = max(0, int(max_sources or 0))
+    min_keep = max(1, int(math.ceil(float(arr.size) * max(0.0, min(1.0, float(min_keep_ratio or 0.0))))))
+    if requested > 0 and arr.size > requested:
+        cap = max(1, min(int(arr.size), max(int(requested), int(min_keep))))
+        arr = arr[:cap]
+    stats: dict[str, float | int | bool] = {
+        "enabled": True,
+        "input": int(stars.size),
+        "finite": int(finite_count),
+        "inside": int(inside_count),
+        "kept": int(arr.size),
+        "removed": int(stars.size - arr.size),
+        "max_sources": int(requested),
+        "min_keep_ratio": float(min_keep_ratio),
+    }
+    stats.update({f"uniform_{k}": v for k, v in uni_stats.items()})
+    return arr, stats
+
+
 @dataclass(frozen=True)
 class _TileCacheEntry:
     signature: tuple[int, int]
@@ -4480,6 +4908,239 @@ def _reset_scale_anchor_for_candidate(
             arcsec_out = None
     source_out = str(initial_source or "") or None
     return arcsec_out, source_out
+
+
+def _resolve_pairset_scale_anchor(
+    current_arcsec: float | None,
+    current_source: str | None,
+    pairset_arcsec: float | None,
+    approx_arcsec: float | None,
+    *,
+    astrometry_native_verify_semantics_mode: bool,
+    promote_enabled: bool,
+    max_ratio_from_approx: float,
+) -> tuple[float | None, str | None, bool, str | None]:
+    """Promote a local pairset scale only when it is consistent with hints.
+
+    The pairset can be heavily contaminated before a valid transform exists.
+    On the native Astrometry path, keep a reliable header/range anchor unless
+    the local pairset scale is close enough to the resolved approximate scale.
+    """
+    if not bool(astrometry_native_verify_semantics_mode):
+        return current_arcsec, current_source, False, "native_mode_off"
+    if not bool(promote_enabled):
+        return current_arcsec, current_source, False, "promotion_disabled"
+    try:
+        pairset = float(pairset_arcsec) if pairset_arcsec is not None else float("nan")
+    except Exception:
+        pairset = float("nan")
+    if (not np.isfinite(pairset)) or pairset <= 0.0:
+        return current_arcsec, current_source, False, "invalid_pairset_scale"
+
+    try:
+        approx = float(approx_arcsec) if approx_arcsec is not None else float("nan")
+    except Exception:
+        approx = float("nan")
+    if np.isfinite(approx) and approx > 0.0:
+        ratio = max(pairset / approx, approx / pairset)
+        limit = max(1.0, float(max_ratio_from_approx or 1.0))
+        if np.isfinite(ratio) and ratio > limit:
+            return current_arcsec, current_source, False, "ratio_vs_approx"
+
+    return float(pairset), "candidate_pairset_local", True, None
+
+
+def _resolve_hit_support_rank_boost(
+    support_pairs: int,
+    *,
+    enabled: bool,
+    weight: float,
+    max_boost: float,
+    native_verify_semantics: bool,
+) -> float:
+    if not bool(enabled) or not bool(native_verify_semantics):
+        return 0.0
+    pairs = max(0, int(support_pairs or 0))
+    if pairs <= 0:
+        return 0.0
+    w = max(0.0, float(weight or 0.0))
+    cap = max(0.0, float(max_boost or 0.0))
+    if w <= 0.0 or cap <= 0.0:
+        return 0.0
+    return float(min(cap, w * float(pairs)))
+
+
+def _refit_prune_similarity_pairs(
+    src_pts: np.ndarray,
+    dst_pts: np.ndarray,
+    *,
+    reflected: bool,
+    min_pairs: int = 4,
+    max_exhaustive_pairs: int = 10,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, complex, complex, float] | None:
+    src = np.asarray(src_pts, dtype=np.float64)
+    dst = np.asarray(dst_pts, dtype=np.float64)
+    if src.ndim != 2 or dst.ndim != 2 or src.shape[1] < 2 or dst.shape[1] < 2:
+        return None
+    src = np.asarray(src[:, :2], dtype=np.float64)
+    dst = np.asarray(dst[:, :2], dtype=np.float64)
+    n = int(src.shape[0])
+    if n < max(4, int(min_pairs)) or int(dst.shape[0]) != n:
+        return None
+    if not (np.all(np.isfinite(src)) and np.all(np.isfinite(dst))):
+        return None
+
+    min_keep = max(4, int(min_pairs))
+    best: tuple[np.ndarray, np.ndarray, np.ndarray, complex, complex, float] | None = None
+
+    def _score_subset(indices: np.ndarray) -> None:
+        nonlocal best
+        if int(indices.size) < min_keep:
+            return
+        hyp = _derive_similarity(src[indices], dst[indices], reflected=bool(reflected))
+        if hyp is None:
+            return
+        rs, tr = hyp
+        sc = float(max(abs(complex(rs)), 1e-12))
+        src_c = src[indices, 0] + 1j * src[indices, 1]
+        if reflected:
+            src_c = np.conj(src_c)
+        dst_c = dst[indices, 0] + 1j * dst[indices, 1]
+        err_px = np.abs(complex(rs) * src_c + complex(tr) - dst_c) / sc
+        fin = err_px[np.isfinite(err_px)]
+        if int(fin.size) != int(indices.size) or int(fin.size) <= 0:
+            return
+        rms = float(np.sqrt(np.mean(np.square(fin))))
+        if best is None or rms < best[5]:
+            best = (indices.copy(), src[indices], dst[indices], complex(rs), complex(tr), float(rms))
+
+    if n <= max(4, int(max_exhaustive_pairs)):
+        for keep_n in range(n, min_keep - 1, -1):
+            for combo in combinations(range(n), keep_n):
+                _score_subset(np.asarray(combo, dtype=np.int64))
+    else:
+        keep = np.arange(n, dtype=np.int64)
+        while int(keep.size) >= min_keep:
+            _score_subset(keep)
+            hyp_cur = _derive_similarity(src[keep], dst[keep], reflected=bool(reflected))
+            if hyp_cur is None or int(keep.size) == min_keep:
+                break
+            rs_cur, tr_cur = hyp_cur
+            sc_cur = float(max(abs(complex(rs_cur)), 1e-12))
+            src_c = src[keep, 0] + 1j * src[keep, 1]
+            if reflected:
+                src_c = np.conj(src_c)
+            dst_c = dst[keep, 0] + 1j * dst[keep, 1]
+            err = np.abs(complex(rs_cur) * src_c + complex(tr_cur) - dst_c) / sc_cur
+            if err.size <= 0 or not np.any(np.isfinite(err)):
+                break
+            worst_pos = int(np.nanargmax(err))
+            keep = np.delete(keep, worst_pos)
+
+    return best
+
+
+def _extend_similarity_support_pairs(
+    src_pool_pts: np.ndarray,
+    dst_pool_pts: np.ndarray,
+    dst_world_pool_pts: np.ndarray | None,
+    seed_src_pts: np.ndarray,
+    seed_dst_pts: np.ndarray,
+    *,
+    reflected: bool,
+    tol_deg: float,
+    min_pairs: int = 6,
+    min_gain: int = 1,
+    max_points: int = 256,
+    max_pairs: int = 96,
+    max_rms_px: float = 2.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, complex, complex, float] | None:
+    src_pool = np.asarray(src_pool_pts, dtype=np.float64)
+    dst_pool = np.asarray(dst_pool_pts, dtype=np.float64)
+    seed_src = np.asarray(seed_src_pts, dtype=np.float64)
+    seed_dst = np.asarray(seed_dst_pts, dtype=np.float64)
+    if src_pool.ndim != 2 or dst_pool.ndim != 2 or src_pool.shape[1] < 2 or dst_pool.shape[1] < 2:
+        return None
+    if seed_src.ndim != 2 or seed_dst.ndim != 2 or seed_src.shape[1] < 2 or seed_dst.shape[1] < 2:
+        return None
+    src_pool = np.asarray(src_pool[:, :2], dtype=np.float64)
+    dst_pool = np.asarray(dst_pool[:, :2], dtype=np.float64)
+    seed_src = np.asarray(seed_src[:, :2], dtype=np.float64)
+    seed_dst = np.asarray(seed_dst[:, :2], dtype=np.float64)
+    seed_n = int(seed_src.shape[0])
+    min_keep = max(4, int(min_pairs))
+    if seed_n < 4 or int(seed_dst.shape[0]) != seed_n:
+        return None
+    if not (
+        np.all(np.isfinite(src_pool))
+        and np.all(np.isfinite(dst_pool))
+        and np.all(np.isfinite(seed_src))
+        and np.all(np.isfinite(seed_dst))
+    ):
+        return None
+    hyp = _derive_similarity(seed_src, seed_dst, reflected=bool(reflected))
+    if hyp is None:
+        return None
+    rs, tr = hyp
+    src_c = (src_pool[:, 0] + 1j * src_pool[:, 1]).astype(np.complex128)
+    dst_c = (dst_pool[:, 0] + 1j * dst_pool[:, 1]).astype(np.complex128)
+    rh = _resolve_hit_correspondences(
+        src_c,
+        dst_c,
+        rot_scale=complex(rs),
+        translation=complex(tr),
+        tol_deg=float(max(1e-10, tol_deg)),
+        max_points=max(8, int(max_points)),
+        max_pairs=max(8, int(max_pairs)),
+        astrometry_iso=True,
+        strict_subset_mode="hybrid",
+        strict_dst_prefilter_enabled=True,
+        strict_dst_prefilter_tol_factor=2.0,
+        strict_dst_prefilter_max_points=max(8, int(max_points)),
+        strict_relaxed_retry=False,
+        strict_prune_enabled=True,
+        strict_prune_tol_factor=2.5,
+    )
+    if rh is None:
+        return None
+    _src_rh, _dst_rh, diag = rh
+    kept = int(diag.get("kept", 0) or 0)
+    if kept < min_keep or kept < seed_n + max(0, int(min_gain)):
+        return None
+    src_idx = np.asarray(diag.get("src_indices", np.zeros(0, dtype=np.int64)), dtype=np.int64)
+    dst_idx = np.asarray(diag.get("dst_indices", np.zeros(0, dtype=np.int64)), dtype=np.int64)
+    if int(src_idx.size) < min_keep or int(dst_idx.size) != int(src_idx.size):
+        return None
+    src_idx = np.clip(src_idx, 0, int(src_pool.shape[0]) - 1)
+    dst_idx = np.clip(dst_idx, 0, int(dst_pool.shape[0]) - 1)
+    src_keep = np.asarray(src_pool[src_idx], dtype=np.float64)
+    dst_keep = np.asarray(dst_pool[dst_idx], dtype=np.float64)
+    refit = _refit_prune_similarity_pairs(
+        src_keep,
+        dst_keep,
+        reflected=bool(reflected),
+        min_pairs=min_keep,
+        max_exhaustive_pairs=10,
+    )
+    if refit is None:
+        return None
+    keep_local, src_ref, dst_ref, rs_ref, tr_ref, rms_ref = refit
+    if int(src_ref.shape[0]) < min_keep or int(src_ref.shape[0]) < seed_n + max(0, int(min_gain)):
+        return None
+    if np.isfinite(float(max_rms_px)) and float(max_rms_px) > 0.0 and float(rms_ref) > float(max_rms_px):
+        return None
+    src_idx_ref = np.asarray(src_idx[np.asarray(keep_local, dtype=np.int64)], dtype=np.int64)
+    dst_idx_ref = np.asarray(dst_idx[np.asarray(keep_local, dtype=np.int64)], dtype=np.int64)
+    world_pool = (
+        np.asarray(dst_world_pool_pts, dtype=np.float64)
+        if dst_world_pool_pts is not None
+        else np.zeros((0, 2), dtype=np.float64)
+    )
+    if world_pool.ndim == 2 and world_pool.shape[1] >= 2 and int(world_pool.shape[0]) > int(np.max(dst_idx_ref)):
+        world_ref = np.asarray(world_pool[dst_idx_ref, :2], dtype=np.float64)
+    else:
+        world_ref = np.asarray(dst_ref, dtype=np.float64)
+    return src_idx_ref, dst_idx_ref, src_ref, dst_ref, world_ref, complex(rs_ref), complex(tr_ref), float(rms_ref)
 
 
 def _scale_bounds_arcsec(
@@ -5508,6 +6169,971 @@ def _build_matches_array(image_pts: np.ndarray, sky_pts: np.ndarray) -> np.ndarr
     return np.column_stack((image_pts, sky_pts))
 
 
+def _astrometry_4d_runtime_requested(config: SolveConfig) -> bool:
+    schema = str(getattr(config, "quad_hash_schema", "opposite_edge_ratio_8bit_v1") or "").strip()
+    return schema == ASTROMETRY_AB_CODE_4D_SCHEMA
+
+
+def _astrometry_4d_source_policy(config: SolveConfig) -> str:
+    policy = str(getattr(config, "blind_astrometry_4d_source_policy", "standard_runtime") or "standard_runtime").strip().lower()
+    if policy in {"standard_runtime", "diagnostic_unfiltered", "astrometry_like"}:
+        return policy
+    return "standard_runtime"
+
+
+def _astrometry_4d_index_paths(config: SolveConfig) -> tuple[str, ...]:
+    raw = getattr(config, "blind_astrometry_4d_index_paths", ())
+    if isinstance(raw, str):
+        items = [part.strip() for part in raw.replace(";", ",").split(",") if part.strip()]
+    elif isinstance(raw, Iterable) and not isinstance(raw, (bytes, bytearray)):
+        items = [str(part).strip() for part in raw if str(part).strip()]
+    else:
+        items = []
+    if not items:
+        legacy_path = str(getattr(config, "blind_astrometry_4d_index_path", "") or "").strip()
+        if bool(getattr(config, "blind_astrometry_4d_index_enabled", False)) and legacy_path:
+            items = [legacy_path]
+    dedup: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if item in seen:
+            continue
+        seen.add(item)
+        dedup.append(item)
+    return tuple(dedup)
+
+
+def _astrometry_4d_validation_catalog_policy(config: SolveConfig) -> str:
+    policy = str(getattr(config, "blind_astrometry_4d_validation_catalog_policy", "source_tile") or "source_tile").strip().lower()
+    if policy in {"source_tile", "union_candidate_tiles"}:
+        return policy
+    return "source_tile"
+
+
+def _astrometry_4d_accept_policy(config: SolveConfig) -> str:
+    policy = str(getattr(config, "blind_astrometry_4d_accept_policy", "first_accept") or "first_accept").strip().lower()
+    if policy in {"first_accept", "best_within_budget"}:
+        return policy
+    return "first_accept"
+
+
+def _astrometry_4d_dedup_catalog_world(catalogs: Iterable[np.ndarray]) -> np.ndarray:
+    arrays: list[np.ndarray] = []
+    for catalog in catalogs:
+        arr = np.asarray(catalog, dtype=np.float64)
+        if arr.ndim == 2 and arr.shape[1] == 2 and arr.size:
+            finite = np.isfinite(arr[:, 0]) & np.isfinite(arr[:, 1])
+            if np.any(finite):
+                arrays.append(arr[finite])
+    if not arrays:
+        return np.empty((0, 2), dtype=np.float64)
+    union = np.vstack(arrays).astype(np.float64, copy=False)
+    _vals, idx = np.unique(np.round(union, decimals=8), axis=0, return_index=True)
+    return union[np.sort(idx)].astype(np.float64, copy=False)
+
+
+def _astrometry_4d_accept_sort_key(candidate: Mapping[str, Any]) -> tuple[int, float, int, float, int]:
+    validation = candidate.get("validation") or {}
+    ok = 1 if validation.get("quality") == "GOOD" or bool(validation.get("success")) else 0
+    try:
+        rms = float(validation.get("rms_px", float("inf")))
+    except Exception:
+        rms = float("inf")
+    if not np.isfinite(rms):
+        rms = float("inf")
+    try:
+        inliers = int(validation.get("inliers", 0) or 0)
+    except Exception:
+        inliers = 0
+    try:
+        geo_area = float(validation.get("geo_cov_area", 0.0) or 0.0)
+    except Exception:
+        geo_area = 0.0
+    if not np.isfinite(geo_area):
+        geo_area = 0.0
+    try:
+        rank = int(candidate.get("rank", validation.get("hit_rank", 10**9)) or 10**9)
+    except Exception:
+        rank = 10**9
+    return (ok, -rms, inliers, geo_area, -rank)
+
+
+def _astrometry_4d_reject_sort_key(validation: Mapping[str, Any]) -> tuple[int, float, float, int]:
+    try:
+        inliers = int(validation.get("inliers", 0) or 0)
+    except Exception:
+        inliers = 0
+    try:
+        rms = float(validation.get("rms_px", float("inf")))
+    except Exception:
+        rms = float("inf")
+    if not np.isfinite(rms):
+        rms = float("inf")
+    try:
+        geo_area = float(validation.get("geo_cov_area", 0.0) or 0.0)
+    except Exception:
+        geo_area = 0.0
+    if not np.isfinite(geo_area):
+        geo_area = 0.0
+    try:
+        rank = int(validation.get("hit_rank", 10**9) or 10**9)
+    except Exception:
+        rank = 10**9
+    return (inliers, -rms, geo_area, -rank)
+
+
+def _wcs_pixel_scale_arcsec(wcs: WCS) -> float:
+    try:
+        matrix = np.asarray(wcs.pixel_scale_matrix, dtype=np.float64)
+        det = float(np.linalg.det(matrix))
+        if not np.isfinite(det) or abs(det) <= 0.0:
+            return float("nan")
+        return float(math.sqrt(abs(det)) * 3600.0)
+    except Exception:
+        return float("nan")
+
+
+def _astrometry_4d_array_hash(points: np.ndarray, *, decimals: int = 6) -> str:
+    try:
+        arr = np.asarray(points, dtype=np.float64)
+        if arr.size == 0:
+            return "00000000"
+        rounded = np.round(arr, decimals=int(decimals))
+        blob = np.ascontiguousarray(rounded).view(np.uint8)
+        return f"{zlib.crc32(blob) & 0xffffffff:08x}"
+    except Exception:
+        return ""
+
+
+def _astrometry_4d_wcs_header_hash(wcs: WCS) -> str:
+    try:
+        header = wcs.to_header(relax=True)
+        rows = [f"{key}={header[key]!r}" for key in sorted(header.keys())]
+        return f"{zlib.crc32('\\n'.join(rows).encode('utf-8')) & 0xffffffff:08x}"
+    except Exception:
+        return ""
+
+
+def _astrometry_4d_wcs_summary(wcs: WCS) -> dict[str, Any]:
+    try:
+        cd = np.asarray(wcs.pixel_scale_matrix, dtype=np.float64)
+    except Exception:
+        cd = np.empty((0, 0), dtype=np.float64)
+    try:
+        crpix = [float(v) for v in np.asarray(wcs.wcs.crpix, dtype=np.float64).ravel()[:2]]
+    except Exception:
+        crpix = []
+    try:
+        crval = [float(v) for v in np.asarray(wcs.wcs.crval, dtype=np.float64).ravel()[:2]]
+    except Exception:
+        crval = []
+    rot = float("nan")
+    if cd.shape[0] >= 2 and cd.shape[1] >= 2:
+        try:
+            rot = float(math.degrees(math.atan2(float(cd[1, 0]), float(cd[0, 0]))))
+        except Exception:
+            rot = float("nan")
+    return {
+        "crpix": crpix,
+        "crval": crval,
+        "cd": cd[:2, :2].astype(float).tolist() if cd.shape[0] >= 2 and cd.shape[1] >= 2 else [],
+        "pixel_scale_arcsec": float(_wcs_pixel_scale_arcsec(wcs)),
+        "rotation_deg": rot,
+        "header_hash": _astrometry_4d_wcs_header_hash(wcs),
+    }
+
+
+def _fit_astrometry_4d_quad_wcs(image_quad_points: np.ndarray, catalog_quad_world: np.ndarray) -> WCS:
+    coords = SkyCoord(
+        ra=np.asarray(catalog_quad_world[:, 0], dtype=np.float64) * u.deg,
+        dec=np.asarray(catalog_quad_world[:, 1], dtype=np.float64) * u.deg,
+        frame="icrs",
+    )
+    return fit_wcs_from_points(
+        (
+            np.asarray(image_quad_points[:, 0], dtype=np.float64),
+            np.asarray(image_quad_points[:, 1], dtype=np.float64),
+        ),
+        coords,
+        projection="TAN",
+    )
+
+
+def _astrometry_4d_build_match_details(
+    wcs: WCS,
+    image_positions: np.ndarray,
+    catalog_world: np.ndarray,
+    *,
+    radius_px: float,
+) -> dict[str, Any]:
+    empty = np.empty((0, 2), dtype=np.float64)
+    if image_positions.size == 0 or catalog_world.size == 0:
+        return {
+            "matches": _build_matches_array(empty, empty),
+            "matched_image_points": empty,
+            "distances_px": np.empty((0,), dtype=np.float64),
+            "projected": empty,
+            "finite_projected": 0,
+            "in_image_projected": 0,
+            "neighbors_within_radius": 0,
+            "unique_pairs": 0,
+            "image_indices": np.empty((0,), dtype=np.int64),
+            "catalog_indices": np.empty((0,), dtype=np.int64),
+        }
+    try:
+        projected = np.asarray(wcs.wcs_world2pix(np.asarray(catalog_world, dtype=np.float64), 0), dtype=np.float64)
+    except Exception:
+        return {
+            "matches": _build_matches_array(empty, empty),
+            "matched_image_points": empty,
+            "distances_px": np.empty((0,), dtype=np.float64),
+            "projected": empty,
+            "finite_projected": 0,
+            "in_image_projected": 0,
+            "neighbors_within_radius": 0,
+            "unique_pairs": 0,
+            "image_indices": np.empty((0,), dtype=np.int64),
+            "catalog_indices": np.empty((0,), dtype=np.int64),
+        }
+    if projected.ndim != 2 or projected.shape[1] != 2:
+        return {
+            "matches": _build_matches_array(empty, empty),
+            "matched_image_points": empty,
+            "distances_px": np.empty((0,), dtype=np.float64),
+            "projected": empty,
+            "finite_projected": 0,
+            "in_image_projected": 0,
+            "neighbors_within_radius": 0,
+            "unique_pairs": 0,
+            "image_indices": np.empty((0,), dtype=np.int64),
+            "catalog_indices": np.empty((0,), dtype=np.int64),
+        }
+    finite = np.isfinite(projected[:, 0]) & np.isfinite(projected[:, 1])
+    if not np.any(finite):
+        return {
+            "matches": _build_matches_array(empty, empty),
+            "matched_image_points": empty,
+            "distances_px": np.empty((0,), dtype=np.float64),
+            "projected": projected,
+            "finite_projected": 0,
+            "in_image_projected": 0,
+            "neighbors_within_radius": 0,
+            "unique_pairs": 0,
+            "image_indices": np.empty((0,), dtype=np.int64),
+            "catalog_indices": np.empty((0,), dtype=np.int64),
+        }
+    cat_indices = np.flatnonzero(finite)
+    tree = cKDTree(np.asarray(image_positions, dtype=np.float64))
+    distances, image_indices = tree.query(
+        projected[finite],
+        k=1,
+        distance_upper_bound=max(0.1, float(radius_px)),
+    )
+    x = projected[finite, 0]
+    y = projected[finite, 1]
+    if image_positions.shape[0] > 0:
+        xmax = float(np.nanmax(image_positions[:, 0]))
+        ymax = float(np.nanmax(image_positions[:, 1]))
+    else:
+        xmax = ymax = 0.0
+    in_image_projected = int(np.count_nonzero((x >= 0.0) & (x <= xmax) & (y >= 0.0) & (y <= ymax)))
+    rows: list[tuple[float, int, int]] = []
+    n_image = int(image_positions.shape[0])
+    for dist, img_idx, cat_idx in zip(distances, image_indices, cat_indices):
+        if not np.isfinite(float(dist)) or int(img_idx) < 0 or int(img_idx) >= n_image:
+            continue
+        rows.append((float(dist), int(img_idx), int(cat_idx)))
+    rows.sort(key=lambda item: item[0])
+    seen_images: set[int] = set()
+    seen_catalog: set[int] = set()
+    image_pts: list[np.ndarray] = []
+    sky_pts: list[np.ndarray] = []
+    out_dist: list[float] = []
+    out_img_idx: list[int] = []
+    out_cat_idx: list[int] = []
+    for _dist, img_idx, cat_idx in rows:
+        if img_idx in seen_images or cat_idx in seen_catalog:
+            continue
+        seen_images.add(img_idx)
+        seen_catalog.add(cat_idx)
+        image_pts.append(np.asarray(image_positions[img_idx], dtype=np.float64))
+        sky_pts.append(np.asarray(catalog_world[cat_idx], dtype=np.float64))
+        out_dist.append(float(_dist))
+        out_img_idx.append(int(img_idx))
+        out_cat_idx.append(int(cat_idx))
+    if not image_pts:
+        return {
+            "matches": _build_matches_array(empty, empty),
+            "matched_image_points": empty,
+            "distances_px": np.empty((0,), dtype=np.float64),
+            "projected": projected,
+            "finite_projected": int(cat_indices.shape[0]),
+            "in_image_projected": int(in_image_projected),
+            "neighbors_within_radius": int(len(rows)),
+            "unique_pairs": 0,
+            "image_indices": np.empty((0,), dtype=np.int64),
+            "catalog_indices": np.empty((0,), dtype=np.int64),
+        }
+    img = np.vstack(image_pts).astype(np.float64, copy=False)
+    sky = np.vstack(sky_pts).astype(np.float64, copy=False)
+    distances_px = np.asarray(out_dist, dtype=np.float64)
+    return {
+        "matches": _build_matches_array(img, sky),
+        "matched_image_points": img,
+        "distances_px": distances_px,
+        "projected": projected,
+        "finite_projected": int(cat_indices.shape[0]),
+        "in_image_projected": int(in_image_projected),
+        "neighbors_within_radius": int(len(rows)),
+        "unique_pairs": int(img.shape[0]),
+        "image_indices": np.asarray(out_img_idx, dtype=np.int64),
+        "catalog_indices": np.asarray(out_cat_idx, dtype=np.int64),
+    }
+
+
+def _astrometry_4d_build_matches(
+    wcs: WCS,
+    image_positions: np.ndarray,
+    catalog_world: np.ndarray,
+    *,
+    radius_px: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    details = _astrometry_4d_build_match_details(
+        wcs,
+        image_positions,
+        catalog_world,
+        radius_px=radius_px,
+    )
+    return np.asarray(details["matches"], dtype=np.float64), np.asarray(details["matched_image_points"], dtype=np.float64)
+
+
+def _astrometry_4d_validate_pixel_matches(
+    wcs: WCS,
+    matches: np.ndarray,
+    distances_px: np.ndarray,
+    thresholds: Mapping[str, float] | None = None,
+) -> dict[str, float | int | str | bool]:
+    if thresholds is None:
+        thresholds = {"rms_px": 1.2, "inliers": 40}
+    matches_arr = np.asarray(matches, dtype=np.float64)
+    dist = np.asarray(distances_px, dtype=np.float64)
+    if matches_arr.size == 0 or dist.size == 0:
+        return {"quality": "FAIL", "success": False, "reason": "no matches", "rms_px": float("inf"), "inliers": 0}
+    scale_arcsec = float(_wcs_pixel_scale_arcsec(wcs))
+    if not np.isfinite(scale_arcsec) or scale_arcsec <= 0.0:
+        return {
+            "quality": "FAIL",
+            "success": False,
+            "reason": "invalid_pixel_scale",
+            "rms_px": float("inf"),
+            "inliers": int(matches_arr.shape[0]),
+        }
+    try:
+        scale_min = float(thresholds.get("scale_min_arcsec", 0.3))  # type: ignore[union-attr]
+    except Exception:
+        scale_min = 0.3
+    try:
+        scale_max = float(thresholds.get("scale_max_arcsec", 15.0))  # type: ignore[union-attr]
+    except Exception:
+        scale_max = 15.0
+    scale_min = max(0.05, scale_min)
+    scale_max = max(scale_min + 1e-6, scale_max)
+    scale_in_range = bool(scale_min <= scale_arcsec <= scale_max)
+    finite = np.isfinite(dist)
+    if not np.any(finite):
+        return {
+            "quality": "FAIL",
+            "success": False,
+            "reason": "nonfinite_residuals",
+            "rms_px": float("inf"),
+            "inliers": 0,
+            "pix_scale_arcsec": scale_arcsec,
+            "gate_scale_ok": scale_in_range,
+        }
+    rp = dist[finite]
+    rms_thr = float(thresholds.get("rms_px", 1.2))  # type: ignore[union-attr]
+    inlier_thr = int(thresholds.get("inliers", 40))  # type: ignore[union-attr]
+    med = float(np.median(rp)) if rp.size else float("inf")
+    mad = float(np.median(np.abs(rp - med))) if rp.size else 0.0
+    base_tol = max(1.0, 2.5 * rms_thr)
+    robust_tol = max(base_tol, med + max(3.5 * mad, 1.5))
+    inlier_mask_local = rp <= robust_tol
+    inlier_dist = rp[inlier_mask_local]
+    n = int(inlier_dist.shape[0])
+    rms_px = float(np.sqrt(np.mean(inlier_dist * inlier_dist))) if n > 0 else float("inf")
+    rms_ok = bool(np.isfinite(rms_px) and rms_px <= rms_thr)
+    inliers_ok = bool(n >= inlier_thr)
+    success = bool(scale_in_range and rms_ok and inliers_ok)
+    reason = None
+    if not scale_in_range:
+        reason = f"pixel_scale_out_of_range[scale={scale_arcsec:.3f},min={scale_min:.3f},max={scale_max:.3f}]"
+    elif not success:
+        reason = (
+            f"validation_failed[rms_ok={int(rms_ok)},inliers_ok={int(inliers_ok)},"
+            f"scale_ok={int(scale_in_range)},rms={rms_px:.3f},rms_thr={rms_thr:.3f},"
+            f"inliers={n},inliers_thr={inlier_thr}]"
+        )
+    return {
+        "quality": "GOOD" if success else "FAIL",
+        "success": bool(success),
+        "reason": reason,
+        "rms_px": rms_px,
+        "inliers": n,
+        "inliers_raw": int(matches_arr.shape[0]),
+        "pix_scale_arcsec": scale_arcsec,
+        "rms_threshold_px": rms_thr,
+        "inliers_threshold": inlier_thr,
+        "gate_scale_ok": scale_in_range,
+        "gate_rms_ok": rms_ok,
+        "gate_inliers_ok": inliers_ok,
+        "robust_tol_px": float(robust_tol),
+        "median_residual_px": float(med),
+        "mad_residual_px": float(mad),
+        "residual_metric": "catalog_world2pix_to_image_px",
+    }
+
+
+def _astrometry_4d_trace_candidate_matches(config: SolveConfig, rank: int, item: Mapping[str, Any]) -> bool:
+    if not bool(getattr(config, "blind_astrometry_4d_trace_candidate_enabled", False)):
+        return False
+    try:
+        target_rank = int(getattr(config, "blind_astrometry_4d_trace_candidate_rank", 0) or 0)
+    except Exception:
+        target_rank = 0
+    if target_rank > 0 and int(rank) == target_rank:
+        return True
+    hit = item.get("hit")
+    if hit is None:
+        return False
+    target_tile = str(getattr(config, "blind_astrometry_4d_trace_candidate_origin_tile", "") or "").strip()
+    target_img = tuple(int(v) for v in (getattr(config, "blind_astrometry_4d_trace_candidate_image_quad_indices", ()) or ()))
+    target_cat = tuple(int(v) for v in (getattr(config, "blind_astrometry_4d_trace_candidate_catalog_quad_indices", ()) or ()))
+    if target_tile and str(getattr(hit, "tile_key", "")) != target_tile:
+        return False
+    if target_img and tuple(int(v) for v in getattr(hit, "image_quad_indices", ())) != target_img:
+        return False
+    if target_cat and tuple(int(v) for v in getattr(hit, "catalog_quad_indices", ())) != target_cat:
+        return False
+    return bool(target_tile or target_img or target_cat)
+
+
+def _astrometry_4d_final_thresholds(
+    config: SolveConfig,
+    *,
+    scale_bounds_arcsec: tuple[float, float] | None,
+) -> dict[str, float | int]:
+    thresholds: dict[str, float | int] = {
+        "rms_px": float(getattr(config, "quality_rms", 1.2) or 1.2),
+        "inliers": int(getattr(config, "quality_inliers", 40) or 40),
+    }
+    if scale_bounds_arcsec is not None:
+        lo, hi = scale_bounds_arcsec
+        if np.isfinite(float(lo)) and float(lo) > 0.0:
+            thresholds["scale_min_arcsec"] = float(max(0.05, float(lo)))
+        if np.isfinite(float(hi)) and float(hi) > 0.0:
+            thresholds["scale_max_arcsec"] = float(max(float(thresholds.get("scale_min_arcsec", 0.05)) + 1e-6, float(hi)))
+    elif getattr(config, "pixel_scale_min_arcsec", None) is not None or getattr(config, "pixel_scale_max_arcsec", None) is not None:
+        if getattr(config, "pixel_scale_min_arcsec", None) is not None:
+            thresholds["scale_min_arcsec"] = float(config.pixel_scale_min_arcsec)
+        if getattr(config, "pixel_scale_max_arcsec", None) is not None:
+            thresholds["scale_max_arcsec"] = float(config.pixel_scale_max_arcsec)
+    return thresholds
+
+
+def _solve_astrometry_4d_runtime_route(
+    *,
+    config: SolveConfig,
+    obs_stars: np.ndarray,
+    image_positions_solver: np.ndarray,
+    verification_image_positions_solver: np.ndarray | None = None,
+    image_shape: tuple[int, int],
+    scale_bounds_arcsec: tuple[float, float] | None,
+    cancel_check: Optional[Callable[[], bool]],
+) -> WcsSolution:
+    t_total0 = time.perf_counter()
+    stats: dict[str, Any] = {
+        "quad_hash_schema": ASTROMETRY_AB_CODE_4D_SCHEMA,
+        "astrometry_4d_runtime_enabled": True,
+        "astrometry_4d_backend": ASTROMETRY_AB_CODE_4D_SCHEMA,
+        "astrometry_4d_legacy_index_enabled": bool(getattr(config, "blind_astrometry_4d_index_enabled", False)),
+        "blind_astrometry_4d_source_policy": _astrometry_4d_source_policy(config),
+        "astrometry_4d_validation_catalog_policy": _astrometry_4d_validation_catalog_policy(config),
+        "astrometry_4d_accept_policy": _astrometry_4d_accept_policy(config),
+        "blind_star_quality_filter": bool(getattr(config, "blind_star_quality_filter", True)),
+        "astrometry_4d_fallback_forbidden": True,
+    }
+    index_paths = _astrometry_4d_index_paths(config)
+    stats["astrometry_4d_index_paths"] = [str(path) for path in index_paths]
+    stats["astrometry_4d_index_count"] = int(len(index_paths))
+    if not index_paths:
+        stats["reject_reason_counts"] = {"missing_explicit_index_paths": 1}
+        stats["astrometry_4d_stop_reason"] = "missing_explicit_index_paths"
+        stats["astrometry_4d_total_s"] = float(time.perf_counter() - t_total0)
+        return WcsSolution(
+            False,
+            "astrometry 4D runtime failed: missing explicit 4D index paths (fallback forbidden)",
+            None,
+            stats,
+            None,
+            {},
+        )
+
+    missing_paths = [str(Path(path).expanduser()) for path in index_paths if not Path(path).expanduser().exists()]
+    if missing_paths:
+        stats["missing_index_paths"] = missing_paths
+        stats["reject_reason_counts"] = {"index_absent": len(missing_paths)}
+        stats["astrometry_4d_stop_reason"] = "index_absent"
+        stats["astrometry_4d_total_s"] = float(time.perf_counter() - t_total0)
+        return WcsSolution(
+            False,
+            "astrometry 4D runtime failed: missing explicit index path(s): " + ", ".join(missing_paths),
+            None,
+            stats,
+            None,
+            {},
+        )
+
+    logger.info(
+        "astrometry 4D experimental backend active: indexes=%d validation=%s accept=%s",
+        len(index_paths),
+        stats["astrometry_4d_validation_catalog_policy"],
+        stats["astrometry_4d_accept_policy"],
+    )
+    t_load0 = time.perf_counter()
+    disk_indexes: list[Quad4DIndex] = []
+    try:
+        for index_path in index_paths:
+            disk_indexes.append(Quad4DIndex.load(index_path))
+    except Exception as exc:
+        stats["index_load_error"] = str(exc)
+        stats["reject_reason_counts"] = {"index_load_failed": 1}
+        stats["astrometry_4d_stop_reason"] = "index_load_failed"
+        stats["astrometry_4d_total_s"] = float(time.perf_counter() - t_total0)
+        return WcsSolution(False, f"astrometry 4D runtime failed: {exc}", None, stats, None, {})
+    stats["astrometry_4d_index_load_s"] = float(time.perf_counter() - t_load0)
+    stats["astrometry_4d_index_metadata"] = [
+        {
+            "path": str(index.path),
+            "entries": int(index.codes_4d.shape[0]),
+            "star_count": int(index.catalog_ra_dec.shape[0]),
+            "tile_keys": [str(v) for v in index.tile_keys],
+            "metadata": dict(index.metadata),
+        }
+        for index in disk_indexes
+    ]
+    if len(disk_indexes) == 1:
+        stats["astrometry_4d_index_path"] = str(disk_indexes[0].path)
+        stats["astrometry_4d_index_entries"] = int(disk_indexes[0].codes_4d.shape[0])
+        stats["astrometry_4d_index_star_count"] = int(disk_indexes[0].catalog_ra_dec.shape[0])
+
+    image_positions = np.asarray(image_positions_solver, dtype=np.float64)
+    verification_image_positions = image_positions
+    if verification_image_positions_solver is not None:
+        verification_image_positions = np.asarray(verification_image_positions_solver, dtype=np.float64)
+        if (
+            verification_image_positions.ndim != 2
+            or verification_image_positions.shape[1] != 2
+            or verification_image_positions.shape[0] == 0
+        ):
+            verification_image_positions = image_positions
+    stats["astrometry_4d_quad_source_stars"] = int(image_positions.shape[0])
+    stats["astrometry_4d_verification_source_stars"] = int(verification_image_positions.shape[0])
+    stats["astrometry_4d_split_quad_verify_sources"] = bool(
+        verification_image_positions_solver is not None
+        and int(verification_image_positions.shape[0]) != int(image_positions.shape[0])
+    )
+    max_quads = max(1, int(getattr(config, "max_quads", 0) or 1))
+    image_strategy = str(getattr(config, "blind_astrometry_4d_image_strategy", "log_spaced") or "log_spaced")
+    t_quad0 = time.perf_counter()
+    image_quads = sample_quads(obs_stars, max_quads=max_quads, strategy=image_strategy)
+    image_records = build_astrometry_quad_records(image_quads, image_positions)
+    stats["astrometry_4d_image_strategy"] = image_strategy
+    stats["astrometry_4d_image_quads"] = int(image_quads.shape[0])
+    stats["astrometry_4d_image_records"] = int(len(image_records))
+    stats["astrometry_4d_quad_build_s"] = float(time.perf_counter() - t_quad0)
+    if not image_records:
+        stats["reject_reason_counts"] = {"no_image_4d_records": 1}
+        return WcsSolution(False, "astrometry 4D runtime failed: no image 4D records", None, stats, None, {})
+
+    code_tol = float(getattr(config, "blind_astrometry_4d_code_tol", 0.015) or 0.015)
+    max_hits = max(1, int(getattr(config, "blind_astrometry_4d_max_hits", 2000) or 2000))
+    max_hits_per_quad = max(1, int(getattr(config, "blind_astrometry_4d_max_hits_per_image_quad", 8) or 8))
+    max_hypotheses = max(1, int(getattr(config, "blind_astrometry_4d_max_hypotheses", 2000) or 2000))
+    max_accepts = max(1, int(getattr(config, "blind_astrometry_4d_max_accepts", 64) or 64))
+    validation_catalog_policy = _astrometry_4d_validation_catalog_policy(config)
+    accept_policy = _astrometry_4d_accept_policy(config)
+    union_catalog = np.empty((0, 2), dtype=np.float64)
+    if validation_catalog_policy == "union_candidate_tiles":
+        union_catalog = _astrometry_4d_dedup_catalog_world(index.catalog_ra_dec for index in disk_indexes)
+        stats["astrometry_4d_union_catalog_stars"] = int(union_catalog.shape[0])
+        stats["astrometry_4d_union_catalog_input_stars"] = int(sum(index.catalog_ra_dec.shape[0] for index in disk_indexes))
+        if union_catalog.size == 0:
+            stats["reject_reason_counts"] = {"union_catalog_empty": 1}
+            stats["astrometry_4d_stop_reason"] = "union_catalog_empty"
+            stats["astrometry_4d_total_s"] = float(time.perf_counter() - t_total0)
+            return WcsSolution(False, "astrometry 4D runtime failed: union catalogue is empty", None, stats, None, {})
+
+    t_lookup0 = time.perf_counter()
+    candidates: list[dict[str, Any]] = []
+    hits_by_index: dict[str, dict[str, Any]] = {}
+    for index_order, disk_index in enumerate(disk_indexes):
+        hits = disk_index.search_records(
+            image_records,
+            code_tol=code_tol,
+            max_hits=max_hits,
+            max_hits_per_image_quad=max_hits_per_quad,
+        )
+        hits_by_index[str(disk_index.path)] = {
+            "hits": int(len(hits)),
+            "index_order": int(index_order),
+            "tile_keys": [str(v) for v in disk_index.tile_keys],
+            "entries": int(disk_index.codes_4d.shape[0]),
+            "stars": int(disk_index.catalog_ra_dec.shape[0]),
+        }
+        for local_rank, hit in enumerate(hits, start=1):
+            candidates.append(
+                {
+                    "index": disk_index,
+                    "hit": hit,
+                    "index_order": int(index_order),
+                    "local_rank": int(local_rank),
+                }
+            )
+    candidates.sort(key=lambda row: (int(row["index_order"]), float(row["hit"].code_distance), int(row["local_rank"])))
+    stats["astrometry_4d_code_tol"] = float(code_tol)
+    stats["astrometry_4d_max_hits"] = int(max_hits)
+    stats["astrometry_4d_max_hits_per_image_quad"] = int(max_hits_per_quad)
+    stats["astrometry_4d_max_hypotheses"] = int(max_hypotheses)
+    stats["astrometry_4d_max_accepts"] = int(max_accepts)
+    stats["astrometry_4d_hits"] = int(sum(int(v["hits"]) for v in hits_by_index.values()))
+    stats["astrometry_4d_candidates"] = int(len(candidates))
+    stats["astrometry_4d_hits_by_index"] = hits_by_index
+    stats["astrometry_4d_kd_lookup_s"] = float(time.perf_counter() - t_lookup0)
+
+    reason_counts: Counter[str] = Counter()
+    first_plausible_rank: int | None = None
+    first_accepted_rank: int | None = None
+    first_lost_hash_rank: int | None = None
+    first_lost_hash_accepted_rank: int | None = None
+    best_reject: dict[str, Any] | None = None
+    reject_buckets: dict[str, dict[str, Any] | None] = {
+        "best_plausible_reject": None,
+        "best_scale_invalid_reject": None,
+        "best_rms_invalid_reject": None,
+        "best_geometry_invalid_reject": None,
+    }
+    accepted_candidates: list[dict[str, Any]] = []
+    selected: dict[str, Any] | None = None
+    thresholds = _astrometry_4d_final_thresholds(config, scale_bounds_arcsec=scale_bounds_arcsec)
+    match_radius_px = max(0.5, float(getattr(config, "blind_astrometry_4d_match_radius_px", 3.0) or 3.0))
+    t_val0 = time.perf_counter()
+    tested = 0
+    stop_reason = "candidate_exhausted"
+    seen_hypotheses: set[tuple[str, tuple[int, ...], tuple[int, ...]]] = set()
+    for rank, item in enumerate(candidates, start=1):
+        if cancel_check and cancel_check():
+            reason_counts["cancelled"] += 1
+            stop_reason = "cancelled"
+            break
+        if tested >= max_hypotheses:
+            reason_counts["max_hypotheses"] += 1
+            stop_reason = "max_hypotheses"
+            break
+        disk_index = item["index"]
+        hit = item["hit"]
+        dedup_key = (
+            str(disk_index.path),
+            tuple(int(v) for v in hit.image_quad_indices),
+            tuple(int(v) for v in hit.catalog_quad_indices),
+        )
+        if dedup_key in seen_hypotheses:
+            reason_counts["duplicate_hypothesis"] += 1
+            continue
+        seen_hypotheses.add(dedup_key)
+        tested += 1
+        image_record = image_records[hit.image_record_index]
+        cat_hash = int(disk_index.ratio_hashes[hit.catalog_record_index]) if disk_index.ratio_hashes.shape[0] else -1
+        img_hash = -1 if image_record.ratio_hash is None else int(image_record.ratio_hash)
+        lost_by_hash = bool(img_hash != cat_hash)
+        if lost_by_hash and first_lost_hash_rank is None:
+            first_lost_hash_rank = int(rank)
+        try:
+            image_quad_points = image_positions[np.asarray(hit.image_quad_indices, dtype=np.int64)]
+            catalog_quad_world = disk_index.catalog_ra_dec[np.asarray(hit.catalog_quad_indices, dtype=np.int64)]
+            wcs = _fit_astrometry_4d_quad_wcs(image_quad_points, catalog_quad_world)
+
+            mono_details = _astrometry_4d_build_match_details(
+                wcs,
+                verification_image_positions,
+                disk_index.catalog_ra_dec,
+                radius_px=match_radius_px,
+            )
+            mono_matches_array = np.asarray(mono_details["matches"], dtype=np.float64)
+            mono_matched_image_points = np.asarray(mono_details["matched_image_points"], dtype=np.float64)
+
+            validation_catalog = disk_index.catalog_ra_dec
+            if validation_catalog_policy == "union_candidate_tiles":
+                validation_catalog = union_catalog
+            match_details = _astrometry_4d_build_match_details(
+                wcs,
+                verification_image_positions,
+                validation_catalog,
+                radius_px=match_radius_px,
+            )
+            matches_array = np.asarray(match_details["matches"], dtype=np.float64)
+            matched_image_points = np.asarray(match_details["matched_image_points"], dtype=np.float64)
+
+            legacy_validation = validate_solution(wcs, matches_array, thresholds)
+            validation = _astrometry_4d_validate_pixel_matches(
+                wcs,
+                matches_array,
+                np.asarray(match_details["distances_px"], dtype=np.float64),
+                thresholds,
+            )
+            geo_ok, geo = _blind_geometric_guardrails(
+                matched_image_points,
+                image_shape,
+                sparse_min_span=float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08),
+                sparse_min_area=float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003),
+                dense_min_span=float(getattr(config, "blind_geo_dense_min_span", 0.10) or 0.10),
+                dense_min_area=float(getattr(config, "blind_geo_dense_min_area", 0.005) or 0.005),
+                dense_max_cond=float(getattr(config, "blind_geo_dense_max_cond", 2.0e4) or 2.0e4),
+            )
+            mono_legacy_validation = validate_solution(wcs, mono_matches_array, thresholds)
+            mono_validation = _astrometry_4d_validate_pixel_matches(
+                wcs,
+                mono_matches_array,
+                np.asarray(mono_details["distances_px"], dtype=np.float64),
+                thresholds,
+            )
+            mono_geo_ok, mono_geo = _blind_geometric_guardrails(
+                mono_matched_image_points,
+                image_shape,
+                sparse_min_span=float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08),
+                sparse_min_area=float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003),
+                dense_min_span=float(getattr(config, "blind_geo_dense_min_span", 0.10) or 0.10),
+                dense_min_area=float(getattr(config, "blind_geo_dense_min_area", 0.005) or 0.005),
+                dense_max_cond=float(getattr(config, "blind_geo_dense_max_cond", 2.0e4) or 2.0e4),
+            )
+            mono_validation = dict(mono_validation)
+            mono_validation.update(
+                {
+                    "geo_cov_x": float(mono_geo.get("cov_x", float("nan"))),
+                    "geo_cov_y": float(mono_geo.get("cov_y", float("nan"))),
+                    "geo_cov_area": float(mono_geo.get("cov_area", float("nan"))),
+                    "geo_cond": float(mono_geo.get("cond", float("nan"))),
+                    "matches": int(mono_matches_array.shape[0]),
+                }
+            )
+            if mono_validation.get("quality") == "GOOD" and not mono_geo_ok:
+                mono_validation["quality"] = "FAIL"
+                mono_validation["success"] = False
+                mono_validation["reason"] = f"geometric_guard_failed[{mono_geo.get('reason', 'unknown')}]"
+            validation = dict(validation)
+            validation.update(
+                {
+                    "geo_cov_x": float(geo.get("cov_x", float("nan"))),
+                    "geo_cov_y": float(geo.get("cov_y", float("nan"))),
+                    "geo_cov_area": float(geo.get("cov_area", float("nan"))),
+                    "geo_cond": float(geo.get("cond", float("nan"))),
+                    "matches": int(matches_array.shape[0]),
+                    "hit_rank": int(rank),
+                    "local_rank": int(item["local_rank"]),
+                    "index_order": int(item["index_order"]),
+                    "index_path": str(disk_index.path),
+                    "code_distance": float(hit.code_distance),
+                    "lost_by_hash_exact": bool(lost_by_hash),
+                    "image_quad_indices": [int(v) for v in hit.image_quad_indices],
+                    "catalog_quad_indices": [int(v) for v in hit.catalog_quad_indices],
+                    "tile_key": str(hit.tile_key),
+                    "origin_tile_key": str(hit.tile_key),
+                    "validation_catalog_policy": str(validation_catalog_policy),
+                    "validation_catalog_stars": int(validation_catalog.shape[0]),
+                    "mono_inliers": int(mono_validation.get("inliers", 0) or 0),
+                    "mono_rms_px": float(mono_validation.get("rms_px", float("nan"))),
+                    "mono_quality": str(mono_validation.get("quality", "")),
+                    "legacy_inverse_inliers": int(legacy_validation.get("inliers", 0) or 0),
+                    "legacy_inverse_rms_px": float(legacy_validation.get("rms_px", float("nan"))),
+                    "legacy_inverse_quality": str(legacy_validation.get("quality", "")),
+                    "legacy_inverse_reason": legacy_validation.get("reason"),
+                    "mono_legacy_inverse_inliers": int(mono_legacy_validation.get("inliers", 0) or 0),
+                    "mono_legacy_inverse_rms_px": float(mono_legacy_validation.get("rms_px", float("nan"))),
+                    "pix_scale_arcsec": float(validation.get("pix_scale_arcsec", _wcs_pixel_scale_arcsec(wcs))),
+                    "parity_label": "nominal",
+                    "parity_value": 1,
+                }
+            )
+            if validation.get("quality") == "GOOD" and first_plausible_rank is None:
+                first_plausible_rank = int(rank)
+            if validation.get("quality") == "GOOD" and not geo_ok:
+                validation["quality"] = "FAIL"
+                validation["success"] = False
+                validation["reason"] = f"geometric_guard_failed[{geo.get('reason', 'unknown')}]"
+            if _astrometry_4d_trace_candidate_matches(config, rank, item):
+                stats["astrometry_4d_trace_candidate"] = {
+                    "rank": int(rank),
+                    "local_rank": int(item["local_rank"]),
+                    "index_order": int(item["index_order"]),
+                    "index_path": str(disk_index.path),
+                    "origin_tile": str(hit.tile_key),
+                    "code_distance": float(hit.code_distance),
+                    "image_quad_indices": [int(v) for v in hit.image_quad_indices],
+                    "catalog_quad_indices": [int(v) for v in hit.catalog_quad_indices],
+                    "wcs": _astrometry_4d_wcs_summary(wcs),
+                    "quad_sources": {
+                        "count": int(image_positions.shape[0]),
+                        "shape": list(np.asarray(image_positions).shape),
+                        "dtype": str(np.asarray(image_positions).dtype),
+                        "min_xy": [float(v) for v in np.nanmin(image_positions, axis=0)] if image_positions.size else [],
+                        "max_xy": [float(v) for v in np.nanmax(image_positions, axis=0)] if image_positions.size else [],
+                        "hash": _astrometry_4d_array_hash(image_positions),
+                        "head_indices": list(range(min(8, int(image_positions.shape[0])))),
+                        "tail_indices": list(range(max(0, int(image_positions.shape[0]) - 8), int(image_positions.shape[0]))),
+                    },
+                    "verification_sources": {
+                        "count": int(verification_image_positions.shape[0]),
+                        "shape": list(np.asarray(verification_image_positions).shape),
+                        "dtype": str(np.asarray(verification_image_positions).dtype),
+                        "min_xy": [float(v) for v in np.nanmin(verification_image_positions, axis=0)] if verification_image_positions.size else [],
+                        "max_xy": [float(v) for v in np.nanmax(verification_image_positions, axis=0)] if verification_image_positions.size else [],
+                        "hash": _astrometry_4d_array_hash(verification_image_positions),
+                        "head_indices": list(range(min(8, int(verification_image_positions.shape[0])))),
+                        "tail_indices": list(range(max(0, int(verification_image_positions.shape[0]) - 8), int(verification_image_positions.shape[0]))),
+                    },
+                    "catalog": {
+                        "policy": str(validation_catalog_policy),
+                        "tile_keys": [str(v) for idx in disk_indexes for v in idx.tile_keys],
+                        "count": int(validation_catalog.shape[0]),
+                        "hash": _astrometry_4d_array_hash(validation_catalog, decimals=8),
+                    },
+                    "matching": {
+                        "finite_projected": int(match_details.get("finite_projected", 0) or 0),
+                        "in_image_projected": int(match_details.get("in_image_projected", 0) or 0),
+                        "neighbors_within_3px": int(match_details.get("neighbors_within_radius", 0) or 0),
+                        "unique_pairs": int(match_details.get("unique_pairs", 0) or 0),
+                        "pairs_hash": _astrometry_4d_array_hash(matches_array, decimals=6),
+                        "image_indices_hash": _astrometry_4d_array_hash(np.asarray(match_details.get("image_indices", []), dtype=np.float64), decimals=0),
+                        "catalog_indices_hash": _astrometry_4d_array_hash(np.asarray(match_details.get("catalog_indices", []), dtype=np.float64), decimals=0),
+                        "distance_summary": {
+                            "count": int(np.asarray(match_details["distances_px"]).shape[0]),
+                            "min": float(np.nanmin(match_details["distances_px"])) if np.asarray(match_details["distances_px"]).size else None,
+                            "median": float(np.nanmedian(match_details["distances_px"])) if np.asarray(match_details["distances_px"]).size else None,
+                            "max": float(np.nanmax(match_details["distances_px"])) if np.asarray(match_details["distances_px"]).size else None,
+                            "rms": float(np.sqrt(np.nanmean(np.asarray(match_details["distances_px"], dtype=np.float64) ** 2))) if np.asarray(match_details["distances_px"]).size else None,
+                        },
+                    },
+                    "validation": dict(validation),
+                    "legacy_inverse_validation": dict(legacy_validation),
+                    "mono_validation": dict(mono_validation),
+                    "mono_legacy_inverse_validation": dict(mono_legacy_validation),
+                }
+            if validation.get("quality") == "GOOD":
+                if first_accepted_rank is None:
+                    first_accepted_rank = int(rank)
+                if lost_by_hash and first_lost_hash_accepted_rank is None:
+                    first_lost_hash_accepted_rank = int(rank)
+                accepted_row = {
+                    "wcs": wcs,
+                    "validation": dict(validation),
+                    "mono_validation": dict(mono_validation),
+                    "tile_key": str(hit.tile_key),
+                    "rank": int(rank),
+                    "local_rank": int(item["local_rank"]),
+                    "index_path": str(disk_index.path),
+                }
+                accepted_candidates.append(accepted_row)
+                reason_counts["accepted"] += 1
+                if accept_policy == "first_accept":
+                    selected = accepted_row
+                    stop_reason = "first_accept"
+                    break
+                if len(accepted_candidates) >= max_accepts:
+                    stop_reason = "max_accepts"
+                    break
+                continue
+            reason = str(validation.get("reason", "validation_failed") or "validation_failed")
+            reason_counts[reason] += 1
+            if best_reject is None or _astrometry_4d_reject_sort_key(validation) > _astrometry_4d_reject_sort_key(best_reject):
+                best_reject = dict(validation)
+            reject_kind = "best_plausible_reject"
+            if not bool(validation.get("gate_scale_ok", True)) or str(reason).startswith("pixel_scale_out_of_range"):
+                reject_kind = "best_scale_invalid_reject"
+            elif not bool(validation.get("gate_rms_ok", False)):
+                reject_kind = "best_rms_invalid_reject"
+            elif str(reason).startswith("geometric_guard_failed"):
+                reject_kind = "best_geometry_invalid_reject"
+            old_reject = reject_buckets.get(reject_kind)
+            if old_reject is None or _astrometry_4d_reject_sort_key(validation) > _astrometry_4d_reject_sort_key(old_reject):
+                reject_buckets[reject_kind] = dict(validation)
+        except Exception as exc:
+            reason_counts["fit_or_validate_failed"] += 1
+            if best_reject is None:
+                best_reject = {"reason": str(exc), "hit_rank": int(rank), "inliers": 0, "rms_px": float("inf")}
+
+    if selected is None and accepted_candidates:
+        selected = max(accepted_candidates, key=_astrometry_4d_accept_sort_key)
+        if stop_reason == "candidate_exhausted":
+            stop_reason = "best_within_budget"
+
+    stats["astrometry_4d_hits_tested"] = int(tested)
+    stats["astrometry_4d_first_plausible_rank"] = first_plausible_rank
+    stats["astrometry_4d_first_accepted_rank"] = first_accepted_rank
+    stats["astrometry_4d_first_lost_hash_rank"] = first_lost_hash_rank
+    stats["astrometry_4d_first_lost_hash_accepted_rank"] = first_lost_hash_accepted_rank
+    stats["astrometry_4d_accepted_candidates"] = int(len(accepted_candidates))
+    stats["astrometry_4d_stop_reason"] = str(stop_reason)
+    stats["astrometry_4d_reject_reason_counts"] = {str(k): int(v) for k, v in reason_counts.items()}
+    stats["astrometry_4d_validation_s"] = float(time.perf_counter() - t_val0)
+    stats["astrometry_4d_match_radius_px"] = float(match_radius_px)
+    stats["astrometry_4d_thresholds"] = dict(thresholds)
+    if best_reject is not None:
+        stats["astrometry_4d_best_reject"] = dict(best_reject)
+    for key, value in reject_buckets.items():
+        if value is not None:
+            stats[f"astrometry_4d_{key}"] = dict(value)
+    if accepted_candidates:
+        stats["astrometry_4d_first_accepted_validation"] = dict(accepted_candidates[0]["validation"])
+        stats["astrometry_4d_best_accepted_validation"] = dict(max(accepted_candidates, key=_astrometry_4d_accept_sort_key)["validation"])
+    stats["astrometry_4d_total_s"] = float(time.perf_counter() - t_total0)
+    logger.info(
+        "astrometry 4D runtime stats: hits=%d tested=%d accepted=%d stop=%s quad=%.3fs lookup=%.3fs validation=%.3fs total=%.3fs",
+        int(stats.get("astrometry_4d_hits", 0) or 0),
+        int(stats.get("astrometry_4d_hits_tested", 0) or 0),
+        int(stats.get("astrometry_4d_accepted_candidates", 0) or 0),
+        str(stats.get("astrometry_4d_stop_reason", "")),
+        float(stats.get("astrometry_4d_quad_build_s", 0.0) or 0.0),
+        float(stats.get("astrometry_4d_kd_lookup_s", 0.0) or 0.0),
+        float(stats.get("astrometry_4d_validation_s", 0.0) or 0.0),
+        float(stats.get("astrometry_4d_total_s", 0.0) or 0.0),
+    )
+    if selected is None:
+        return WcsSolution(False, "astrometry 4D runtime failed: no validated hypothesis", None, stats, None, {})
+    wcs = selected["wcs"]
+    validation = dict(selected["validation"])
+    tile_key = str(selected["tile_key"])
+    header_updates = {
+        "SOLVED": 1,
+        "DBSET": "astrometry_ab_code_4d_v1",
+        "TILE_ID": tile_key,
+        "RMSPX": float(validation.get("rms_px", float("nan"))),
+        "INLIERS": int(validation.get("inliers", 0) or 0),
+        "PIXSCAL": float(validation.get("pix_scale_arcsec", _wcs_pixel_scale_arcsec(wcs))),
+        "SIPORD": 0,
+        "QUALITY": str(validation.get("quality", "GOOD")),
+        "USED_DB": "astrometry_ab_code_4d_v1",
+        "SOLVER": "ZeSolver",
+        "SOLVMODE": "BLIND4DMI" if len(disk_indexes) > 1 else "BLIND4D",
+    }
+    stats.update(validation)
+    stats["astrometry_4d_selected_rank"] = int(selected["rank"])
+    stats["astrometry_4d_selected_local_rank"] = int(selected["local_rank"])
+    stats["astrometry_4d_selected_index_path"] = str(selected["index_path"])
+    stats["astrometry_4d_selected_origin_tile_key"] = tile_key
+    stats["astrometry_4d_selected_mono_validation"] = dict(selected.get("mono_validation") or {})
+    stats["astrometry_4d_runtime_accepted"] = True
+    return WcsSolution(True, "astrometry 4D runtime solution", wcs, stats, tile_key, header_updates)
+
+
 def _log_phase(stage: str, start: float) -> None:
     logger.debug("%s completed in %.2fs", stage, time.time() - start)
 
@@ -5554,6 +7180,26 @@ def solve_blind(
     _scale_ladder_internal: bool = False,
 ) -> WcsSolution:
     config = config or SolveConfig()
+    _external_cancel_check = cancel_check
+    _global_hard_budget_s = max(
+        0.0, float(getattr(config, "blind_global_hard_budget_s", 0.0) or 0.0)
+    )
+    _global_hard_budget_started = time.monotonic()
+    _global_hard_budget_state = {"triggered": False, "elapsed_s": 0.0}
+
+    def _combined_cancel_check() -> bool:
+        if _external_cancel_check and _external_cancel_check():
+            return True
+        if _global_hard_budget_s <= 0.0:
+            return False
+        elapsed = time.monotonic() - _global_hard_budget_started
+        if elapsed >= _global_hard_budget_s:
+            _global_hard_budget_state["triggered"] = True
+            _global_hard_budget_state["elapsed_s"] = float(elapsed)
+            return True
+        return False
+
+    cancel_check = _combined_cancel_check
     try:
         globals()["_A2V_COLLECT_DUMP_PATH"] = str(getattr(config, "blind_collect_matches_exact_dump_path", "") or "").strip()
         globals()["_A2V_COLLECT_DUMP_MAX_ENTRIES"] = int(getattr(config, "blind_collect_matches_exact_dump_max_entries", 400) or 400)
@@ -5619,6 +7265,22 @@ def solve_blind(
         return "unknown"
 
     def _finish(result: WcsSolution) -> WcsSolution:
+        if bool(_global_hard_budget_state["triggered"]):
+            stats = dict(result.stats or {})
+            stats["global_hard_budget_triggered"] = True
+            stats["global_hard_budget_s"] = float(_global_hard_budget_s)
+            stats["global_hard_budget_elapsed_s"] = float(
+                _global_hard_budget_state["elapsed_s"]
+            )
+            stats["fail_early_abort"] = True
+            stats["fail_early_abort_reason"] = (
+                f"global_hard_budget>{_global_hard_budget_s:.1f}s"
+            )
+            result.stats = stats
+            if not bool(result.success):
+                result.message = (
+                    f"global hard budget exceeded ({_global_hard_budget_s:.1f}s)"
+                )
         if logger.isEnabledFor(logging.DEBUG):
             hits, misses = _tile_cache_stats()
             total = hits + misses
@@ -6331,10 +7993,12 @@ def solve_blind(
         index_selection_policy["index_scale_overlap_prefilter_applied"] = False
     detect_k_sigma = max(0.5, float(getattr(config, "detect_k_sigma", 3.0)))
     detect_min_area = max(1, int(getattr(config, "detect_min_area", 5)))
+    source_list_gate_enabled = bool(getattr(config, "blind_astrometry_source_list_gate_enabled", False))
     cache_key: str | None = None
     cache_sig: tuple[int, int] | None = None
     cached_stars: np.ndarray | None = None
     cache_entry: dict[str, Any] | None = None
+    external_image2xy_stats: dict[str, Any] = {"enabled": False}
     if prep_cache is not None:
         try:
             resolved_source = source_path.resolve()
@@ -6367,29 +8031,64 @@ def solve_blind(
     _log_phase("read image", stage)
     if cached_stars is None:
         stage = time.time()
-        # Use a smaller median kernel for speed on typical Seestar frames
-        kernel = max(5, int(round(15 / downsample_factor)))
-        try:
-            work_image = remove_background(work_image, kernel_size=kernel)
-        except TypeError:
-            # Test/mocked call-sites may provide a simplified signature.
-            work_image = remove_background(work_image)
-        pyramid = build_pyramid(work_image)
-        _log_phase("preprocess", stage)
-        detection = pyramid[-1]
-        stage = time.time()
-        min_fwhm = max(1.0, 1.5 / downsample_factor)
-        max_fwhm = max(2.5, 8.0 / downsample_factor)
-        stars = detect_stars(
-            detection,
-            min_fwhm_px=min_fwhm,
-            max_fwhm_px=max_fwhm,
-            k_sigma=detect_k_sigma,
-            min_area=detect_min_area,
-        )
+        stars = None
+        if bool(getattr(config, "blind_astrometry_external_image2xy_enabled", False)):
+            try:
+                max_ext = int(getattr(config, "blind_astrometry_external_image2xy_max_sources", 0) or 0)
+                if max_ext <= 0 and (not source_list_gate_enabled):
+                    max_ext = max(0, int(getattr(config, "max_stars", 0) or 0))
+                stars_ext, external_image2xy_stats = _load_external_image2xy_stars(
+                    source_path,
+                    command=str(getattr(config, "blind_astrometry_external_image2xy_command", "image2xy") or "image2xy"),
+                    offset_xy=float(getattr(config, "blind_astrometry_external_image2xy_offset_xy", -1.0) or 0.0),
+                    max_sources=max_ext,
+                )
+                if stars_ext.size > 0:
+                    stars = stars_ext
+                    logger.info(
+                        "blind external image2xy sources: kept=%d raw=%d offset=%.2f",
+                        int(external_image2xy_stats.get("source_count", stars_ext.shape[0])),
+                        int(external_image2xy_stats.get("source_count_raw", stars_ext.shape[0])),
+                        float(external_image2xy_stats.get("offset_xy", 0.0)),
+                    )
+                else:
+                    raise RuntimeError("image2xy returned no sources")
+            except Exception as exc:
+                external_image2xy_stats = {
+                    "enabled": True,
+                    "error": str(exc),
+                    "fallback_internal": not bool(getattr(config, "blind_astrometry_external_image2xy_strict", False)),
+                }
+                if bool(getattr(config, "blind_astrometry_external_image2xy_strict", False)):
+                    return _finish(WcsSolution(False, f"external image2xy failed: {exc}", None, {}, None, {}))
+                logger.warning("external image2xy source extraction failed; falling back to internal detector: %s", exc)
+        if stars is None:
+            # Use a smaller median kernel for speed on typical Seestar frames
+            kernel = max(5, int(round(15 / downsample_factor)))
+            try:
+                work_image = remove_background(work_image, kernel_size=kernel)
+            except TypeError:
+                # Test/mocked call-sites may provide a simplified signature.
+                work_image = remove_background(work_image)
+            pyramid = build_pyramid(work_image)
+            _log_phase("preprocess", stage)
+            detection = pyramid[-1]
+            stage = time.time()
+            min_fwhm = max(1.0, 1.5 / downsample_factor)
+            max_fwhm = max(2.5, 8.0 / downsample_factor)
+            stars = detect_stars(
+                detection,
+                min_fwhm_px=min_fwhm,
+                max_fwhm_px=max_fwhm,
+                k_sigma=detect_k_sigma,
+                min_area=detect_min_area,
+            )
+        else:
+            _log_phase("preprocess", stage)
+            stage = time.time()
         if stars.size == 0:
             return _finish(WcsSolution(False, "no stars found", None, {}, None, {}))
-        if config.max_stars and stars.size > config.max_stars:
+        if (not source_list_gate_enabled) and config.max_stars and stars.size > config.max_stars:
             stars = stars[: config.max_stars]
         if downsample_factor > 1:
             stars["x"] *= downsample_factor
@@ -6399,7 +8098,7 @@ def solve_blind(
         _log_phase("preprocess", stage)
         stage = time.time()
         stars = cached_stars
-        if config.max_stars and stars.size > config.max_stars:
+        if (not source_list_gate_enabled) and config.max_stars and stars.size > config.max_stars:
             stars = stars[: config.max_stars]
 
     if prep_cache is not None and cache_key is not None:
@@ -6419,8 +8118,13 @@ def solve_blind(
         except Exception:
             pass
 
+    source_gate_stats: dict[str, float | int | bool] = {"enabled": False}
     raw_star_count = int(stars.shape[0])
-    if bool(getattr(config, "blind_star_quality_filter", True)) and raw_star_count > 0:
+    source_policy_4d = _astrometry_4d_source_policy(config) if _astrometry_4d_runtime_requested(config) else "standard_runtime"
+    effective_star_quality_filter = bool(getattr(config, "blind_star_quality_filter", True))
+    if source_policy_4d == "diagnostic_unfiltered":
+        effective_star_quality_filter = False
+    if effective_star_quality_filter and raw_star_count > 0:
         stars, star_filter_stats = _filter_blind_input_stars(
             stars,
             image_shape=image.shape,
@@ -6435,8 +8139,36 @@ def solve_blind(
         )
         if stars.size == 0:
             return _finish(WcsSolution(False, "no stars left after blind quality filter", None, {}, None, {}))
-        if config.max_stars and stars.size > config.max_stars:
+        if (not source_list_gate_enabled) and config.max_stars and stars.size > config.max_stars:
             stars = stars[: config.max_stars]
+    elif source_policy_4d == "diagnostic_unfiltered" and raw_star_count > 0:
+        logger.info(
+            "blind 4D source policy diagnostic_unfiltered: bypassing standard star quality filter for experimental backend"
+        )
+
+    if source_list_gate_enabled:
+        gate_target = int(getattr(config, "blind_astrometry_source_list_gate_max_sources", 0) or 0)
+        if gate_target <= 0:
+            gate_target = max(0, int(getattr(config, "max_stars", 0) or 0))
+        gate_before = int(stars.shape[0])
+        stars, source_gate_stats = _astrometry_source_list_gate(
+            stars,
+            image_shape=image.shape,
+            approx_boxes=max(1, int(getattr(config, "blind_astrometry_source_list_gate_boxes", 10) or 10)),
+            max_sources=gate_target,
+            min_keep_ratio=float(getattr(config, "blind_astrometry_source_list_gate_min_keep_ratio", 0.05)),
+        )
+        logger.info(
+            "blind astrometry source-list gate: kept=%d/%d removed=%d boxes=%dx%d target=%d",
+            int(source_gate_stats.get("kept", stars.shape[0])),
+            gate_before,
+            int(source_gate_stats.get("removed", max(0, gate_before - stars.shape[0]))),
+            int(source_gate_stats.get("uniform_nx", 1)),
+            int(source_gate_stats.get("uniform_ny", 1)),
+            int(source_gate_stats.get("max_sources", gate_target)),
+        )
+        if stars.size == 0:
+            return _finish(WcsSolution(False, "no stars left after astrometry source-list gate", None, {}, None, {}))
 
     try:
         if bool(getattr(config, "blind_astrometry_native_verify_semantics_enabled", False)):
@@ -6461,6 +8193,8 @@ def solve_blind(
                 "image_positions": np.asarray(image_positions, dtype=np.float64).tolist(),
                 "image_positions_solver": np.asarray(image_positions_solver, dtype=np.float64).tolist(),
                 "n": int(image_positions_solver.shape[0]) if image_positions_solver.ndim == 2 else 0,
+                "source_list_gate": dict(source_gate_stats),
+                "external_image2xy": dict(external_image2xy_stats),
             }
             _pp.write_text(json.dumps(_pkg, ensure_ascii=False, indent=2), encoding='utf-8')
     except Exception:
@@ -6503,6 +8237,69 @@ def solve_blind(
     obs_stars["x"] = stars["x"]
     obs_stars["y"] = stars["y"]
     obs_stars["mag"] = -stars["flux"]
+
+    if _astrometry_4d_runtime_requested(config):
+        verification_image_positions_solver: np.ndarray | None = None
+        try:
+            verification_stars = cache_entry.get("astrometry_4d_verification_stars") if isinstance(cache_entry, dict) else None
+            if isinstance(verification_stars, np.ndarray) and verification_stars.size > 0:
+                verification_image_positions_solver = np.asarray(_image_positions(verification_stars), dtype=np.float64).copy()
+                if solver_pixel_xscale > 0.0:
+                    verification_image_positions_solver[:, 0] *= float(solver_pixel_xscale)
+                logger.info(
+                    "blind 4D split source-list: quad_sources=%d verification_sources=%d",
+                    int(obs_stars.shape[0]),
+                    int(verification_image_positions_solver.shape[0]),
+                )
+        except Exception:
+            verification_image_positions_solver = None
+        result_4d = _solve_astrometry_4d_runtime_route(
+            config=config,
+            obs_stars=obs_stars,
+            image_positions_solver=image_positions_solver,
+            verification_image_positions_solver=verification_image_positions_solver,
+            image_shape=(int(image.shape[0]), int(image.shape[1])),
+            scale_bounds_arcsec=scale_bounds_arcsec,
+            cancel_check=cancel_check,
+        )
+        if bool(result_4d.success) and is_fits and result_4d.wcs is not None:
+            header_updates_4d = {
+                **dict(result_4d.header_updates or {}),
+                "BLINDVER": ZEBLIND_VERSION,
+            }
+            try:
+                with fits.open(source_path, mode="update", memmap=False) as hdul:
+                    apply_wcs_solution_to_header(
+                        hdul[0].header,
+                        result_4d.wcs,
+                        header_updates=header_updates_4d,
+                        remove_sip_before_write=True,
+                    )
+                    hdul[0].header["ZBLNDVER"] = ZEBLIND_VERSION
+                    hdul.flush()
+                result_4d.stats["astrometry_4d_wrote_wcs"] = True
+                result_4d.header_updates = header_updates_4d
+            except Exception as exc:
+                result_4d.stats["astrometry_4d_wrote_wcs"] = False
+                result_4d.stats["astrometry_4d_write_error"] = str(exc)
+                return _finish(
+                    WcsSolution(
+                        False,
+                        f"astrometry 4D runtime failed: WCS write failed: {exc}",
+                        None,
+                        result_4d.stats,
+                        result_4d.tile_key,
+                        {},
+                    )
+                )
+        logger.info(
+            "astrometry 4D runtime route finished: success=%s hits=%s tested=%s first_accepted=%s",
+            bool(result_4d.success),
+            result_4d.stats.get("astrometry_4d_hits"),
+            result_4d.stats.get("astrometry_4d_hits_tested"),
+            result_4d.stats.get("astrometry_4d_first_accepted_rank"),
+        )
+        return _finish(result_4d)
 
     # Prefer local-neighborhood quads to improve geometric stability on TAN plane
     if cancel_check and cancel_check():
@@ -8897,7 +10694,7 @@ def solve_blind(
         out_stats["prob_verify_pass"] = bool(prob_pass)
         out_stats["prob_logodds_accept_thr"] = float(min_prob)
         out_stats["prob_logodds_bail_thr"] = float(getattr(config, "verify_logodds_bail", -24.0) or -24.0)
-        out_stats["prob_logodds_stoplooking_thr"] = float(getattr(config, "verify_logodds_stoplooking", 24.0) or 24.0)
+        out_stats["prob_logodds_stoplooking_thr"] = float(verify_logodds_stoplooking)
 
         if not prob_pass:
             logger.info(
@@ -9010,6 +10807,14 @@ def solve_blind(
         local_tile_in = tile_in
         local_world_in = world_in
         local_final_wcs = final_wcs
+
+        def _solver_crpix() -> tuple[float, float]:
+            cx = float(getattr(config, "blind_solver_crpix_x", 0.0) or 0.0)
+            cy = float(getattr(config, "blind_solver_crpix_y", 0.0) or 0.0)
+            if cx > 0.0 and cy > 0.0:
+                return (cx, cy)
+            return (float(image.shape[1]) / 2.0, float(image.shape[0]) / 2.0)
+
         local_matches_array = matches_array
         local_cov_area = float(local_stats.get("geo_cov_area", float("nan")))
 
@@ -9095,7 +10900,10 @@ def solve_blind(
                     local_transform,
                     image.shape,
                     center_pixel=crpix,
-                    tile_center=(float(tile_entry.get("center_ra_deg", 0.0)), float(tile_entry.get("center_dec_deg", 0.0))),
+                    tile_center=(
+                        float(candidate_ctx.get("tile_center_ra_deg", 0.0) or 0.0),
+                        float(candidate_ctx.get("tile_center_dec_deg", 0.0) or 0.0),
+                    ),
                 )
                 local_matches_array = _build_matches_array(local_img_in, local_world_in)
                 n_pairs_tt = int(local_matches_array.shape[0])
@@ -9138,6 +10946,11 @@ def solve_blind(
                         transform=local_transform,
                         final_wcs=local_final_wcs,
                         matches_array=local_matches_array,
+                        img_in=local_img_in,
+                        tile_in=local_tile_in,
+                        world_in=local_world_in,
+                        tile_world_all=None,
+                        tile_xy_all=None,
                         candidate_key=str(candidate_key),
                         level_name=str(level_name),
                         parity_label=str(parity_label),
@@ -11578,7 +13391,7 @@ def solve_blind(
                 effective_area_px2=float(effA_use),
                 distractor_rate=distractor_use,
                 logodds_bail=float(getattr(config, "verify_logodds_bail", -24.0) or -24.0),
-                logodds_stoplooking=float(getattr(config, "verify_logodds_stoplooking", 24.0) or 24.0),
+                logodds_stoplooking=float(verify_logodds_stoplooking),
                 max_match_nsig2=_max_nsig2,
             )
             try:
@@ -11888,7 +13701,7 @@ def solve_blind(
                     "prob_logodds": float(out_stats.get("prob_logodds", float("nan")) or float("nan")),
                     "prob_logodds_accept_thr": float(out_stats.get("prob_logodds_accept_thr", float(getattr(config, "verify_logodds_accept", 12.0) or 12.0))),
                     "prob_logodds_bail_thr": float(out_stats.get("prob_logodds_bail_thr", float(getattr(config, "verify_logodds_bail", -24.0) or -24.0))),
-                    "prob_logodds_stoplooking_thr": float(out_stats.get("prob_logodds_stoplooking_thr", float(getattr(config, "verify_logodds_stoplooking", 24.0) or 24.0))),
+                    "prob_logodds_stoplooking_thr": float(out_stats.get("prob_logodds_stoplooking_thr", float(verify_logodds_stoplooking))),
                     "verify_logodds_min_validations": int(verify_logodds_min_validations),
                     "prob_best_i": (int(out_stats.get("prob_best_i")) if out_stats.get("prob_best_i") is not None else None),
                     "prob_ibailed": (int(out_stats.get("prob_ibailed")) if out_stats.get("prob_ibailed") is not None else None),
@@ -13454,6 +15267,8 @@ def solve_blind(
                 obj_idx=int(obj_idx),
             )
             tile_entry = tile_entries[tile_index]
+            candidate_ctx["tile_center_ra_deg"] = float(tile_entry.get("center_ra_deg", 0.0) or 0.0)
+            candidate_ctx["tile_center_dec_deg"] = float(tile_entry.get("center_dec_deg", 0.0) or 0.0)
             try:
                 tile_positions, tile_world = _load_tile_positions(index_root, tile_entry)
             except FileNotFoundError:
@@ -14020,6 +15835,8 @@ def solve_blind(
                 _rms_px: float,
                 _pairs: int,
                 _model_scale_arcsec: float | None = None,
+                _resolve_hit_support_pairs: int = 0,
+                _resolve_hit_self_rms_px: float | None = None,
             ) -> float:
                 q = float(max(0, int(_inliers)))
                 if bool(getattr(config, "blind_hypothesis_rank_enabled", True)):
@@ -14087,6 +15904,28 @@ def solve_blind(
                                 phase_slot["hypothesis_rank_scale_hotspot_penalty_last_overshoot"] = float(_ov)
                     except Exception:
                         pass
+                q += _resolve_hit_support_rank_boost(
+                    int(_resolve_hit_support_pairs or 0),
+                    enabled=bool(getattr(config, "blind_hypothesis_rank_resolve_hit_support_enabled", True)),
+                    weight=float(getattr(config, "blind_hypothesis_rank_resolve_hit_support_weight", 1.25) or 0.0),
+                    max_boost=float(getattr(config, "blind_hypothesis_rank_resolve_hit_support_max_boost", 8.0) or 0.0),
+                    native_verify_semantics=bool(astrometry_native_verify_semantics_mode),
+                )
+                if (
+                    bool(astrometry_native_verify_semantics_mode)
+                    and bool(getattr(config, "blind_hypothesis_rank_resolve_hit_self_rms_penalty_enabled", True))
+                    and _resolve_hit_self_rms_px is not None
+                ):
+                    try:
+                        sr = float(_resolve_hit_self_rms_px)
+                    except Exception:
+                        sr = float("nan")
+                    if np.isfinite(sr):
+                        start = max(0.0, float(getattr(config, "blind_hypothesis_rank_resolve_hit_self_rms_start_px", 1.2) or 0.0))
+                        weight = max(0.0, float(getattr(config, "blind_hypothesis_rank_resolve_hit_self_rms_penalty_weight", 1.8) or 0.0))
+                        cap = max(0.0, float(getattr(config, "blind_hypothesis_rank_resolve_hit_self_rms_penalty_max", 6.0) or 0.0))
+                        if weight > 0.0 and cap > 0.0 and sr > start:
+                            q -= min(cap, weight * math.log1p(sr - start))
                 return float(q)
 
             # Pair-set scale trace before any hypothesis fitting.
@@ -14095,14 +15934,30 @@ def solve_blind(
                     astrometry_lookup_ready = bool(level_index is not None and level_slices is not None)
                     pairset_scale_summary = _estimate_pairset_local_scale_summary(img_points, tile_points)
                     pairset_local_scale_arcsec = pairset_scale_summary.get("median_arcsec")
+                    pairset_anchor_promoted = False
+                    pairset_anchor_reject_reason = None
                     if (
                         bool(astrometry_native_verify_semantics_mode)
                         and pairset_local_scale_arcsec is not None
                         and np.isfinite(float(pairset_local_scale_arcsec))
                         and float(pairset_local_scale_arcsec) > 0.0
                     ):
-                        scale_anchor_arcsec = float(pairset_local_scale_arcsec)
-                        scale_anchor_source = "candidate_pairset_local"
+                        scale_anchor_arcsec, scale_anchor_source, pairset_anchor_promoted, pairset_anchor_reject_reason = _resolve_pairset_scale_anchor(
+                            scale_anchor_arcsec,
+                            scale_anchor_source,
+                            pairset_local_scale_arcsec,
+                            approx_scale_arcsec,
+                            astrometry_native_verify_semantics_mode=bool(astrometry_native_verify_semantics_mode),
+                            promote_enabled=bool(getattr(config, "blind_pairset_scale_anchor_promote_enabled", True)),
+                            max_ratio_from_approx=float(getattr(config, "blind_pairset_scale_anchor_max_ratio_from_approx", 1.8) or 1.8),
+                        )
+                        if pairset_anchor_promoted:
+                            phase_slot["pairset_scale_anchor_promoted"] = int(phase_slot.get("pairset_scale_anchor_promoted", 0) + 1)
+                        else:
+                            phase_slot["pairset_scale_anchor_rejected"] = int(phase_slot.get("pairset_scale_anchor_rejected", 0) + 1)
+                            if pairset_anchor_reject_reason:
+                                key_ps_anchor = f"pairset_scale_anchor_reject_{pairset_anchor_reject_reason}"
+                                phase_slot[key_ps_anchor] = int(phase_slot.get(key_ps_anchor, 0) + 1)
                     img_span_ps = float(np.hypot(np.ptp(np.asarray(img_points[:, 0], dtype=np.float64)), np.ptp(np.asarray(img_points[:, 1], dtype=np.float64))))
                     tile_span_ps = float(np.hypot(np.ptp(np.asarray(tile_points[:, 0], dtype=np.float64)), np.ptp(np.asarray(tile_points[:, 1], dtype=np.float64))))
                     span_scale_ps = float(3600.0 * tile_span_ps / max(img_span_ps, 1e-12)) if np.isfinite(img_span_ps) and img_span_ps > 0.0 and np.isfinite(tile_span_ps) else float("nan")
@@ -14211,6 +16066,9 @@ def solve_blind(
                             "approx_scale_arcsec": float(approx_scale_arcsec) if np.isfinite(float(approx_scale_arcsec)) else None,
                             "scale_anchor_arcsec": float(scale_anchor_arcsec) if (scale_anchor_arcsec is not None and np.isfinite(float(scale_anchor_arcsec))) else None,
                             "scale_anchor_source": str(scale_anchor_source or "") or None,
+                            "pairset_local_scale_arcsec": float(pairset_local_scale_arcsec) if (pairset_local_scale_arcsec is not None and np.isfinite(float(pairset_local_scale_arcsec))) else None,
+                            "pairset_anchor_promoted": bool(pairset_anchor_promoted),
+                            "pairset_anchor_reject_reason": str(pairset_anchor_reject_reason or "") or None,
                             "img_span_px": float(img_span_ps) if np.isfinite(img_span_ps) else None,
                             "tile_span_deg": float(tile_span_ps) if np.isfinite(tile_span_ps) else None,
                             "span_implied_scale_arcsec": float(span_scale_ps) if np.isfinite(span_scale_ps) else None,
@@ -14295,6 +16153,9 @@ def solve_blind(
                 best_inliers = -1
                 best_metric = -1e18
                 best_rms_px = float("inf")
+                best_resolve_hit_support_ready = False
+                resolve_hit_support_lookahead_start_tested: int | None = None
+                resolve_hit_support_lookahead_start_time: float | None = None
                 tested = 0
                 # Cap buckets per candidate tile to keep runtime reasonable.
                 # Give more budget to top-ranked candidates and less to tail candidates.
@@ -14322,6 +16183,9 @@ def solve_blind(
                     dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
                     phase_slot["astrometry_verify_candidate_star_pool_used"] = int(phase_slot.get("astrometry_verify_candidate_star_pool_used", 0) + 1)
                     resolve_hit_pool_mode_used = "candidate_pairs"
+                resolve_hit_initial_src_all_c = np.asarray(src_all_c, dtype=np.complex128).copy()
+                resolve_hit_initial_dst_all_c = np.asarray(dst_all_c, dtype=np.complex128).copy()
+                resolve_hit_initial_pool_mode = str(resolve_hit_pool_mode_used)
                 src_eval_c = src_all_c
                 dst_eval_c = dst_all_c
                 near_lookup_enabled = bool(getattr(config, "blind_astrometry_code_near_lookup_enabled", True))
@@ -14372,6 +16236,8 @@ def solve_blind(
                 resolve_hit_preresolve_dump_path = str(getattr(config, "blind_astrometry_resolve_hit_preresolve_dump_path", "") or "").strip()
                 resolve_hit_preresolve_dump_max_entries = max(1, int(getattr(config, "blind_astrometry_resolve_hit_preresolve_dump_max_entries", 400) or 0))
                 resolve_hit_preresolve_seq = 0
+                resolve_hit_diag_dump_path = str(getattr(config, "blind_astrometry_resolve_hit_diag_dump_path", "") or "").strip()
+                resolve_hit_diag_dump_max_entries = max(1, int(getattr(config, "blind_astrometry_resolve_hit_diag_dump_max_entries", 400) or 0))
                 resolve_hit_transition_dump_path = str(getattr(config, "blind_astrometry_transition_dump_path", "") or "").strip()
                 resolve_hit_transition_dump_max_entries = max(1, int(getattr(config, "blind_astrometry_transition_dump_max_entries", 400) or 0))
                 resolve_hit_transition_seq = 0
@@ -14623,12 +16489,47 @@ def solve_blind(
                         phase_slot["astrometry_newpoint_fallback_used"] = int(phase_slot.get("astrometry_newpoint_fallback_used", 0) + int(_np_stats.get("fallback_used", 0)))
                     except Exception:
                         pass
+                if (
+                    bool(getattr(config, "blind_astrometry_exact_hash_first_enabled", True))
+                    and int(idx2_order.shape[0]) > 1
+                ):
+                    try:
+                        exact_idx = [
+                            int(ii)
+                            for ii in idx2_order.tolist()
+                            if level_slices[int(ii)].start != level_slices[int(ii)].stop
+                        ]
+                        miss_idx = [
+                            int(ii)
+                            for ii in idx2_order.tolist()
+                            if level_slices[int(ii)].start == level_slices[int(ii)].stop
+                        ]
+                        if exact_idx:
+                            # Mirror Astrometry's useful newpoint discipline
+                            # inside the exact-hit subset before approximate
+                            # code-space recovery consumes the bucket budget.
+                            exact_idx.sort(
+                                key=lambda ii: (
+                                    int(np.max(np.asarray(level_quads[ii], dtype=np.int64))),
+                                    int(ii),
+                                )
+                            )
+                            idx2_order = np.asarray(exact_idx + miss_idx, dtype=np.int64)
+                            phase_slot["astrometry_exact_hash_first_activations"] = int(
+                                phase_slot.get("astrometry_exact_hash_first_activations", 0) + 1
+                            )
+                            phase_slot["astrometry_exact_hash_first_count"] = int(
+                                phase_slot.get("astrometry_exact_hash_first_count", 0)
+                                + len(exact_idx)
+                            )
+                    except Exception:
+                        pass
                 if bool(getattr(config, "blind_astrometry_observed_unsaturated_first_enabled", True)) and int(idx2_order.shape[0]) > 1:
                     try:
                         sat_mask = np.zeros(int(idx2_order.shape[0]), dtype=bool)
                         if level_hashes is not None and int(level_hashes.shape[0]) >= int(idx2_order.shape[0]):
                             for _ii in range(int(idx2_order.shape[0])):
-                                _hh = int(level_hashes[int(_ii)])
+                                _hh = int(level_hashes[int(idx2_order[_ii])])
                                 _q1 = int((_hh >> 48) & 0xFFFF)
                                 _q2 = int((_hh >> 32) & 0xFFFF)
                                 _q3 = int((_hh >> 16) & 0xFFFF)
@@ -15060,6 +16961,11 @@ def solve_blind(
                     for slc_use in obs_slices:
                         if tested >= max_buckets:
                             break
+                        exact_seed_slice = bool(
+                            slc.start != slc.stop
+                            and slc_use.start == slc.start
+                            and slc_use.stop == slc.stop
+                        )
                         for b in range(slc_use.start, slc_use.stop):
                             if cancel_check and cancel_check():
                                 return None
@@ -15172,6 +17078,39 @@ def solve_blind(
                                     )
                                 else:
                                     perm_orders = _astrometry_permutation_orders(perm_max)
+                            exact_hash_pair = False
+                            try:
+                                exact_hash_pair = (
+                                    obs_hash_seed is not None
+                                    and tile_hash64 is not None
+                                    and int(obs_hash_seed) == int(tile_hash64)
+                                )
+                            except Exception:
+                                exact_hash_pair = False
+                            if (
+                                (exact_seed_slice or exact_hash_pair)
+                                and bool(
+                                    getattr(
+                                        config,
+                                        "blind_astrometry_exact_hash_identity_perm_enabled",
+                                        True,
+                                    )
+                                )
+                            ):
+                                identity_perm = np.asarray([0, 1, 2, 3], dtype=np.int64)
+                                if not any(
+                                    np.array_equal(
+                                        np.asarray(existing, dtype=np.int64),
+                                        identity_perm,
+                                    )
+                                    for existing in perm_orders
+                                ):
+                                    perm_orders = [identity_perm] + list(perm_orders)
+                                    if len(perm_orders) > perm_max:
+                                        perm_orders = perm_orders[:perm_max]
+                                phase_slot["astrometry_exact_hash_identity_perm"] = int(
+                                    phase_slot.get("astrometry_exact_hash_identity_perm", 0) + 1
+                                )
                             if current_upstream_trace_row is not None:
                                 current_upstream_trace_row["perm_callsite_stage"] = "perm_emitted"
                                 current_upstream_trace_row["permute_mode"] = bool(permute_mode)
@@ -15977,6 +17916,26 @@ def solve_blind(
                                                 phase_slot["astrometry_resolve_hit_tol_promote_capped"] = int(phase_slot.get("astrometry_resolve_hit_tol_promote_capped", 0) + 1)
                                         except Exception:
                                             pass
+                                        self_rms_px_hit = float("nan")
+                                        try:
+                                            if int(src_hit.shape[0]) >= 4 and int(dst_hit.shape[0]) == int(src_hit.shape[0]):
+                                                _hyp_q = _derive_similarity(
+                                                    src_hit.astype(np.float64),
+                                                    dst_hit.astype(np.float64),
+                                                    reflected=bool(parity_label == "mirror"),
+                                                )
+                                                if _hyp_q is not None:
+                                                    _rs_q, _tr_q = _hyp_q
+                                                    _sc_q = float(max(abs(_rs_q), 1e-12))
+                                                    _pred_q = complex(_rs_q) * (src_hit[:, 0] + 1j * src_hit[:, 1]) + complex(_tr_q)
+                                                    _err_q_px = np.abs(_pred_q - (dst_hit[:, 0] + 1j * dst_hit[:, 1])) / _sc_q
+                                                    _fin_q = _err_q_px[np.isfinite(_err_q_px)]
+                                                    if _fin_q.size > 0:
+                                                        self_rms_px_hit = float(np.sqrt(np.mean(np.square(_fin_q))))
+                                        except Exception:
+                                            self_rms_px_hit = float("nan")
+                                        if resolve_hit_diag_out is not None:
+                                            resolve_hit_diag_out["self_rms_px"] = float(self_rms_px_hit) if np.isfinite(self_rms_px_hit) else None
                                         _dump_resolve_hit_preresolve({
                                             "source": "astrometry_quad",
                                             "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
@@ -16075,6 +18034,26 @@ def solve_blind(
                                                 phase_slot["astrometry_resolve_hit_tol_promote_capped"] = int(phase_slot.get("astrometry_resolve_hit_tol_promote_capped", 0) + 1)
                                         except Exception:
                                             pass
+                                        self_rms_px_hit = float("nan")
+                                        try:
+                                            if int(src_hit.shape[0]) >= 4 and int(dst_hit.shape[0]) == int(src_hit.shape[0]):
+                                                _hyp_q = _derive_similarity(
+                                                    src_hit.astype(np.float64),
+                                                    dst_hit.astype(np.float64),
+                                                    reflected=bool(parity_label == "mirror"),
+                                                )
+                                                if _hyp_q is not None:
+                                                    _rs_q, _tr_q = _hyp_q
+                                                    _sc_q = float(max(abs(_rs_q), 1e-12))
+                                                    _pred_q = complex(_rs_q) * (src_hit[:, 0] + 1j * src_hit[:, 1]) + complex(_tr_q)
+                                                    _err_q_px = np.abs(_pred_q - (dst_hit[:, 0] + 1j * dst_hit[:, 1])) / _sc_q
+                                                    _fin_q = _err_q_px[np.isfinite(_err_q_px)]
+                                                    if _fin_q.size > 0:
+                                                        self_rms_px_hit = float(np.sqrt(np.mean(np.square(_fin_q))))
+                                        except Exception:
+                                            self_rms_px_hit = float("nan")
+                                        if resolve_hit_diag_out is not None:
+                                            resolve_hit_diag_out["self_rms_px"] = float(self_rms_px_hit) if np.isfinite(self_rms_px_hit) else None
                                         _dump_resolve_hit_preresolve({
                                             "source": "astrometry_quad",
                                             "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
@@ -16126,27 +18105,6 @@ def solve_blind(
                                                     phase_slot["astrometry_resolve_hit_mutual_ratio_rejects"] = int(phase_slot.get("astrometry_resolve_hit_mutual_ratio_rejects", 0) + 1)
                                                     quality_ok = False
                                                     quality_fail_reasons.append("mutual_ratio")
-
-                                        self_rms_px_hit = float("nan")
-                                        try:
-                                            if int(src_hit.shape[0]) >= 4 and int(dst_hit.shape[0]) == int(src_hit.shape[0]):
-                                                _hyp_q = _derive_similarity(
-                                                    src_hit.astype(np.float64),
-                                                    dst_hit.astype(np.float64),
-                                                    reflected=bool(parity_label == "mirror"),
-                                                )
-                                                if _hyp_q is not None:
-                                                    _rs_q, _tr_q = _hyp_q
-                                                    _sc_q = float(max(abs(_rs_q), 1e-12))
-                                                    _pred_q = complex(_rs_q) * (src_hit[:, 0] + 1j * src_hit[:, 1]) + complex(_tr_q)
-                                                    _err_q_px = np.abs(_pred_q - (dst_hit[:, 0] + 1j * dst_hit[:, 1])) / _sc_q
-                                                    _fin_q = _err_q_px[np.isfinite(_err_q_px)]
-                                                    if _fin_q.size > 0:
-                                                        self_rms_px_hit = float(np.sqrt(np.mean(np.square(_fin_q))))
-                                        except Exception:
-                                            self_rms_px_hit = float("nan")
-                                        if resolve_hit_diag_out is not None:
-                                            resolve_hit_diag_out["self_rms_px"] = float(self_rms_px_hit) if np.isfinite(self_rms_px_hit) else None
 
                                         self_rms_gate_enabled = bool(getattr(config, "blind_astrometry_resolve_hit_self_rms_gate_enabled", False))
                                         if self_rms_gate_enabled:
@@ -16413,11 +18371,42 @@ def solve_blind(
                                         trace_entry["decision"] = "skip_zero_inliers"
                                         _dump_astrometry_exact(trace_entry)
                                         continue
+                                resolve_hit_support_pairs = 0
+                                try:
+                                    if isinstance(resolve_hit_diag_out, dict):
+                                        for _rk in ("kept", "pairs", "resolve_hit_pairs", "accepted_pairs"):
+                                            _rv = resolve_hit_diag_out.get(_rk)
+                                            if _rv is not None:
+                                                resolve_hit_support_pairs = max(resolve_hit_support_pairs, int(_rv))
+                                        _rhs = resolve_hit_diag_out.get("src_indices")
+                                        if _rhs is not None:
+                                            resolve_hit_support_pairs = max(
+                                                resolve_hit_support_pairs,
+                                                int(np.asarray(_rhs, dtype=np.int64).size),
+                                            )
+                                except Exception:
+                                    resolve_hit_support_pairs = 0
+                                trace_entry["resolve_hit_support_pairs"] = int(resolve_hit_support_pairs)
+                                resolve_hit_support_self_rms_px = None
+                                try:
+                                    if isinstance(resolve_hit_diag_out, dict):
+                                        _sr = resolve_hit_diag_out.get("self_rms_px")
+                                        if _sr is not None and np.isfinite(float(_sr)):
+                                            resolve_hit_support_self_rms_px = float(_sr)
+                                except Exception:
+                                    resolve_hit_support_self_rms_px = None
+                                trace_entry["resolve_hit_support_self_rms_px"] = (
+                                    float(resolve_hit_support_self_rms_px)
+                                    if resolve_hit_support_self_rms_px is not None
+                                    else None
+                                )
                                 hyp_metric = _hypothesis_quality_metric(
                                     inliers,
                                     rms_px,
                                     int(img_points.shape[0]),
                                     model_scale_arcsec_h,
+                                    resolve_hit_support_pairs,
+                                    resolve_hit_support_self_rms_px,
                                 )
                                 trace_entry["hyp_metric"] = float(hyp_metric)
                                 if (hyp_metric < best_metric) or (hyp_metric == best_metric and inliers <= best_inliers):
@@ -16530,10 +18519,126 @@ def solve_blind(
                                 trace_entry["best_metric_after"] = float(best_metric)
                                 trace_entry["best_inliers_after"] = int(best_inliers)
                                 trace_entry["best_rms_px_after"] = float(best_rms_px) if np.isfinite(float(best_rms_px)) else None
+                                min_support_exit_pairs = max(
+                                    4,
+                                    int(getattr(config, "blind_astrometry_native_resolve_hit_support_early_exit_min_pairs", 4) or 0),
+                                )
+                                strong_support_exit_pairs = max(
+                                    int(min_support_exit_pairs),
+                                    int(getattr(config, "blind_astrometry_native_resolve_hit_support_early_exit_strong_min_pairs", 6) or 0),
+                                )
+                                if (
+                                    bool(astrometry_native_verify_semantics_mode)
+                                    and bool(getattr(config, "blind_astrometry_native_resolve_hit_support_early_exit_enabled", True))
+                                    and int(resolve_hit_support_pairs) >= int(min_support_exit_pairs)
+                                ):
+                                    max_exit_self_rms = float(
+                                        max(
+                                            0.0,
+                                            getattr(
+                                                config,
+                                                "blind_astrometry_native_resolve_hit_support_early_exit_max_self_rms_px",
+                                                1.50,
+                                            )
+                                            or 0.0,
+                                        )
+                                    )
+                                    self_rms_ok = (
+                                        max_exit_self_rms <= 0.0
+                                        or resolve_hit_support_self_rms_px is None
+                                        or float(resolve_hit_support_self_rms_px) <= max_exit_self_rms
+                                    )
+                                    strong_support_ok = (
+                                        int(resolve_hit_support_pairs) >= int(strong_support_exit_pairs)
+                                        and bool(self_rms_ok)
+                                    )
+                                    trace_entry["resolve_hit_support_early_exit_self_rms_ok"] = bool(self_rms_ok)
+                                    trace_entry["resolve_hit_support_early_exit_max_self_rms_px"] = float(max_exit_self_rms)
+                                    trace_entry["resolve_hit_support_early_exit_strong_min_pairs"] = int(strong_support_exit_pairs)
+                                    trace_entry["resolve_hit_support_early_exit_strong_ok"] = bool(strong_support_ok)
+                                    if bool(strong_support_ok):
+                                        best_resolve_hit_support_ready = True
+                                        trace_entry["resolve_hit_support_early_exit"] = True
+                                        trace_entry["resolve_hit_support_early_exit_reason"] = "strong_support"
+                                        phase_slot["astrometry_resolve_hit_support_early_exits"] = int(
+                                            phase_slot.get("astrometry_resolve_hit_support_early_exits", 0) + 1
+                                        )
+                                        _dump_astrometry_exact(trace_entry)
+                                        break
+                                    lookahead_enabled = bool(
+                                        getattr(config, "blind_astrometry_native_resolve_hit_support_lookahead_enabled", True)
+                                    )
+                                    if bool(lookahead_enabled):
+                                        if resolve_hit_support_lookahead_start_tested is None:
+                                            resolve_hit_support_lookahead_start_tested = int(tested)
+                                            resolve_hit_support_lookahead_start_time = time.perf_counter()
+                                            phase_slot["astrometry_resolve_hit_support_lookahead_starts"] = int(
+                                                phase_slot.get("astrometry_resolve_hit_support_lookahead_starts", 0) + 1
+                                            )
+                                        max_extra = max(
+                                            0,
+                                            int(
+                                                getattr(
+                                                    config,
+                                                    "blind_astrometry_native_resolve_hit_support_lookahead_max_extra_buckets",
+                                                    48,
+                                                )
+                                                or 0
+                                            ),
+                                        )
+                                        max_s = max(
+                                            0.0,
+                                            float(
+                                                getattr(
+                                                    config,
+                                                    "blind_astrometry_native_resolve_hit_support_lookahead_max_s",
+                                                    8.0,
+                                                )
+                                                or 0.0
+                                            ),
+                                        )
+                                        extra_tested = int(max(0, int(tested) - int(resolve_hit_support_lookahead_start_tested)))
+                                        elapsed_extra = (
+                                            float(time.perf_counter() - float(resolve_hit_support_lookahead_start_time))
+                                            if resolve_hit_support_lookahead_start_time is not None
+                                            else 0.0
+                                        )
+                                        trace_entry["resolve_hit_support_lookahead"] = True
+                                        trace_entry["resolve_hit_support_lookahead_extra_tested"] = int(extra_tested)
+                                        trace_entry["resolve_hit_support_lookahead_max_extra_buckets"] = int(max_extra)
+                                        trace_entry["resolve_hit_support_lookahead_elapsed_s"] = float(elapsed_extra)
+                                        trace_entry["resolve_hit_support_lookahead_max_s"] = float(max_s)
+                                        if (max_extra <= 0 or int(extra_tested) >= int(max_extra)) or (
+                                            max_s <= 0.0 or float(elapsed_extra) >= float(max_s)
+                                        ):
+                                            best_resolve_hit_support_ready = True
+                                            trace_entry["resolve_hit_support_early_exit"] = True
+                                            trace_entry["resolve_hit_support_early_exit_reason"] = "lookahead_cap"
+                                            phase_slot["astrometry_resolve_hit_support_lookahead_cap_exits"] = int(
+                                                phase_slot.get("astrometry_resolve_hit_support_lookahead_cap_exits", 0) + 1
+                                            )
+                                            _dump_astrometry_exact(trace_entry)
+                                            break
+                                        phase_slot["astrometry_resolve_hit_support_lookahead_continues"] = int(
+                                            phase_slot.get("astrometry_resolve_hit_support_lookahead_continues", 0) + 1
+                                        )
+                                    else:
+                                        best_resolve_hit_support_ready = True
+                                        trace_entry["resolve_hit_support_early_exit"] = True
+                                        trace_entry["resolve_hit_support_early_exit_reason"] = "weak_support_no_lookahead"
+                                        phase_slot["astrometry_resolve_hit_support_early_exits"] = int(
+                                            phase_slot.get("astrometry_resolve_hit_support_early_exits", 0) + 1
+                                        )
+                                        _dump_astrometry_exact(trace_entry)
+                                        break
+                                    if not bool(self_rms_ok):
+                                        phase_slot["astrometry_resolve_hit_support_early_exit_self_rms_blocks"] = int(
+                                            phase_slot.get("astrometry_resolve_hit_support_early_exit_self_rms_blocks", 0) + 1
+                                        )
                                 _dump_astrometry_exact(trace_entry)
                                 if inliers >= config.quality_inliers and rms_px <= config.quality_rms:
                                     break
-                    if best_inliers >= config.quality_inliers:
+                    if bool(best_resolve_hit_support_ready) or best_inliers >= config.quality_inliers:
                         break
                 transform_result = best
                 if best_meta is not None:
@@ -17346,11 +19451,102 @@ def solve_blind(
                             dst_pts_m.astype(np.float64),
                             reflected=reflected_m,
                         )
+                        pruned_rms_m = None
+                        pruned_pairs_m = int(src_pts_m.shape[0])
+                        if (
+                            hyp_m is not None
+                            and bool(getattr(config, "blind_astrometry_meta_seed_prune_refit_enabled", True))
+                            and int(src_pts_m.shape[0]) > max(4, int(getattr(config, "blind_astrometry_resolve_hit_min_pairs", 4) or 4))
+                        ):
+                            pruned_m = _refit_prune_similarity_pairs(
+                                src_pts_m,
+                                dst_pts_m,
+                                reflected=bool(reflected_m),
+                                min_pairs=max(4, int(getattr(config, "blind_astrometry_resolve_hit_min_pairs", 4) or 4)),
+                                max_exhaustive_pairs=max(
+                                    4,
+                                    int(getattr(config, "blind_astrometry_meta_seed_prune_refit_max_exhaustive_pairs", 10) or 10),
+                                ),
+                            )
+                            if pruned_m is not None:
+                                keep_m, src_pr_m, dst_pr_m, rs_pr_m, tr_pr_m, rms_pr_m = pruned_m
+                                src_pts_m = np.asarray(src_pr_m, dtype=np.float64)
+                                dst_pts_m = np.asarray(dst_pr_m, dtype=np.float64)
+                                if dst_world_m.ndim == 2 and int(dst_world_m.shape[0]) >= int(np.max(keep_m)) + 1:
+                                    dst_world_m = np.asarray(dst_world_m[np.asarray(keep_m, dtype=np.int64)], dtype=np.float64)
+                                if src_m.size >= int(np.max(keep_m)) + 1:
+                                    src_m = np.asarray(src_m[np.asarray(keep_m, dtype=np.int64)], dtype=np.int64)
+                                if dst_m.size >= int(np.max(keep_m)) + 1:
+                                    dst_m = np.asarray(dst_m[np.asarray(keep_m, dtype=np.int64)], dtype=np.int64)
+                                hyp_m = (complex(rs_pr_m), complex(tr_pr_m))
+                                pruned_rms_m = float(rms_pr_m)
+                                pruned_pairs_m = int(src_pts_m.shape[0])
+                                phase_slot["astrometry_meta_seed_prune_refit_hits"] = int(
+                                    phase_slot.get("astrometry_meta_seed_prune_refit_hits", 0) + 1
+                                )
+                                phase_slot["astrometry_meta_seed_prune_refit_pairs_last"] = int(pruned_pairs_m)
+                                phase_slot["astrometry_meta_seed_prune_refit_rms_last"] = float(pruned_rms_m)
+                        if (
+                            hyp_m is not None
+                            and bool(getattr(config, "blind_astrometry_meta_seed_extend_enabled", False))
+                            and int(image_positions.shape[0]) >= int(src_pts_m.shape[0])
+                            and int(tile_positions.shape[0]) >= int(dst_pts_m.shape[0])
+                        ):
+                            tol_ext_m = float(transform_origin_meta.get("resolve_hit_tol_deg", float("nan")) or float("nan"))
+                            if not (np.isfinite(tol_ext_m) and tol_ext_m > 0.0):
+                                tol_ext_m = float(tol_deg)
+                            phase_slot["astrometry_meta_seed_extend_attempts"] = int(
+                                phase_slot.get("astrometry_meta_seed_extend_attempts", 0) + 1
+                            )
+                            extended_m = _extend_similarity_support_pairs(
+                                np.asarray(image_positions, dtype=np.float64),
+                                np.asarray(tile_positions, dtype=np.float64),
+                                np.asarray(tile_world, dtype=np.float64),
+                                src_pts_m,
+                                dst_pts_m,
+                                reflected=bool(reflected_m),
+                                tol_deg=float(tol_ext_m),
+                                min_pairs=max(4, int(getattr(config, "blind_astrometry_meta_seed_extend_min_pairs", 6) or 6)),
+                                min_gain=max(0, int(getattr(config, "blind_astrometry_meta_seed_extend_min_gain", 1) or 0)),
+                                max_points=max(8, int(getattr(config, "blind_astrometry_meta_seed_extend_max_points", 256) or 256)),
+                                max_pairs=max(8, int(getattr(config, "blind_astrometry_meta_seed_extend_max_pairs", 96) or 96)),
+                                max_rms_px=float(getattr(config, "blind_astrometry_meta_seed_extend_max_rms_px", 2.0) or 0.0),
+                            )
+                            if extended_m is not None:
+                                src_idx_ext, dst_idx_ext, src_ext, dst_ext, world_ext, rs_ext, tr_ext, rms_ext = extended_m
+                                src_m = np.asarray(src_idx_ext, dtype=np.int64)
+                                dst_m = np.asarray(dst_idx_ext, dtype=np.int64)
+                                src_pts_m = np.asarray(src_ext, dtype=np.float64)
+                                dst_pts_m = np.asarray(dst_ext, dtype=np.float64)
+                                dst_world_m = np.asarray(world_ext, dtype=np.float64)
+                                hyp_m = (complex(rs_ext), complex(tr_ext))
+                                pruned_pairs_m = int(src_pts_m.shape[0])
+                                pruned_rms_m = float(rms_ext)
+                                phase_slot["astrometry_meta_seed_extend_hits"] = int(
+                                    phase_slot.get("astrometry_meta_seed_extend_hits", 0) + 1
+                                )
+                                phase_slot["astrometry_meta_seed_extend_pairs_last"] = int(src_pts_m.shape[0])
+                                phase_slot["astrometry_meta_seed_extend_rms_last"] = float(rms_ext)
                         if hyp_m is not None:
                             carry_guard_enabled = bool(
                                 getattr(config, "blind_astrometry_meta_seed_carry_plausibility_guard_enabled", False)
                             )
-                            prescreen_err_px = np.asarray(err_deg / max(scale, 1e-12), dtype=np.float64)
+                            guard_on_refit = bool(
+                                getattr(config, "blind_astrometry_meta_seed_carry_guard_on_refit_enabled", True)
+                            )
+                            if guard_on_refit:
+                                rs_guard, tr_guard = hyp_m
+                                src_guard_c = (src_pts_m[:, 0] + 1j * src_pts_m[:, 1]).astype(np.complex128)
+                                if reflected_m:
+                                    src_guard_c = np.conj(src_guard_c)
+                                dst_guard_c = (dst_pts_m[:, 0] + 1j * dst_pts_m[:, 1]).astype(np.complex128)
+                                scale_guard = float(max(abs(complex(rs_guard)), 1e-12))
+                                prescreen_err_px = np.asarray(
+                                    np.abs(complex(rs_guard) * src_guard_c + complex(tr_guard) - dst_guard_c) / scale_guard,
+                                    dtype=np.float64,
+                                )
+                            else:
+                                prescreen_err_px = np.asarray(err_deg / max(scale, 1e-12), dtype=np.float64)
                             finite_prescreen_err_px = prescreen_err_px[np.isfinite(prescreen_err_px)]
                             prescreen_residual_med = (
                                 float(np.median(finite_prescreen_err_px)) if finite_prescreen_err_px.size else float("nan")
@@ -17361,7 +19557,11 @@ def solve_blind(
                             carry_guard_require_inliers = bool(
                                 getattr(config, "blind_astrometry_meta_seed_carry_require_origin_inliers", True)
                             )
-                            carry_guard_min_inliers_ok = (not carry_guard_require_inliers) or int(inlier_count) > 0
+                            carry_guard_min_inliers_ok = (
+                                int(finite_prescreen_err_px.size) >= int(src_pts_m.shape[0])
+                                if guard_on_refit
+                                else ((not carry_guard_require_inliers) or int(inlier_count) > 0)
+                            )
                             carry_guard_max_med_px = float(
                                 max(
                                     0.0,
@@ -17412,8 +19612,11 @@ def solve_blind(
                                             "guard_reasons": list(carry_guard_reasons),
                                             "prescreen_residual_px_med": prescreen_residual_med if np.isfinite(prescreen_residual_med) else None,
                                             "prescreen_residual_px_max": prescreen_residual_max if np.isfinite(prescreen_residual_max) else None,
+                                            "guard_basis": "refit" if guard_on_refit else "origin",
                                             "origin_inlier_count": int(inlier_count),
                                             "source_pairs_original": int(src_pts_m.shape[0]),
+                                            "pruned_pairs": int(pruned_pairs_m),
+                                            "pruned_rms_px": float(pruned_rms_m) if pruned_rms_m is not None else None,
                                         },
                                     )
                                     meta_dump_path = str(getattr(config, "blind_s6_meta_seed_probe_dump_path", "") or "").strip()
@@ -17431,7 +19634,10 @@ def solve_blind(
                                                 "origin_inlier_count": int(inlier_count),
                                                 "prescreen_residual_px_med": prescreen_residual_med if np.isfinite(prescreen_residual_med) else None,
                                                 "prescreen_residual_px_max": prescreen_residual_max if np.isfinite(prescreen_residual_max) else None,
+                                                "guard_basis": "refit" if guard_on_refit else "origin",
                                                 "guard_reasons": list(carry_guard_reasons),
+                                                "pruned_pairs": int(pruned_pairs_m),
+                                                "pruned_rms_px": float(pruned_rms_m) if pruned_rms_m is not None else None,
                                             }
                                             dp = Path(meta_dump_path)
                                             obj = {"schema": "zeblind.s6_meta_seed_probe.v1", "entries": []}
@@ -17508,6 +19714,8 @@ def solve_blind(
                                         "reassign_path_tag": "resolve_hit_meta_seed",
                                         "source_pairs_original": int(src_pts_m.shape[0]),
                                         "carried_pairs": int(img_points.shape[0]),
+                                        "pruned_pairs": int(pruned_pairs_m),
+                                        "pruned_rms_px": float(pruned_rms_m) if pruned_rms_m is not None else None,
                                         "resolve_hit_tol_deg": float(tol_deg),
                                         "residual_px_min": float(np.min(finite_meta)) if finite_meta.size else None,
                                         "residual_px_med": float(np.median(finite_meta)) if finite_meta.size else None,
@@ -17529,6 +19737,8 @@ def solve_blind(
                                             "carried_pairs": int(img_points.shape[0]),
                                             "inlier_count": int(inlier_count),
                                             "model_scale_arcsec": float(3600.0 * max(scale, 1e-12)),
+                                            "pruned_pairs": int(pruned_pairs_m),
+                                            "pruned_rms_px": float(pruned_rms_m) if pruned_rms_m is not None else None,
                                             "resolve_hit_tol_deg": float(tol_deg),
                                             "residual_px_min": float(np.min(finite_meta)) if finite_meta.size else None,
                                             "residual_px_med": float(np.median(finite_meta)) if finite_meta.size else None,
@@ -17794,9 +20004,59 @@ def solve_blind(
                 try:
                     phase_slot["astrometry_post_resolve_attempts"] = int(phase_slot.get("astrometry_post_resolve_attempts", 0) + 1)
                     rh_tol_factor = float(max(0.6, getattr(config, "blind_astrometry_resolve_hit_tol_factor", 3.0) or 3.0))
+                    if (
+                        bool(getattr(config, "blind_astrometry_probe_post_resolve_initial_pool_diag_enabled", False))
+                        and resolve_hit_diag_dump_path
+                        and int(getattr(resolve_hit_initial_src_all_c, "shape", (0,))[0]) > 0
+                        and int(getattr(resolve_hit_initial_dst_all_c, "shape", (0,))[0]) > 0
+                    ):
+                        try:
+                            _ = _resolve_hit_correspondences(
+                                resolve_hit_initial_src_all_c,
+                                resolve_hit_initial_dst_all_c,
+                                rot_scale=complex(rot_scale),
+                                translation=complex(translation),
+                                tol_deg=float(tol_deg) * rh_tol_factor,
+                                max_points=max(24, int(getattr(config, "blind_astrometry_resolve_hit_max_points", 192) or 0)),
+                                max_pairs=max(8, int(getattr(config, "blind_astrometry_resolve_hit_max_pairs", 64) or 0)),
+                                astrometry_iso=bool(getattr(config, "blind_astrometry_strict_verify_path_enabled", True)),
+                                strict_subset_mode=str(getattr(config, "blind_astrometry_strict_resolve_hit_subset_mode", "nn_radius") or "nn_radius"),
+                                strict_dst_prefilter_enabled=bool(getattr(config, "blind_astrometry_strict_resolve_hit_dst_prefilter_enabled", False)),
+                                strict_dst_prefilter_tol_factor=float(max(1.0, getattr(config, "blind_astrometry_strict_resolve_hit_dst_prefilter_tol_factor", 2.0) or 2.0)),
+                                strict_dst_prefilter_max_points=int(max(8, getattr(config, "blind_astrometry_strict_resolve_hit_dst_prefilter_max_points", 256) or 256)),
+                                diag_dump_path=resolve_hit_diag_dump_path,
+                                diag_dump_max_entries=resolve_hit_diag_dump_max_entries,
+                                diag_context={
+                                    "callsite": "post_hypothesis",
+                                    "attempt": "initial_pool_probe",
+                                    "initial_pool_mode": str(resolve_hit_initial_pool_mode),
+                                    "phase": str(phase_name),
+                                    "level": str(level_name),
+                                    "parity": str(parity_label),
+                                    "tile": str(candidate_key),
+                                    "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                                    "tile_combo": [int(v) for v in np.asarray(tile_combo, dtype=np.int64).tolist()],
+                                    "perm": [int(v) for v in np.asarray(po, dtype=np.int64).tolist()],
+                                },
+                            )
+                        except Exception:
+                            phase_slot["astrometry_post_resolve_initial_pool_diag_errors"] = int(phase_slot.get("astrometry_post_resolve_initial_pool_diag_errors", 0) + 1)
+                    post_resolve_use_initial_pool = bool(
+                        getattr(config, "blind_astrometry_post_resolve_initial_pool_enabled", False)
+                        and str(resolve_hit_initial_pool_mode) == "field_index_all"
+                        and int(getattr(resolve_hit_initial_src_all_c, "shape", (0,))[0]) > 0
+                        and int(getattr(resolve_hit_initial_dst_all_c, "shape", (0,))[0]) > 0
+                    )
+                    post_src_all_c = resolve_hit_initial_src_all_c if post_resolve_use_initial_pool else src_all_c
+                    post_dst_all_c = resolve_hit_initial_dst_all_c if post_resolve_use_initial_pool else dst_all_c
+                    if post_resolve_use_initial_pool and getattr(transform, "parity", 1) < 0:
+                        post_src_all_c = np.conj(post_src_all_c)
+                    post_img_points = np.asarray(image_positions[:, :2], dtype=np.float64) if post_resolve_use_initial_pool else img_points
+                    post_tile_points = np.asarray(tile_positions[:, :2], dtype=np.float64) if post_resolve_use_initial_pool else tile_points
+                    post_tile_world = np.asarray(tile_world[:, :2], dtype=np.float64) if post_resolve_use_initial_pool else tile_world_matches
                     rh_post = _resolve_hit_correspondences(
-                        src_all_c,
-                        dst_all_c,
+                    post_src_all_c,
+                    post_dst_all_c,
                         rot_scale=complex(rot_scale),
                         translation=complex(translation),
                         tol_deg=float(tol_deg) * rh_tol_factor,
@@ -17807,14 +20067,27 @@ def solve_blind(
                         strict_dst_prefilter_enabled=bool(getattr(config, "blind_astrometry_strict_resolve_hit_dst_prefilter_enabled", False)),
                         strict_dst_prefilter_tol_factor=float(max(1.0, getattr(config, "blind_astrometry_strict_resolve_hit_dst_prefilter_tol_factor", 2.0) or 2.0)),
                         strict_dst_prefilter_max_points=int(max(8, getattr(config, "blind_astrometry_strict_resolve_hit_dst_prefilter_max_points", 256) or 256)),
+                        diag_dump_path=resolve_hit_diag_dump_path,
+                        diag_dump_max_entries=resolve_hit_diag_dump_max_entries,
+                        diag_context={
+                            "callsite": "post_hypothesis",
+                            "attempt": "strict",
+                            "phase": str(phase_name),
+                            "level": str(level_name),
+                            "parity": str(parity_label),
+                            "tile": str(candidate_key),
+                            "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                            "tile_combo": [int(v) for v in np.asarray(tile_combo, dtype=np.int64).tolist()],
+                            "perm": [int(v) for v in np.asarray(po, dtype=np.int64).tolist()],
+                        },
                     )
                     if rh_post is None:
                         if int(phase_slot.get("upstream_pair_rescue_hits", 0) or 0) <= 0:
                             phase_slot["astrometry_post_resolve_relaxed_forced"] = int(phase_slot.get("astrometry_post_resolve_relaxed_forced", 0) + 1)
                         phase_slot["astrometry_post_resolve_relaxed_attempts"] = int(phase_slot.get("astrometry_post_resolve_relaxed_attempts", 0) + 1)
                         rh_post = _resolve_hit_correspondences(
-                            src_all_c,
-                            dst_all_c,
+                            post_src_all_c,
+                            post_dst_all_c,
                             rot_scale=complex(rot_scale),
                             translation=complex(translation),
                             tol_deg=float(tol_deg) * max(rh_tol_factor * 2.0, rh_tol_factor + 1.0),
@@ -17825,6 +20098,19 @@ def solve_blind(
                         strict_dst_prefilter_enabled=bool(getattr(config, "blind_astrometry_strict_resolve_hit_dst_prefilter_enabled", False)),
                         strict_dst_prefilter_tol_factor=float(max(1.0, getattr(config, "blind_astrometry_strict_resolve_hit_dst_prefilter_tol_factor", 2.0) or 2.0)),
                         strict_dst_prefilter_max_points=int(max(8, getattr(config, "blind_astrometry_strict_resolve_hit_dst_prefilter_max_points", 256) or 256)),
+                        diag_dump_path=resolve_hit_diag_dump_path,
+                        diag_dump_max_entries=resolve_hit_diag_dump_max_entries,
+                        diag_context={
+                            "callsite": "post_hypothesis",
+                            "attempt": "relaxed",
+                            "phase": str(phase_name),
+                            "level": str(level_name),
+                            "parity": str(parity_label),
+                            "tile": str(candidate_key),
+                            "obs_combo": [int(v) for v in np.asarray(obs_combo, dtype=np.int64).tolist()],
+                            "tile_combo": [int(v) for v in np.asarray(tile_combo, dtype=np.int64).tolist()],
+                            "perm": [int(v) for v in np.asarray(po, dtype=np.int64).tolist()],
+                        },
                         )
                         if rh_post is not None:
                             phase_slot["astrometry_post_resolve_relaxed_hits"] = int(phase_slot.get("astrometry_post_resolve_relaxed_hits", 0) + 1)
@@ -17842,13 +20128,13 @@ def solve_blind(
                         }
                         min_pairs_post = max(4, int(getattr(config, "blind_astrometry_resolve_hit_min_pairs", 4) or 0))
                         if src_idx_post.size >= min_pairs_post and dst_idx_post.size == src_idx_post.size:
-                            src_idx_post = np.clip(src_idx_post, 0, img_points.shape[0] - 1)
-                            dst_idx_post = np.clip(dst_idx_post, 0, tile_points.shape[0] - 1)
+                            src_idx_post = np.clip(src_idx_post, 0, post_img_points.shape[0] - 1)
+                            dst_idx_post = np.clip(dst_idx_post, 0, post_tile_points.shape[0] - 1)
 
                             # A2-v14: require minimal 2D footprint for post-resolve correspondences.
                             accept_post = True
                             try:
-                                pts_post = img_points[src_idx_post]
+                                pts_post = post_img_points[src_idx_post]
                                 if int(pts_post.shape[0]) >= 4:
                                     gx = np.asarray(pts_post[:, 0], dtype=np.float64)
                                     gy = np.asarray(pts_post[:, 1], dtype=np.float64)
@@ -17877,10 +20163,24 @@ def solve_blind(
                                 pass
 
                             if accept_post:
+                                if post_resolve_use_initial_pool:
+                                    matched_img_points = np.asarray(post_img_points[src_idx_post], dtype=np.float64)
+                                    matched_tile_points = np.asarray(post_tile_points[dst_idx_post], dtype=np.float64)
+                                    matched_tile_world = np.asarray(post_tile_world[dst_idx_post], dtype=np.float64)
+                                    img_points = matched_img_points
+                                    tile_points = matched_tile_points
+                                    tile_world_matches = matched_tile_world
+                                    src_idx_post = np.arange(int(img_points.shape[0]), dtype=np.int64)
+                                    dst_idx_post = np.arange(int(tile_points.shape[0]), dtype=np.int64)
+                                    src_all_c = (img_points[:, 0] + 1j * img_points[:, 1]).astype(np.complex128)
+                                    if getattr(transform, "parity", 1) < 0:
+                                        src_all_c = np.conj(src_all_c)
+                                    dst_all_c = (tile_points[:, 0] + 1j * tile_points[:, 1]).astype(np.complex128)
+                                    phase_slot["astrometry_post_resolve_initial_pool_used"] = int(phase_slot.get("astrometry_post_resolve_initial_pool_used", 0) + 1)
                                 reassign_src_idx = src_idx_post
                                 reassign_dst_idx = dst_idx_post
-                                reassign_source = "resolve_hit"
-                                reassign_path_tag = "resolve_hit_direct"
+                                reassign_source = "resolve_hit_initial_pool" if post_resolve_use_initial_pool else "resolve_hit"
+                                reassign_path_tag = "resolve_hit_initial_pool_direct" if post_resolve_use_initial_pool else "resolve_hit_direct"
                                 inlier_count = int(src_idx_post.size)
                                 inliers_mask = np.zeros(src_all_c.shape[0], dtype=bool)
                                 inliers_mask[src_idx_post] = True
@@ -21977,6 +24277,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Tile position cache capacity (overrides ZE_TILE_CACHE_SIZE, default=128)",
     )
     parser.add_argument("--fail-attempt-budget-s", type=float, default=70.0, help="Fail-fast budget (s) for weak blind attempts; <=0 disables")
+    parser.add_argument("--blind-global-hard-budget-s", type=float, default=0.0, help="Hard wall-clock cap (s) for the complete blind attempt; <=0 disables")
     parser.add_argument("--fail-attempt-min-validations", type=int, default=18, help="Minimum failed validations before fail-fast abort")
     parser.add_argument("--fail-attempt-max-best-inliers", type=int, default=4, help="Maximum best inliers considered weak for fail-fast abort")
     parser.add_argument("--fail-attempt-min-candidates", type=int, default=20, help="Minimum tried candidates before fail-fast abort")
@@ -22002,6 +24303,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--blind-astrometry-endobj", type=int, default=0, help="Astrometry-like end object index for strict incremental candidate traversal (inclusive; 0 means auto/max)")
     parser.add_argument("--blind-astrometry-code-rangesearch-backend", default="linf", choices=("linf", "l2", "grid3d", "kdbox"), help="Continuous code-space rangesearch backend")
     parser.add_argument("--blind-astrometry-code-rangesearch-allow-experimental-backends", type=int, choices=(0, 1), default=0, help="Allow experimental/non-default code-space rangesearch backends")
+    parser.add_argument("--quad-hash-schema", default="opposite_edge_ratio_8bit_v1", choices=("opposite_edge_ratio_8bit_v1", ASTROMETRY_AB_CODE_4D_SCHEMA), help="Quad code/hash schema; astrometry_ab_code_4d_v1 is experimental and off by default")
+    parser.add_argument("--blind-astrometry-4d-index-enabled", type=int, choices=(0, 1), default=0, help="Enable experimental disk-backed Astrometry-like 4D index route")
+    parser.add_argument("--blind-astrometry-4d-index-path", type=str, default="", help="Path to experimental astrometry_ab_code_4d_v1 .npz index")
+    parser.add_argument("--blind-astrometry-4d-code-tol", type=float, default=0.015, help="4D code-space range-search tolerance")
+    parser.add_argument("--blind-astrometry-4d-max-hits", type=int, default=2000, help="Global cap on 4D hits returned by KD lookup")
+    parser.add_argument("--blind-astrometry-4d-max-hits-per-image-quad", type=int, default=8, help="Per-image-quad cap on 4D hits")
+    parser.add_argument("--blind-astrometry-4d-max-hypotheses", type=int, default=2000, help="Maximum 4D hypotheses to validate before stopping")
+    parser.add_argument("--blind-astrometry-4d-image-strategy", default="log_spaced", help="Image quad sampler strategy for the experimental 4D route")
+    parser.add_argument("--blind-astrometry-4d-match-radius-px", type=float, default=3.0, help="Nearest-neighbor image/catalog pairing radius for experimental 4D validation")
+    parser.add_argument("--blind-astrometry-4d-source-policy", default="standard_runtime", choices=("standard_runtime", "diagnostic_unfiltered", "astrometry_like"), help="Source-list policy for the experimental 4D route; diagnostic_unfiltered is opt-in and does not change the global blind quality filter")
+    parser.add_argument("--blind-astrometry-4d-index-paths", default="", help="Experimental bounded multi-index 4D paths, comma-separated; OFF when empty")
+    parser.add_argument("--blind-astrometry-4d-validation-catalog-policy", default="source_tile", choices=("source_tile", "union_candidate_tiles"), help="Experimental 4D validation catalogue policy; union_candidate_tiles is opt-in only")
+    parser.add_argument("--blind-astrometry-4d-accept-policy", default="first_accept", choices=("first_accept", "best_within_budget"), help="Experimental 4D candidate acceptance policy")
+    parser.add_argument("--blind-astrometry-4d-max-accepts", type=int, default=64, help="Experimental cap on retained accepted 4D candidates in best_within_budget mode")
     parser.add_argument("--blind-accept-logodds-min", type=float, default=0.25, help="Minimum logodds-like acceptance score for blind candidate validation")
     parser.add_argument("--blind-accept-logodds-geo-weight", type=float, default=1.10, help="Coverage weight in blind logodds-like acceptance score")
     parser.add_argument("--blind-accept-logodds-astrometry-stages", type=int, choices=(0, 1), default=1, help="Use Astrometry-like staged acceptance (precheck at min(totune,tokeep), final keep at tokeep)")
@@ -22130,6 +24445,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--blind-sparse-min-inliers-floor", type=int, default=4, help="Lower floor for adaptive sparse inlier requirement")
     parser.add_argument("--blind-star-quality-filter", type=int, choices=(0, 1), default=1, help="Enable blind input-star quality filter")
     parser.add_argument("--blind-star-min-sep-px", type=float, default=0.0, help="Minimum star separation in px for blind star filter (0=auto)")
+    parser.add_argument("--blind-astrometry-source-list-gate-enabled", type=int, choices=(0, 1), default=0, help="Enable experimental Astrometry-like pre-quad source-list gate")
+    parser.add_argument("--blind-astrometry-source-list-gate-boxes", type=int, default=10, help="Approximate number of spatial boxes for the source-list gate")
+    parser.add_argument("--blind-astrometry-source-list-gate-max-sources", type=int, default=0, help="Source-list gate cap (0=use --max-stars)")
+    parser.add_argument("--blind-astrometry-source-list-gate-min-keep-ratio", type=float, default=0.05, help="Minimum keep ratio for source-list gate cap safety")
+    parser.add_argument("--blind-astrometry-external-image2xy-enabled", type=int, choices=(0, 1), default=0, help="Use external Astrometry image2xy sources before internal detection (off by default)")
+    parser.add_argument("--blind-astrometry-external-image2xy-command", default="image2xy", help="Command/path for external image2xy source extraction")
+    parser.add_argument("--blind-astrometry-external-image2xy-offset-xy", type=float, default=-1.0, help="Offset applied to image2xy X/Y coordinates before Ze quads")
+    parser.add_argument("--blind-astrometry-external-image2xy-max-sources", type=int, default=0, help="Cap external image2xy sources (0=use --max-stars when source gate is off)")
+    parser.add_argument("--blind-astrometry-external-image2xy-strict", type=int, choices=(0, 1), default=0, help="Fail instead of falling back if external image2xy extraction fails")
+    parser.add_argument("--blind-astrometry-external-image2xy-after-internal-fail-enabled", type=int, choices=(0, 1), default=0, help="Try the internal detector first, then retry with external image2xy only after a failed solve")
+    parser.add_argument("--blind-astrometry-external-image2xy-internal-first-budget-s", type=float, default=0.0, help="Optional hard budget for the internal first pass before external image2xy fallback (0=use normal blind budget)")
     parser.add_argument("--blind-verify-uniformize-pairs", type=int, choices=(0, 1), default=1, help="Enable spatial uniformization of verify pairs")
     parser.add_argument("--blind-verify-uniform-grid-px", type=float, default=48.0, help="Grid cell size (px) for verify-pair uniformization")
     parser.add_argument("--blind-verify-uniform-max-per-cell", type=int, default=4, help="Max verify pairs kept per image-grid cell")
@@ -22311,6 +24637,9 @@ def main(argv: list[str] | None = None) -> int:
         pixel_scale_max_arcsec=args.pixel_scale_max,
         tile_cache_size=tile_cache_size,
         fail_attempt_budget_s=max(0.0, float(args.fail_attempt_budget_s or 0.0)),
+        blind_global_hard_budget_s=max(
+            0.0, float(args.blind_global_hard_budget_s or 0.0)
+        ),
         fail_attempt_min_validations=max(0, int(args.fail_attempt_min_validations or 0)),
         fail_attempt_max_best_inliers=max(0, int(args.fail_attempt_max_best_inliers or 0)),
         fail_attempt_min_candidates=max(0, int(args.fail_attempt_min_candidates or 0)),
@@ -22336,6 +24665,22 @@ def main(argv: list[str] | None = None) -> int:
         blind_astrometry_endobj=max(0, int(args.blind_astrometry_endobj or 0)),
         blind_astrometry_code_rangesearch_backend=str(args.blind_astrometry_code_rangesearch_backend or "linf").strip().lower(),
         blind_astrometry_code_rangesearch_allow_experimental_backends=bool(int(args.blind_astrometry_code_rangesearch_allow_experimental_backends)),
+        quad_hash_schema=str(args.quad_hash_schema or "opposite_edge_ratio_8bit_v1").strip(),
+        blind_astrometry_4d_index_enabled=bool(int(args.blind_astrometry_4d_index_enabled)),
+        blind_astrometry_4d_index_path=str(args.blind_astrometry_4d_index_path or ""),
+        blind_astrometry_4d_code_tol=max(1e-6, float(args.blind_astrometry_4d_code_tol or 0.015)),
+        blind_astrometry_4d_max_hits=max(1, int(args.blind_astrometry_4d_max_hits or 1)),
+        blind_astrometry_4d_max_hits_per_image_quad=max(1, int(args.blind_astrometry_4d_max_hits_per_image_quad or 1)),
+        blind_astrometry_4d_max_hypotheses=max(1, int(args.blind_astrometry_4d_max_hypotheses or 1)),
+        blind_astrometry_4d_image_strategy=str(args.blind_astrometry_4d_image_strategy or "log_spaced"),
+        blind_astrometry_4d_match_radius_px=max(0.5, float(args.blind_astrometry_4d_match_radius_px or 3.0)),
+        blind_astrometry_4d_source_policy=str(args.blind_astrometry_4d_source_policy or "standard_runtime").strip(),
+        blind_astrometry_4d_index_paths=tuple(
+            part.strip() for part in str(args.blind_astrometry_4d_index_paths or "").split(",") if part.strip()
+        ),
+        blind_astrometry_4d_validation_catalog_policy=str(args.blind_astrometry_4d_validation_catalog_policy or "source_tile").strip(),
+        blind_astrometry_4d_accept_policy=str(args.blind_astrometry_4d_accept_policy or "first_accept").strip(),
+        blind_astrometry_4d_max_accepts=max(1, int(args.blind_astrometry_4d_max_accepts or 1)),
         blind_accept_logodds_min=float(args.blind_accept_logodds_min),
         blind_accept_logodds_geo_weight=float(args.blind_accept_logodds_geo_weight),
         blind_accept_logodds_astrometry_stages=bool(int(args.blind_accept_logodds_astrometry_stages)),
@@ -22464,6 +24809,20 @@ def main(argv: list[str] | None = None) -> int:
         blind_sparse_min_inliers_floor=max(2, int(args.blind_sparse_min_inliers_floor or 2)),
         blind_star_quality_filter=bool(int(args.blind_star_quality_filter)),
         blind_star_min_sep_px=max(0.0, float(args.blind_star_min_sep_px or 0.0)),
+        blind_astrometry_source_list_gate_enabled=bool(int(args.blind_astrometry_source_list_gate_enabled)),
+        blind_astrometry_source_list_gate_boxes=max(1, int(args.blind_astrometry_source_list_gate_boxes or 10)),
+        blind_astrometry_source_list_gate_max_sources=max(0, int(args.blind_astrometry_source_list_gate_max_sources or 0)),
+        blind_astrometry_source_list_gate_min_keep_ratio=min(
+            1.0,
+            max(0.0, float(args.blind_astrometry_source_list_gate_min_keep_ratio or 0.0)),
+        ),
+        blind_astrometry_external_image2xy_enabled=bool(int(args.blind_astrometry_external_image2xy_enabled)),
+        blind_astrometry_external_image2xy_command=str(args.blind_astrometry_external_image2xy_command or "image2xy"),
+        blind_astrometry_external_image2xy_offset_xy=float(args.blind_astrometry_external_image2xy_offset_xy),
+        blind_astrometry_external_image2xy_max_sources=max(0, int(args.blind_astrometry_external_image2xy_max_sources or 0)),
+        blind_astrometry_external_image2xy_strict=bool(int(args.blind_astrometry_external_image2xy_strict)),
+        blind_astrometry_external_image2xy_after_internal_fail_enabled=bool(int(args.blind_astrometry_external_image2xy_after_internal_fail_enabled)),
+        blind_astrometry_external_image2xy_internal_first_budget_s=max(0.0, float(args.blind_astrometry_external_image2xy_internal_first_budget_s or 0.0)),
         blind_verify_uniformize_pairs=bool(int(args.blind_verify_uniformize_pairs)),
         blind_verify_uniform_grid_px=max(0.0, float(args.blind_verify_uniform_grid_px or 0.0)),
         blind_verify_uniform_max_per_cell=max(0, int(args.blind_verify_uniform_max_per_cell or 0)),

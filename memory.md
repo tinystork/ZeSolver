@@ -3909,3 +3909,2035 @@
   - `reports/r47i_s7_product_blind8_bounded_20260624/summary.md`
 - Prochain pas unique :
   - smoke multicase avec oracle WCS qualité pour séparer vrais succès, faux positifs et coût des échecs avant tout tuning de budgets.
+
+## 2026-06-25 — Smoke multicase oracle strict : le goulet est la recherche, pas le startree
+
+- Un banc reproductible a été ajouté :
+  - `tools/r47i_s8_blind_oracle_smoke.py`
+  - copies FITS nettoyées de tout WCS
+  - comparaison systématique à l'oracle ASTAP
+  - processus isolé et timeout par image
+  - mesure séparée des index Astrometry 4107/4108/4109
+- Smoke strict sur `6` cas M106, borne `120 s` par image :
+  - vrais succès : `0/6`
+  - succès déclarés par ZeBlind : `0/6`
+  - faux positifs déclarés : `0`
+  - timeout : `6/6`
+- Coût startree isolé :
+  - 4107 : load `0.072 s`, query `0.0019 s`, pic processus `209 MiB`
+  - 4108 : load `0.061 s`, query `0.0017 s`, pic processus `188 MiB`
+  - 4109 : load `0.041 s`, query `0.0022 s`, pic processus `167 MiB`
+- Conclusion durable :
+  - le chargement/query startree est négligeable face au coût total
+  - le front produit est désormais le budget de recherche/validation des échecs Blind
+  - ne pas optimiser le loader avant d'avoir un budget global strict, observable et testé
+- Artefact :
+  - `reports/r47i_s8_blind_oracle_smoke_20260625_140850/summary.md`
+- Prochain pas unique :
+  - instrumenter puis imposer un budget global strict dans le chemin Blind natif, avec raison d'arrêt explicite et conservation des garde-fous oracle/Near.
+
+## 2026-06-25 — Budget global Blind strict implémenté et validé
+
+- Nouveau champ `SolveConfig` :
+  - `blind_global_hard_budget_s`
+  - valeur par défaut `0.0`, donc comportement historique inchangé tant qu'il n'est pas activé
+- Le budget couvre l'ensemble de la tentative Blind :
+  - callback de cancellation composé avec l'éventuel callback externe
+  - propagation naturelle dans les ladders internes
+  - arrêt observable dans le message et les stats :
+    - `global_hard_budget_triggered`
+    - `global_hard_budget_s`
+    - `global_hard_budget_elapsed_s`
+    - `fail_early_abort_reason`
+- Le flag est exposé en CLI :
+  - `--blind-global-hard-budget-s`
+- Validation :
+  - `45 passed` sur `test_zeblindsolver.py` + `test_synthetic.py`
+  - compilation Python et `git diff --check` OK
+  - probe oracle réel, budget `5 s` :
+    - arrêt propre à `5.42 s`
+    - message `global hard budget exceeded (5.0s)`
+    - raison exportée `global_hard_budget>5.0s`
+    - aucun WCS écrit
+- Le léger dépassement (`~0.42 s`) correspond à la granularité des checkpoints de cancellation internes.
+- Artefact :
+  - `reports/r47i_s8_blind_oracle_smoke_20260625_142907/summary.md`
+- Prochain pas unique :
+  - A/B oracle court avec un budget produit prudent (`60–90 s`) pour mesurer le gain sur les échecs sans supprimer de vrai succès.
+
+## 2026-06-25 — A/B oracle budget Blind 60 s : coût d'échec divisé par deux
+
+- Même corpus strict S8 de `6` cas M106, avec oracle ASTAP.
+- Contrôle historique borné extérieurement à `120 s` :
+  - `6/6` timeouts
+  - total `721.38 s`
+  - médiane `120.26 s`
+  - vrais succès `0`
+  - succès déclarés `0`
+- Variante avec `blind_global_hard_budget_s=60` :
+  - `6/6` arrêts internes propres
+  - total `360.18 s`
+  - médiane `60.02 s`
+  - raison uniforme `global_hard_budget>60.0s`
+  - vrais succès `0`
+  - succès déclarés `0`
+- Gain mesuré :
+  - `361.19 s` économisés
+  - `-50.07 %`
+  - accélération `x2.00` sur ce corpus d'échecs
+- Décision prudente :
+  - le mécanisme 60 s est validé pour réduire le coût des échecs
+  - il ne devient pas encore le défaut produit, car ce corpus ne contient aucun vrai succès ZeBlind strict permettant de détecter une coupure trop précoce
+  - la valeur par défaut reste `0` (désactivée)
+- Artefact :
+  - `reports/r47i_s8_blind_oracle_smoke_20260625_143106/summary.md`
+- Prochain pas unique :
+  - constituer un petit corpus positif ZeBlind strict avec oracle, puis comparer temps de résolution sans budget et avec budget 60/90 s.
+
+## 2026-06-25 — Tentative de corpus positif hinted : blocage avant verify
+
+- Probe strict avec hints M106 réels sur trois cas :
+  - `232102`
+  - `233644`
+  - `234013`
+- Configuration :
+  - oracle ASTAP
+  - startree natif
+  - budget dur `90 s`
+  - hints RA/Dec + focale + taille pixel + échelle M106
+- Résultat :
+  - vrais succès `0/3`
+  - succès déclarés `0/3`
+  - temps naturels `81.64 s`, `76.55 s`, `68.40 s`
+  - aucun cas n'a atteint le budget dur
+  - étage d'échec dominant : `hypothesis`
+  - validations : `0` sur les trois cas
+  - candidats essayés : `30`, `25`, `25`
+- Lecture durable :
+  - le manque de contrôle positif strict ne vient pas du nouveau budget
+  - le chemin complet ne transforme pas les candidats en hypothèses validables
+  - le replay sentinelle peut vérifier `232102 / d50_2823`, donc le prochain écart causal est entre sélection/collecte du candidat et construction de transform
+- Artefact :
+  - `reports/r47i_s8_blind_oracle_smoke_20260625_143910/summary.md`
+- Prochain pas unique :
+  - audit top-down du premier candidat utile `232102 / d50_2823` dans le chemin complet hinted, jusqu'au premier rejet avant `verify`.
+
+## 2026-06-25 — Bilan d'étape ZeBlind publié
+
+- Rapport canonique :
+  - `reports/zeblind_status_20260625.md`
+- Verdict :
+  - ZeBlind n'est pas encore fonctionnel comme solveur blind strict
+    end-to-end
+  - la moitié aval `verify` est largement alignée avec Astrometry sur le
+    sentinelle
+  - le bloc critique est en amont, dans le passage
+    candidat -> seed/quad/permutation -> transform
+- État produit :
+  - le bon candidat `d50_2823` est visible dans le classement
+  - le solveur strict complet produit actuellement `0` validation sur les
+    probes positifs
+  - les traces précédentes indiquent
+    `no_quad_survived_preperm_gates`, avec `0` seed final
+- Acquis durables :
+  - startree natif et support verify alignés
+  - oracle WCS strict
+  - suppression de faux positifs permissifs
+  - double fallback batch corrigé
+  - workers Blind bornés par la RAM
+  - budget global observable
+  - baseline ZeNear préservée à `22/30`
+- Dette structurante :
+  - `SolveConfig` compte `613` champs
+  - `zeblindsolver.py` dépasse `22500` lignes
+  - l'environnement de tests doit être homogénéisé
+- Priorité unique validée par le bilan :
+  - P0.1 : comparer replay et chemin complet sur
+    `pairs -> seed slices -> quad -> permutation`
+  - obtenir ensuite le premier vrai succès strict oracle sans injection
+    forensic
+
+## 2026-06-25 — P0.1 rejoué : seeds/permutation fonctionnent, front déplacé au transform
+
+- Harness historique borné :
+  - ajout de `--hard-budget-s` à
+    `tools/r47i_s6_m106_first_divergence_audit.py`
+  - un premier run non borné a été arrêté après `11 min 47 s`
+- Profil historique `product`, `d50_2823` :
+  - `24 -> 12 -> 4` paires selon les filtres
+  - `27` seeds finaux
+  - `34` itérations pré-permutation
+  - permutation `[1,0,2,3]`
+  - au moins une entrée verify
+- Profil strict exact, candidat forcé `d50_2823` :
+  - `303` paires initiales
+  - `291` après inbox
+  - `15` seeds finaux
+  - `58` itérations pré-permutation
+  - permutation `[0,1,2,3]`
+  - `0` validation
+- Le vieux front `no_quad_survived_preperm_gates` est donc fermé/dépassé.
+- Premier front vivant :
+  - transform initial à `0` inlier
+  - meta-seed rejeté avec résidus médians `~2986–4668 px`
+  - transform Astrometry local à `3` inliers mais aucun inlier sur le pool
+    global (`résidu min 29–169 px`, médian `1206–1379 px`)
+- Anomalie parallèle confirmée :
+  - header `2.3927"/px`
+  - `candidate_pairset_local = 22.8112"/px`
+  - cette ancre est mauvaise, mais ne suffit pas à expliquer seule les
+    milliers de pixels de résidu
+- Rapport :
+  - `reports/zeblind_p01_current_trace_20260625.md`
+- Prochain pas unique :
+  - P0.2 : comparer les IDs de quads, permutation et quatre couples de points
+    du fit entre chemin strict et replay sentinelle.
+
+## 2026-06-25 — P0.2 : cause racine trouvée dans le hash de quad
+
+- Défaut structurel reproduit :
+  - `_canonical_quad_order()` trie cycliquement puis tourne vers le plus petit
+    ID d'étoile
+  - les IDs image/catalogue étant indépendants, le hash n'est pas invariant à
+    la renumérotation
+- Test minimal :
+  - même géométrie, plusieurs renumérotations
+  - quatre hashes différents observés
+- Preuve runtime stricte sur `232102 / d50_2823` :
+  - vote mass total `736`
+  - saturated vote mass `736`
+  - unsaturated vote mass `0`
+  - unsaturated pair count `0`
+  - les correspondances viennent uniquement de collisions saturées
+- Fenêtre exacte de 60 s :
+  - `513` hypothèses tracées
+  - seulement `46` quads observés distincts, indices `196–271`
+  - le quad forensic `q2560` n'est jamais atteint
+- Lecture causale :
+  - les mauvais transforms et milliers de pixels de résidu sont une
+    conséquence du pool de correspondances contaminé
+  - le prochain patch ne doit pas tuner RANSAC/RMS
+- Source Astrometry auditée :
+  - code AB-frame
+  - invariants géométriques indépendants des IDs
+  - swaps backbone/parité explicites
+- Rapport :
+  - `reports/zeblind_p02_hash_invariance_20260625.md`
+- Prochain pas unique :
+  - P0.3 : implémenter un code de quad invariant, versionner/reconstruire
+    l'index focalisé, puis rejouer le sentinelle.
+
+## 2026-06-25 — P0.3 à P0.6 : premier succès ZeBlind strict oracle
+
+- Hash de quad remplacé par `opposite_edge_ratio_8bit_v1` :
+  - invariant aux IDs, aux 24 permutations, rotation, échelle, translation
+    et miroir
+  - plus de bit de parité dépendant de l'ordre
+  - filtre continu et hash runtime utilisent désormais le même code
+- Index versionné :
+  - version finale de cette itération : `v4`
+  - métadonnée `hash_schema` obligatoire
+  - métadonnée `level_spec` obligatoire
+  - anciennes tables rejetées explicitement
+  - rebuild `quads-only` rafraîchit aussi les niveaux du manifeste
+- Couverture S corrigée :
+  - le plancher historique `min_area=0.01 deg²` rejetait les vrais quads
+    M106, mesurés vers `0.0044–0.0057 deg²`
+  - nouveau plancher : `0.002 deg²`
+  - index focalisé S : `219717` entrées, `192287` buckets
+  - taille bucket moyenne `1.143`, p99 `3`, maximum `11`
+- Ordonnancement runtime corrigé :
+  - buckets exacts avant les récupérations code-space approchées
+  - exact hits ordonnés par arrivée de l'étoile la plus précoce
+  - identité forcée en tête pour les buckets exacts
+- Preuve causale sur `232102 / d50_2823` :
+  - deux couples vrais exacts présents aux rangs newpoint `0` et `1`
+  - la permutation identité donne `39` inliers, RMS `~0.92 px`,
+    échelle `~2.376"/px`
+  - l'ancienne permutation unique `[1,0,2,3]` donnait `0–1` inlier
+- Premier succès strict end-to-end sans injection forensic :
+  - statut oracle `true_match`
+  - temps `25.75 s`
+  - séparation centre `3.44"`
+  - séparation coin max `10.18"`
+  - ratio d'échelle `1.00043`
+  - artefact :
+    `reports/r47i_s8_blind_oracle_smoke_20260625_162221_p06_exact_identity`
+- Probe court 3 cas :
+  - résultat `1/3`
+  - échecs dominants : `hypothesis`
+  - artefact :
+    `reports/r47i_s8_blind_oracle_smoke_20260625_162335_p06_threecase`
+- Cause suivante :
+  - `232350` contient `13` quads observés vrais mais aucun quad catalogue
+    commun dans le sampler limité à `15019`
+  - un budget brut `120000` retrouve `8/13`, mais est trop coûteux
+  - `232534` ne forme aucun quad observé à quatre correspondances oracle
+    avec le sampler courant
+- Prochain pas unique :
+  - P0.7 : sampler catalogue coverage-first/interleavé sous budget fixe,
+    tag sampler versionné, rebuild focalisé, replay `232350` puis 3 cas.
+
+## 2026-06-26 — P0.7 sampler hybride S coverage-first testé, front déplacé vers l'ancre locale
+
+- Sampler catalogue hybride ajouté :
+  - tag d'index : `hybrid_s_coverage_first_v1`
+  - niveau `S` : `catalog_coverage_first`
+  - niveaux `M/L` : `log_spaced`
+  - sampler image/runtime laissé inchangé par défaut
+- `_pair_candidate_pool` a été vectorisé pour rendre le coverage-first
+  utilisable en rebuild offline.
+- Garde-fou test ajouté :
+  - `test_catalog_coverage_first_spreads_fixed_budget_across_seeds`
+  - validation ciblée : `pytest -q tests/test_quad_storage.py tests/test_synthetic.py`
+    => `10 passed`
+- Index focalisé `reports/s3_focused_index_20260526_1936_expanded/index`
+  reconstruit avec le tag hybride :
+  - `L`: `3` entrées
+  - `M`: `13273` entrées
+  - `S`: `221438` entrées
+- Probe `232350` seul :
+  - artefact :
+    `reports/r47i_s8_blind_oracle_smoke_20260626_p07_232350_hybrid_s_coverage`
+  - résultat : `fail_no_wcs`, `51.68 s`, front `hypothesis`
+  - `pairs=175`, `initial_inliers=0`
+  - ancre `candidate_pairset_local=13.64"/px`, très éloignée du header
+    `~2.39"/px`
+- Probe 3 cas :
+  - artefact :
+    `reports/r47i_s8_blind_oracle_smoke_20260626_p07_threecase_hybrid_s_coverage`
+  - résultat : `1/3`
+  - `232102` reste `true_match` (`30.78 s`)
+  - `232350` reste `fail_no_wcs` (`41.56 s`, `hypothesis`)
+  - `232534` reste `fail_no_wcs` (`44.21 s`, `hypothesis`)
+- Lecture durable :
+  - P0.7 ne régresse pas le premier succès strict, mais ne débloque pas les
+    deux cas faibles.
+  - La couverture catalogue n'est pas le seul verrou restant.
+  - Le prochain front causal est l'ancre `candidate_pairset_local`, contaminée
+    même sur `232102` où le solve réussit (`11.77"/px` contre modèle
+    `~2.38"/px`).
+
+## 2026-06-26 — P0.8 ancre pairset locale neutralisée, front déplacé vers les correspondances transform
+
+- Politique de promotion de l'ancre pairset ajoutée :
+  - `blind_pairset_scale_anchor_promote_enabled=True`
+  - `blind_pairset_scale_anchor_max_ratio_from_approx=1.8`
+  - en mode native strict, `candidate_pairset_local` ne remplace l'ancre
+    initiale que si son ratio reste proche de `approx_scale_arcsec`
+  - sinon l'ancre fiable (`header_scale_arcsec` sur M106) est conservée
+- Tests :
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py tests/test_quad_storage.py`
+  - résultat : `54 passed`
+- Probe `232350` seul :
+  - artefact :
+    `reports/r47i_s8_blind_oracle_smoke_20260626_p08_232350_anchor_guard`
+  - résultat : `fail_no_wcs`, `59.31 s`, front `hypothesis`
+  - ancre corrigée : `header_scale_arcsec=2.392674`
+  - premier transform : `model_scale_arcsec=2.4225`, `initial_inliers=0`
+  - hypothèse principale : `empty_inliers`, `transform_origin_inliers=2`,
+    résidu médian `~1304 px`
+- Probe 3 cas :
+  - artefact :
+    `reports/r47i_s8_blind_oracle_smoke_20260626_p08_threecase_anchor_guard`
+  - résultat : `1/3`
+  - `232102` reste `true_match` (`43.76 s`)
+  - `232350` reste `fail_no_wcs` (`58.99 s`, `hypothesis`)
+  - `232534` reste `fail_no_wcs` (`60.02 s`, `hypothesis` / budget)
+- Lecture durable :
+  - l'ancre `candidate_pairset_local` contaminée était bien un défaut réel,
+    mais pas le seul verrou causal.
+  - Une fois l'ancre remise au header, les cas faibles échouent encore avant
+    `verify`, avec trop peu de support transform (`resolve_hit` à 2 inliers,
+    puis 0 inlier global).
+  - Prochain front : audit diffable des correspondances `resolve_hit` et du
+    transform initial, pour distinguer mauvais appariement, permutation, ou
+    pool global contaminé.
+
+## 2026-06-26 — P0.9 resolve_hit porte maintenant les cas faibles jusqu'à la validation
+
+- Nouvel audit diffable :
+  - `tools/r47i_s8_p09_resolve_hit_audit.py`
+  - dumps couverts : `resolve_hit_preresolve`, transition, pairset scale,
+    transform scale, zero-inlier origin
+- Diagnostic initial :
+  - `232350` avait bien des candidats `post_resolve_hit`, mais la sélection
+    finale pouvait conserver un candidat sans paires (`post_resolve_too_few_pairs`)
+  - le ranking ne tenait pas compte du support `resolve_hit` en mode natif
+  - le carry `resolve_hit_meta_seed` pouvait rejeter des paires cohérentes en
+    jugeant les résidus du transform initial au lieu du refit dérivé des paires
+- Deltas appliqués :
+  - bonus de ranking natif borné pour le support `resolve_hit`
+  - sortie anticipée native quand un support `resolve_hit` minimal est trouvé
+  - garde de carry évalué sur le refit des paires `resolve_hit`
+- Tests :
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py tests/test_quad_storage.py`
+  - résultat : `55 passed`
+- Smoke oracle 3 cas :
+  - artefact :
+    `reports/r47i_s8_p09d_threecase_meta_seed_refit_guard_20260626`
+  - résultat : `1/3`
+  - `232102` reste `true_match` (`28.32 s`, `7` inliers, RMS `0.338 px`)
+  - `232350` échoue maintenant à `validate_base` avec `4` paires :
+    RMS `5.361 px`, logodds `-1.386`
+  - `232534` échoue maintenant à `validate_base` avec `4` paires :
+    RMS `2.540 px`, logodds `6.560`
+- Lecture durable :
+  - le front causal a avancé de "pas de transform exploitable" vers
+    "support `resolve_hit` trop maigre/bruité pour satisfaire validate"
+  - prochaine étape : P0.10 doit augmenter/filtrer le support `resolve_hit`
+    avant validation, sans relâcher les seuils d'acceptation.
+
+## 2026-06-26 — P0.10 prune/refit resolve_hit : mécanisme utile, sélection encore ouverte
+
+- Mécanisme ajouté :
+  - helper `_refit_prune_similarity_pairs()`
+  - prune/refit exhaustif des petits supports `resolve_hit_meta_seed`
+  - test unitaire sur outlier synthétique
+- Tests :
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py tests/test_quad_storage.py`
+  - résultat : `56 passed`
+- Probe d'hypothèse :
+  - `blind_astrometry_native_resolve_hit_support_early_exit_min_pairs=6`
+  - `232102` reste `true_match`
+  - `232350` passe à `7` paires et RMS `2.781 px`, mais reste rejeté
+  - `232534` passe à `6` paires mais RMS empire à `4.565 px`
+  - conclusion : le nombre de paires seul n'est pas un bon critère global
+- Probe avec blocage self-RMS de sortie anticipée :
+  - artefact :
+    `reports/r47i_s8_p10_threecase_prune_refit_20260626`
+  - `232350` trouve un support bien meilleur : RMS `1.476 px`
+  - mais les cas faibles atteignent le budget `60 s`
+- Smoke rapide final :
+  - artefact :
+    `reports/r47i_s8_p10_threecase_prune_refit_fast_20260626`
+  - résultat : `1/3`
+  - `232102` reste `true_match` (`22.27 s`)
+  - `232350` et `232534` restent `fail_no_wcs`, sans nouveau succès
+- Lecture durable :
+  - P0.10 ne doit pas être considéré comme une victoire produit
+  - le prune/refit est utile et non régressif, mais le front causal restant est
+    la sélection/ranking des supports `resolve_hit`
+  - prochain cran : P0.11 ranking validation-aware combinant support,
+    self-RMS et coût, sans relâcher `quality_rms`.
+
+## 2026-06-26 — P0.11 self-RMS resolve_hit observable : leviers qualité non promus
+
+- Mécanisme ajouté :
+  - pénalité de ranking sur `resolve_hit_self_rms_px` disponible mais OFF par
+    défaut
+  - sortie anticipée forte et fenêtre `lookahead` disponibles mais OFF par
+    défaut
+  - dump `resolve_hit_self_rms_px` corrigé avant écriture `post_resolve_hit`
+- Tests :
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py tests/test_quad_storage.py`
+  - résultat : `56 passed`
+- Smoke oracle 3 cas avec défaut conservateur :
+  - artefact :
+    `reports/r47i_s8_p11_resolve_hit_selfrms_observable_defaultsafe_20260626`
+  - résultat : `1/3`
+  - `232102` reste `true_match` (`22.69 s`)
+  - `232350` reste `fail_no_wcs` (`25.01 s`, front `hypothesis`)
+  - `232534` reste `fail_no_wcs` (`24.54 s`, front `hypothesis`)
+- Probe actif non promu :
+  - artefact :
+    `reports/r47i_s8_p11_resolve_hit_quality_window_final_20260626`
+  - le ranking/lookahead actif garde `232102`, mais `232534` retombe au budget
+    `60 s` (`verify_prob`)
+  - décision durable : ne pas promouvoir ces leviers par défaut
+- Lecture self-RMS :
+  - `232350` expose des premiers supports à `4` paires avec self-RMS `4.03 px`
+    et des supports aberrants `>2000 px`
+  - `232534` expose des supports `4` paires à self-RMS `~1.7–4.3 px`
+- Lecture durable :
+  - P0.11 améliore surtout l'observabilité ; il ne ferme pas le front produit
+  - activer ranking/lookahead sans enrichir réellement le support peut coûter
+    trop cher
+  - le prochain levier n'est pas un nouveau relâchement de seuil : il faut
+    enrichir le support autour du modèle `resolve_hit` avant validation
+    (extension locale / consensus inliers), puis rejouer le 3-cas.
+
+## 2026-06-26 — P0.12 extension post-carry resolve_hit : mécanisme ajouté, non promu
+
+- Mécanisme ajouté :
+  - helper `_extend_similarity_support_pairs()`
+  - extension par consensus `resolve_hit` strict depuis les pools globaux
+    `image_positions/tile_positions`
+  - refit/prune du consensus avant carry
+  - flags OFF par défaut :
+    - `blind_astrometry_meta_seed_extend_enabled`
+    - paramètres `min_pairs`, `min_gain`, `max_points`, `max_pairs`, `max_rms_px`
+  - options de probe dans `tools/r47i_s8_p09_resolve_hit_audit.py`
+- Tests :
+  - `pytest -q tests/test_zeblindsolver.py tests/test_synthetic.py tests/test_quad_storage.py`
+  - résultat : `57 passed`
+- Probes extension activée :
+  - `reports/r47i_s8_p12_meta_seed_extend_232350_strict_v2_20260626`
+    - `232350` reste `fail_no_wcs` en `24.02 s`
+    - support carry inchangé à `4` paires
+  - `reports/r47i_s8_p12_meta_seed_extend_232534_strict_20260626`
+    - `232534` reste `fail_no_wcs` en `22.83 s`
+    - support carry inchangé à `4` paires
+  - variante loose `232350` :
+    `reports/r47i_s8_p12_meta_seed_extend_232350_loose_20260626`
+    - pas de gain de support
+- Smoke oracle 3 cas avec défaut conservateur :
+  - artefact :
+    `reports/r47i_s8_p12_meta_seed_extend_defaultsafe_20260626`
+  - résultat : `1/3`
+  - `232102` reste `true_match` (`20.93 s`)
+  - `232350` reste `fail_no_wcs` (`23.66 s`, front `hypothesis`)
+  - `232534` reste `fail_no_wcs` (`23.41 s`, front `hypothesis`)
+- Lecture durable :
+  - l'extension post-carry ne débloque pas les cas faibles ; elle reste donc
+    non promue par défaut
+  - le blocage est en amont de cette étape : il faut produire ou sélectionner
+    un meilleur candidat `resolve_hit` avant carry
+  - prochain front : P0.13 sur la sélection/génération du candidat utile, avec
+    trace de preuve plutôt qu'un nouveau post-traitement.
+
+## 2026-06-27 — Décision P0.13 : forensic hash/index avant reprise du tuning
+
+- Tristan a soulevé une hypothèse conceptuelle prioritaire : ZeBlind pourrait
+  diverger structurellement d'Astrometry non pas parce qu'il utilise des
+  hashes, mais parce que sa couche `hash + index + vote/ranking` est trop
+  discrète/cassante par rapport à une recherche géométrique tolérante.
+- Décision durable :
+  - ne pas reprendre immédiatement le tâtonnement sur le ranking `resolve_hit`
+    ou les seuils aval ;
+  - faire d'abord un protocole forensic dédié pour mesurer la perte causale à
+    chaque étage :
+    `sampling -> code continu -> quantification/hash -> bucket lookup ->
+    vote/ranking -> resolve_hit -> validate`.
+- Le protocole doit comparer au minimum :
+  - un contrôle positif strict (`232102`) ;
+  - les deux cas faibles courants (`232350`, `232534`) ;
+  - le comportement avec tuile oracle forcée vs chemin index/vote normal.
+- Verdict attendu avant toute nouvelle optimisation produit :
+  - si la tuile oracle solve mais pas le chemin index, traiter l'index/hash ou
+    le ranking comme front causal ;
+  - si la tuile oracle échoue aussi, revenir aux quads/fit/validation ;
+  - si les quads communs disparaissent avant hash, corriger le sampling ;
+  - si le bon candidat existe mais reste enterré, reprendre le ranking avec
+    preuve, pas au hasard.
+
+## 2026-07-01 — P0.13 premier audit hash/index : 232534 devient positif, 232350 reste le front
+
+- Outil ajouté :
+  - `tools/r47i_s8_p13_hash_index_forensic.py`
+  - active ensemble les dumps `observed_hash`, `collect_matches`,
+    `resolve_hit_preresolve`, `transition`, `pairset`, `transform`,
+    `zero_inlier` et `phase_handoff`
+  - compare mode tuile forcée et mode normal sur copies FITS sans WCS
+- Validation syntaxe :
+  - `python3 -m py_compile tools/r47i_s8_p13_hash_index_forensic.py` OK
+- Probe tuile forcée `d50_2823` :
+  - artefact : `reports/r47i_s8_p13_forced_threecase_20260701`
+  - `232102` => `true_match` en `33.28 s`
+  - `232350` => `fail_no_wcs`, front `hypothesis`, `35.16 s`
+  - `232534` => `fail_no_wcs`, front `hypothesis`, `39.35 s`
+- Probe mode normal :
+  - artefact : `reports/r47i_s8_p13_normal_threecase_20260701`
+  - `232102` => `true_match` en `40.45 s`, `TILE_ID=d50_2823`
+  - `232350` => `fail_no_wcs`, front `verify_prob`, budget `60 s`
+  - `232534` => `true_match` en `42.24 s`, `TILE_ID=d50_2822`
+- Lecture durable :
+  - les hashes observés ne saturent plus sur ce mini-corpus (`0` hash saturé,
+    environ `7951-7963` hashes uniques pour `8000` bruts)
+  - `d50_2823` n'est pas une tuile oracle universelle : `232534` réussit via
+    `d50_2822`
+  - le front P0 actif se resserre sur `232350`, qui atteint
+    `resolve_hit`/`prevalidate` mais reste bloqué sur des supports à `4`
+    paires et échoue logodds/verify avant WCS acceptable
+  - ne pas conclure à un défaut global hash/index ni promouvoir de lookup
+    tolérant avant un forensic ciblé `232350`
+- Prochain cran :
+  - P0.14 sur `232350` seul
+  - identifier la meilleure tuile/candidat réel parmi `d50_2823`,
+    `d50_2822`, `d50_2725`, `d50_2726`, `d50_2724`
+  - expliquer pourquoi le support reste bloqué à `4` paires : bon candidat
+    enterré, pool de votes incohérent, ou validation trop pauvre
+
+## 2026-07-01 — P0.14 232350 : perte causale dans la couverture catalogue/index S
+
+- Rapport :
+  - `reports/zeblind_p014_232350_catalog_coverage_20260701.md`
+- Probes forcés `232350` :
+  - `d50_2823`, `d50_2822`, `d50_2725`, `d50_2726`, `d50_2724`
+  - tous échouent en `hypothesis` avec seulement `4` paires portées
+- Oracle ASTAP + positions image runtime :
+  - `d50_2823` contient `30` vraies correspondances à `<=3 px`
+  - `d50_2822` contient `13` vraies correspondances
+  - `d50_2724/2725/2726` contiennent `0` vraie correspondance dans le champ
+- Collect forcé `d50_2823` :
+  - `189` paires sélectionnées
+  - `0` paire oracle correcte à `<=3 px`
+  - `0` paire proche même à `<=20 px`
+  - aucune paire oracle dans les `support_sample`
+- Reconstruction offline `sampling -> hash -> index` :
+  - le sampler image produit `13` quads composés de quatre vraies
+    correspondances
+  - les `13` survivent au hash S avec le `level_spec` pixelisé runtime
+  - `12/13` ont exactement le même hash image/catalogue
+  - l'index S focalisé contient `0/13` quads/hashes catalogue correspondants
+- Scan sampler catalogue sur les `13` quads cibles :
+  - `catalog_coverage_first`, budget `15019` => `0/13`
+  - `30000` => `2/13`
+  - `60000` => `3/13`
+  - `120000` => `5/13`
+  - `log_spaced`, `local_brightness`, `legacy_local` => seulement `1/13` à
+    `120000`
+  - `legacy_brightness` => `0/13` à `120000`
+- Lecture durable :
+  - le front causal de `232350` est la couverture catalogue/index S sous
+    budget fixe
+  - ne pas tuner `verify`, logodds, RMS, ou lookup tolérant avant d'avoir
+    corrigé/validé cette couverture
+  - prochain chantier P0.15 : sampler catalogue borné mieux couvrant la
+    géométrie locale de rang moyen, rebuild index focalisé taggé, puis rerun
+    `232350 / d50_2823`
+
+## 2026-07-01 — P0.15 ring coverage : 232350 corrigé, 232534 régresse
+
+- Rapport :
+  - `reports/zeblind_p015_ring_coverage_sampler_20260701.md`
+- Code ajouté/modifié :
+  - `zeblindsolver/quad_sampling.py`
+    - nouveau `generate_ring_coverage_quads()`
+  - `zeblindsolver/asterisms.py`
+    - nouvelle stratégie `catalog_ring_coverage`
+    - quota blend final : ring coverage puis fill par `catalog_coverage_first`
+  - `zeblindsolver/quad_index_builder.py`
+    - S catalogue passe sur `catalog_ring_coverage`
+    - tag sampler `hybrid_s_ring_coverage_v2`
+  - `tests/test_synthetic.py`
+    - test de couverture mid-rank pour `catalog_ring_coverage`
+- Validations ciblées :
+  - `pytest -q tests/test_synthetic.py::test_catalog_ring_coverage_reaches_mid_rank_local_geometry tests/test_quad_storage.py::test_quads_only_rebuild`
+    => `2 passed`
+  - série précédente de 4 tests ciblés sampler/stockage => `4 passed`
+- Indexes construits :
+  - `reports/s3_focused_index_20260701_ring_v2`
+    - S ring pur : `77.0 s`
+    - M/L retaggés : `54.08 s` / `60.6 s`
+  - `reports/s3_focused_index_20260701_ringfill_v2`
+    - S ring + fill non quoté : `158.69 s`
+  - `reports/s3_focused_index_20260701_ringquota_v2`
+    - S quota final : `208.1 s`
+- Résultat positif :
+  - forced `232350 / d50_2823` avec `ring_v2` :
+    - `true_match` en `24.34 s`
+    - `TILE_ID=d50_2823`
+    - RMS `0.021 px`
+    - centre `2.34"`, coin max `7.26"`, scale ratio `1.0010`
+  - mini-corpus normal avec `ringquota_v2` :
+    - `232102` => `true_match`
+    - `232350` => `true_match`
+    - `232534` => `fail_no_wcs`, `verify_prob`
+- Diagnostic régression :
+  - l'ancien index résolvait `232534` via `d50_2822`
+  - avec les variantes ring, forced `232534 / d50_2822` échoue
+  - oracle `232534 / d50_2822` :
+    - `21` vraies paires disponibles
+    - `4` quads cibles hashables
+    - `ringquota_v2` contient seulement `1/4` quad cible
+    - `_collect_tile_matches` ne sort qu'une paire oracle correcte sur `147`
+      paires sélectionnées
+- Lecture durable :
+  - P0.15 confirme que la direction couverture catalogue est bonne :
+    `232350` est réellement débloqué par l'index
+  - mais le sampler n'est pas promotable : il doit être optimisé en objectif
+    multicase, pas uniquement pour `232350`
+  - prochain chantier P0.16 :
+    - conserver les `4` quads récupérés pour `232350 / d50_2823`
+    - augmenter la couverture `232534 / d50_2822` au-delà de `1/4`
+    - vérifier plusieurs paires oracle en sortie de `_collect_tile_matches`
+      avant de relancer un smoke solve complet
+
+## 2026-07-01 — P0.16 sampler multicase validé sur mini-corpus
+
+- Rapport :
+  - `reports/zeblind_p016_multicase_ring_sampler_20260701.md`
+- Changement durable :
+  - `catalog_ring_coverage` ne doit pas être optimise sur un seul cas :
+    il fusionne maintenant une tranche `spread` qui conserve le gain
+    `232350 / d50_2823` et une tranche `hybrid` proche+large qui restaure
+    `232534 / d50_2822`
+  - tag index : `hybrid_s_ring_coverage_v3`
+- Score hors index :
+  - `232350 / d50_2823` : `4/13` quads cibles presents
+  - `232534 / d50_2822` : `3/4` quads cibles presents
+- Index focalise :
+  - `reports/s3_focused_index_20260701_p16_multicase_v3/index`
+  - S reconstruit, M/L retagges v3
+- Validation :
+  - forced `232350 / d50_2823` : `true_match`, `23.32 s`
+  - forced `232534 / d50_2822` : `true_match`, `22.46 s`
+  - mini-corpus normal `232102/232350/232534` : `3/3 true_match`
+- Lecture durable :
+  - la regression P0.15 est fermee sur le mini-corpus sentinelle
+  - ne pas promouvoir encore globalement : prochain cran = smoke positif
+    strict plus large avec mesure des faux positifs rejetes, du temps par cas
+    et de la stabilite du choix de tile
+
+## 2026-07-01 — P0.17 smoke all30 v3 : 21/30, front restant verify_prob
+
+- Rapport :
+  - `reports/zeblind_p017_all30_v3_smoke_20260701.md`
+- Artefact :
+  - `reports/r47i_s8_p17_all30_v3_normal_20260701`
+- Protocole :
+  - `30` FITS M106 du dossier `eq_ircut_cleanbench_20260518_230249`
+  - index `hybrid_s_ring_coverage_v3`
+  - mode `normal`
+  - hints M106 actifs
+  - budget `60 s` par cas
+- Resultats :
+  - `21/30` vrais succes
+  - `9/30` echecs
+  - `0` faux positif declare
+  - succes : mediane `34.98 s`, max `41.89 s`
+  - echecs : mediane `61.45 s`, max `64.74 s`
+- Echecs :
+  - tous `fail_no_wcs`
+  - verdict unique : `verify_prob`
+  - raison commune : `blind accept-logodds below toprint`
+- Lecture durable :
+  - P0.16 est confirme sur corpus plus large
+  - le front restant prioritaire n'est plus la couverture catalogue des cas
+    sentinelles, mais l'acceptation `verify` / log-odds des hypotheses
+  - prochain diagnostic : prendre un echec `verify_prob` representatif
+    (`233211`, `233232` ou `233705`) et verifier s'il s'agit d'une vraie
+    hypothese sous-scoree ou d'une fausse hypothese correctement rejetee
+
+## 2026-07-01 — P0.18 pairset audit : ne pas activer de hard reject global
+
+- Rapport :
+  - `reports/zeblind_p018_verify_prob_pairset_audit_20260701.md`
+- Cas inspecte :
+  - echec `233211`
+- Constat sur `233211` :
+  - transitions candidates a `2.63–7.57 deg` du hint
+  - pairsets a `10.94–14.69"/px` contre `~2.39"/px` attendu
+  - lecture : mauvaises hypotheses probablement correctement rejetees
+- Contre-exemple critique :
+  - des vrais succes (`232350`, `232534`, `232247`, `232821`, `233356`,
+    `233828`) ont aussi des pairsets globaux contamines a `~14–17"/px`
+- Lecture durable :
+  - ne pas activer un hard reject global base sur l'echelle du pairset :
+    cela casserait des vrais succes
+  - prochain front utile : isoler le sous-support correct dans les pairsets
+    contamines, via audit `resolve_hit_preresolve`, ranking et support
+    lookahead sur un echec `verify_prob` compare a un succes voisin
+
+## 2026-07-01 — P0.19 exact hash identity perm : 24/30
+
+- Rapport :
+  - `reports/zeblind_p019_exact_hash_identity_perm_20260701.md`
+- Cause racine sur `233211 / d50_2822` :
+  - le bucket exact contenait le quad cible `[15,24,196,7]`
+  - l'obs combo correspondant etait `[1,2,7,0]`
+  - la permutation identite donnait un RMS offline `0.075 px`
+  - Ze essayait une permutation non-identite, donnant une echelle absurde
+    `0.24"/px`
+  - la promotion de l'identite etait conditionnee trop strictement a
+    `exact_seed_slice`
+- Patch :
+  - promouvoir la permutation identite si `exact_seed_slice` ou
+    `obs_hash_seed == tile_hash64`
+  - conserver le flag existant :
+    `blind_astrometry_exact_hash_identity_perm_enabled`
+- Validation :
+  - forced `233211 / d50_2822` :
+    - avant : `fail_no_wcs`, verdict `hypothesis`, `37.57 s`
+    - apres : `true_match`, `30.98 s`
+  - normal `233211` : `true_match`, `36.02 s`
+  - replay des `9` echecs P0.17 :
+    - `3/9` recuperes : `232144`, `233211`, `233232`
+  - all30 post-patch :
+    - `24/30` vrais succes
+    - `6/30` echecs
+    - `0` regression vs P0.17
+    - echecs restants tous `verify_prob`
+- Lecture durable :
+  - P0.19 confirme que le front restant se traite par classes de perte de
+    sous-support, pas par tuning global
+  - prochaine cible recommandee : un des `6` restants (`232329`, `233048`,
+    `233520`, `233602`, `233705`, `234013`) pour trouver la prochaine classe
+    de mauvaise permutation/ranking/support/logodds
+
+## 2026-07-02 — P0.20 remaining6 oracle/collect audit
+
+- Rapport :
+  - `reports/zeblind_p020_remaining6_oracle_collect_audit_20260702.md`
+- Constat durable :
+  - les `6` echecs restants apres P0.19 ne sont pas une classe unique
+    `verify_prob`
+  - classe A : signal oracle absent de `_collect_tile_matches`
+    - `233520 / d50_2823` : `44` paires oracle disponibles, `0` ligne
+      collect correcte
+    - `234013 / d50_2822` : `25` paires oracle disponibles, `0` ligne
+      collect correcte
+  - classe B : signal oracle present dans le collect mais perdu avant
+    validation
+    - `232329 / d50_2823` : `27` paires oracle, `17` lignes collect correctes
+    - `233602 / d50_2823` : `39` paires oracle, `14` lignes collect correctes
+    - `233705 / d50_2823` : `45` paires oracle, `22` lignes collect correctes
+  - `233048 / d50_2822` est intermediaire : `29` paires oracle, seulement
+    `4` lignes collect correctes
+- Probes negatifs :
+  - `blind_astrometry_meta_seed_extend_enabled=True` ne recupere pas `233048`
+  - `blind_astrometry_native_resolve_hit_support_lookahead_enabled` ne
+    recupere pas `233705`
+  - prototype sampler round-robin intra-seed rejete puis revert : il cassait
+    le test synthetique P0.15 et degradait la couverture oracle
+- Lecture durable :
+  - ne pas relacher globalement log-odds / `verify_prob`
+  - prochain patch cible recommande : `233705 / d50_2823`, comprendre pourquoi
+    `22` paires oracle correctes collectees finissent en `too_few_inliers`
+    (`67` paires, `3` inliers)
+
+## 2026-07-02 — P0.21 Astrometry source extraction audit
+
+- Rapport :
+  - `reports/zeblind_p021_astrometry_source_extraction_audit_20260702.md`
+- Constat source-list :
+  - Astrometry `image2xy` est beaucoup plus selectif que ZeBlind sur les edge
+    cases restants
+  - `233520` : `104` sources Astrometry contre `4998` detections Ze brutes
+    (`500` conservees)
+  - `233705` : `92` sources Astrometry contre `4976` detections Ze brutes
+    (`500` conservees)
+  - meme avec `max_stars=500`, plusieurs sources Astrometry sont absentes ou
+    tres tardives dans l'ordre Ze : p90 de rang Ze autour de `308–315`
+- Probe injection :
+  - injecter directement `image2xy` via `prep_cache` rend ZeBlind beaucoup plus
+    prompt a produire une hypothese sur `233520` et `233705`
+  - mais les hypotheses sont classees `false_positive` par le comparateur WCS
+    du probe
+- Lecture durable :
+  - la piste "traitement image/source-list Astrometry" est valide et amont
+  - ne pas remplacer brutalement le detecteur Ze par `image2xy`
+  - un premier gate/order pre-quad Astrometry-like existe maintenant sous flag
+    `blind_astrometry_source_list_gate_enabled=False` par defaut :
+    uniformisation spatiale inspiree de `astrometry.net/util/uniformize.py`,
+    cap applique apres gate
+  - correction P0.21c : les premiers probes utilisaient une reference WCS
+    inadaptee ; avec l'oracle fiable
+    `reports/r47i_s7_testzenear_full_product_clean_20260624/input`,
+    source_gate `max_sources=100`, `min_keep_ratio=0` recupere
+    `233520 / d50_2823` en `true_match` (centre `2.47"`, coin max `5.70"`,
+    scale ratio `1.0026`)
+  - `233705 / d50_2823` reste `fail_no_wcs` avec source_gate `100`, mais le
+    collect monte a `308` votes / `171` paires
+  - `234013 / d50_2822` reste `fail_no_wcs` avec source_gate `100` et meme
+    avec `image2xy_minus1` (`57` sources, front `hypothesis`)
+  - prochain delta doit renforcer ce flag avec oracle strict anti-faux-positifs :
+    garder le profil positif `max_sources=100` comme point d'appui,
+    comparer les lignes oracle dans `_collect_tile_matches`, ajouter un proxy
+    `flux+background` ou signal background si disponible, garde-fou avant
+    promotion produit multicase
+
+## 2026-07-02 — ZeBlind edge-case readiness checkpoint
+
+- Rapport :
+  - `reports/zeblind_edge_case_readiness_20260702.md`
+- Verdict :
+  - ZeBlind n'est pas encore un solveur blind livrable par defaut
+  - il est devenu un prototype focalise M106 encourageant : baseline stricte
+    P0.19 a `24/30`, et source_gate `100` recupere `233520` en `true_match`
+  - les echecs restants ne justifient plus des tweaks globaux
+- Classification restante :
+  - `233520 / d50_2823` : blocage source-list/quads observes, recupere par
+    source_gate `100`
+  - `234013 / d50_2822` : pas seulement source-list ; reste echec meme avec
+    `image2xy_minus1`
+  - `233048 / d50_2822` : collect faible/intermediaire (`4` lignes oracle)
+  - `232329`, `233602`, `233705` : lignes oracle deja presentes dans collect,
+    mais perdues avant validation/support coherent
+- Decision :
+  - stopper la logique "un tweak de plus"
+  - prochain cran obligatoire : refaire P0.20 oracle-collect sous
+    `source_gate=100` sur les `6` restants, puis classer les cas avant patch
+  - definition de succes intermediaire : viser au moins `28/30` vrais succes
+    M106, `0` faux positif, ZeNear intact, budget borne
+
+## 2026-07-02 — P0.22 source_gate validation
+
+- Rapport :
+  - `reports/zeblind_p022_source_gate_validation_20260702.md`
+- Outil ajoute :
+  - `tools/r47i_s8_p22_source_gate_oracle_collect_audit.py`
+- Outil de smoke mis a jour :
+  - `tools/r47i_s8_blind_oracle_smoke.py` accepte maintenant `--source-gate`
+    et les parametres `--source-gate-max-sources`, `--source-gate-boxes`,
+    `--source-gate-min-keep-ratio`
+- Resultat cle :
+  - `source_gate=100` n'est pas une rustine mono-cas ; il recupere
+    strictement `232329`, `233520`, `233602` en `true_match`
+  - `233048` ecrit une WCS coherente avec le centre attendu
+    (`183.7063 / 46.7077`), mais l'oracle fichier courant est incomplet ;
+    ne pas le compter en succes strict tant qu'une reference propre n'est pas
+    reconstruite
+  - `233705` reste `fail_no_wcs` malgre `20` lignes oracle exactes collectees :
+    front aval support/resolve
+  - `234013` reste `fail_no_wcs` : front amont plus profond que source-list
+- Smoke all30 :
+  - run `reports/r47i_s8_p22_all30_source_gate_100_20260702`
+  - sortie brute avec oracle incomplet : `21 true_match`, `7 compare_error`,
+    `2 fail_no_wcs`, `28` succes solveur
+  - les `compare_error` deja resolus (`232945`, `233027`, `233130`,
+    `233211`, `233232`, `233828`) matchent les WCS P0.19 existantes
+- Lecture durable :
+  - etat realiste = `27/30` confirmes automatiquement, `28/30` plausible avec
+    `233048` valide par oracle propre, vrais restants `233705` et `234013`
+  - garder le flag off par defaut jusqu'a oracle repare + non-regression
+    multicorpus
+
+## 2026-07-03 — P0.23 remaining-front classifier
+
+- Outil ajoute :
+  - `tools/r47i_s8_p23_remaining_front_classifier.py`
+- Rapport :
+  - `reports/r47i_s8_p23_remaining_front_classifier_20260703/summary.md`
+- `233048` est maintenant confirme strictement contre une reference Astrometry
+  independante :
+  - statut `true_match`
+  - centre `1.00"`
+  - coin max `5.23"`
+  - scale ratio `1.001581`
+- Lecture durable de l'etat M106 sous `source_gate=100` :
+  - `28/30` succes strictement confirmes
+  - `233705` reste le front causal prioritaire : le premier quad candidat est
+    oracle-correct (`obs_combo/tile_combo` = `4/4`), mais `resolve_hit` retombe
+    a `3` paires et sort `post_resolve_too_few_pairs`
+  - `234013` n'a pas d'oracle/source-list exploitable dans la reference courante
+    (`0` paire oracle, `0` ligne oracle collectee) ; ne pas appliquer de tuning
+    support/validation sur ce cas avant d'avoir repare ou remplace la reference
+- Decision :
+  - prochain delta = instrumentation probe-only de `_resolve_hit_correspondences`
+    sur `233705`, pour expliquer la perte du quad oracle-correct vers
+    `3` paires
+  - ne pas relacher des seuils globaux tant que cette perte n'est pas comprise
+
+## 2026-07-03 — P0.24 233705 resolve_hit initial-pool
+
+- Rapport :
+  - `reports/zeblind_p024_233705_resolve_hit_initial_pool_20260703.md`
+- Cause identifiee pour `233705 / d50_2823` :
+  - le quad candidat sous `source_gate=100` est oracle-correct (`4/4`)
+  - le post-resolve courant utilisait ensuite un pool local `55 x 55`, ou les
+    IDs catalogue globaux du quad sont hors espace local
+  - contre-probe sur le pool initial `field_index_all` (`100 x 2000`) :
+    `47` paires, quad `4/4` in-bounds, meme hypothese
+- Patch ajoute :
+  - observabilite `blind_astrometry_resolve_hit_diag_dump_path`
+  - mode experimental `blind_astrometry_post_resolve_initial_pool_enabled`,
+    `False` par defaut
+  - conversion du support global accepte en pairset compact avant le pipeline
+    aval, pour conserver les hypotheses de tableaux apparies
+- Resultat :
+  - `233705` avec opt-in
+    `ZE_P24_POST_RESOLVE_INITIAL_POOL=1` devient `true_match` en phase
+    `hinted`, `31.29 s`
+  - smoke opt-in court : `232329`, `233520`, `233602` restent `true_match`
+  - `234013` sans opt-in reste `fail_no_wcs` propre / `oracle_unavailable`
+  - tests `tests/test_zeblindsolver.py` : `49 passed`
+- Decision :
+  - ne pas promouvoir le flag par defaut avant un all30 source_gate opt-in
+  - prochain cran = all30 avec `ZE_P24_POST_RESOLVE_INITIAL_POOL=1`, mesure des
+    succes stricts, faux positifs, runtime, et comportement `234013`
+
+## 2026-07-03 — P0.25 all30 source_gate initial-pool opt-in
+
+- Rapport :
+  - `reports/zeblind_p025_all30_source_gate_initial_pool_20260703.md`
+- Run :
+  - `reports/r47i_s8_p25_all30_source_gate_initial_pool_20260703`
+  - profil `source_gate=100`, `ZE_P24_POST_RESOLVE_INITIAL_POOL=1`,
+    hard budget `60 s`
+- Stabilisation avant run :
+  - le chemin experimental expose par `234013` a revele des helpers
+    transaction/tune incomplets ; ils ont ete bornes/cables :
+    `_solver_crpix()` local, `tile_center` porte par `candidate_ctx`, appel
+    postverify tune avec `img_in/tile_in/world_in`
+- Resultat brut :
+  - `22 true_match`
+  - `7 compare_error` dus a l'oracle incomplet
+  - `1 fail_no_wcs`
+  - `29/30` succes declares par le solveur
+- Lecture realiste :
+  - les `7` `compare_error` P0.25 matchent les sorties P0.22 (`true_match`
+    contre P0.22, separations centre <= `0.94"`)
+  - `233048` reste `true_match` contre une reference Astrometry independante
+  - donc etat M106 realiste = `29/30` solutions coherentes/stables
+  - seul vrai echec restant : `234013`, `fail_no_wcs`, `verify_prob`, budget
+    `60 s`, oracle courant inutilisable (`0` paire oracle)
+- Validation :
+  - `tests/test_zeblindsolver.py` : `49 passed`
+- Decision :
+  - garder `blind_astrometry_post_resolve_initial_pool_enabled=False` par defaut
+    tant qu'une validation multicorpus hors M106 n'est pas faite
+  - prochain front causal = `234013`, mais d'abord reparer/remplacer son oracle
+    ou produire une reference Astrometry independante
+
+## 2026-07-03 — P0.26 234013 Astrometry verify gap
+
+- Rapport :
+  - `reports/zeblind_p026_234013_astrometry_verify_gap_20260703.md`
+- Oracle :
+  - reference saine locale `backuplightsastap`
+  - ancienne sortie ZeNear `true_match` contre cette reference (`1.70"` centre)
+  - WCS cleanbench courant de `234013` confirmee fausse (`47249"` centre,
+    scale ratio `1.644886`)
+- Diagnostic ZeBlind :
+  - le candidat strictement rejete est une vraie pose
+  - run avec seuil keep/solve abaisse uniquement pour ecrire la WCS :
+    `reports/r47i_s8_p26_234013_threshold_diagnostic_20260703`
+  - `true_match`, centre `1.44"`, coin max `14.54"`, scale ratio `1.001321`,
+    `26` inliers, RMS `0.882 px`
+  - echec strict = `accept_logodds=20.6975746` juste sous `ln(1e9)=20.7232658`
+- Astrometry local :
+  - `solve-field` resout `234013` avec `index-4107`
+  - log-odds `117.336`, `16` matches, `0` conflit, `19` distractors,
+    `23` index stars
+  - WCS `true_match` contre reference saine (`0.09"` centre, `1.99"` coins)
+- Front causal :
+  - Astrometry utilise `57` sources `simplexy` et `FIELDOBJS [1,4,10,0,0]`
+  - Ze utilise `100` sources detectees maison et `mo_field [3,9,4,5]`
+  - Ze verify sur la pose vraie tombe a `20.70` apres uniformize
+  - avant uniformize, le meme pool Ze monte a `24.47`
+- Correctif applique :
+  - divergence `stoplooking` : le profil strict calculait
+    `blind_anodds_stoplooking=0` comme `inf`, mais l'appel verify utilisait
+    encore `config.verify_logodds_stoplooking=24`
+  - `zeblindsolver.py` utilise maintenant le `verify_logodds_stoplooking`
+    effectif dans `_astrometry_verify_sequence_logodds` et les dumps
+  - replay verify-core avec artefacts Astrometry + `stoplooking=inf` :
+    log-odds `125.67`, `17` matches, `0` conflit, `19` distractors
+  - tests `tests/test_zeblindsolver.py` : `49 passed`
+  - probe strict post-patch `234013` reste `fail_no_wcs`, donc le front restant
+    est toujours source-list / MatchObj / `testperm`
+- Decision :
+  - ne pas abaisser `blind_anodds_tokeep`
+  - prochain cran = replay complet avec les entrees Astrometry exactes
+    `.axy/.match/.rdls/.xyls` pour separer source-list, MatchObj et `testperm`
+
+## 2026-07-03 — P0.27 234013 image2xy recovery
+
+- Rapport :
+  - `reports/zeblind_p027_234013_image2xy_recovery_20260703.md`
+- Run :
+  - `reports/r47i_s8_p26_234013_image2xy_after_stoplooking_20260703`
+  - `ZE_P24_POST_RESOLVE_INITIAL_POOL=1`
+  - modes `image2xy_native` et `image2xy_minus1`
+  - `/usr/bin/image2xy` extrait `57` sources
+- Resultat contre reference saine P0.26 :
+  - `image2xy_native` : `true_match`, centre `2.44"`, coin max `15.21"`,
+    scale ratio `1.001261`, phase `hinted`, `1` candidat, `29.48 s`
+  - `image2xy_minus1` : `true_match`, centre `1.39"`, coin max `14.18"`,
+    scale ratio `1.001261`, phase `hinted`, `1` candidat, `26.84 s`
+- Decision :
+  - `234013` est recupere sans relacher `blind_anodds_tokeep`
+  - front produit restant = source-list / ordering d'entree
+  - ne pas activer `image2xy` par defaut ; prochain cran = smoke court
+    `image2xy_minus1 + stoplooking fix` sur cas M106 confirmes, puis decision
+    entre mode opt-in externe et approximation interne Astrometry-like
+
+## 2026-07-03 — P0.27b external image2xy opt-in
+
+- Smoke court :
+  - `reports/r47i_s8_p27_image2xy_minus1_smoke_20260703`
+  - `232329`, `233520`, `233602`, `233705` : `4/4 true_match`
+  - tous en `hinted`, `1` candidat, walls `25.21..35.29 s`
+- Patch runtime :
+  - ajout d'un mode opt-in off par defaut :
+    `blind_astrometry_external_image2xy_enabled`
+  - commande configurable `blind_astrometry_external_image2xy_command`
+  - offset par defaut `-1.0`
+  - max sources configurable
+  - fallback interne si extraction echoue, sauf `strict=True`
+  - CLI associee ajoutee
+- Validation directe sans `prep_cache` :
+  - `reports/r47i_s8_p27_234013_external_image2xy_optin_20260703`
+  - `234013` `true_match`, `hinted`, `1` candidat, `31.37 s`
+  - centre `1.39"`, coin max `14.18"`, scale ratio `1.001261`
+- Tests :
+  - `py_compile` OK
+  - `tests/test_zeblindsolver.py` : `49 passed`
+- Decision :
+  - ne pas promouvoir par defaut
+  - prochain cran = all30 M106 avec `external_image2xy` + initial-pool opt-in
+    pour mesurer succes/runtime/faux positifs
+
+## 2026-07-03 — P0.28 internal -> image2xy fallback
+
+- Rapport :
+  - `reports/zeblind_p028_internal_then_image2xy_fallback_20260703.md`
+- All30 remplacement pur `image2xy` :
+  - `reports/r47i_s8_p27_all30_external_image2xy_initial_pool_20260703`
+  - solveur `29/30`
+  - `234013` recupere, mais regression `233828` en `fail_no_wcs`
+- Diagnostic `233828` :
+  - interne : succes, `29` inliers, RMS `0.852 px`
+  - externe : bon tile `d50_2823`, `30` inliers, RMS `1.311 px`
+  - decision : ne pas relacher le seuil RMS `1.200 px`; `image2xy` ne doit pas
+    remplacer globalement le detecteur interne
+- Patch :
+  - ajout du flag off par defaut
+    `blind_astrometry_external_image2xy_after_internal_fail_enabled`
+  - `zesolver.blind_solve` essaie l'interne d'abord, puis retry externe
+    seulement si echec
+  - runner env associee :
+    `ZE_P27_EXTERNAL_IMAGE2XY_AFTER_INTERNAL_FAIL=1`
+- Validation :
+  - run full :
+    `reports/r47i_s8_p28_all30_internal_then_image2xy_fallback_full_20260703`
+  - solveur `30/30`
+  - oracle historique `22 true_match`, `8 compare_error`, `0 fail_no_wcs`
+  - fallback tente uniquement sur `234013`
+  - `234013` contre reference saine : `true_match`, centre `1.39"`, coin max
+    `14.18"`, scale ratio `1.001261`
+- Decision :
+  - mecanisme valide mais pas promu par defaut
+  - prochain cran = reduire le cout de fallback `234013` via une signature
+    source-list, sans attendre tout le hard budget interne
+
+## 2026-07-04 — P0.29 internal-first budget
+
+- Rapport :
+  - `reports/zeblind_p029_internal_first_budget_20260704.md`
+- Patch :
+  - ajout opt-in `blind_astrometry_external_image2xy_internal_first_budget_s`
+  - CLI :
+    `--blind-astrometry-external-image2xy-internal-first-budget-s`
+  - runner env : `ZE_P29_INTERNAL_FIRST_BUDGET_S`
+  - applique seulement au premier passage interne du mode
+    `external_image2xy + after_internal_fail`
+  - defaut `0.0`, donc P0.28 preserve
+- Probe budget `45 s` :
+  - `reports/r47i_s8_p29_budget45_probe_232534_234013_20260704`
+  - `232534` reste interne `true_match`, `33.60 s`
+  - `234013` bascule a `45.0 s`, puis externe reussit, `73.00 s`
+  - `234013` contre reference saine : `true_match`, centre `1.39"`, coin max
+    `14.18"`, scale ratio `1.001261`
+- All30 :
+  - `reports/r47i_s8_p29_all30_internal45_then_image2xy_fallback_20260704`
+  - solveur `30/30`, `0 fail_no_wcs`
+  - oracle historique `22 true_match`, `8 compare_error`
+  - fallback externe tente/reussi uniquement sur `234013`
+  - max wall `70.89 s` vs `115.74 s` en P0.28
+  - wall total `1051.07 s` vs `1068.66 s`
+- Tests :
+  - couverture unitaire du wrapper retry budgete ajoutee
+  - `tests/test_zeblindsolver.py` : `50 passed`
+- Decision :
+  - amelioration utile de latence de queue, mais toujours off par defaut
+  - prochain cran = comparer `45 s` vs `50 s` ou budget derive des latences
+    normales, puis multicorpus avant toute promotion
+
+## 2026-07-04 — P0.30 multifield smoke / oracle hygiene
+
+- Rapport :
+  - `reports/zeblind_p030_multifield_smoke_20260704.md`
+- Test :
+  - P0.29 budget `50 s` teste hors M106 sur un smoke M31 / NGC6888 / M106
+  - profil : `ZE_P24_POST_RESOLVE_INITIAL_POOL=1`,
+    `ZE_P27_EXTERNAL_IMAGE2XY=1`,
+    `ZE_P27_EXTERNAL_IMAGE2XY_AFTER_INTERNAL_FAIL=1`,
+    `ZE_P29_INTERNAL_FIRST_BUDGET_S=50`
+  - runner enrichi avec hints FITS optionnels (`ZE_HEADER_HINTS=1`) pour les
+    probes multicorpus realistes
+- Infrastructure :
+  - l'index complet `/home/tristan/zesolver_index` est inutilisable pour le
+    solveur courant : tables quad schema `v2`, alors que ZeBlind requiert `v4`
+  - un index focalise temporaire schema `v4`, q4000, a ete reconstruit sur
+    `33` tiles :
+    `reports/r47i_s8_p30_multifield10_focused_v4_index_q4000_20260704`
+- Resultat brut contre `near_bench100/new_auto_proxy` :
+  - solveur `3/4`
+  - oracle brut : `1 true_match`, `2 false_positive`, `1 fail_no_wcs`
+- Audit oracle :
+  - les deux `false_positive` apparents sont des `true_match` contre references
+    saines :
+    - NGC6888 `010` : centre `3.0"`, coin max `3.6"`, scale ratio `1.000`
+    - M106 `056/234013` : centre `1.4"`, coin max `14.5"`, scale ratio
+      `1.001`
+  - plusieurs references `near_bench100/new_auto_proxy` ont un WCS inutilisable
+    malgre `SOLVED=1` :
+    - NGC6888 `010` : `RMSPX=175.06 px`
+    - M31 `002` : `RMSPX=142.53 px`
+- Decision :
+  - ne pas conclure "multicorpus valide" sur cet oracle
+  - P0.29 reste sain sur les cas a reference fiable
+  - prochain cran avant tout tuning : index complet/multifield `v4`, filtre
+    qualite WCS des oracles, petit set M31 avec reference saine
+
+## 2026-07-09 — Audit ZeBlind vs coeur Astrometry.net
+
+- Audit realise sans modification du code applicatif, puis publie dans
+  `followup.md`.
+- Verdict durable :
+  - ZeBlind n'est pas actuellement un portage du coeur Astrometry.net, mais un
+    solveur different inspire d'Astrometry.net.
+  - Divergence amont confirmee : Astrometry.net utilise un code de quad continu
+    4D AB/C/D dans le repere du backbone AB avec recherche KD-tree/range
+    tolerante, tandis que ZeBlind utilise actuellement
+    `opposite_edge_ratio_8bit_v1`, un hash 3D quantifie de ratios d'aretes
+    opposees, plus un vote par tuile avant validation.
+  - Nuance importante : ZeBlind possede deja de la recherche approchee, mais
+    elle opere sur le mauvais code-space et apres selection de candidat/tuile ;
+    elle ne restaure donc pas l'equivalence Astrometry.net.
+- Divergences principales a conserver :
+  - invariant de quad non equivalent ;
+  - canonicalisation AB/C/D non equivalente ;
+  - lookup exact/bucket et vote par tuile avant hypothese, au lieu d'un hit
+    direct en range search 4D ;
+  - permutations/parite plus restrictives par defaut que le corridor
+    Astrometry ;
+  - index ZeBlind par tuiles/niveaux S/M/L conceptuellement different des
+    index Astrometry HEALPix/KD-code ;
+  - verification RMS/inliers probablement secondaire tant que les bons hits
+    AB/C/D n'arrivent pas correctement.
+- Plan minimal valide :
+  - commencer par un patch diagnostic offline, sans changer l'algorithme ;
+  - tester ensuite un backend experimental derriere un flag explicite, par
+    exemple `quad_hash_schema="astrometry_ab_code_4d_v1"`, sans supprimer
+    l'ancien backend ;
+  - ne refactorer proprement que si l'experience confirme le gain.
+- Disciplines a maintenir :
+  - ne pas modifier ZeNear, GUI, packaging, seuils, rescues, fallbacks, retries
+    ou scoring produit pendant cette phase ;
+  - ne pas pretendre a un port Astrometry.net tant que le code-space AB/C/D et
+    la range search compatible ne sont pas implementes et verifies.
+
+## 2026-07-09 — Toilettage de `followup.md`
+
+- `followup.md` a ete reduit a la mission courante uniquement :
+  realignement ZeBlind sur le coeur Astrometry.net via diagnostic AB/C/D et
+  recherche tolerante 4D.
+- L'ancien historique d'execution P0.x reste conserve ici comme memoire repo :
+  - pipeline sentinelle `d50_2823` ferme progressivement jusqu'a `verify` ;
+  - hash invariant `opposite_edge_ratio_8bit_v1` et schema d'index `v4`
+    valides comme etape intermediaire, mais finalement identifies comme non
+    equivalents au coeur Astrometry.net ;
+  - sampler catalogue coverage/ring explore jusqu'a P0.16+ ;
+  - fallback `image2xy` interne-puis-externe valide en opt-in jusqu'a P0.29 ;
+  - smoke multifield P0.30 bloque par hygiene d'oracles et index complet `v4`
+    manquant.
+
+## 2026-07-09 — P2.0 mini-backend 4D offline
+
+- Scope respecte :
+  - aucun branchement runtime ;
+  - aucun changement ZeNear/GUI ;
+  - aucun changement de seuil produit ;
+  - aucun rescue/fallback/reranking/tuning global ;
+  - aucun rebuild complet d'index.
+- Ajouts offline :
+  - mini-index AB/C/D 4D en memoire avec `cKDTree` ;
+  - script `tools/diagnose_memory_4d_backend.py` ;
+  - rapport `reports/zeblind_p20_memory_4d_backend_probe.md`.
+- Resultat sur les deux cas obligatoires :
+  - `232350 / d50_2823` :
+    - `95` hits 4D ;
+    - `90` hypotheses plausibles ;
+    - `55` hits perdus par hash exact pair-level ;
+    - `50` hypotheses plausibles perdues par hash exact ;
+    - premier hit plausible = rang `4`, perdu par hash exact, `36` inliers,
+      RMS `1.50 px`, centre `3.58"`, coin max `10.36"`, scale ratio
+      `1.0020` ;
+    - premier hit hash-exact plausible = rang `8`.
+  - `232102 / d50_2823` :
+    - `351` hits 4D ;
+    - `343` hypotheses plausibles ;
+    - `77` hypotheses plausibles perdues par hash exact ;
+    - premier hit plausible = rang `1`, hash-exact, `53` inliers,
+      RMS `0.32 px`, centre `2.47"`, coin max `5.74"`, scale ratio
+      `0.9990`.
+- Verdict durable :
+  - P2.0 est positif : le range search AB/C/D 4D en memoire produit au moins
+    un gain concret avant implementation d'un backend complet.
+  - La prochaine decision peut envisager `quad_hash_schema="astrometry_ab_code_4d_v1"`,
+    mais seulement derriere flag explicite et sans supprimer l'ancien backend.
+
+## 2026-07-09 — P2.1 index disque 4D experimental focalise
+
+- Scope respecte :
+  - aucun changement ZeNear/GUI ;
+  - aucun changement de seuil produit ;
+  - aucun rescue/fallback/reranking global ;
+  - aucun rebuild complet ;
+  - ancien backend `opposite_edge_ratio_8bit_v1` conserve par defaut ;
+  - pas encore de branchement runtime solveur principal.
+- Ajouts experimentaux :
+  - module `zeblindsolver/quad_index_4d.py` ;
+  - schema `astrometry_ab_code_4d_v1` ;
+  - format `.npz` focalise avec `codes_4d`, `quad_star_indices`,
+    `source_quad_indices`, `tile_key_indices`, `tile_keys`, `catalog_ra_dec`,
+    `catalog_xy`, `ratio_hashes`, `metadata` ;
+  - loader/searcher `cKDTree` avec `code_tol` explicite, tri par distance,
+    caps de cout et deduplication ;
+  - probe `tools/diagnose_disk_4d_index_probe.py`.
+- Premier essai disque `400` etoiles / `8000` quads :
+  - partiel seulement ;
+  - `232350` ne reproduisait pas P2.0 ;
+  - cause auditee : les quads utiles P2.0 utilisent des etoiles catalogue de
+    rang global au-dela de `400` (`425`, `689`, `929`, `1543`, `1871`).
+- Run final focalise `d50_2823`, `2000` etoiles / `40000` quads :
+  - rapport `reports/zeblind_p21_disk_4d_index_probe.md` ;
+  - index `reports/p21_astrometry_ab_code_4d_v1_d50_2823_S_stars2000_q40000.npz` ;
+  - `232350 / d50_2823` :
+    - `171` hits 4D testes ;
+    - `37` hypotheses plausibles ;
+    - `18` plausibles perdues par hash exact ;
+    - premier plausible perdu par hash au rang `90` ;
+    - premier hash-exact plausible au rang `93` ;
+    - meilleur hit : `40` inliers, RMS `0.427 px`, centre `2.69"`,
+      coin max `4.61"`, scale ratio `0.9996`.
+  - `232102 / d50_2823` :
+    - `173` hits 4D testes ;
+    - `93` hypotheses plausibles ;
+    - premier hit plausible au rang `1`, hash-exact ;
+    - meilleur hit : `53` inliers, RMS `0.222 px`, centre `2.48"`,
+      coin max `5.58"`, scale ratio `0.9992`.
+- Verdict durable :
+  - P2.1 est positif : l'index disque 4D focalise reproduit le gain concret de
+    P2.0 et garde `232102` non-regresse.
+  - La couverture catalogue est le point de vigilance principal : un index trop
+    tronque en magnitude peut masquer le gain 4D.
+  - Ne pas passer au runtime complet sans decision explicite et garde-fous de
+    cout.
+
+## 2026-07-09 — P2.2 route runtime 4D experimentale derriere flag
+
+- Scope respecte :
+  - aucun changement ZeNear/GUI ;
+  - ancien backend `opposite_edge_ratio_8bit_v1` conserve par defaut ;
+  - nouveau chemin actif uniquement via `quad_hash_schema="astrometry_ab_code_4d_v1"`
+    ou `blind_astrometry_4d_index_enabled=True` avec chemin d'index explicite ;
+  - aucun rebuild complet ;
+  - pas de vote de tuile avant hypothese dans le mode 4D ;
+  - pas de fallback implicite vers les vieux rescues dans ce mode experimental.
+- Ajouts :
+  - route runtime 4D dans `zeblindsolver/zeblindsolver.py` ;
+  - flags CLI `--quad-hash-schema`, `--blind-astrometry-4d-index-enabled`,
+    `--blind-astrometry-4d-index-path`, `--blind-astrometry-4d-code-tol`,
+    caps de hits/hypotheses ;
+  - script `tools/diagnose_runtime_4d_route.py` ;
+  - rapport `reports/zeblind_p22_runtime_4d_route.md`.
+- Validation avec l'index focalise
+  `reports/p21_astrometry_ab_code_4d_v1_d50_2823_S_stars2000_q40000.npz` :
+  - `232350 / d50_2823` : runtime 4D valide, `171` hits, `93` hypotheses
+    testees, premier accepte rang `93`, `40` inliers, RMS `0.593 px`,
+    evaluation externe centre `1.87"` / coin max `4.45"`, scale ratio
+    `0.9996`.
+  - `232102 / d50_2823` : non-regresse, runtime 4D valide, `173` hits,
+    premier accepte rang `1`, `53` inliers, RMS `0.416 px`, centre `2.47"` /
+    coin max `5.74"`, scale ratio `0.9990`.
+- Point causal important :
+  - P2.2 reproduit P2.1 uniquement avec la meme source-list diagnostic que P2.1
+    (`blind_star_quality_filter=False` dans le probe experimental).
+  - Avec le filtre source runtime standard actif, le probe ne reproduit pas P2.1
+    (`232350`: `100` hits, aucun accepte ; `232102`: `86` hits, aucun accepte).
+  - Avant generalisation, traiter proprement l'alignement source-list
+    diagnostic/runtime sans changer le defaut produit.
+
+## 2026-07-09 — P2.3 contrat source-list backend 4D
+
+- Scope respecte :
+  - pas d'elargissement d'index ;
+  - pas de all30 ;
+  - pas de rebuild complet ;
+  - aucun changement de seuil qualite ;
+  - aucun rescue/fallback/reranking ajoute ;
+  - `blind_star_quality_filter` non desactive globalement ;
+  - aucun changement ZeNear/GUI.
+- Audit differentiel produit :
+  - script `tools/diagnose_p23_4d_source_list_contract.py` ;
+  - rapport `reports/zeblind_p23_4d_source_list_contract.md` ;
+  - JSON `reports/zeblind_p23_4d_source_list_contract.json`.
+- Resultat causal ferme :
+  - le backend 4D n'est pas casse par le code 4D, l'index ou la validation WCS
+    sur ces deux cas ;
+  - le front causal est la source-list image ;
+  - le filtre runtime standard retire des etoiles critiques et reordonne
+    fortement les communes, ce qui change les quads image generes.
+- `232350 / d50_2823` :
+  - A diagnostic : `120` etoiles, `171` hits, premier accepte rang `93`,
+    raw_quad `[9, 15, 7, 24]`, `40` inliers, RMS `0.593 px` ;
+  - B standard : `102` etoiles, `100` hits, aucun accepte ;
+  - B retire notamment le rang brut `24`, utilise par le quad accepte A ;
+  - le quad accepte A est absent des quads generes par B.
+- `232102 / d50_2823` :
+  - A diagnostic : `120` etoiles, `173` hits, premier accepte rang `1`,
+    raw_quad `[0, 15, 26, 8]`, `53` inliers, RMS `0.416 px` ;
+  - B standard : `105` etoiles, `86` hits, aucun accepte ;
+  - B retire notamment le rang brut `26`, utilise par le quad accepte A ;
+  - le quad accepte A est absent des quads generes par B.
+- Politique ajoutee :
+  - `blind_astrometry_4d_source_policy`, defaut `standard_runtime` ;
+  - valeurs nommees : `standard_runtime`, `diagnostic_unfiltered`,
+    `astrometry_like` ;
+  - seul `diagnostic_unfiltered` a un effet dans ce patch : bypasser le filtre
+    source standard uniquement quand la route experimentale
+    `astrometry_ab_code_4d_v1` est demandee ;
+  - le flag global `blind_star_quality_filter` reste `True`.
+- Validation :
+  - rapport `reports/zeblind_p23_4d_policy_validation.md` ;
+  - avec `blind_astrometry_4d_source_policy="diagnostic_unfiltered"` et
+    `blind_star_quality_filter=True`, `232350` et `232102` resolvent avec les
+    memes rangs/inliers/RMS que P2.2 ;
+  - tests courts passes : `74 passed`.
+
+## 2026-07-09 — P2.4 bake-off politiques source-list 4D
+
+- Scope respecte :
+  - aucun changement ZeNear/GUI ;
+  - aucun changement de seuil qualite ;
+  - aucun changement de defaut produit ;
+  - aucun rebuild complet ;
+  - aucun elargissement d'index ;
+  - aucun all30.
+- Artefacts :
+  - script `tools/diagnose_p24_4d_source_policy_bakeoff.py` ;
+  - rapport `reports/zeblind_p24_4d_source_policy_bakeoff.md` ;
+  - JSON `reports/zeblind_p24_4d_source_policy_bakeoff.json`.
+- Cas inclus :
+  - obligatoires : `232350 / d50_2823`, `232102 / d50_2823` ;
+  - optionnels pertinents avec l'index focalise `d50_2823` :
+    `232144`, `232205`, `232247`.
+- Resultat politiques :
+  - `standard_runtime` echoue sur les deux cas obligatoires :
+    `232350` garde `102` etoiles, perd le rang critique `24`, `100` hits,
+    aucun accepte ; `232102` garde `105` etoiles, perd le rang critique `26`,
+    `86` hits, aucun accepte.
+  - `standard_runtime` resout deux optionnels (`232144`, `232205`) mais echoue
+    sur `232247`, donc pas stable pour le backend 4D experimental.
+  - `diagnostic_unfiltered` resout tous les cas inclus :
+    `232350` accepte rang `93`, `40` inliers, RMS `0.593 px` ;
+    `232102` accepte rang `1`, `53` inliers, RMS `0.416 px` ;
+    optionnels acceptes au rang `1`.
+  - `astrometry_like_candidate` resout aussi tous les cas inclus et garde les
+    etoiles critiques, mais son cout median total est environ `1.44x` celui de
+    `diagnostic_unfiltered` sur ce bake-off ; il reste candidate P2.5 bis.
+- Decision durable :
+  - utiliser `diagnostic_unfiltered` comme baseline experimentale P2.5 ;
+  - ne pas promouvoir `diagnostic_unfiltered` comme defaut produit ;
+  - ne pas promouvoir `astrometry_like_candidate` sans corpus plus large ;
+  - on peut passer a une extension ciblee `d50_2822` avec politique source-list
+    fixee explicitement, mais toujours pas de all30.
+
+## 2026-07-09 — P2.5 integration produit experimentale 4D
+
+- Scope respecte :
+  - aucun changement ZeNear/GUI ;
+  - backend 4D non active par defaut ;
+  - ancien backend `opposite_edge_ratio_8bit_v1` conserve ;
+  - aucun changement de seuil qualite produit ;
+  - aucun rescue/fallback/reranking global ajoute ;
+  - aucun all30 ;
+  - `astrometry_like_candidate` non promue.
+- Integration :
+  - activation du runtime 4D clarifiee : `quad_hash_schema="astrometry_ab_code_4d_v1"`
+    selectionne le backend experimental ;
+  - `blind_astrometry_4d_index_enabled=True` seul ne suffit plus a activer le
+    backend 4D si le schema reste historique ;
+  - en schema 4D strict, absence de flag/index 4D explicite echoue
+    explicitement au lieu de fallback silencieux vers l'ancien backend ;
+  - `diagnostic_unfiltered` reste limitee a la route 4D et ne change pas
+    `blind_star_quality_filter=True` globalement.
+- Artefacts :
+  - doc `docs/zeblind_astrometry_4d_experimental.md` ;
+  - probe `tools/diagnose_p25_4d_experimental_product_slice.py` ;
+  - rapport `reports/zeblind_p25_4d_experimental_product_slice.md` ;
+  - JSON `reports/zeblind_p25_4d_experimental_product_slice.json`.
+- Validation `d50_2823` :
+  - `232350 / d50_2823` resout : `171` hits, `93` testes, accepte rang `93`,
+    `40` inliers, RMS `0.593 px` ;
+  - `232102 / d50_2823` resout : `173` hits, accepte rang `1`, `53` inliers,
+    RMS `0.416 px` ;
+  - check flag OFF : schema defaut `opposite_edge_ratio_8bit_v1`,
+    `default_4d_requested=false`, `flag_only_4d_requested=false`.
+- Extension ciblee `d50_2822` :
+  - index construit sans rebuild complet :
+    `reports/p25_astrometry_ab_code_4d_v1_d50_2822_S_stars2000_q40000.npz` ;
+  - memes parametres que `d50_2823`, `40000` entrees, `2000` etoiles ;
+  - mini-validation voisins `232144`, `232205`, `232247`, `232329`, `232431`
+    donne `0/5` succes avec cet index seul ;
+  - front causal apparent : couverture/hypotheses insuffisantes pour atteindre
+    `quality_inliers=40` sur ce perimetre, avec plusieurs rejets proches autour
+    de `19-31` inliers, sans changement de seuil autorise.
+- Decision :
+  - P2.5 positif pour l'interface/isolation du mode 4D experimental ;
+  - `d50_2823` reste non-regresse ;
+  - `d50_2822` ne doit pas encore etre presente comme couverture utile produit ;
+  - prochain pas recommande : mini-corpus cible plus large ou diagnostic de
+    couverture/index autour de `d50_2822`, toujours sans all30.
+
+## 2026-07-09 — P2.6 diagnostic oracle de routage/couverture 4D
+
+- Scope respecte :
+  - diagnostic uniquement ;
+  - aucun tuning ;
+  - aucun refactor ;
+  - aucun all30 ;
+  - aucun changement ZeNear/GUI/default/seuil ;
+  - aucun changement du coeur backend 4D.
+- Cadrage important :
+  - le WCS Astrometry.net a servi uniquement d'oracle offline de tuilage
+    (centre RA/Dec, coins, footprint approximative, tuiles intersectees) ;
+  - le runtime blind 4D a ete lance sur des FITS copies avec WCS strippe, et
+    jamais avec le WCS oracle en entree de resolution.
+- Artefacts :
+  - script `tools/diagnose_p26_4d_oracle_tile_routing.py` ;
+  - rapport `reports/zeblind_p26_4d_oracle_tile_routing.md` ;
+  - JSON `reports/zeblind_p26_4d_oracle_tile_routing.json`.
+- Oracle couverture :
+  - les 7 images M106 testees ont `d50_2823` comme tuile principale probable ;
+  - `d50_2822` est seulement secondaire/partielle pour les 5 echecs P2.5 ;
+  - `d50_2821` et `d50_2824` ont `0%` de footprint oracle sur ce perimetre,
+    donc n'ont pas ete construits/testes.
+- Resultat solve 4D :
+  - `d50_2823` recupere 3/5 echecs P2.5 :
+    `232144` (`52` inliers, RMS `0.695`), `232205` (`52`, `0.608`),
+    `232247` (`45`, `0.596`) ;
+  - `d50_2822` echoue sur les 5, avec peu d'etoiles catalogue dans le champ
+    pour les premiers cas (`6`, `6`, `21`, `22`, `32`) et des rejets surtout
+    `scale`/`inliers` ;
+  - `232329 / d50_2823` reste un near-miss sans tuning : meilleur rejet
+    `37` inliers, RMS `0.259`, seuil produit `40` ;
+  - `232431` reste non resolu sur `d50_2823` et `d50_2822`, meilleur support
+    `31` inliers.
+- Decision :
+  - P2.6 est partiel : le routage/couverture explique clairement `3/5` echecs
+    d50_2822, mais pas tout ;
+  - prochain bloc causal : couverture/catalogue/validation pour `232329` et
+    `232431` dans une enveloppe oracle courte, sans elargir ni tuner.
+
+## 2026-07-09 — P2.7 diagnostic densite d50_2823 4D
+
+- Scope respecte :
+  - diagnostic uniquement ;
+  - aucun tuning ;
+  - aucun refactor backend ;
+  - aucun all30 ;
+  - aucun changement ZeNear/GUI/default/seuil ;
+  - aucun changement du coeur backend 4D.
+- Artefacts :
+  - script `tools/diagnose_p27_4d_d50_2823_density_probe.py` ;
+  - rapport `reports/zeblind_p27_4d_d50_2823_density_probe.md` ;
+  - JSON `reports/zeblind_p27_4d_d50_2823_density_probe.json`.
+- Variantes testees uniquement sur `d50_2823` :
+  - baseline `2000` etoiles / `40000` quads ;
+  - variante A `3000` etoiles / `80000` quads ;
+  - variante B `4000` etoiles / `120000` quads ;
+  - schema `astrometry_ab_code_4d_v1`, sampler `catalog_ring_coverage`,
+    `code_tol=0.015`, dtype `float32`.
+- Constat cle :
+  - la source catalogue `d50_2823` disponible plafonne a `2000` etoiles, donc
+    A/B n'ont pas augmente la densite etoiles reelle, seulement le nombre de
+    quads indexes (`80000` puis `120000`) ;
+  - `232329` reste bloque a `37` inliers, RMS `0.259`, seuil produit conserve
+    `quality_inliers=40` ;
+  - `232431` reste bloque a `31` inliers, RMS `0.333` ;
+  - les quads utiles/hits augmentent, mais les inliers max ne progressent pas.
+- Non-regression courte :
+  - `232144`, `232205`, `232247`, `232350`, `232102` passent sur les variantes
+    testees (`15/15` succes).
+- Decision :
+  - ne pas augmenter aveuglement le budget de quads ;
+  - la vraie densite etoiles reste non conclue tant que la source `d50_2823`
+    n'est pas plus profonde ;
+  - prochain front causal possible : profondeur catalogue/source index,
+    union/multi-index bornee ou analyse validation/source-list, sans baisse de
+    seuil ni all30.
+
+## 2026-07-09 — P2.8 audit validation par support catalogue reel
+
+- Scope respecte :
+  - diagnostic uniquement ;
+  - aucun tuning ;
+  - aucun refactor backend ;
+  - aucun all30 ;
+  - aucun changement ZeNear/GUI/default/seuil ;
+  - aucun changement du coeur backend 4D.
+- Artefacts :
+  - script `tools/diagnose_p28_4d_validation_support_audit.py` ;
+  - rapport `reports/zeblind_p28_4d_validation_support_audit.md` ;
+  - JSON `reports/zeblind_p28_4d_validation_support_audit.json`.
+- Methode :
+  - le WCS Astrometry.net a servi uniquement d'oracle offline pour projeter le
+    catalogue et mesurer le support appariable ;
+  - les resultats runtime 4D stricts viennent des matrices P2.6/P2.7 deja
+    produites, sans passage WCS oracle au solveur blind.
+- Resultat `232431` :
+  - `d50_2823` contient seulement `31` etoiles catalogue strictement dans le
+    champ (`32` avec marge) ;
+  - les detections brutes matchent `31` etoiles et la source-list 4D gardee en
+    matche `30` au rayon oracle `3 px` ;
+  - le meilleur rejet runtime atteint `31` inliers, RMS `0.333`, donc le solveur
+    couvre pratiquement tout le support mono-tuile disponible mais reste sous le
+    seuil produit `quality_inliers=40` ;
+  - `d50_2822` seul plafonne aussi a `31` inliers, mais l'union support-only
+    `d50_2823+d50_2822` expose `63` etoiles champ / `61` matchables, piste pour
+    un audit multi-index borne.
+- Resultat `232329` :
+  - `d50_2823` contient `41` etoiles catalogue dans le champ ;
+  - seules `39` sont matchables dans les detections brutes et `37` dans la
+    source-list 4D gardee ;
+  - le meilleur rejet runtime atteint exactement `37` inliers, RMS `0.259`,
+    marge `-3` vs seuil produit ;
+  - lecture durable : near-miss geometrique a support source-list/matchable
+    limite, pas vraie mauvaise hypothese.
+- Decision :
+  - ne pas baisser `quality_inliers=40` ni `quality_rms=1.2` ;
+  - ne pas continuer a augmenter les quads ;
+  - avant de juger le backend 4D sur les champs pauvres, introduire en diagnostic
+    un statut distinct type `GEOMETRIC_OK_LOW_SUPPORT` /
+    `VALIDATION_NEAR_MISS_LOW_CATALOG_SUPPORT`, sans acceptation produit ;
+  - mini-corpus M106 multi-index borne possible en diagnostic, mais le contrat de
+    validation support faible vs acceptation produit doit etre clarifie.
+
+## 2026-07-09 — P2.9 audit runtime multi-index borne avec validation union-catalogue
+
+- Scope respecte :
+  - diagnostic uniquement ;
+  - aucun tuning de seuil ;
+  - aucun refactor backend produit ;
+  - aucun all30 ;
+  - aucun changement ZeNear/GUI/default/seuil ;
+  - aucun changement du coeur AB/C/D 4D ;
+  - aucune promotion produit du backend 4D ou de la validation union.
+- Artefacts :
+  - script `tools/diagnose_p29_4d_bounded_multi_index_union_validation.py` ;
+  - rapport `reports/zeblind_p29_4d_bounded_multi_index_union_validation.md` ;
+  - JSON `reports/zeblind_p29_4d_bounded_multi_index_union_validation.json`.
+- Methode :
+  - deux index uniquement charges explicitement : `d50_2823` et `d50_2822` ;
+  - aucune construction/decouverte de `d50_2821` ou `d50_2824` ;
+  - hypotheses generees depuis chaque index 4D puis validees d'abord contre la
+    tuile source, ensuite contre l'union catalogue dedupliquee
+    `d50_2823+d50_2822` ;
+  - rayon matching conserve `3 px`, seuils conserves `quality_inliers=40` et
+    `quality_rms=1.2`.
+- Resultat `232431` :
+  - mono `d50_2823` : `31` inliers, RMS `0.333` ;
+  - mono `d50_2822` : `31` inliers, RMS `0.190` ;
+  - union catalogue : `62` inliers, RMS `0.273`, accepte au rang `1`, origine
+    `d50_2823`.
+- Resultat `232329` :
+  - mono `d50_2823` : `37` inliers, RMS `0.259` ;
+  - mono `d50_2822` : `20` inliers, RMS `0.306` ;
+  - premiere acceptation union : rang `3`, origine `d50_2823`, `57` inliers,
+    RMS `0.959` ;
+  - meilleur union : rang `135`, origine `d50_2822`, `57` inliers, RMS `0.300`.
+- Non-regression courte :
+  - `232144`, `232205`, `232247`, `232350`, `232102` restent
+    `ACCEPTED_PRODUCT_THRESHOLD` en validation union.
+- Decision :
+  - les deux echecs P2.8/P2.7 restants venaient de la validation mono-tuile et
+    du support catalogue fragmente, pas d'un echec geometrique du backend 4D ;
+  - la strategie multi-index bornee est viable en diagnostic pour les champs en
+    bord de tuile ;
+  - ne pas l'activer produit avant un mini-corpus M106 multi-index borne et un
+    contrat de validation separe entre statut diagnostic et acceptation produit.
+
+## 2026-07-09 — P2.10 mini-corpus M106 multi-index borne
+
+- Scope respecte :
+  - aucun changement ZeNear/GUI/default ;
+  - backend 4D toujours OFF par defaut ;
+  - aucun changement de seuil (`quality_inliers=40`, `quality_rms=1.2`) ;
+  - aucun all30 ;
+  - aucun rebuild complet ;
+  - aucun WCS Astrometry.net utilise comme entree runtime.
+- Artefacts :
+  - script `tools/diagnose_p210_4d_m106_bounded_multi_index_corpus.py` ;
+  - rapport `reports/zeblind_p210_4d_m106_bounded_multi_index_corpus.md` ;
+  - JSON `reports/zeblind_p210_4d_m106_bounded_multi_index_corpus.json`.
+- Interface experimentale preparee dans `SolveConfig`, avec valeurs OFF/inertes
+  par defaut :
+  - `blind_astrometry_4d_index_paths` ;
+  - `blind_astrometry_4d_validation_catalog_policy` ;
+  - `blind_astrometry_4d_accept_policy` ;
+  - `blind_astrometry_4d_max_accepts`.
+- Mini-corpus :
+  - 10 images M106 testees : les 7 cas P2.9 plus `232513`, `232534`,
+    `232658` ;
+  - 30 images M106 locales existent, mais P2.10 n'a pas lance all30.
+- Resultats :
+  - `first_accept` resout `10/10` ;
+  - `best_within_budget` resout `10/10` ;
+  - cas obligatoires recuperes :
+    - `232329` : first accept `57` inliers / RMS `0.959`, best `57` / `0.300` ;
+    - `232431` : `62` inliers / RMS `0.273` des le rang `1` ;
+  - les 5 cas de comparaison restent acceptes ;
+  - les 3 extras bornes passent aussi avec validation union ;
+  - `best_within_budget` ameliore le RMS sur `9/10` cas, donc `first_accept`
+    suffit pour le succes brut mais pas toujours pour la meilleure qualite.
+- Controle anti-faux-positif :
+  - mauvaise liste explicite `d50_2822` seule sur 5 cas ou sa footprint oracle
+    est <= `40%` ;
+  - `0/5` acceptation, pas de faux positif evident sur ce controle.
+- Decision :
+  - la strategie multi-index bornee `d50_2823+d50_2822` est propre comme option
+    experimentale utilisateur ;
+  - ne pas la promouvoir produit avant un mini-corpus plus large mais borne,
+    des controles faux positifs plus durs, et un contrat clair entre statut
+    diagnostic et acceptation produit.
+
+## 2026-07-09 — P2.11 hardening runtime 4D multi-index
+
+- Scope respecte :
+  - aucun changement ZeNear/GUI/default ;
+  - backend 4D toujours OFF par defaut ;
+  - aucun changement de seuil (`quality_inliers=40`, `quality_rms=1.2`,
+    `match_radius_px=3.0`) ;
+  - aucun all30 ni rebuild complet ;
+  - aucun WCS Astrometry.net utilise comme entree runtime.
+- Runtime principal :
+  - `solve_blind` consomme maintenant les options experimentales P2.10 :
+    `blind_astrometry_4d_index_paths`,
+    `blind_astrometry_4d_validation_catalog_policy`,
+    `blind_astrometry_4d_accept_policy`,
+    `blind_astrometry_4d_max_accepts` ;
+  - activation uniquement via `quad_hash_schema="astrometry_ab_code_4d_v1"` ;
+  - chemins/index seuls restent inertes si le schema historique est conserve ;
+  - en mode schema 4D, liste vide, index absent/incompatible ou union catalogue
+    vide produisent une erreur explicite, sans fallback silencieux vers
+    `opposite_edge_ratio_8bit_v1`.
+- Validation union :
+  - `union_candidate_tiles` charge uniquement les index explicites candidats,
+    construit une union catalogue dedupliquee et valide les hypotheses 4D contre
+    cette union ;
+  - la validation mono-tuile reste capturee en stats comme reference.
+- Accept policies :
+  - `first_accept` conserve le comportement d'arret au premier candidat accepte ;
+  - `best_within_budget` choisit le meilleur accepte par seuil produit, RMS plus
+    bas, inliers plus eleves, couverture geometrie, puis rang.
+- Replay P2.10 via solveur principal :
+  - script `tools/diagnose_p211_4d_experimental_runtime_hardening.py` ;
+  - rapport `reports/zeblind_p211_4d_experimental_runtime_hardening.md` ;
+  - `10/10` succes sur le mini-corpus M106 borne ;
+  - `232329` : `57` inliers / RMS `0.300` ;
+  - `232431` : `62` inliers / RMS `0.273` ;
+  - controle mauvaise liste `d50_2822` seule : `0/5` acceptation.
+- Validation :
+  - `python -m py_compile tools/diagnose_p211_4d_experimental_runtime_hardening.py zeblindsolver/zeblindsolver.py` OK ;
+  - `python -m pytest -q tests/test_quad_code_diagnostic.py tests/test_zeblindsolver.py tests/test_synthetic.py tests/test_quad_storage.py` -> `79 passed`.
+- Decision :
+  - le mode 4D multi-index borne est pret comme option experimentale utilisateur,
+    toujours OFF par defaut ;
+  - avant promotion produit : garder controles faux positifs, mini-corpus borne
+    plus large, et contrat d'acceptation separe.
+
+## 2026-07-09 — P2.12 validation M106 elargie bornee
+
+- Scope respecte :
+  - aucun changement ZeNear/GUI/default ;
+  - backend 4D toujours OFF par defaut ;
+  - aucun changement de seuil (`quality_inliers=40`, `quality_rms=1.2`,
+    `match_radius_px=3.0`) ;
+  - aucun all-sky/all30 CLI, aucun rebuild complet ;
+  - aucun WCS Astrometry.net utilise comme entree runtime ;
+  - aucune decouverte globale ni construction d'index au runtime.
+- Artefacts :
+  - script `tools/diagnose_p212_4d_m106_30_bounded_validation.py` ;
+  - rapport `reports/zeblind_p212_4d_m106_30_bounded_validation.md` ;
+  - JSON `reports/zeblind_p212_4d_m106_30_bounded_validation.json`.
+- Resultats corpus M106 local 30 images :
+  - `first_accept` : `28/30` ;
+  - `best_within_budget` : `28/30` ;
+  - les 10 cas P2.10/P2.11 restent valides (`10/10`) ;
+  - `best_within_budget` ameliore le RMS sur `27/30` cas, sans degradation RMS.
+- Echecs restants :
+  - `233828` : meilleur rejet `37` inliers / RMS `0.942`, RMS/scale OK mais
+    inliers sous `40` ;
+  - `234013` : meilleur rejet `28` inliers / RMS `0.910`, RMS/scale OK mais
+    inliers sous `40`.
+- Controles :
+  - mauvaise liste `d50_2822` seule sur low-footprint : `0/10` acceptation ;
+  - ordre inverse `[d50_2822, d50_2823]` : `10/10` sur controles prioritaires,
+    aucune degradation RMS > `0.25 px` ;
+  - listes partielles montrent la perte de couverture attendue :
+    `d50_2823` seule `5/10`, `d50_2822` seule `1/10` ;
+  - index absent/incompatible : erreurs explicites, sans fallback silencieux.
+- Cout `best_within_budget` :
+  - total median `19.220s`, p95 `23.617s` ;
+  - validation mediane `7.621s`, p95 `11.812s` ;
+  - median `187` hypotheses testees ;
+  - `12` cas touchent `max_accepts`, aucun ne touche `max_wall_s`.
+- Decision :
+  - mode credible comme option experimentale utilisateur bornee et documentee ;
+  - P2.12 reste partiel, donc pas de promotion produit ;
+  - prochain front causal : diagnostiquer `233828` et `234013`
+    (support catalogue/source-list/couverture) sans baisser les seuils.
+
+## 2026-07-09 — P2.13 autopsie des deux echecs M106
+
+- Scope respecte :
+  - diagnostic uniquement ;
+  - aucun changement ZeNear/GUI/default/backend ;
+  - aucun changement de seuil (`quality_inliers=40`, `quality_rms=1.2`,
+    `match_radius_px=3.0`) ;
+  - aucun all-sky, aucune construction de tuile/index ;
+  - runtime blind execute sur copies FITS sans WCS ; WCS Astrometry.net utilise
+    seulement comme oracle offline de support/footprint.
+- Artefacts :
+  - script `tools/diagnose_p213_4d_m106_failure_autopsy.py` ;
+  - rapport `reports/zeblind_p213_4d_m106_failure_autopsy.md` ;
+  - JSON `reports/zeblind_p213_4d_m106_failure_autopsy.json`.
+- Point important de methode :
+  - certaines copies FITS portaient un header WCS stale/non utile ;
+  - le probe selectionne une copie locale resolue coherente M106 comme oracle
+    offline, sans jamais l'utiliser dans le solveur blind.
+- `233828` :
+  - meilleur rejet union : `37` inliers / RMS `0.942`, scale OK ;
+  - footprint oracle : `d50_2823` `87.1%`, `d50_2822` `29.0%` ;
+  - support union catalogue : `63` etoiles dans le champ ;
+  - `55` etoiles brutes matchables, mais seulement `37` dans la source-list 4D
+    gardee ;
+  - classification : `source_list_selection_drops_matchable_stars`, near-miss.
+- `234013` :
+  - meilleur rejet union : `28` inliers / RMS `0.910`, scale OK ;
+  - footprint oracle : `d50_2822` `100%`, `d50_2725` seulement `3.2%`,
+    `d50_2823` marginal ;
+  - support `d50_2822` : `68` etoiles dans le champ ;
+  - `42` etoiles brutes matchables, mais seulement `28` dans la source-list 4D
+    gardee ;
+  - classification : `source_list_selection_drops_matchable_stars`.
+- Decision :
+  - les deux echecs P2.12 ne sont pas des faux positifs ni des problemes de
+    seuil ;
+  - le duo `[d50_2823,d50_2822]` reste suffisant pour le diagnostic courant ;
+  - `d50_2725` n'est qu'une footprint marginale sur `234013`, pas la direction
+    prioritaire ;
+  - direction suivante unique : auditer/rendre plus stable le ranking
+    source-list 4D pour conserver davantage d'etoiles oracle matchables dans les
+    `120` sources, sans augmenter les quads ni baisser les seuils.
+
+## 2026-07-10 — P2.14 bake-off source-list 4D
+
+- Scope respecte :
+  - diagnostic uniquement ;
+  - aucun changement ZeNear/GUI/default/backend ;
+  - aucun changement de seuil (`quality_inliers=40`, `quality_rms=1.2`,
+    `match_radius_px=3.0`) ;
+  - aucun all-sky, aucun rebuild complet ;
+  - runtime blind sur copies FITS sans WCS ; WCS Astrometry.net utilise
+    seulement comme oracle offline de retention.
+- Artefacts :
+  - script `tools/diagnose_p214_4d_source_policy_bakeoff.py` ;
+  - rapport `reports/zeblind_p214_4d_source_policy_bakeoff.md` ;
+  - JSON `reports/zeblind_p214_4d_source_policy_bakeoff.json`.
+- Politiques testees avant elargissement :
+  - baseline `diagnostic_unfiltered` cap `120` ;
+  - caps simples `160`, `200`, `250` ;
+  - grilles `4x4` et `6x4` aux caps `160` et `200` ;
+  - stratification flux/qscore aux caps `160` et `200` ;
+  - `astrometry_like` cap `200`.
+- Resultat causal :
+  - `233828` est recuperable par cap/ranking sans baisse de seuil :
+    `head_cap200` atteint `40` inliers / RMS `0.939`, plusieurs variantes
+    donnent `41-44` inliers ;
+  - `234013` ne passe avec aucune politique raisonnable testee : head
+    `160/200/250` et astrometry-like `200` restent a `28` inliers, les grilles
+    et la stratification font pareil ou pire ;
+  - la retention oracle de `234013` reste bloquee a `28/42` matchables meme en
+    head cap `250`, donc le bloc causal n'est pas un simple cap <=250.
+- Decision :
+  - P2.14 negatif utile, stop criterion active ;
+  - pas de run 30/30 ni controles faux positifs complets apres le focus negatif
+    sur `234013` ;
+  - aucune nouvelle source policy 4D n'est promouvable ;
+  - meilleure politique partielle seulement : `grid4x4_cap160`.
+- Prochaine direction :
+  - auditer les matchables perdues de `234013` au-dela du top 250 ;
+  - tester une source-list superieure a 250 uniquement en diagnostic, ou revoir
+    le ranking detecteur profond ;
+  - ne pas baisser les seuils, ne pas augmenter les quads a l'aveugle, ne pas
+    promouvoir le backend 4D par defaut.
+
+## 2026-07-12 — P2.15 separation quad_sources / verification_sources 4D
+
+- Scope respecte :
+  - nouveau comportement uniquement dans la route 4D experimentale ;
+  - aucun changement ZeNear/GUI/default, aucun seuil change ;
+  - aucun all30/all-sky, aucun WCS oracle runtime ;
+  - WCS Astrometry.net utilise seulement pour les compteurs offline de sources
+    oracle-matchables.
+- Artefacts :
+  - script `tools/diagnose_p215_4d_split_quad_verify_sources.py` ;
+  - rapport `reports/zeblind_p215_4d_split_quad_verify_sources.md` ;
+  - JSON `reports/zeblind_p215_4d_split_quad_verify_sources.json`.
+- Implementation :
+  - la route runtime 4D peut recevoir une liste de validation separee via
+    `prep_cache["astrometry_4d_verification_stars"]` ;
+  - `quad_sources` continue seule a generer les quads et le lookup 4D ;
+  - `verification_sources` sert seulement a mesurer les matches/inliers WCS.
+- Resultat principal `234013` :
+  - baseline `q120_v250` : `28` inliers / RMS `0.910` ;
+  - meilleur candidat coherent : `q120_v500`, `30` inliers / RMS `0.974` ;
+  - verification full nettoyee : `4938` sources, contient les `42` etoiles
+    oracle-matchables, mais ne produit pas de solution valide >=40 ;
+  - les compteurs hauts (`q120_vfull` `215`, `q200_vfull` `191`) sont des
+    rejets hors echelle/RMS invalide, donc accumulation artificielle.
+- Controles :
+  - `233828` passe grace a la separation : `q120_v250` donne `43` inliers /
+    RMS `1.102` ;
+  - `233705`, `233644`, `233602`, `233520` passent sur toutes les configs ;
+  - cout median global : validation `5.590s`, total solveur `7.331s`.
+- Decision :
+  - la separation des listes est architecturalement plus proche d'Astrometry.net
+    et utile pour certains plafonds (`233828`) ;
+  - elle ne resout pas le gap principal `234013` ;
+  - prochaine piste : auditer les centroïdes, le matching et les residus des
+    etoiles oracle restantes, puis comparer au detecteur `image2xy` seulement
+    si ce diagnostic le justifie.
+
+## 2026-07-12 — P2.16 audit residuel du candidat 4D `234013`
+
+- Scope respecte :
+  - diagnostic uniquement ;
+  - aucun changement ZeNear/GUI/default ;
+  - aucun changement de seuil (`quality_inliers=40`, `quality_rms=1.2`,
+    `match_radius_px=3.0`) ;
+  - aucun all-sky, aucun WCS oracle runtime, aucun changement du coeur AB/C/D
+    ni du ranking source-list.
+- Artefacts :
+  - script `tools/diagnose_p216_4d_candidate_refine_residual_audit.py` ;
+  - rapport `reports/zeblind_p216_4d_candidate_refine_residual_audit.md` ;
+  - JSON `reports/zeblind_p216_4d_candidate_refine_residual_audit.json` ;
+  - controle runtime `reports/zeblind_p216_controls_runtime_replay.json`.
+- Candidat `234013` isole :
+  - origine `d50_2822` ;
+  - rang replay `95` ;
+  - image quad `[5,3,4,0]` ;
+  - catalogue quad `[196,54,175,7]` ;
+  - echelle initiale `2.373471"/px`.
+- Resultat principal :
+  - les `42/42` etoiles oracle-matchables sont deja sous `3 px` avec le WCS
+    quad initial ;
+  - le WCS quad initial passe les seuils avec la liste complete :
+    `42` inliers / RMS `1.102` ;
+  - le refit TAN strict ameliore legerement a `43` inliers / RMS `0.992`,
+    mais n'est pas necessaire au passage ;
+  - les rayons de collecte temporaires `4.5/5 px` n'apportent pas de gain utile ;
+  - matching glouton, mutual nearest-neighbour et biparti donnent le meme
+    support initial (`42`) ;
+  - SIP ordre 2 non necessaire.
+- Controles :
+  - replay runtime `q120_v500` des cinq controles passe aux seuils inchanges :
+    `233828=47/1.147`, `233705=58/0.656`, `233644=60/0.739`,
+    `233602=58/0.464`, `233520=61/0.420` ;
+  - mauvaise tuile `d50_2823` seule sur `234013` ne passe pas :
+    `121` matches bruts mais rejet hors echelle (`scale=26.056`).
+- Decision :
+  - le bloc causal de `234013` n'est pas l'absence de tweak/refine TAN/SIP ;
+  - le gap restant est l'isolation/telemetrie du meilleur candidat coherent
+    avec la liste complete, afin qu'un candidat hors echelle ne masque plus le
+    candidat coherent.
+
+## 2026-07-12 — P2.17 parite runtime/replay du candidat 4D `234013`
+
+- Scope respecte :
+  - audit de contrat/plomberie ;
+  - aucun changement ZeNear/GUI/default ;
+  - aucun changement de seuil (`quality_inliers=40`, `quality_rms=1.2`,
+    `match_radius_px=3.0`) ;
+  - aucun all-sky, aucun WCS oracle runtime, aucun changement du coeur AB/C/D,
+    aucun nouveau ranking source-list, aucun refit ni rescue.
+- Artefacts :
+  - script `tools/diagnose_p217_4d_runtime_replay_parity.py` ;
+  - rapport `reports/zeblind_p217_4d_runtime_replay_parity.md` ;
+  - JSON `reports/zeblind_p217_4d_runtime_replay_parity.json` ;
+  - matrice controle `reports/zeblind_p217_runtime_validation_matrix.json`.
+- Cause racine :
+  - le candidat coherent `234013` rang `95` etait deja present en runtime ;
+  - identite/WCS/sources/catalogue/paires sont identiques entre runtime et
+    replay (`same_*` vrais) ;
+  - la divergence venait de la metrique de validation : P2.16 mesurait les
+    distances pixel directes du matching `catalogue world2pix -> image`, alors
+    que la route runtime 4D repassait les memes paires dans `validate_solution`,
+    qui mesure `image pix2world -> catalogue` puis reconvertit en pixels.
+- Resultat numerique sur les memes `42` paires :
+  - metrique directe : `42` inliers / RMS `1.102` ;
+  - ancienne metrique inverse runtime : `41` inliers / RMS `1.203`, rejetee
+    de justesse par `quality_rms=1.2`.
+- Implementation :
+  - correction bornee a la route 4D experimentale : validation finale sur les
+    distances pixel deja collectees par `_astrometry_4d_build_match_details` ;
+  - ancienne validation inverse conservee en telemetrie `legacy_inverse_*` ;
+  - buckets separes exposes pour `best_plausible_reject`,
+    `best_scale_invalid_reject`, `best_rms_invalid_reject`,
+    `best_geometry_invalid_reject`.
+- Validation :
+  - `solve_blind` recupere maintenant naturellement `234013` en `q120_vfull`,
+    rang selectionne `95`, `42` inliers / RMS `1.102` ;
+  - controles `q120_vfull` passes :
+    `233828=55/0.934`, `233705=64/0.593`, `233644=64/0.664`,
+    `233602=66/0.534`, `233520=61/0.379` ;
+  - mauvaise tuile `d50_2823` seule reste rejetee :
+    `121` matches, RMS `2.102`, echelle invalide `26.051"/px` ;
+  - tests courts : `pytest -q tests/test_zeblindsolver.py` => `50 passed`.
+- Decision :
+  - le bloc causal P2.17 est ferme ;
+  - le mode peut maintenant etre rejoue sur les 30 M106 avant toute nouvelle
+    strategie algorithmique.
+
+## 2026-07-12 — P2.18 cloture M106 all30 / contrat metrique directe 4D
+
+- Scope respecte :
+  - `solve_blind` uniquement ;
+  - aucun changement ZeNear/GUI/default ;
+  - aucun changement de seuil (`quality_inliers=40`, `quality_rms=1.2`,
+    `match_radius_px=3.0`) ;
+  - aucun all-sky, aucun WCS oracle runtime, aucun changement du coeur AB/C/D,
+    aucun refit TAN/SIP, aucun rescue.
+- Artefacts :
+  - script `tools/diagnose_p218_4d_m106_all30_direct_metric_closure.py` ;
+  - rapport `reports/zeblind_p218_4d_m106_all30_direct_metric_closure.md` ;
+  - JSON `reports/zeblind_p218_4d_m106_all30_direct_metric_closure.json`.
+- Tests de contrat ajoutes :
+  - la validation finale 4D utilise les distances pixel directes deja produites
+    par le matching `catalogue world2pix -> image` ;
+  - pas de rematch inverse dans la decision ;
+  - ordre des paires invariant ;
+  - `legacy_inverse_*` reste telemetrique et ne modifie pas le sorting
+    d'acceptation ;
+  - cas frontiere `234013` verrouille : direct accepte, legacy inverse rejete.
+- Validation tests :
+  - `pytest -q tests/test_quad_code_diagnostic.py tests/test_zeblindsolver.py`
+    => `72 passed` ;
+  - `python -m py_compile` OK sur scripts P2.17/P2.18 et
+    `zeblindsolver.py`.
+- Resultat all30 M106 :
+  - configuration `q120_vfull`, index `[d50_2823,d50_2822]`,
+    `union_candidate_tiles`, `best_within_budget` ;
+  - `30/30` succes via `solve_blind` ;
+  - `234013` passe naturellement rang `95`, `42` inliers / RMS direct `1.102`,
+    legacy inverse `41` / `1.203`.
+- Direct vs legacy :
+  - seule decision differente sur les 30 : `234013` ;
+  - delta RMS inverse-direct median `0.0845`, p95 `0.195`, max `0.235` ;
+  - aucun cas ou la metrique directe est nettement pire de plus de `0.05 px`.
+- Controles :
+  - `0/8` faux positifs sur controles negatifs :
+    `d50_2822` seule low-footprint, `d50_2823` seule sur `234013`, index
+    absent, catalogue incompatible/shuffle ;
+  - ordre inverse `[d50_2822,d50_2823]` : `30/30` ;
+  - garde `first_accept` sur `234013` : direct accepte malgre
+    `legacy_inverse_quality=FAIL`.
+- Cout :
+  - median total `7.559s`, p95 total `11.415s` ;
+  - median validation `5.390s`, p95 validation `9.208s` ;
+  - median hypotheses `184`, p95 `301` ;
+  - max `verification_sources=5000` ;
+  - aucun cas ne touche `max_wall_s=45`.
+- Decision :
+  - le backend 4D peut etre considere comme experimental release candidate sur
+    M106 ;
+  - backend historique inchange et toujours OFF par defaut ;
+  - prochaine limite produit reelle : non-regression hors champ M106 et indices
+    voisins avant promotion produit plus large.

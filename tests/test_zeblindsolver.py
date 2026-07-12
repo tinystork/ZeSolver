@@ -130,6 +130,69 @@ def test_blind_solve_delegates_to_internal(monkeypatch, tmp_path) -> None:
     assert captured and captured[0][0] == str(path)
 
 
+def test_blind_solve_external_retry_can_bound_internal_first_pass(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "input.fits"
+    fits.PrimaryHDU(data=np.zeros((2, 2), dtype=np.float32)).writeto(path)
+    index_root = tmp_path / "index"
+    index_root.mkdir()
+
+    configs: list[core_solver.SolveConfig] = []
+
+    def fake_internal(
+        input_fits: str,
+        index_root_arg: str,
+        *,
+        config: Optional[Any],
+        cancel_check: Optional[Any] = None,
+        prep_cache: Optional[dict[str, Any]] = None,
+    ) -> SimpleNamespace:
+        assert input_fits == str(path)
+        assert index_root_arg == str(index_root)
+        configs.append(config)
+        if len(configs) == 1:
+            return SimpleNamespace(
+                success=False,
+                message="global hard budget exceeded (45.0s)",
+                tile_key=None,
+                header_updates={},
+                stats={"fail_stage": "verify_prob", "best_fail_inliers": 26},
+            )
+        return SimpleNamespace(
+            success=True,
+            message="ok",
+            tile_key="tile99",
+            header_updates={"SOLVED": 1},
+            stats={"total_candidates_tried": 1},
+        )
+
+    monkeypatch.setattr(zeblindsolver, "_internal_solve_blind", fake_internal)
+    cfg = core_solver.SolveConfig(
+        blind_global_hard_budget_s=90.0,
+        blind_astrometry_external_image2xy_enabled=True,
+        blind_astrometry_external_image2xy_after_internal_fail_enabled=True,
+        blind_astrometry_external_image2xy_internal_first_budget_s=45.0,
+    )
+    result = zeblindsolver.blind_solve(
+        fits_path=str(path),
+        index_root=str(index_root),
+        config=cfg,
+        skip_if_valid=False,
+    )
+
+    assert result["success"]
+    assert result["used_db"] == "tile99"
+    assert len(configs) == 2
+    assert configs[0].blind_astrometry_external_image2xy_enabled is False
+    assert configs[0].blind_global_hard_budget_s == pytest.approx(45.0)
+    assert configs[1].blind_astrometry_external_image2xy_enabled is True
+    assert configs[1].blind_global_hard_budget_s == pytest.approx(90.0)
+    retry = result["stats"]["external_image2xy_after_internal_fail"]
+    assert retry["internal_fail_stage"] == "verify_prob"
+    assert retry["internal_best_fail_inliers"] == 26
+    assert retry["internal_budget_s"] == pytest.approx(45.0)
+    assert retry["external_success"] is True
+
+
 def test_manifest_cone_filter():
     manifest = {
         "tiles": [
@@ -204,6 +267,17 @@ def test_detection_params_forwarded(monkeypatch, tmp_path):
         core_solver.solve_blind(str(fits_path), str(tmp_path), config=cfg)
     assert recorded["k_sigma"] == pytest.approx(1.7)
     assert recorded["min_area"] == 7
+
+
+def test_blind_global_hard_budget_is_reported(tmp_path) -> None:
+    fits_path = tmp_path / "scene.fits"
+    fits.PrimaryHDU(data=np.zeros((16, 16), dtype=np.float32)).writeto(fits_path)
+    cfg = core_solver.SolveConfig(blind_global_hard_budget_s=1.0e-9)
+    result = core_solver.solve_blind(str(fits_path), str(tmp_path), config=cfg)
+    assert not result.success
+    assert "global hard budget exceeded" in result.message
+    assert result.stats["global_hard_budget_triggered"] is True
+    assert result.stats["global_hard_budget_s"] == pytest.approx(1.0e-9)
 
 
 def _build_simple_tan_wcs(*, crval1: float, crval2: float, scale_arcsec: float = 2.37) -> WCS:
@@ -855,3 +929,171 @@ def test_reset_scale_anchor_for_candidate_keeps_state_when_disabled() -> None:
     )
     assert arcsec == pytest.approx(24.21388441049848)
     assert source == "candidate_pairset_local"
+
+
+def test_pairset_scale_anchor_rejects_contaminated_native_scale() -> None:
+    arcsec, source, promoted, reason = core_solver._resolve_pairset_scale_anchor(
+        2.3926740786838514,
+        "header_scale_arcsec",
+        13.638204598599607,
+        2.3926740786838514,
+        astrometry_native_verify_semantics_mode=True,
+        promote_enabled=True,
+        max_ratio_from_approx=1.8,
+    )
+    assert promoted is False
+    assert reason == "ratio_vs_approx"
+    assert arcsec == pytest.approx(2.3926740786838514)
+    assert source == "header_scale_arcsec"
+
+
+def test_pairset_scale_anchor_promotes_consistent_native_scale() -> None:
+    arcsec, source, promoted, reason = core_solver._resolve_pairset_scale_anchor(
+        2.3926740786838514,
+        "header_scale_arcsec",
+        2.45,
+        2.3926740786838514,
+        astrometry_native_verify_semantics_mode=True,
+        promote_enabled=True,
+        max_ratio_from_approx=1.8,
+    )
+    assert promoted is True
+    assert reason is None
+    assert arcsec == pytest.approx(2.45)
+    assert source == "candidate_pairset_local"
+
+
+def test_resolve_hit_support_rank_boost_is_native_only_and_capped() -> None:
+    assert core_solver._resolve_hit_support_rank_boost(
+        5,
+        enabled=True,
+        weight=1.25,
+        max_boost=8.0,
+        native_verify_semantics=True,
+    ) == pytest.approx(6.25)
+    assert core_solver._resolve_hit_support_rank_boost(
+        20,
+        enabled=True,
+        weight=1.25,
+        max_boost=8.0,
+        native_verify_semantics=True,
+    ) == pytest.approx(8.0)
+    assert core_solver._resolve_hit_support_rank_boost(
+        5,
+        enabled=True,
+        weight=1.25,
+        max_boost=8.0,
+        native_verify_semantics=False,
+    ) == 0.0
+
+
+def test_refit_prune_similarity_pairs_drops_outlier() -> None:
+    src = np.array(
+        [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            [10.0, 10.0],
+            [5.0, 5.0],
+        ],
+        dtype=np.float64,
+    )
+    dst = 2.0 * src + np.array([3.0, -4.0])
+    dst[-1] += np.array([20.0, -15.0])
+    result = core_solver._refit_prune_similarity_pairs(
+        src,
+        dst,
+        reflected=False,
+        min_pairs=4,
+        max_exhaustive_pairs=8,
+    )
+    assert result is not None
+    keep, src_keep, dst_keep, rs, tr, rms = result
+    assert keep.tolist() == [0, 1, 2, 3]
+    assert src_keep.shape == (4, 2)
+    assert dst_keep.shape == (4, 2)
+    assert abs(rs) == pytest.approx(2.0)
+    assert tr.real == pytest.approx(3.0)
+    assert tr.imag == pytest.approx(-4.0)
+    assert rms < 1.0e-9
+
+
+def test_extend_similarity_support_pairs_adds_consensus_matches() -> None:
+    src_pool = np.array(
+        [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            [10.0, 10.0],
+            [20.0, 5.0],
+            [5.0, 20.0],
+            [30.0, 15.0],
+            [80.0, 80.0],
+        ],
+        dtype=np.float64,
+    )
+    scale = 0.01
+    dst_pool = scale * src_pool + np.array([1.0, -2.0])
+    dst_pool[-1] += np.array([0.4, -0.3])
+    world_pool = dst_pool + np.array([10.0, 20.0])
+    result = core_solver._extend_similarity_support_pairs(
+        src_pool,
+        dst_pool,
+        world_pool,
+        src_pool[:4],
+        dst_pool[:4],
+        reflected=False,
+        tol_deg=0.02,
+        min_pairs=6,
+        min_gain=2,
+        max_points=16,
+        max_pairs=16,
+        max_rms_px=0.25,
+    )
+    assert result is not None
+    src_idx, dst_idx, src_keep, dst_keep, world_keep, rs, tr, rms = result
+    assert src_idx.size >= 6
+    assert dst_idx.tolist() == src_idx.tolist()
+    assert src_keep.shape == dst_keep.shape
+    assert np.allclose(world_keep, world_pool[dst_idx])
+    assert abs(rs) == pytest.approx(scale)
+    assert tr.real == pytest.approx(1.0)
+    assert tr.imag == pytest.approx(-2.0)
+    assert rms < 0.25
+
+
+def test_default_config_prioritizes_exact_quad_hashes() -> None:
+    cfg = core_solver.SolveConfig()
+    assert cfg.blind_astrometry_exact_hash_first_enabled is True
+    assert cfg.blind_astrometry_exact_hash_identity_perm_enabled is True
+
+
+def test_astrometry_uniformize_order_interleaves_spatial_bins() -> None:
+    x = np.array([10.0, 12.0, 90.0, 92.0], dtype=np.float64)
+    y = np.array([10.0, 12.0, 10.0, 12.0], dtype=np.float64)
+    order, stats = core_solver._astrometry_uniformize_order_xy(x, y, approx_boxes=2)
+    assert order.tolist() == [0, 2, 1, 3]
+    assert stats["nx"] > 1
+    assert stats["ny"] == 1
+
+
+def test_astrometry_source_list_gate_uniformizes_before_cap() -> None:
+    stars = np.array(
+        [
+            (10.0, 10.0, 100.0, 2.0),
+            (12.0, 12.0, 90.0, 2.0),
+            (90.0, 10.0, 80.0, 2.0),
+            (92.0, 12.0, 70.0, 2.0),
+        ],
+        dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")],
+    )
+    out, stats = core_solver._astrometry_source_list_gate(
+        stars,
+        image_shape=(100, 100),
+        approx_boxes=2,
+        max_sources=3,
+        min_keep_ratio=0.0,
+    )
+    assert out["x"].tolist() == pytest.approx([10.0, 90.0, 12.0])
+    assert int(stats["kept"]) == 3
+    assert int(stats["uniform_nx"]) > 1

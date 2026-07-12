@@ -32,10 +32,9 @@ from dataclasses import dataclass
 import numpy as np
 
 from .levels import QuadLevelSpec
-from .quad_sampling import generate_pairwise_quads
+from .quad_sampling import generate_coverage_first_quads, generate_pairwise_quads, generate_ring_coverage_quads
 
-MIN_RATIO = 0.25
-MAX_RATIO = 4.0
+QUAD_HASH_QUANTIZATION_MAX = 255
 MIN_AREA = 1e-7
 
 
@@ -53,9 +52,27 @@ def _quad_area(points: np.ndarray) -> float:
 
 
 def _quantize_ratio(value: float) -> int:
-    clipped = min(max(value, MIN_RATIO), MAX_RATIO)
-    norm = (clipped - MIN_RATIO) / (MAX_RATIO - MIN_RATIO)
-    return int(round(norm * 65535))
+    """Quantize a bounded, permutation-invariant edge ratio to eight bits."""
+    clipped = min(max(value, 0.0), 1.0)
+    return int(round(clipped * QUAD_HASH_QUANTIZATION_MAX))
+
+
+def opposite_edge_ratio_code(points: np.ndarray) -> np.ndarray | None:
+    """Return the unlabeled three-ratio code used by the v3 quad hash."""
+    pts = np.asarray(points, dtype=np.float64)
+    if pts.shape != (4, 2) or not np.all(np.isfinite(pts)):
+        return None
+    diffs = pts[:, None, :] - pts[None, :, :]
+    distances = np.hypot(diffs[..., 0], diffs[..., 1])
+    eps = 1e-12
+    ratios: list[float] = []
+    for (a, b), (c, d) in (((0, 1), (2, 3)), ((0, 2), (1, 3)), ((0, 3), (1, 2))):
+        first = float(distances[a, b])
+        second = float(distances[c, d])
+        if first <= eps or second <= eps:
+            return None
+        ratios.append(min(first, second) / max(first, second))
+    return np.sort(np.asarray(ratios, dtype=np.float64))
 
 
 def _quad_diameter(points: np.ndarray) -> float:
@@ -65,21 +82,40 @@ def _quad_diameter(points: np.ndarray) -> float:
 
 
 def _canonical_quad_order(combo: np.ndarray, positions: np.ndarray) -> np.ndarray:
-    """Return a stable cyclic ordering for a quad.
+    """Return a non-crossing cyclic ordering for a quad.
 
     Sorting by distance-to-centroid can create crossing polygons (bow-ties),
-    which collapses polygon area and rejects valid quads. We instead sort by
-    polar angle around the centroid, then rotate to a deterministic start.
+    which collapses polygon area and rejects valid quads. The hash itself is
+    permutation invariant, so this order is used only for area checks and
+    downstream permutation trials; it must not depend on star identifiers.
     """
     idx = np.asarray(combo, dtype=np.int64)
     points = positions[idx]
     center = points.mean(axis=0)
     angles = np.arctan2(points[:, 1] - center[1], points[:, 0] - center[0])
-    order = np.argsort(angles)
-    ordered = idx[order]
-    start = int(np.argmin(ordered))
-    ordered = np.roll(ordered, -start)
-    return ordered.astype(np.uint16, copy=False)
+    order = np.argsort(angles, kind="stable")
+    cyclic = idx[order]
+
+    # Select one of the eight cyclic/reflected representations by geometry,
+    # not by local star IDs or absolute orientation. This gives corresponding
+    # image/catalog quads the same slot order when their shape is asymmetric.
+    candidates: list[tuple[tuple[float, ...], np.ndarray]] = []
+    for base in (cyclic, cyclic[::-1]):
+        for shift in range(4):
+            candidate = np.roll(base, -shift)
+            p = positions[candidate]
+            distances = (
+                np.linalg.norm(p[0] - p[1]),
+                np.linalg.norm(p[1] - p[2]),
+                np.linalg.norm(p[2] - p[3]),
+                np.linalg.norm(p[3] - p[0]),
+                np.linalg.norm(p[0] - p[2]),
+                np.linalg.norm(p[1] - p[3]),
+            )
+            scale = max(float(max(distances)), 1e-12)
+            signature = tuple(round(float(value) / scale, 12) for value in distances)
+            candidates.append((signature, candidate))
+    return min(candidates, key=lambda item: item[0])[1].astype(np.uint16, copy=False)
 
 
 def _legacy_biased_brightness(order: np.ndarray, max_quads: int) -> np.ndarray:
@@ -190,27 +226,18 @@ def _hash_from_indexes(
             return None
         if spec.max_diameter is not None and diameter > spec.max_diameter:
             return None
-    a, b, c, d = points
+    # The three ways to split four vertices into two opposite edge pairs are
+    # intrinsic to the unlabeled quad. Sorting their bounded ratios makes the
+    # code invariant to all 24 vertex permutations, reflection, rotation,
+    # translation and scale.
+    ratio_code = opposite_edge_ratio_code(points)
+    if ratio_code is None:
+        return None
+    q1, q2, q3 = (_quantize_ratio(value) for value in ratio_code)
 
-    def dist(u: np.ndarray, v: np.ndarray) -> float:
-        return float(np.hypot(*(u - v)))
-
-    d12 = dist(a, b)
-    d34 = dist(c, d)
-    d13 = dist(a, c)
-    d24 = dist(b, d)
-    d14 = dist(a, d)
-    d23 = dist(b, c)
-    eps = 1e-8
-    r12 = d12 / (d34 + eps)
-    r13 = d13 / (d24 + eps)
-    r14 = d14 / (d23 + eps)
-    q1 = _quantize_ratio(r12)
-    q2 = _quantize_ratio(r13)
-    q3 = _quantize_ratio(r14)
-    cross_z = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
-    parity = 1 if cross_z >= 0 else 0
-    hash_value = (q1 << 48) | (q2 << 32) | (q3 << 16) | parity
+    # The low 16 bits are reserved for future schema-local flags. Parity is
+    # intentionally absent: reflection must produce the same candidate code.
+    hash_value = (q1 << 48) | (q2 << 32) | (q3 << 16)
     return hash_value, order
 
 
@@ -264,8 +291,10 @@ def sample_quads(stars: np.ndarray, max_quads: int, strategy: str = "log_spaced"
     if method == "legacy_local":
         return _legacy_local_brightness(priority_order, stars, max_quads)
 
+    catalog_coverage_first = method in {"catalog_coverage_first", "coverage_first"}
+    ring_coverage = method in {"catalog_ring_coverage", "ring_coverage"}
     sparse_preferred = method == "sparse_triples"
-    sparse_auto = method in {"local_brightness", "log_spaced"} and stars.shape[0] <= 96
+    sparse_auto = method in {"local_brightness", "log_spaced", "catalog_coverage_first", "coverage_first"} and stars.shape[0] <= 96
     sparse_quads = _sparse_triple_quads(priority_order, stars, max_quads) if (sparse_preferred or sparse_auto) else np.zeros((0, 4), dtype=np.uint16)
 
     positions = np.column_stack(
@@ -282,11 +311,49 @@ def sample_quads(stars: np.ndarray, max_quads: int, strategy: str = "log_spaced"
         [lookup[idx] for idx in priority_order if lookup[idx] >= 0],
         dtype=np.int32,
     )
-    quads = generate_pairwise_quads(
-        valid_positions,
-        seed_order=seed_order,
-        max_quads=max_quads,
-    )
+    if ring_coverage:
+        if int(max_quads) >= 12000:
+            spread_budget = max(1, int(max_quads) - 6000)
+            hybrid_budget = min(6000, int(max_quads))
+        else:
+            spread_budget = int(max_quads)
+            hybrid_budget = max(1, int(max_quads) // 3)
+        spread_quads = generate_ring_coverage_quads(
+            valid_positions,
+            seed_order=seed_order,
+            max_quads=spread_budget,
+            base_pair_cap=6,
+            per_seed_quads=20,
+            per_base_quads=max_quads,
+            base_selection="spread",
+            companion_order="combinations",
+        )
+        hybrid_quads = generate_ring_coverage_quads(
+            valid_positions,
+            seed_order=seed_order,
+            max_quads=hybrid_budget,
+        )
+        if spread_quads.size and hybrid_quads.size:
+            quads = _dedup_quads_preserve_order(np.vstack((spread_quads, hybrid_quads)), max_quads)
+        elif spread_quads.size:
+            quads = spread_quads
+        else:
+            quads = hybrid_quads
+        if quads.shape[0] < max_quads:
+            fill = generate_coverage_first_quads(
+                valid_positions,
+                seed_order=seed_order,
+                max_quads=max_quads,
+            )
+            if fill.size:
+                quads = _dedup_quads_preserve_order(np.vstack((quads, fill)), max_quads)
+    else:
+        generator = generate_coverage_first_quads if catalog_coverage_first else generate_pairwise_quads
+        quads = generator(
+            valid_positions,
+            seed_order=seed_order,
+            max_quads=max_quads,
+        )
     pairwise = index_map[quads] if quads.size else np.zeros((0, 4), dtype=np.uint16)
 
     if sparse_quads.size:
@@ -319,7 +386,7 @@ def hash_quads(
     spec: QuadLevelSpec | None = None,
     return_source_indices: bool = False,
 ) -> QuadHash:
-    """Hash the provided quads using the 3-ratio encoding and parity bit."""
+    """Hash quads with an unlabeled, similarity-invariant 8-bit ratio code."""
     valid = []
     hashes = []
     source_idx: list[int] | None = [] if return_source_indices else None
