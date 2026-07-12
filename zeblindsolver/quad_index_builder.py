@@ -46,8 +46,9 @@ from .levels import LEVEL_MAP, bucket_cap_for
 logger = logging.getLogger(__name__)
 HASH_DIR = "hash_tables"
 MANIFEST_FILENAME = "manifest.json"
-QUAD_TABLE_VERSION = 2
-QUAD_SAMPLER_TAG = "pairwise_multiscale_v1"
+QUAD_TABLE_VERSION = 4
+QUAD_SAMPLER_TAG = "hybrid_s_ring_coverage_v3"
+QUAD_HASH_SCHEMA = "opposite_edge_ratio_8bit_v1"
 QUAD_METADATA_FILE = "metadata.json"
 _INDEX_CACHE: dict[tuple[Path, str], "QuadIndex"] = {}
 # Prevent redundant concurrent loads of the same quad table
@@ -77,9 +78,22 @@ def _validate_metadata(metadata: dict[str, Any], *, level: str) -> dict[str, Any
         raise RuntimeError(
             f"quad table sampler {sampler!r} incompatible with {QUAD_SAMPLER_TAG}; rebuild required"
         )
+    hash_schema = str(metadata.get("hash_schema", ""))
+    if hash_schema != QUAD_HASH_SCHEMA:
+        raise RuntimeError(
+            f"quad table hash schema {hash_schema!r} incompatible with "
+            f"{QUAD_HASH_SCHEMA}; rebuild required"
+        )
     lvl = metadata.get("level")
     if lvl and str(lvl) != level:
         raise RuntimeError(f"quad table level mismatch ({lvl} vs {level}); rebuild required")
+    spec = LEVEL_MAP.get(level)
+    expected_spec = spec.to_manifest() if spec is not None else None
+    if expected_spec is not None and metadata.get("level_spec") != expected_spec:
+        raise RuntimeError(
+            f"quad table level spec for {level} is incompatible with the active "
+            "coverage limits; rebuild required"
+        )
     return metadata
 
 
@@ -554,7 +568,8 @@ def _process_tile_for_level(
         from .levels import LEVEL_MAP  # local import is safe in subproc
         from .asterisms import sample_quads, hash_quads
         spec = LEVEL_MAP.get(level_name)
-        quads = sample_quads(stars, max_quads_per_tile, strategy="log_spaced")
+        strategy = "catalog_ring_coverage" if str(level_name).upper() == "S" else "log_spaced"
+        quads = sample_quads(stars, max_quads_per_tile, strategy=strategy)
         if quads.size == 0:
             return None
         quad_hash = hash_quads(quads, coords, spec=spec)
@@ -675,7 +690,9 @@ def build_quad_index(
     metadata = {
         "version": QUAD_TABLE_VERSION,
         "sampler": QUAD_SAMPLER_TAG,
+        "hash_schema": QUAD_HASH_SCHEMA,
         "level": level,
+        "level_spec": spec.to_manifest(),
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "max_quads_per_tile": int(max_quads_per_tile),
         "storage": fmt,

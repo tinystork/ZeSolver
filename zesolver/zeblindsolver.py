@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import math
 import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable, List, Optional, Sequence, TypedDict
 
@@ -235,13 +236,73 @@ def blind_solve(
     try:
         if cancel_check and cancel_check():
             raise BlindSolverRuntimeError("cancelled")
+        use_external_retry = bool(
+            config is not None
+            and getattr(config, "blind_astrometry_external_image2xy_enabled", False)
+            and getattr(config, "blind_astrometry_external_image2xy_after_internal_fail_enabled", False)
+        )
+        first_config = config
+        if use_external_retry:
+            internal_budget_s = max(
+                0.0,
+                float(getattr(config, "blind_astrometry_external_image2xy_internal_first_budget_s", 0.0) or 0.0),
+            )
+            if internal_budget_s > 0.0:
+                current_budget_s = max(
+                    0.0,
+                    float(getattr(config, "blind_global_hard_budget_s", 0.0) or 0.0),
+                )
+                effective_budget_s = (
+                    min(current_budget_s, internal_budget_s)
+                    if current_budget_s > 0.0
+                    else internal_budget_s
+                )
+                first_config = replace(
+                    config,
+                    blind_astrometry_external_image2xy_enabled=False,
+                    blind_global_hard_budget_s=effective_budget_s,
+                )
+            else:
+                first_config = replace(config, blind_astrometry_external_image2xy_enabled=False)
         solution = _internal_solve_blind(
             fits_path,
             index_root,
-            config=config,
+            config=first_config,
             cancel_check=cancel_check,
             prep_cache=prep_cache,
         )
+        if use_external_retry and not solution.success:
+            first_stats = dict(solution.stats or {})
+            logger("[ZEBLIND] internal detector failed; retrying with external image2xy")
+            if cancel_check and cancel_check():
+                raise BlindSolverRuntimeError("cancelled")
+            retry_solution = _internal_solve_blind(
+                fits_path,
+                index_root,
+                config=replace(config, blind_astrometry_external_image2xy_enabled=True),
+                cancel_check=cancel_check,
+                prep_cache={},
+            )
+            retry_stats = dict(retry_solution.stats or {})
+            retry_stats["external_image2xy_after_internal_fail"] = {
+                "enabled": True,
+                "internal_success": bool(solution.success),
+                "internal_message": solution.message,
+                "internal_fail_stage": first_stats.get("fail_stage"),
+                "internal_best_fail_inliers": first_stats.get("best_fail_inliers"),
+                "internal_budget_s": getattr(first_config, "blind_global_hard_budget_s", None),
+                "external_success": bool(retry_solution.success),
+            }
+            retry_solution.stats = retry_stats
+            solution = retry_solution
+        elif use_external_retry:
+            stats = dict(solution.stats or {})
+            stats["external_image2xy_after_internal_fail"] = {
+                "enabled": True,
+                "internal_success": True,
+                "external_attempted": False,
+            }
+            solution.stats = stats
     except InvalidInputError:
         raise
     except Exception as exc:

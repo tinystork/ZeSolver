@@ -160,6 +160,9 @@ def build_index_from_astap(
             raise FileNotFoundError(f"Manifest missing at {manifest_path} (required for quads-only rebuild)")
         if not tiles_dir.is_dir():
             raise FileNotFoundError(f"{tiles_dir} missing; run a full zebuildindex first")
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["levels"] = [level.to_manifest() for level in LEVEL_SPECS]
+        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
         logger.info("Skipping tile conversion; rebuilding quad tables only in %s", index_root)
     else:
         tile_entries = []
