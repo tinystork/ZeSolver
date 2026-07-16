@@ -79,18 +79,18 @@ def list_presets() -> List[InstrumentPreset]:
             res_w=1080,
             res_h=1920,
             spec_confidence="high",
-            notes="Seestar S50 (250mm, 2.9um, 1080x1920 portrait, ~1.8\"/px)",
+            notes="Seestar S50 (250mm, 2.9um, 1080x1920 portrait, validated P2.19b scale ~2.37\"/px; experimental range 1.90..2.85\"/px)",
         ),
         InstrumentPreset(
             id="seestar_s30",
             label="Seestar S30",
-            focal_mm=380.0,
+            focal_mm=150.0,
             reducer=1.0,
             pixel_um=2.9,
             res_w=1920,
             res_h=1080,
-            spec_confidence="approx",
-            notes="IMX462 (2.9um), 1920x1080; ~380mm focal",
+            spec_confidence="high",
+            notes="Seestar S30 / IMX462-class (2.9um), 1920x1080; validated P2.19b focal ~150mm and scale ~3.99\"/px; experimental range 3.19..4.79\"/px",
         ),
     ]
 

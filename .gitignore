@@ -26,3 +26,4 @@ tests/
 
 # Local astrometry.net index files
 astrometry-indexes/
+indexes/astrometry_4d/*.npz

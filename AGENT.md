@@ -1,458 +1,862 @@
-# Agent Guide for This Repository
+# AGENT.md — Mission de stabilisation et de publication de ZeSolver
 
-Scope: This AGENT.md lives at the repository root and applies to the entire tree.
-Use it as the source of truth when you (the coding agent) interact with the codebase.
-
-## Mission Override (2026-04-29) — PRIORITÉ ABSOLUE
-
-Objectif produit actuel:
-- Atteindre la **parité fonctionnelle ZeBlind vs Astrometry blind solver** en local et en Python pur.
-- **Ne pas toucher ZeNear** sauf correctif de non-régression strictement nécessaire.
-
-Mission produit durable du repo:
-- **Achever ZeSolver** avec deux contraintes non négociables :
-  - **ZeNear doit rester fonctionnel**
-  - **ZeBlind doit fonctionner comme Astrometry**
-
-Méthode de travail durable:
-- Travailler **de l'amont vers l'aval** pour identifier le **premier point de divergence causal**.
-- Éviter les itérations opportunistes sur des résiduels aval tant que le premier écart amont n'est pas isolé.
-- Un seul delta causal par itération, puis rejeu du même protocole.
-
-Discipline documentaire obligatoire à chaque itération:
-- `followup.md` est un **plan court orienté exécution**, pas un journal.
-- Chaque item réalisé dans `followup.md` doit être coché avec **`[X]`**.
-- Chaque item restant à faire dans `followup.md` doit être marqué **`[ ]`**.
-- À chaque itération complétée, **`memory.md` doit être renseigné** pour conserver la trace de ce qui a été accompli, validé, appris, ou écarté durablement.
-- Les conclusions durables vont dans `memory.md`; `followup.md` ne garde que l'orientation actuelle et le plan utile à dérouler.
-
-Portée obligatoire de l’audit parité:
-- Couvrir de façon explicite les briques de `astrometry-main/solver/` (solve loop, permutations, resolve, verify, tweak),
-  ainsi que les dépendances utiles (`include/astrometry`, `libkd`, `util`).
-- `plot/` est requis comme appui diagnostic (pas comme dépendance runtime).
-- Exclure la logique web/service (`net/`, docker webservice) du périmètre produit.
-
-Règles d’implémentation:
-- Reproduire fidèlement les équations et la sémantique du pipeline blind Astrometry (sans copier-coller de code source C).
-- Tracer chaque brique de parité dans `followup.md` avec checklist **`[ ]` / `[X]`**.
-- Toute itération doit laisser une trace accomplie dans `memory.md` + artefact de rapport dans `reports/`.
-
-## Mission
-
-Build and maintain a fast, fully-Python blind and metadata-assisted WCS solver for batches of astronomical images without invoking ASTAP or shipping any of its source code. You may read ASTAP/HNSKY catalogue shards to build your own Python index, but you must not run or embed ASTAP itself.
-
-## Strict Rules (Read First)
-
-- Do NOT call the ASTAP executable or any third-party solver binaries.
-- Do NOT import, copy, or integrate ASTAP source code. The folder `astapsourcereadonly/` (if present) is for reading and inspiration only. You may use it to understand algorithms, but you must not paste or translate functions verbatim. The project must remain pure Python.
-- DO use ASTAP/HNSKY databases (the star shards like `.1476`, `.290`) as input data only. Parsing and conversion are implemented here in Python.
-- Keep indices separated from raw databases. The recommended layout is:
-  - `database/` → ASTAP/HNSKY tiles (read-only data)
-  - `index/` → Generated Python blind index (manifest + quads)
-
-## Project Layout (Key Parts)
-
-- `zewcs290/` – Catalogue reader for ASTAP/HNSKY tiles; builds a virtual view of the shards and serves cone/box queries.
-- `zeblindsolver/` – End-to-end blind solver pipeline in Python.
-  - `db_convert.py` – Converts ASTAP tiles to tangent-plane per-tile blobs and writes `manifest.json`, then builds quad hash tables.
-  - `quad_index_builder.py` – Hashes quads for levels L/M/S and writes `hash_tables/quads_*.npz`.
-  - `asterisms.py` – Quad sampling and hashing (three ratios + parity). Includes a “local_brightness” strategy for smaller-diameter quads.
-  - `candidate_search.py` – Tally candidate tiles by hash votes.
-  - `matcher.py` – Similarity transform estimation + RANSAC.
-  - `wcs_fit.py` – Build TAN WCS from similarity and refine with SIP if needed.
-  - `zeblindsolver.py` – CLI + orchestration of the blind solve.
-- `zesolver.py` – Batch GUI/CLI wrapper for solving folders and managing index settings.
-- `examples/` – Example FITS and `*_thn.jpg` thumbnails (JPGs are expected to fail/skip solving; they are for UI testing).
-- `tests/` – Synthetic and integration tests.
-
-## Index Build and Use
-
-1) Build the index from the ASTAP database (separate folder from `database/`):
-   - CLI: `zebuildindex --db-root database --index-root index --mag-cap 15.5 --max-stars 2000 --max-quads-per-tile 20000`
-   - Output:
-     - `index/manifest.json`
-     - `index/tiles/*.npz`
-     - `index/hash_tables/quads_L.*`, `quads_M.*`, `quads_S.*`
-   - Storage knobs:
-     - `--quad-storage {npz,npz_uncompressed,npy}` picks compressed `.npz`, store-only `.npz`, or mmap-friendly `quads_<level>/hashes.npy` directories.
-     - `--tile-compression {compressed,uncompressed}` toggles NPZ compression for tiles (uncompressed = faster reads, larger files).
-     - `--workers N` sets the number of processes used to hash quads (default: half the CPUs).
-
-2) Run the blind solver:
-   - CLI: `zeblindsolve examples/Light_*.fit --index-root index`
-   - The solver writes a TAN WCS and validation keywords (`SOLVED`, `QUALITY`, `BLIND_VER`, etc.).
-
-3) GUI (zesolver):
-   - Settings → “Construire l’index” prompts for a dedicated index directory (prevents mixing with `database/`).
-   - Settings are persisted in `~/.zesolver_settings.json` (`db_root`, `index_root`, and limits).
-
-## Cross-Platform Paths
-
-- Always write manifest tile paths with POSIX separators (`as_posix()`).
-- When reading, normalize backslashes to forward slashes (Windows-origin manifests).
-
-## Allowed vs Prohibited Sources
-
-- Allowed:
-  - Reading `.1476` / `.290` catalogue tiles (ASTAP/HNSKY) and deriving your own per-tile arrays and indices.
-  - Using GPL data files under `database/` as input.
-- Prohibited:
-  - Including ASTAP source code or calling the ASTAP executable from this project.
-  - Copying ASTAP functions verbatim (“read only for understanding”).
-
-## Coding Conventions
-
-- Stay in Python; keep code minimal, explicit, and testable.
-- Prefer small, targeted changes; don't rename files or add frameworks unless necessary.
-- Update docs and GUI strings when behavior changes (FR/EN supported in `GUI_TRANSLATIONS`).
-- Normalize manifest paths; treat missing quad tables (`hash_tables/quads_<level>.npz` or `.npy` folders) as a clear, actionable error.
-- `_load_tile_positions` uses an in-process LRU cache keyed by absolute path + `(mtime_ns, size)`. Use the existing helper functions, and expose size tuning via `ZE_TILE_CACHE_SIZE` / `--tile-cache-size` rather than new globals.
-
-## Typical Agent Tasks
-
-- Add/modify index build options in the GUI:
-  - Ensure index destination is user-chosen and not inside `database/`.
-  - Persist the chosen `index_root`.
-- Improve blind matching robustness:
-  - Use vote-based pair filtering, local-neighborhood sampling, and level-specific hash specs.
-  - Ensure `CRPIX` and `CRVAL` are consistent with the plane center.
-- Performance:
-  - Tune `max_quads_per_tile` (e.g. 2000-5000 for faster builds) and level strategies (`local_brightness` for M/S).
-  - Pick the right index layout for the machine: `--quad-storage npy` for mmap, `npz_uncompressed` when I/O dominates, `--tile-compression uncompressed` if disk allows faster solving.
-
-## Troubleshooting
-
-- “Missing quad tables (L/M/S)” → Rebuild the index; ensure each level has either `hash_tables/quads_<level>.npz` or a `hash_tables/quads_<level>/` directory with `.npy` payloads.
-- “Tile file not found” with backslashes in path → Manifest from Windows; reader normalizes separators.
-- Too many false candidates → increase quad selectivity, lower bucket caps, or favor smaller-diameter levels.
-
-## Tests
-
-- Keep/add tests under `tests/` following existing patterns (synthetic index fixture, candidate tally, WCS validation). Avoid adding heavy or external dependencies.
+**Projet :** ZeSolver  
+**Écosystème :** ZeMosaic / ZeSeestarStacker  
+**Auteur principal :** Tinystork — Tristan Nauleau  
+**Document de mission :** 16 juillet 2026  
+**Statut du projet :** solveur fonctionnel, phase de stabilisation avant publication
 
 ---
 
-By following this guide, you ensure all future contributions remain compliant with the project’s constraints: pure Python, no ASTAP code execution or integration, and clean separation of database vs. index artifacts.
+## 1. Portée de ce document
+
+Ce fichier s'applique à l'ensemble du dépôt ZeSolver, sauf instruction plus spécifique placée dans un sous-répertoire.
+
+Il définit la mission des agents de développement intervenant sur le projet, l'ordre obligatoire des priorités et les règles destinées à préserver les résultats astrométriques déjà obtenus.
+
+Le projet a franchi la phase de preuve de concept : les moteurs ZeNear et ZeBlind 4D produisent maintenant des solutions exploitables. La mission n'est donc plus de multiplier les expérimentations, mais de transformer ce résultat en un logiciel fiable, compréhensible, installable et publiable.
+
 ---
 
-## Strategic Roadmap: From Monolithic to Tiled Architecture
+## 2. Constat de départ
 
-**Diagnosis:** Analysis has shown that `zeblind`'s slow performance and low success rate are caused by two primary architectural issues:
-1.  **Monolithic Index:** A single, large `.npz` index file is loaded entirely into memory, causing extremely long start-up times and high RAM usage.
-2.  **Brittle Quad Sampling:** The method for generating quad hashes (based on the "brightest-N" stars) is not robust, leading to a low probability of matching image hashes with index hashes.
+ZeSolver est fonctionnel, mais son code conserve les traces normales d'une longue phase de recherche et de développement :
 
-**Objective:** Refactor `zeblind` to implement a high-performance, tiled architecture inspired by the successful concepts of `astap` and `astrometry.net`, while remaining pure Python.
+- plusieurs modules sont devenus très volumineux et concentrent trop de responsabilités ;
+- la logique métier, l'orchestration, l'interface graphique, les réglages expérimentaux et les outils de diagnostic sont encore fortement liés ;
+- de nombreux paramètres internes du solveur sont exposés ou persistés alors qu'ils ne devraient pas être manipulés par un utilisateur normal ;
+- l'interface contient encore des éléments utiles au développement, au benchmark et à la construction des index ;
+- la couverture du ciel par les index ZeBlind 4D doit être complétée ou clairement bornée ;
+- les résultats actuels doivent être transformés en tests automatisés avant toute refactorisation importante ;
+- l'écriture des solutions WCS dans les fichiers FITS doit être rendue explicitement sûre ;
+- la gestion des catalogues doit être unifiée autour d'une bibliothèque ASTAP unique du point de vue de l'utilisateur ;
+- le packaging et l'installation sur une machine vierge ne sont pas encore au niveau d'une version publique stable.
 
-**Action Plan Summary (See `followup.md` for full details):**
+La réussite actuelle doit être considérée comme une **baseline fonctionnelle à protéger**.
 
-### Phase 1: Transition to a Tiled/Bucketed Index
-- **Action:** Replace the single `.npz` index with a "bucketed" structure of many small, independent files. Each file will contain quads for a specific range of hashes (e.g., based on the first 12 bits of the hash).
-- **Implementation:**
-  - Modify the index builder (`tools/build_blind_index.py`) to write to these bucket files.
-  - Rewrite the query logic (`zesolver/blindindex.py`) to use **memory-mapping (`mmap`)** to open only the necessary bucket files on-demand.
-- **Outcome:** Near-instantaneous load times and drastically reduced memory consumption.
+---
 
-### Phase 2: Implement Robust, Geometric Quad Sampling
-- **Action:** Replace the "brightest-N" quad sampling logic with a geometrically stable algorithm.
-- **Implementation:**
-  - In both the indexer and the solver (`zeblindsolver/asterisms.py`), implement a sampling method that generates quads based on pairs of stars and their neighbors at multiple distance scales. This makes hash generation far more reliable and resilient to star magnitude variations.
-- **Outcome:** A massive increase in the solver's success rate.
+## 3. Mission générale
 
-### Phase 3: (Recommended) Enhance Star Detection
-- **Action:** Improve the quality of the initial star list.
-- **Implementation:**
-  - In `zeblindsolver/star_detect.py`, move from a global threshold to an **adaptive local threshold** to better handle varying sky backgrounds.
-- **Outcome:** A cleaner input signal for the entire solving pipeline, further boosting reliability.
+Transformer ZeSolver en un produit publiable sans dégrader les capacités de résolution acquises.
 
-For a detailed technical guide on how to implement these changes, refer to the **`followup.md`** file.
+L'ordre de travail imposé est :
 
+1. figer et mesurer le comportement actuel ;
+2. protéger les fichiers et empêcher les faux WCS ;
+3. unifier l'architecture des catalogues ;
+4. stabiliser les API internes ;
+5. découper progressivement les monolithes ;
+6. reconstruire une interface utilisateur simple ;
+7. fiabiliser le packaging et l'installation ;
+8. seulement ensuite poursuivre les optimisations avancées.
 
-## Current Focus (2026-04-11)
+Une refactorisation élégante qui réduit le taux de résolution, augmente les faux positifs ou rend les résultats moins reproductibles est une régression et doit être refusée.
 
-A focused audit was run on speed + success-rate versus ASTAP.
+---
 
-### Observed baseline
+## 4. Ordre final des priorités
 
-- Repository benchmark (`benchmark_report.json`): **6 / 111** successful solves.
-- Most failures return `no valid solution`; failures are also costly in runtime.
-- `downsample-2` is currently the only profile with consistent wins (5/22).
+| Priorité | Chantier | Bloquant pour publication |
+|---|---|---:|
+| **P0** | Baseline, corpus et non-régression | Oui |
+| **P0** | Protection des FITS et absence de faux WCS | Oui |
+| **P1** | Bibliothèque ASTAP unique et gestion automatique | Oui |
+| **P1** | Couverture 4D complète ou clairement limitée | Oui |
+| **P2** | Façade stable et réduction des configurations | Oui |
+| **P2** | Découpage progressif des monolithes | Oui |
+| **P3** | Nouvelle interface utilisateur | Oui |
+| **P4** | Packaging, documentation et tests sur machine vierge | Oui |
+| **P5** | Optimisations GPU et fonctionnalités avancées | Non |
 
-### Suspected root causes
+### Règle de séquencement
 
-1. Metadata-assisted near solve is brittle when headers are incomplete/noisy (RA/DEC/scale hints).
-2. Quad/hash robustness issue remains (test path can hit `no quads were hashed for level L`).
-3. Validation thresholds and solve acceptance criteria need harmonization (near vs blind).
-4. Candidate + matching loops still spend too much CPU in failing branches.
+- Les travaux P0 précèdent toute refactorisation structurelle importante.
+- La conception P1 doit être arrêtée avant l'implémentation finale de la nouvelle interface P3.
+- P2 peut commencer par de petites extractions uniquement lorsque les tests P0 protègent le comportement concerné.
+- P5 ne doit jamais retarder ou fragiliser P0 à P4.
 
-### Implementation priority
+---
 
-- P0 Robustness first, then P1 quality gates, then P2 throughput optimization.
-- Any optimization that reduces success rate is out of scope.
-- Keep full Python compliance (no ASTAP executable/code integration).
+# MISSION P0 — Baseline, corpus et non-régression
 
-### Working log convention
+## 5. Objectif
 
-A repo-local `memory.md` file tracks discoveries, actions, and outcomes chronologically.
-Update it as work progresses (diagnostics, patches, benchmark deltas, regressions).
+Créer une référence mesurable et immuable du comportement actuel de ZeSolver afin que chaque modification ultérieure puisse être comparée objectivement.
 
-## Current Focus (2026-04-12, throughput pivot)
+## 5.1 Baseline fonctionnelle
 
-Reliability has improved substantially on heavy runs (first 300+ images reported stable with ZeNear).
-The primary bottleneck is now end-to-end throughput for the 10k+ images objective.
+Créer et documenter une référence de type :
 
-### Updated priority order
+```text
+v0.9.0-functional-baseline
+```
 
-1. **P0 Throughput engineering (CPU first):**
-   - optimize worker count, I/O concurrency, and tile cache behavior,
-   - reduce expensive fail-path work,
-   - benchmark images/min at scale (500 -> 2k -> 10k).
-2. **P1 GPU re-activation (targeted stages):**
-   - restore effective GPU usage where it pays off (star detection first),
-   - keep robust automatic CPU fallback.
-3. **P2 Hybrid pipeline (CPU + GPU simultaneously):**
-   - overlap stages (GPU detect on N+1 while CPU matches/validates N),
-   - pursue measurable throughput gains without sacrificing reproducibility.
+Cette baseline doit identifier au minimum :
 
-### Guardrails for this phase
+- le commit exact ;
+- la version Python ;
+- les versions des dépendances principales ;
+- les paramètres et profils de solve utilisés ;
+- le ou les manifestes ZeBlind 4D ;
+- les index et catalogues utilisés, avec version ou empreinte ;
+- le corpus de test ;
+- les rapports de réussite, d'échec, de temps d'exécution et de qualité.
 
-- Do not trade away solve stability for raw speed.
-- Keep deterministic behavior auditable (seeded RANSAC paths).
-- Measure before/after every tuning step on the same dataset slice.
+Ne jamais modifier rétroactivement une baseline publiée. Toute évolution crée une nouvelle baseline.
 
+## 5.2 Corpus de référence
 
-## Audit précis ASTAP-main (2026-04-14)
-
-### 1) État des lieux du code source ASTAP utilisé pour la résolution
+Le corpus doit couvrir progressivement :
 
-Fichiers cœur (lus et tracés):
+- champs larges, moyens et étroits ;
+- régions stellaires denses et pauvres ;
+- images avec et sans métadonnées fiables ;
+- métadonnées volontairement erronées ;
+- images bruitées, sous-exposées, saturées ou légèrement filées ;
+- différents capteurs, focales, binning et échantillonnages ;
+- FITS avec WCS valide, invalide, partiel ou absent ;
+- cas historiquement difficiles et cas déjà résolus durant le développement 4D ;
+- cas négatifs qui doivent échouer proprement.
 
-- `ASTAP-main/unit_astrometric_solving.pas`
-  - `solve_image(...)` (ligne ~746): orchestration complète de la résolution.
-  - `bin_and_find_stars(...)` (ligne ~473): binning/crop + fond + détection étoiles.
-  - `read_stars(...)` (ligne ~238): lecture catalogue autour d’un centre RA/Dec.
-- `ASTAP-main/unit_star_align.pas`
-  - `find_quads(...)` (ligne ~505), `find_many_quads(...)` (ligne ~228): génération des quads.
-  - `find_fit(...)` (ligne ~972), `find_fit_using_hash(...)` (ligne ~1083): matching quads.
-  - `find_offset_and_rotation(...)` (ligne ~1651): choix brute-force/hash + fit affine LSQ.
-- `ASTAP-main/command-line_version/unit_command_line_solving.pas`
-  - version CLI avec la même logique de base (constantes/formules cohérentes avec les deux unités ci-dessus).
-
-### 2) Méthode ASTAP de résolution (factuelle, avec constantes)
-
-1. **Initialisation FOV / base de données**
-   - `max_fov := 5.142857143` pour DB `.1476` (unit_astrometric_solving.pas:821).
-   - `max_fov := 9.53` pour DB `.290` (ligne 824).
-   - Auto-FOV:
-     - départ à `9.5°` (ou `90°` pour wide DB), puis division par `1.5` à chaque boucle (`fov_org := fov_org / 1.5`, lignes 847, 857).
-     - borne basse `fov_min := 0.38` (ou `12` en wide, ligne 848).
-
-2. **Détection étoiles image**
-   - Binning auto: `Result := max(Result, round(1.5 / arcsec_per_px))` (ligne 563).
-   - `hfd_min := max(0.8, min_star_size_arcsec / (binning * arcsec_per_px))` (dans `solve_image`).
-   - Pipeline concret: `get_background(...)` puis `find_stars(...)` (lignes 500-501, 545).
-
-3. **Génération quads image**
-   - Si `nrstars_image < 30` -> `find_many_quads(..., mode=6)` (unit_star_align.pas:525-527).
-   - Si `< 60` -> `mode=5` (lignes 531-533).
-   - Sinon `find_quads` standard.
-   - `minimum_quads := 3 + nrstars_image div 140` (unit_astrometric_solving.pas:968).
-
-4. **Balayage du ciel (spirale carrée)**
-   - `STEP_SIZE := search_field` (ligne 983), donc pas = FOV courant.
-   - `max_distance := round(radius / (fov2 + 0.00001))` (ligne 991) en DB standard.
-   - Filtre géométrique: séparation angulaire `<= radius + step_size/2` (ligne 1055).
-
-5. **Lecture catalogue à chaque centre testé**
-   - `read_stars(...)` fait un split sur 1..4 zones via `find_areas(...)` (ligne 254).
-   - Quotas par zone proportionnels `frac1..frac4` (ex. ligne 260).
-
-6. **Matching quads et fit**
-   - `find_offset_and_rotation(...)`:
-     - si `nrquads < 180` -> `find_fit` brute force (unit_star_align.pas:1664-1666),
-     - sinon `find_fit_using_hash` (ligne 1674).
-   - `find_fit`: test de 5 ratios normalisés (indices 1..5) sous `quad_tolerance` (ligne 994).
-   - Filtrage ratio médian:
-     - `median_ratio := smedian(...)` (ligne 1034),
-     - garde si `abs(median_ratio-ratio)<=quad_tolerance*median_ratio` (ligne 1046).
-   - Fit affine LSQ sur centres de quads (`A_XYpositions`, `b_Xrefpositions`, `b_Yrefpositions`).
-   - Garde-fou final: `xy_sqr_ratio` doit rester dans `[0.9, 1.1]` (lignes 1692-1693).
-
-7. **Double passe précision**
-   - boucle `match_nr` jusqu’à `match_nr >= 2` (unit_astrometric_solving.pas:1218),
-   - 2e passe avec recadrage sur la solution 1 pour améliorer la précision.
-
-8. **Écriture WCS + SIP**
-   - WCS TAN via `CRPIX/CRVAL/CD/CROTA`.
-   - SIP seulement si activé et assez de correspondances (`if len < 20 then` abandon SIP, lignes 625-627; appel ligne 1298).
-
-### 3) Comparaison précise avec notre ZeSolver actuel
-
-Référence code ZeSolver: `zeblindsolver/metadata_solver.py`.
-
-1. **Entrée et préfiltrage spatial**
-   - **ZeSolver**: échec immédiat si RA/DEC absents (`metadata RA/DEC missing`, lignes 1533-1534).
-   - **ASTAP**: pas de garde équivalente dans `solve_image`; il travaille avec la position de départ courante.
-   - **ZeSolver**: préfiltrage manifeste tuiles (`_select_tiles`, lignes 220, 1563) avec cap `max_tile_candidates=48` (ligne 71).
-   - **ASTAP**: lecture DB directement au fil de la spirale, sans manifeste indexé intermédiaire.
-
-2. **Détection étoiles**
-   - **ZeSolver**: `detect_stars` NumPy/SciPy/CUDA (ou ASTAP extract optionnel), seuils `k_sigma/min_area/max_labels` (NearSolveConfig lignes 87-89).
-   - **ASTAP**: `get_background + find_stars` avec logique HFD/SNR interne Pascal.
-
-3. **Noyau quads**
-   - **ZeSolver**: port ISO ASTAP (`_astap_iso_find_quads`, `_astap_iso_find_fit_using_hash`) avec sweep tolérances `0.007..0.060` (ligne 1092).
-   - **ASTAP**: matching quads + LSQ via `find_fit` / `find_fit_using_hash`.
-   - Point important: le comportement mode-6 de la source ASTAP actuelle est atypique (combinaisons dupliquées et 4e index non exploité dans ce bloc: `x4 := ... quad_indices[2]`, unit_star_align.pas:409). Le port Python reproduit volontairement ce comportement (`combos6`, lignes 756+).
-
-4. **Chemins supplémentaires non-ASTAP**
-   - **ZeSolver** ajoute des couches absentes d’ASTAP:
-     - `_build_candidate_pairs` (ligne 1339),
-     - hypothèse quad additionnelle `_find_quad_hypothesis` (ligne 584),
-     - RANSAC global `estimate_similarity_RANSAC(...)` (lignes 2230, 2271).
-   - **ASTAP** n’utilise pas ce mix pair-votes + RANSAC dans ce flux near.
-
-5. **Gates d’acceptation solution**
-   - **ZeSolver** applique 3 niveaux de rejet:
-     1) `validate_solution` RMS/inliers (lignes 2403+),
-     2) `validate_wcs_for_zemosaic` (ligne 2471),
-     3) `_near_conformance_check` (ligne 1435, appelé après).
-   - **ASTAP**: après fit géométrique valide, écrit WCS; il log des warnings d’échelle mais n’empile pas ces mêmes gates.
-
-6. **Profil actuel des écarts qui comptent pour la parité**
-   - Nous ne sommes pas en “ASTAP pur”: notre flux ajoute des branches de matching (pairs/RANSAC) et des critères de rejet supplémentaires.
-   - Notre near est plus contraint en post-validation, ce qui peut transformer des hypothèses “acceptables ASTAP” en échecs ZeSolver.
-   - Le préfiltrage par manifeste + fenêtre locale peut changer le set d’étoiles comparé au `read_stars` ASTAP en spirale.
-
-### 4) Conclusion opérationnelle (non conceptuelle)
-
-Pour comparer à iso-comportement ASTAP, il faut exécuter un mode diagnostic qui:
-
-1. garde uniquement la chaîne `ASTAP-ISO quads -> find_fit_using_hash -> LSQ`,
-2. désactive les branches `candidate_pairs/quad_hypothesis/RANSAC`,
-3. désactive temporairement les gates additionnels non-ASTAP (`zemosaic` + `near_conformance`).
-
-Sinon, on compare ASTAP à un pipeline différent, et le diagnostic reste mécaniquement biaisé.
-
-
-## Current Focus (2026-04-21, post-parity strict)
-
-### Mission ASTAP-gap: statut
-- La mission "écart ZeNear vs ASTAP" est considérée **accomplie pour le scope actuel** (mode strict ASTAP-ISO).
-- Validation side-by-side exécutée ASTAP CLI vs ZeNear strict sur lot NGC6888 co-résolu:
-  - séparation centre médiane ~3.14",
-  - écart scale médian ~0.0034%,
-  - écart rotation médian ~0.291°.
-- Test mixte opérationnel préparé pour ZeMosaic sur M106 (50% ASTAP / 50% ZeNear) dans:
-  - `/home/tristan/zemosaic/example/testzenear/`.
-
-### Criticité restante (ZeSolver)
-- **Aucun P0 bloquant immédiat** identifié sur la parité stricte ASTAP pour ce scope.
-- Backlog technique (P1):
-  1. benchmark C (ASTAP CLI) multi-champs complet, pour clôture statistique large,
-  2. stratégie non-strict en mode rescue (profils safe/balanced/aggressive).
+Le dépôt ne doit pas nécessairement contenir toutes les images lourdes. Un manifeste de corpus peut référencer leur emplacement, leur empreinte SHA-256 et les résultats attendus.
 
-### Nouveau cap prioritaire (P0 produit)
-- Passer en mode **scale-up/throughput** pour lots massifs (1k -> 10k images):
-  1. stabilité long run (aucun faux échec de fin de run),
-  2. saturation CPU/GPU contrôlée et reproductible,
-  3. instrumentation débit/latence/mémoire robuste pour tuning itératif.
-
-## Mission Execution Mode (2026-05-04) — Parité stricte ZeBlind = Astrometry
-
-Le mode opératoire de cette mission est désormais:
-
-1. **Diff d’abord, tuning ensuite**
-   - Chaque cycle commence par une comparaison ZeBlind vs Astrometry sur un cas oracle.
-   - Pas d’itération heuristique sans divergence causale identifiée.
-
-2. **Un seul delta causal par patch**
-   - Une PR/patch doit corriger une divergence unique (pas de mélange de changements).
-   - Validation A/B obligatoire sur le même protocole.
-
-3. **KPI de progression imposés**
-   - KPI #1 (prioritaire): baisse de `hypothesis_fail_empty_inliers`.
-   - KPI #2: hausse du signal verify utile (`nummatches` / validations exploitables).
-   - KPI #3: maintien ou amélioration du coût runtime.
-
-4. **Gates GO/NO-GO**
-   - Si 2 itérations sans amélioration KPI #1/#2, pivot obligatoire vers la prochaine divergence structurelle.
-
-5. **Traçabilité obligatoire**
-   - Tout cycle met à jour: `followup.md`, `memory.md`, et un rapport dans `reports/`.
-   - Les étapes manquantes vers l’objectif final sont maintenues sous forme de checklist vivante.
-
-Référence actuelle de la divergence:
-- `reports/zeblind_vs_astrometry_online_20260504_single_233459.json`
-- `reports/zeblind_vs_astrometry_diff_20260504_233459.md`
-
-### Anti-loop rule (2026-05-04)
-
-Pour éviter les boucles de tests/fine-tuning:
-- ne pas empiler des heuristiques locales sans divergence causale identifiée;
-- prioriser les changements structurels de parité (pipeline, sémantique stop/verify, lifecycle des hits);
-- limiter les probes à la validation d’un changement causal unique;
-- documenter explicitement pourquoi une itération est structurelle et non tuning.
-
-### Linear-first / Transverse-safe method (2026-05-14)
-
-Objectif: avancer sans s’éparpiller **et** éviter les régressions croisées.
-
-1. **Investigation linéaire (descente par étage)**
-   - Travailler un seul étage de rupture à la fois (ex: `runtime -> pre-callback -> callback`).
-   - Ne pas ouvrir un nouvel étage tant que l’étage courant n’a pas une preuve causale claire.
-
-2. **Delta causal unique**
-   - Une itération = un seul changement causal.
-   - Pas de mélange de patchs structurels + tuning dans la même passe.
-
-3. **Double gate obligatoire après chaque delta**
-   - **Gate A (local):** l’étage ciblé s’améliore réellement.
-   - **Gate B (transversal):** pas de régression sur un pack sentinelle fixe (mêmes cas/protocole/métriques).
-   - Si Gate B échoue: rollback immédiat.
-
-4. **Point d’entrée ISO verrouillé**
-   - Conserver un harness stable C vs ZeBlind (mêmes RAW, mêmes caps, WCS-strip, même protocole).
-   - Toute conclusion de parité doit être basée sur ce point d’entrée commun.
-
-5. **Preuve avant patch suivant**
-   - Avant de patcher l’étage N+1: publier un rapport diffable de l’étage N (cause, métriques, verdict GO/NO-GO).
-
-### First-divergence mirror-trace protocol (2026-05-14)
-
-Quand plusieurs deltas causaux restent NO-GO, **arrêter les perturbations globales** et pivoter vers une isolation stricte de la première divergence C↔ZeBlind.
-
-1. **Un seul RAW sentinelle d’abord**
-   - Travailler d’abord sur 1 RAW (cas dominant) en `hinted_wide`.
-   - Ne pas relancer le pack 4 RAW tant que la première divergence locale n’est pas explicitement identifiée.
-
-2. **Trace miroir candidate-par-candidate**
-   - Produire une trace ZeBlind détaillée (accept/reject + raison + métriques) sur la même fenêtre de candidats.
-   - Produire la trace Astrometry équivalente sur le même RAW.
-   - Aligner les deux traces par identité candidate (tile/parité/score/ordre).
-
-3. **Point de rupture primaire obligatoire**
-   - Le livrable attendu n’est pas un patch, mais la **première décision divergente** documentée.
-   - Inclure: entrée, décision C, décision ZeBlind, métriques exactes, et condition logique minimale qui diverge.
-
-4. **Patch seulement après divergence prouvée**
-   - Un patch n’est autorisé qu’après preuve écrite de divergence primaire.
-   - Le patch doit corriger uniquement cette condition (pas d’empilement d’heuristiques).
-
-5. **Validation en descente**
-   - Valider d’abord sur le RAW sentinelle.
-   - Puis seulement élargir au pack 4 RAW capés pour Gate B transversal.
-
-
-## Addendum audit profondeur (2026-05-05) — couverture "sans trou noir"
-
-Pour la clôture de parité ZeBlind/Astrometry, la couverture minimale d’audit doit inclure **aussi** les chemins connexes souvent oubliés au premier passage:
-
-1. chemin verify-only: `solver_verify_sip_wcs -> solver_inject_match -> solver_handle_hit(fake_match=TRUE)`;
-2. sémantique `fake_match` dans `verify_hit` (gamma/RoR/gestion quad);
-3. branche `predistort` / `pixel_xscale` dans `solver_handle_hit` (refit TAN/SIP pondéré, `set_crpix`);
-4. orchestration `onefield/engine` (seuils `ANODDS*`, `best_hit_only`, `remove_duplicate_solutions`, callbacks);
-5. points d’entrée périphériques (`control-program.c`, `solver.i`) vérifiés comme wrappers non-sémantiques.
-
-Règle de conduite:
-- maintenir `followup.md` comme checklist unique de mission (pas de TODO parallèle) ;
-- cocher uniquement les items terminés avec preuve diffable (run/dump/report).
+## 5.3 Oracle de résultat
+
+Pour chaque image de référence, enregistrer lorsque pertinent :
+
+- succès, échec ou résultat attendu ;
+- backend attendu ou autorisé ;
+- centre RA/Dec ;
+- échelle en secondes d'arc par pixel ;
+- rotation et parité ;
+- nombre d'inliers ;
+- RMS en pixels et/ou secondes d'arc ;
+- durée indicative ;
+- index ou famille utilisée ;
+- tolérances d'acceptation ;
+- raison attendue en cas d'échec.
+
+Les tests ne doivent pas imposer une égalité flottante exacte. Utiliser des tolérances astronomiquement justifiées.
+
+## 5.4 Niveaux de tests attendus
+
+Mettre en place :
+
+1. **tests unitaires** des fonctions mathématiques, catalogues, parsing et validation ;
+2. **tests de caractérisation** protégeant le comportement actuel ;
+3. **tests d'intégration** ZeNear, ZeBlind 4D et chaîne complète ;
+4. **tests négatifs** contre les faux positifs ;
+5. **tests batch** incluant annulation, erreurs partielles et reprise ;
+6. **tests de performance** informatifs avec comparaison à la baseline.
+
+## 5.5 Critères de sortie P0 — baseline
+
+P0-baseline est terminé lorsque :
+
+- une commande unique lance la suite de non-régression ;
+- les cas de référence sont décrits par un manifeste versionné ;
+- les seuils de succès sont explicites ;
+- les faux positifs sont testés ;
+- les rapports sont lisibles par un humain et exploitables en CI ;
+- une modification qui dégrade les résultats bloque automatiquement l'intégration.
+
+---
+
+# MISSION P0 — Protection des FITS et absence de faux WCS
+
+## 6. Principe de sûreté
+
+Un échec propre est préférable à une solution WCS fausse.
+
+Le solveur ne doit jamais déclarer une image résolue sur le seul fait qu'une transformation mathématique a pu être calculée. Toute solution doit être validée par des critères indépendants suffisants.
+
+## 6.1 Validation obligatoire d'une solution
+
+Une solution acceptée doit notamment vérifier, selon le backend :
+
+- un nombre minimum d'inliers ;
+- un RMS sous le seuil du profil ;
+- une distribution spatiale raisonnable des correspondances ;
+- une échelle et une transformation physiquement cohérentes ;
+- une projection WCS valide sur l'image ;
+- l'absence de valeurs non finies ;
+- une cohérence avec les indices utilisateur lorsqu'ils sont explicitement contraignants ;
+- une validation finale utilisant la liste d'étoiles suffisante, et pas uniquement le quad candidat.
+
+Les seuils appartiennent aux profils internes versionnés. Ils ne doivent pas être dispersés dans le GUI.
+
+## 6.2 Règles d'écriture FITS
+
+Par défaut :
+
+- ne jamais modifier les données pixel ;
+- privilégier une copie de sortie ou une sauvegarde vérifiable ;
+- ne pas écraser silencieusement un WCS existant ;
+- écrire le WCS de manière atomique ou avec stratégie de restauration ;
+- relire et valider le fichier après écriture ;
+- conserver les métadonnées non WCS sauf raison documentée ;
+- signaler clairement toute modification partielle ;
+- garantir qu'une interruption ne laisse pas un fichier annoncé comme résolu avec un en-tête incomplet.
+
+Tout test d'écriture doit comparer avant/après :
+
+- empreinte ou égalité des pixels ;
+- structure des HDU ;
+- cartes d'en-tête attendues ;
+- ouverture du fichier par Astropy ;
+- construction et utilisation du WCS final.
+
+## 6.3 Critères de sortie P0 — FITS
+
+Ce chantier est terminé lorsque :
+
+- les pixels sont garantis inchangés par tests automatisés ;
+- les écritures interrompues ou invalides sont récupérables ;
+- les faux WCS du corpus négatif sont rejetés ;
+- toute solution écrite est relue et revalidée ;
+- les modes écrasement, copie et sauvegarde sont documentés et testés.
+
+---
+
+# MISSION P1 — Bibliothèque ASTAP unique
+
+## 7. Décision d'architecture
+
+ASTAP/HNSKY devient la source locale de données stellaires de référence pour ZeSolver.
+
+Cela signifie une source de vérité unique du point de vue du produit, mais pas nécessairement un fichier physique unique.
+
+- ZeNear lit les tuiles stellaires ASTAP nécessaires à ses requêtes.
+- ZeBlind 4D utilise des index de quads dérivés de ces mêmes tuiles.
+- Les index sont des artefacts générés, versionnés et vérifiables ; ils ne constituent pas une seconde source astronomique indépendante.
+- Astrometry.net peut rester un fallback web facultatif, clairement distinct du fonctionnement local.
+
+## 7.1 Architecture cible indicative
+
+```text
+ZeSolverCatalog/
+├── catalog.json
+├── astap/
+│   └── raw/
+│       ├── d50_....1476
+│       ├── d80_....1476
+│       └── ...
+└── indexes/
+    └── blind4d/
+        ├── manifest.json
+        ├── index_....npz
+        └── ...
+```
+
+Le nom et le format exacts pourront évoluer, mais l'utilisateur doit sélectionner ou installer une seule **Bibliothèque de catalogue ZeSolver**.
+
+## 7.2 Composant `CatalogLibrary`
+
+Créer une façade interne unique responsable de :
+
+- découvrir ou ouvrir la bibliothèque ;
+- lire son manifeste ;
+- vérifier les versions et empreintes ;
+- exposer les tuiles ASTAP à ZeNear ;
+- exposer les index compatibles à ZeBlind 4D ;
+- indiquer la couverture céleste et les échelles disponibles ;
+- détecter les éléments manquants ou incompatibles ;
+- proposer une réparation ou reconstruction explicite ;
+- fournir un état simple au GUI : prêt, incomplet, incompatible ou absent.
+
+Le GUI ne doit pas manipuler directement les chemins de tuiles, familles, hashes ou manifestes 4D.
+
+## 7.3 Choix des familles
+
+Ne pas imposer arbitrairement D50 seul avant validation sur le corpus.
+
+D50 est le candidat principal, mais la sélection finale doit être fondée sur :
+
+- le taux de réussite ;
+- les très grands et très petits champs ;
+- les régions stellaires pauvres et denses ;
+- la profondeur des images ;
+- la taille totale de la bibliothèque ;
+- les temps de requête et de génération des index.
+
+Plusieurs familles ASTAP peuvent être utilisées tout en restant une bibliothèque unique pour l'utilisateur.
+
+## 7.4 Critères de sortie P1 — bibliothèque
+
+Ce chantier est terminé lorsque :
+
+- ZeNear et ZeBlind 4D consomment la même bibliothèque via une API commune ;
+- les données brutes et les index dérivés sont reliés par des empreintes et versions ;
+- l'utilisateur ne choisit plus séparément une base et un manifeste 4D ;
+- les erreurs d'installation ou de compatibilité sont explicites ;
+- le fonctionnement avec bibliothèque partielle est défini et testé.
+
+---
+
+# MISSION P1 — Couverture ZeBlind 4D
+
+## 8. Objectif
+
+Garantir une couverture 4D adaptée à la promesse publique du logiciel.
+
+Deux formes de publication sont acceptables :
+
+1. couverture complète et validée pour les plages de champ annoncées ;
+2. version beta à couverture limitée, avec limites détectables et clairement documentées.
+
+Une couverture limitée ne doit jamais être présentée comme générale.
+
+## 8.1 Travaux attendus
+
+- inventorier les index installés et leur couverture ;
+- définir les zones célestes, densités, échelles et familles couvertes ;
+- générer les index manquants avec processus reproductible ;
+- valider chaque nouvel index sur le corpus correspondant ;
+- tester l'ordre et l'union des index ;
+- mesurer consommation mémoire, taille disque et temps de chargement ;
+- détecter automatiquement lorsqu'une requête sort de la couverture ;
+- produire une erreur claire ou déclencher le fallback autorisé.
+
+## 8.2 Critères de sortie P1 — couverture
+
+- manifeste de couverture versionné ;
+- aucun index incompatible chargé silencieusement ;
+- couverture complète ou limites publiques explicites ;
+- tests de bord et de zones non couvertes ;
+- procédure reproductible de génération et de vérification.
+
+---
+
+# MISSION P2 — Façade stable et configurations réduites
+
+## 9. Objectif
+
+Séparer l'API produit des détails expérimentaux du solveur.
+
+## 9.1 API cible
+
+Le GUI, le CLI et les traitements batch doivent converger vers une façade comparable à :
+
+```python
+result = SolverPipeline.solve(request)
+```
+
+Objets publics recommandés :
+
+```text
+SolveRequest
+SolveResult
+CatalogLibrary
+SolverPipeline
+ProductSettings
+```
+
+Les noms définitifs peuvent changer, mais les responsabilités doivent rester simples et stables.
+
+## 9.2 Séparer deux catégories de réglages
+
+### Paramètres utilisateur
+
+Exemples :
+
+- fichiers ou dossier d'entrée ;
+- dossier de sortie ;
+- bibliothèque de catalogue ;
+- conserver ou écraser un WCS existant ;
+- nombre de tâches ou mode Auto ;
+- fallback web autorisé ou non ;
+- indices instrumentaux facultatifs.
+
+### Profils internes versionnés
+
+Exemples :
+
+```text
+zenear-v1
+zeblind4d-v1
+```
+
+Ils contiennent :
+
+- seuils de détection ;
+- limites de candidats ;
+- nombre de quads ;
+- stratégies de profondeur ;
+- tolérances de validation ;
+- règles de fallback ;
+- caps de buckets ;
+- options expérimentales validées.
+
+Ces détails ne doivent pas être exposés dans l'interface normale ni multipliés dans plusieurs structures de configuration.
+
+## 9.3 Compatibilité
+
+Lors de l'introduction de la façade :
+
+- préserver temporairement les anciennes entrées si nécessaire ;
+- ajouter des adaptateurs explicites ;
+- émettre des avertissements de dépréciation ;
+- ne supprimer les anciens chemins qu'après migration des tests, du GUI et du CLI.
+
+## 9.4 Critères de sortie P2 — façade
+
+- GUI et CLI utilisent la même orchestration ;
+- une seule source de valeurs par défaut produit existe ;
+- les profils internes sont versionnés ;
+- le nombre de paramètres exposés à l'utilisateur est fortement réduit ;
+- les anciens réglages inutiles sont migrés ou ignorés explicitement ;
+- tous les tests P0 restent conformes.
+
+---
+
+# MISSION P2 — Découpage progressif des monolithes
+
+## 10. Principe
+
+Ne jamais réécrire les grands solveurs en une seule opération.
+
+Le découpage doit être progressif, couvert par les tests et sans changement fonctionnel involontaire.
+
+## 10.1 Architecture cible indicative
+
+```text
+zesolver/
+├── core/
+│   ├── models.py
+│   ├── pipeline.py
+│   └── errors.py
+├── catalog/
+│   ├── library.py
+│   ├── astap.py
+│   └── integrity.py
+├── solver/
+│   ├── near.py
+│   ├── blind4d.py
+│   ├── validation.py
+│   └── profiles.py
+├── io/
+│   ├── images.py
+│   ├── fits.py
+│   └── wcs.py
+├── runtime/
+│   ├── batch.py
+│   ├── workers.py
+│   └── resources.py
+├── gui/
+└── cli/
+```
+
+Cette arborescence est une direction, pas une obligation de renommage immédiat.
+
+## 10.2 Ordre d'extraction conseillé
+
+1. modèles et types de résultats ;
+2. erreurs métier typées ;
+3. lecture d'images et métadonnées ;
+4. écriture et validation WCS ;
+5. accès catalogue ;
+6. fonctions mathématiques pures ;
+7. validation des candidats ;
+8. télémétrie et rapports ;
+9. orchestration Near/Blind ;
+10. interface et batch.
+
+Après chaque extraction :
+
+- lancer les tests ciblés ;
+- lancer la non-régression complète ;
+- comparer taux de réussite, RMS et temps ;
+- documenter tout changement de comportement volontaire.
+
+## 10.3 Exceptions et erreurs silencieuses
+
+Tout `except Exception` doit être classé :
+
+- protection légitime d'une fonction optionnelle ;
+- erreur journalisée en debug ;
+- erreur métier convertie en type explicite ;
+- défaut à corriger ;
+- bloc à supprimer.
+
+Aucune erreur affectant le catalogue, le calcul WCS, l'écriture FITS ou la validation d'une solution ne doit être ignorée silencieusement.
+
+## 10.4 Critères de sortie P2 — découpage
+
+- modules à responsabilité identifiable ;
+- dépendances orientées du produit vers le cœur, pas l'inverse ;
+- fonctions critiques testables sans GUI ;
+- aucune importation du GUI par le cœur ;
+- aucun changement de résultat non documenté ;
+- taille et complexité des fonctions critiques réduites progressivement.
+
+---
+
+# MISSION P3 — Nouvelle interface utilisateur
+
+## 11. Objectif
+
+Permettre à un utilisateur ne connaissant ni ASTAP, ni les quads, ni les manifestes de résoudre ses images sans comprendre l'architecture interne.
+
+## 11.1 Parcours principal cible
+
+```text
+1. Choisir les images
+2. Vérifier la bibliothèque
+3. Résoudre
+4. Consulter les résultats
+```
+
+L'écran principal doit montrer au maximum :
+
+- fichiers ou dossier sélectionnés ;
+- nombre d'images ;
+- état de la bibliothèque ;
+- dossier de sortie ;
+- règle concernant les WCS existants ;
+- bouton Résoudre ;
+- progression ;
+- statut par fichier ;
+- résumé final et accès au journal.
+
+## 11.2 Réglages normaux
+
+Limiter les réglages normaux à :
+
+- bibliothèque de catalogue ;
+- dossier de sortie ;
+- traitement parallèle Auto ou manuel ;
+- copie, sauvegarde ou écrasement ;
+- fallback web facultatif ;
+- langue ;
+- niveau de journal.
+
+## 11.3 Outils avancés séparés
+
+Sortir du parcours principal :
+
+- construction ou réparation d'index ;
+- benchmark ;
+- reconstruction des hashes ;
+- index checker ;
+- WCS cleaner ;
+- téléchargement manuel des familles ;
+- paramètres de quads et de validation ;
+- profils expérimentaux ;
+- diagnostics développeur.
+
+Ces fonctions peuvent vivre dans un menu **Outils avancés**, une application distincte ou le CLI.
+
+## 11.4 Règles d'architecture GUI
+
+- le GUI appelle uniquement la façade produit ;
+- aucune logique astrométrique critique dans les callbacks ;
+- aucun paramètre expérimental directement lié à un widget du mode normal ;
+- tâches longues hors du thread d'interface ;
+- annulation propre et testée ;
+- messages d'erreur orientés action ;
+- état de l'application déterministe et reproductible.
+
+## 11.5 Critères de sortie P3
+
+Un nouvel utilisateur doit pouvoir :
+
+1. installer ou sélectionner la bibliothèque ;
+2. choisir des images ;
+3. lancer la résolution ;
+4. comprendre les succès et les échecs ;
+5. retrouver les fichiers produits ;
+
+sans ouvrir la documentation technique des index.
+
+---
+
+# MISSION P4 — Packaging, documentation et machine vierge
+
+## 12. Objectif
+
+Produire une installation reproductible et cohérente avec le nom du produit ZeSolver.
+
+## 12.1 Packaging Python
+
+À traiter :
+
+- nom de distribution et version cohérents ;
+- section `[build-system]` explicite ;
+- découverte correcte des packages ;
+- inclusion des ressources, layouts, traductions et icônes ;
+- points d'entrée GUI et CLI ;
+- extras séparés : `gui`, `gpu`, `dev` ;
+- licence au format SPDX moderne ;
+- exclusion des logs, caches, catalogues locaux et corpus lourds ;
+- construction wheel et source distribution ;
+- installation editable et installation wheel testées.
+
+## 12.2 Installation sur machine vierge
+
+Tester au minimum :
+
+- environnement Python propre ;
+- absence du dépôt dans `PYTHONPATH` ;
+- premier lancement sans réglages existants ;
+- bibliothèque absente, partielle puis complète ;
+- chemins contenant espaces et caractères non ASCII ;
+- lancement GUI et CLI ;
+- traitement d'un petit corpus ;
+- désinstallation ou mise à jour.
+
+Tester les plateformes effectivement annoncées. Ne pas promettre une plateforme non validée.
+
+## 12.3 Documentation minimale de publication
+
+- README orienté utilisateur ;
+- guide d'installation ;
+- guide de bibliothèque/catalogue ;
+- guide rapide de résolution ;
+- description des limites connues ;
+- politique de sauvegarde FITS ;
+- FAQ de diagnostic ;
+- guide contributeur ;
+- crédits et licences des projets et données amont ;
+- changelog ;
+- notes de version.
+
+## 12.4 Version de publication
+
+Tant que la couverture générale, l'installation et les tests multi-machines ne sont pas démontrés, préférer une version beta telle que :
+
+```text
+0.9.0b1
+```
+
+Ne déclarer une version `1.0.0` qu'après satisfaction des critères P0 à P4.
+
+## 12.5 Critères de sortie P4
+
+- installation réussie depuis un artefact publié sur machine vierge ;
+- premier lancement guidé ;
+- catalogue installable et vérifiable ;
+- corpus minimal résolu ;
+- documentation suffisante pour un utilisateur externe ;
+- licences et crédits vérifiés ;
+- aucun fichier de développement local embarqué par erreur.
+
+---
+
+# MISSION P5 — Optimisations GPU et fonctions avancées
+
+## 13. Statut
+
+P5 n'est pas bloquant pour la première publication.
+
+Exemples de travaux P5 :
+
+- optimisation GPU supplémentaire ;
+- parallélisme avancé ;
+- nouveaux profils d'instruments ;
+- amélioration automatique des paramètres de détection ;
+- nouvelles projections ou modèles de distorsion ;
+- optimisation de taille et chargement des index ;
+- nouvelles fonctions de benchmark ou d'analyse.
+
+## 13.1 Conditions d'acceptation
+
+Une optimisation doit :
+
+- conserver les résultats P0 ;
+- disposer d'un chemin CPU fonctionnel ;
+- démontrer son gain sur benchmark reproductible ;
+- ne pas augmenter les faux positifs ;
+- ne pas rendre l'installation normale dépendante du GPU ;
+- rester désactivable ou revenir proprement au CPU.
+
+---
+
+## 14. Règles générales de développement
+
+### 14.1 Avant toute modification
+
+L'agent doit :
+
+1. lire ce fichier ;
+2. identifier la priorité concernée ;
+3. inspecter les modules et tests existants ;
+4. décrire le comportement actuel ;
+5. définir les critères mesurables de réussite ;
+6. vérifier qu'une baseline protège la zone modifiée.
+
+### 14.2 Taille des changements
+
+Préférer :
+
+- petites modifications cohérentes ;
+- commits séparant refactorisation et changement fonctionnel ;
+- extraction sans modification de comportement ;
+- migration progressive avec compatibilité temporaire.
+
+Éviter :
+
+- réécriture complète d'un solveur ;
+- renommage massif mêlé à une évolution algorithmique ;
+- suppression de paramètres avant migration ;
+- changement de seuil sans preuve sur le corpus ;
+- optimisation fondée sur un seul fichier test.
+
+### 14.3 Tests obligatoires
+
+Pour chaque changement :
+
+- exécuter les tests ciblés ;
+- exécuter la compilation ou analyse syntaxique ;
+- exécuter la non-régression pertinente ;
+- comparer les métriques avant/après ;
+- signaler précisément les tests non exécutés et pourquoi.
+
+Ne jamais annoncer qu'un changement est fiable sans indiquer les validations réellement effectuées.
+
+### 14.4 Gestion des performances
+
+Les performances sont importantes, mais viennent après la justesse.
+
+Mesurer séparément :
+
+- chargement et détection ;
+- recherche de candidats ;
+- validation ;
+- écriture ;
+- mémoire maximale ;
+- temps médian et percentile 95 ;
+- taux de succès et de faux positifs.
+
+Une accélération qui réduit la robustesse ne doit pas devenir le comportement par défaut.
+
+### 14.5 Compatibilité et dépendances
+
+- éviter les dépendances lourdes sans bénéfice démontré ;
+- conserver un fonctionnement CPU ;
+- isoler les dépendances GUI et GPU dans des extras ;
+- documenter toute nouvelle dépendance ;
+- ne pas utiliser d'API privée d'une bibliothèque sans test et justification ;
+- vérifier la compatibilité avec les versions Python annoncées.
+
+### 14.6 Données et fichiers volumineux
+
+Ne pas ajouter au dépôt sans décision explicite :
+
+- catalogues stellaires complets ;
+- index 4D volumineux ;
+- logs ;
+- environnements virtuels ;
+- caches Python ;
+- résultats de benchmark temporaires ;
+- corpus lourd non filtré.
+
+Utiliser des manifestes, checksums, scripts de téléchargement ou artefacts de release.
+
+---
+
+## 15. Format attendu pour chaque mission confiée à un agent
+
+Chaque intervention importante doit produire un compte rendu comprenant :
+
+### Objectif
+
+Ce qui devait être obtenu.
+
+### État initial
+
+Comportement observé, fichiers concernés et risques.
+
+### Modifications
+
+Liste concise des changements réalisés.
+
+### Validation
+
+Commandes exécutées, corpus utilisé et métriques obtenues.
+
+### Comparaison baseline
+
+Succès, RMS, performances et éventuelles différences.
+
+### Limites ou risques restants
+
+Ce qui n'est pas démontré ou doit encore être fait.
+
+### Prochaine étape recommandée
+
+Une seule étape prioritaire, rattachée à P0–P5.
+
+---
+
+## 16. Première séquence de travail recommandée
+
+### Étape A — Geler la baseline
+
+- créer le tag ou commit de référence ;
+- archiver les paramètres et manifestes ;
+- établir un premier manifeste de corpus ;
+- enregistrer les métriques actuelles.
+
+### Étape B — Construire le harnais de non-régression
+
+- automatiser l'exécution du corpus ;
+- produire JSON et résumé lisible ;
+- définir les tolérances ;
+- intégrer les cas négatifs.
+
+### Étape C — Sécuriser les FITS
+
+- vérifier l'intégrité des pixels ;
+- ajouter les stratégies copie/sauvegarde ;
+- relire et valider tout WCS écrit ;
+- tester les interruptions et fichiers invalides.
+
+### Étape D — Spécifier `CatalogLibrary`
+
+- documenter le format de bibliothèque ;
+- définir le manifeste commun ;
+- définir les API ZeNear et ZeBlind ;
+- inventorier la couverture 4D actuelle.
+
+### Étape E — Introduire la façade produit
+
+- créer les modèles de requête et résultat ;
+- adapter le CLI puis le GUI ;
+- migrer progressivement les réglages ;
+- conserver les anciens chemins jusqu'à validation.
+
+La refonte visuelle complète ne commence qu'après stabilisation des étapes A à E.
+
+---
+
+## 17. Définition de « prêt à publier »
+
+ZeSolver est prêt pour une publication publique lorsque :
+
+- la baseline et le corpus sont versionnés ;
+- la non-régression est automatisée ;
+- les faux WCS sont activement testés ;
+- les FITS sont protégés ;
+- la bibliothèque ASTAP est unifiée et vérifiable ;
+- la couverture 4D est complète ou honnêtement limitée ;
+- le GUI et le CLI passent par une façade commune ;
+- l'interface principale ne présente plus les outils de développement ;
+- l'installation fonctionne depuis un artefact sur machine vierge ;
+- la documentation et les licences sont prêtes ;
+- les limites connues sont publiées ;
+- aucun blocage P0 à P4 ne reste ouvert.
+
+---
+
+## 18. Principe final
+
+La priorité absolue de ZeSolver est la confiance :
+
+- confiance dans la solution WCS ;
+- confiance dans l'intégrité du fichier ;
+- confiance dans la reproductibilité ;
+- confiance dans l'installation ;
+- confiance dans les limites annoncées.
+
+**Mesurer avant de modifier. Protéger avant de simplifier. Simplifier avant de publier. Optimiser après avoir fiabilisé.**

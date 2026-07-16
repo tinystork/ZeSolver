@@ -406,54 +406,20 @@ def near_solve(
             output_path=fits_path,
             stats={},
         )
-    logger(f"[ZENEAR] near solve failed ({solution.message}); attempting blind fallback…")
-
-    blind_cfg = InternalBlindConfig()
-    try:
-        with fits.open(fits_path, mode="readonly", memmap=False) as hdul:
-            h = hdul[0].header
-            data = hdul[0].data
-            hgt = int(getattr(data, "shape", [0, 0])[0]) if data is not None else 0
-            wdt = int(getattr(data, "shape", [0, 0])[1]) if data is not None and len(getattr(data, "shape", [])) >= 2 else 0
-            ra_hint = (
-                _normalize_header_angle(h.get("RA"), is_ra=True)
-                or _normalize_header_angle(h.get("OBJCTRA"), is_ra=True)
-                or _normalize_header_angle(h.get("CRVAL1"), is_ra=True)
-            )
-            dec_hint = (
-                _normalize_header_angle(h.get("DEC"), is_ra=False)
-                or _normalize_header_angle(h.get("OBJCTDEC"), is_ra=False)
-                or _normalize_header_angle(h.get("CRVAL2"), is_ra=False)
-            )
-            blind_cfg.ra_hint_deg = ra_hint
-            blind_cfg.dec_hint_deg = dec_hint
-            if wdt > 0 and hgt > 0:
-                scale_arcsec, (fov_x, fov_y) = _core_estimate_scale_and_fov(h, wdt, hgt)
-                if scale_arcsec is not None:
-                    blind_cfg.pixel_scale_arcsec = float(scale_arcsec)
-                fovs = [v for v in (fov_x, fov_y) if v is not None]
-                if fovs:
-                    blind_cfg.radius_hint_deg = max(0.5, 0.8 * float(max(fovs)))
-    except Exception:
-        pass
-
-    # Relax inlier threshold for fallback from near path while keeping geometric guards.
-    blind_cfg.quality_inliers = max(12, int(getattr(blind_cfg, "quality_inliers", 40) or 40) // 2)
-    blind_cfg.quality_rms = min(1.5, float(getattr(blind_cfg, "quality_rms", 1.2) or 1.2))
-
-    orchestration_trace["blind_fallback_attempted"] = True
-    blind_result = blind_solve(
-        fits_path,
-        index_root,
-        config=blind_cfg,
-        log=log,
-        skip_if_valid=False,
-        cancel_check=cancel_check,
+    logger(f"[ZENEAR] near solve failed ({solution.message}); 4D-only chain required, no historical fallback")
+    orchestration_trace["blind_fallback_skipped_reason"] = "BLIND4D_CONFIGURATION_REQUIRED"
+    return BlindSolveResult(
+        success=False,
+        message=f"near failed: {solution.message}; BLIND4D_CONFIGURATION_REQUIRED",
+        elapsed_sec=elapsed,
+        tried_dbs=[index_root],
+        used_db=None,
+        wrote_wcs=False,
+        updated_keywords={},
+        output_path=fits_path,
+        stats={
+            "near_orchestration": dict(orchestration_trace),
+            "historical_blind_called": False,
+            "final_status": "BLIND4D_CONFIGURATION_REQUIRED",
+        },
     )
-    prefix = f"near failed: {solution.message}"
-    blind_message = blind_result["message"]
-    blind_result["message"] = f"{prefix}; blind {blind_message}"
-    blind_result.setdefault("stats", {})
-    if isinstance(blind_result["stats"], dict):
-        blind_result["stats"]["near_orchestration"] = dict(orchestration_trace)
-    return blind_result

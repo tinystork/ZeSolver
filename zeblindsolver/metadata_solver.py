@@ -30,6 +30,7 @@ import logging
 import json
 import hashlib
 import math
+import re
 import time
 import subprocess
 import tempfile
@@ -158,6 +159,23 @@ class NearSolveConfig:
     conformance_center_extra_deg: float = 0.6
     conformance_center_fov_mult: float = 1.2
     conformance_center_max_deg: float = 0.90
+    # Strict ASTAP-ISO acceptance gate.  ZN3.5 moves strict mode from a mirror
+    # path to a product candidate path: a candidate must be accepted before WCS
+    # writing.  Use "diagnostic" to compute metrics without changing outcome.
+    strict_acceptance_mode: str = "diagnostic"  # "off" | "diagnostic" | "enforce"
+    strict_acceptance_min_unique_matches: int = 12
+    strict_acceptance_min_holdout_matches: int = 8
+    strict_acceptance_max_rms_px: float = 3.0
+    strict_acceptance_max_cd_cond: float = 1.0e4
+    strict_acceptance_min_span_fraction: float = 0.12
+    # Diagnostic-only dumps. Disabled by default; used by ZN probes to compare
+    # ZeNear's exact selected lists against external solvers without changing
+    # the solving path.
+    diagnostic_dump_dir: str | None = None
+    diagnostic_dump_label: str | None = None
+    diagnostic_image_stars_csv: str | None = None
+    diagnostic_catalog_stars_csv: str | None = None
+    diagnostic_iso_trace: bool = False
 
 
 def _failure(message: str) -> WcsSolution:
@@ -178,6 +196,331 @@ def _emit_near_debug_record(record: dict) -> None:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+def _dump_near_diagnostic_lists(
+    *,
+    dump_dir: str | Path | None,
+    label: str,
+    stars: np.ndarray,
+    cat_positions: np.ndarray,
+    cat_world: np.ndarray,
+    cat_mags: np.ndarray,
+) -> None:
+    if not dump_dir:
+        return
+    try:
+        out_dir = Path(dump_dir).expanduser().resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(label or "zenear")).strip("_") or "zenear"
+
+        img_path = out_dir / f"{safe_label}_zenear_image_stars.csv"
+        with img_path.open("w", encoding="utf-8") as f:
+            f.write("rank,x,y,flux\n")
+            n = int(stars.size)
+            for i in range(n):
+                f.write(
+                    f"{i + 1},"
+                    f"{float(stars['x'][i]):.6f},"
+                    f"{float(stars['y'][i]):.6f},"
+                    f"{float(stars['flux'][i]):.6f}\n"
+                )
+
+        cat_path = out_dir / f"{safe_label}_zenear_catalog_stars.csv"
+        with cat_path.open("w", encoding="utf-8") as f:
+            f.write("rank,ra_deg,dec_deg,x_tan_deg,y_tan_deg,mag\n")
+            n = int(min(cat_positions.shape[0], cat_world.shape[0], cat_mags.shape[0]))
+            for i in range(n):
+                f.write(
+                    f"{i + 1},"
+                    f"{float(cat_world[i, 0]):.10f},"
+                    f"{float(cat_world[i, 1]):.10f},"
+                    f"{float(cat_positions[i, 0]):.10f},"
+                    f"{float(cat_positions[i, 1]):.10f},"
+                    f"{float(cat_mags[i]):.6f}\n"
+                )
+    except Exception:
+        pass
+
+
+def _astap_iso_collect_quad_hits(
+    quads_ref: np.ndarray,
+    quads_img: np.ndarray,
+    *,
+    minimum_count: int,
+    quad_tolerance: float,
+) -> dict:
+    """Diagnostic mirror of ASTAP-ISO quad matching.
+
+    This intentionally does not feed the solver decision.  It exposes the
+    raw signature hits and the scale-ratio retained subset used by the fit
+    functions so probes can distinguish lookup from transform failures.
+    """
+    n1 = int(quads_ref.shape[1]) if quads_ref.ndim == 2 else 0
+    n2 = int(quads_img.shape[1]) if quads_img.ndim == 2 else 0
+    if n1 < int(minimum_count) or n2 < int(minimum_count):
+        return {"path_used": None, "matches_raw": 0, "matches_kept": 0, "median_ratio": None, "hits": []}
+
+    use_bruteforce = n1 < 180
+    matches: list[tuple[int, int, float]] = []
+    tol = max(1e-12, float(quad_tolerance))
+    if use_bruteforce:
+        for i in range(n1):
+            r1 = quads_ref[1:6, i]
+            for j in range(n2):
+                r2 = quads_img[1:6, j]
+                d = float(np.max(np.abs(r1 - r2)))
+                if d <= tol:
+                    matches.append((i, j, d))
+    else:
+        hash_bins = max(1, 2 * max(n1, n2))
+        h1 = [[] for _ in range(hash_bins)]
+        h2 = [[] for _ in range(hash_bins)]
+        for i in range(n1):
+            b = int(quads_ref[1, i] / tol) % hash_bins
+            h1[b].append(i)
+        for j in range(n2):
+            b = int(quads_img[1, j] / tol) % hash_bins
+            h2[b].append(j)
+        for b in range(hash_bins):
+            if not h1[b]:
+                continue
+            for db in (-1, 0, 1):
+                bb = (b + db) % hash_bins
+                if not h2[bb]:
+                    continue
+                for i in h1[b]:
+                    r1 = quads_ref[1:6, i]
+                    for j in h2[bb]:
+                        r2 = quads_img[1:6, j]
+                        d = float(np.max(np.abs(r1 - r2)))
+                        if d <= tol:
+                            matches.append((i, j, d))
+
+    if not matches:
+        return {"path_used": "find_fit" if use_bruteforce else "find_fit_using_hash", "matches_raw": 0, "matches_kept": 0, "median_ratio": None, "hits": []}
+
+    ratios = np.array([quads_ref[0, i] / max(quads_img[0, j], 1e-12) for i, j, _ in matches], dtype=np.float64)
+    median_ratio = float(np.median(ratios)) if ratios.size else float("nan")
+    hits: list[dict] = []
+    kept = 0
+    for rank, ((i, j, d), ratio) in enumerate(zip(matches, ratios), start=1):
+        retained = bool(np.isfinite(median_ratio) and median_ratio > 0 and abs(median_ratio - float(ratio)) <= tol * median_ratio)
+        if retained:
+            kept += 1
+        hits.append({
+            "lookup_rank": int(rank),
+            "catalog_quad_rank": int(i + 1),
+            "image_quad_rank": int(j + 1),
+            "code_distance": float(d),
+            "scale_ratio": float(ratio) if np.isfinite(ratio) else None,
+            "retained": retained,
+            "rejection_reason": None if retained else "SCALE_RATIO_MEDIAN_FILTER",
+        })
+    return {
+        "path_used": "find_fit" if use_bruteforce else "find_fit_using_hash",
+        "matches_raw": int(len(matches)),
+        "matches_kept": int(kept),
+        "median_ratio": float(median_ratio) if np.isfinite(median_ratio) else None,
+        "hits": hits,
+    }
+
+
+def _dump_astap_iso_trace(
+    *,
+    dump_dir: str | Path | None,
+    label: str,
+    stage: str,
+    trace: dict | None,
+    diag: dict | None,
+    minimum_count: int,
+    quad_tolerance: float,
+) -> None:
+    if not dump_dir or not trace:
+        return
+    try:
+        out_dir = Path(dump_dir).expanduser().resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+        safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(label or "zenear")).strip("_") or "zenear"
+        safe_stage = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(stage or "initial")).strip("_") or "initial"
+        prefix = out_dir / f"{safe_label}_iso_{safe_stage}"
+
+        img = np.asarray(trace.get("image_positions", np.empty((0, 2))), dtype=np.float64)
+        img_src = np.asarray(trace.get("image_source_indices", np.arange(img.shape[0])), dtype=np.int64)
+        img_flux = trace.get("image_fluxes")
+        img_flux_arr = np.asarray(img_flux, dtype=np.float64) if img_flux is not None else None
+        with prefix.with_name(prefix.name + "_image_final_for_quads.csv").open("w", encoding="utf-8") as f:
+            f.write("rank,source_index,x,y,flux\n")
+            for i in range(int(img.shape[0])):
+                flux_text = ""
+                if img_flux_arr is not None and i < int(img_flux_arr.shape[0]) and np.isfinite(img_flux_arr[i]):
+                    flux_text = f"{float(img_flux_arr[i]):.10f}"
+                f.write(f"{i + 1},{int(img_src[i])},{float(img[i,0]):.10f},{float(img[i,1]):.10f},{flux_text}\n")
+
+        cat = np.asarray(trace.get("catalog_positions", np.empty((0, 2))), dtype=np.float64)
+        cat_src = np.asarray(trace.get("catalog_source_indices", np.arange(cat.shape[0])), dtype=np.int64)
+        cat_world = trace.get("catalog_world")
+        cat_world_arr = np.asarray(cat_world, dtype=np.float64) if cat_world is not None else None
+        cat_mags = trace.get("catalog_mags")
+        cat_mag_arr = np.asarray(cat_mags, dtype=np.float64) if cat_mags is not None else None
+        with prefix.with_name(prefix.name + "_catalog_final_for_quads.csv").open("w", encoding="utf-8") as f:
+            f.write("rank,source_index,x_arcsec,y_arcsec,ra_deg,dec_deg,magnitude,identity_kind,decoded_identity\n")
+            for i in range(int(cat.shape[0])):
+                ra_text = dec_text = mag_text = ""
+                identity = ""
+                if cat_world_arr is not None and i < int(cat_world_arr.shape[0]):
+                    ra = float(cat_world_arr[i, 0])
+                    dec = float(cat_world_arr[i, 1])
+                    if np.isfinite(ra) and np.isfinite(dec):
+                        ra_text = f"{ra:.10f}"
+                        dec_text = f"{dec:.10f}"
+                if cat_mag_arr is not None and i < int(cat_mag_arr.shape[0]) and np.isfinite(cat_mag_arr[i]):
+                    mag_text = f"{float(cat_mag_arr[i]):.6f}"
+                if ra_text and dec_text and mag_text:
+                    identity = f"radec_mag:{float(ra_text):.8f}:{float(dec_text):.8f}:{float(mag_text):.3f}"
+                f.write(
+                    f"{i + 1},{int(cat_src[i])},{float(cat[i,0]):.10f},{float(cat[i,1]):.10f},"
+                    f"{ra_text},{dec_text},{mag_text},decoded_coordinate_surrogate,{identity}\n"
+                )
+
+        def _write_quads(name: str, q: np.ndarray) -> None:
+            q = np.asarray(q, dtype=np.float64)
+            with prefix.with_name(prefix.name + f"_{name}_quads.csv").open("w", encoding="utf-8") as f:
+                f.write("quad_rank,longest,signature1,signature2,signature3,signature4,signature5,center_x,center_y\n")
+                n = int(q.shape[1]) if q.ndim == 2 else 0
+                for i in range(n):
+                    f.write(
+                        f"{i + 1},"
+                        f"{float(q[0,i]):.10f},{float(q[1,i]):.10f},{float(q[2,i]):.10f},"
+                        f"{float(q[3,i]):.10f},{float(q[4,i]):.10f},{float(q[5,i]):.10f},"
+                        f"{float(q[6,i]):.10f},{float(q[7,i]):.10f}\n"
+                    )
+
+        q_img = np.asarray(trace.get("image_quads", np.empty((8, 0))), dtype=np.float64)
+        q_cat = np.asarray(trace.get("catalog_quads", np.empty((8, 0))), dtype=np.float64)
+        _write_quads("image", q_img)
+        _write_quads("catalog", q_cat)
+
+        hits = _astap_iso_collect_quad_hits(
+            q_cat,
+            q_img,
+            minimum_count=int(minimum_count),
+            quad_tolerance=float(quad_tolerance),
+        )
+        with prefix.with_name(prefix.name + "_hits.csv").open("w", encoding="utf-8") as f:
+            f.write("lookup_rank,image_quad_rank,catalog_quad_rank,code_distance,scale_ratio,retained,rejection_reason\n")
+            for row in hits.get("hits", []):
+                ratio_text = "" if row.get("scale_ratio") is None else f"{float(row['scale_ratio']):.10f}"
+                f.write(
+                    f"{int(row['lookup_rank'])},"
+                    f"{int(row['image_quad_rank'])},"
+                    f"{int(row['catalog_quad_rank'])},"
+                    f"{float(row['code_distance']):.10f},"
+                    f"{ratio_text},"
+                    f"{str(bool(row['retained'])).lower()},"
+                    f"{row.get('rejection_reason') or ''}\n"
+                )
+        summary = {
+            "stage": safe_stage,
+            "image_final_for_quads": int(img.shape[0]),
+            "catalog_final_for_quads": int(cat.shape[0]),
+            "image_quads": int(q_img.shape[1]) if q_img.ndim == 2 else 0,
+            "catalog_quads": int(q_cat.shape[1]) if q_cat.ndim == 2 else 0,
+            "hits": {k: v for k, v in hits.items() if k != "hits"},
+            "diag": diag or {},
+            "stage_meta": trace.get("stage_meta") if isinstance(trace.get("stage_meta"), dict) else {},
+        }
+        prefix.with_name(prefix.name + "_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _load_near_diagnostic_image_stars_csv(path: str | Path | None) -> np.ndarray | None:
+    if not path:
+        return None
+    try:
+        csv_path = Path(path).expanduser().resolve()
+        if not csv_path.exists():
+            return None
+        arr = np.genfromtxt(
+            csv_path,
+            delimiter=",",
+            names=True,
+            dtype=None,
+            encoding="utf-8",
+            invalid_raise=False,
+        )
+        if arr is None or getattr(arr, "size", 0) == 0:
+            return np.zeros(0, dtype=_STAR_DETECT_DTYPE)
+        arr = np.atleast_1d(arr)
+        names = set(arr.dtype.names or ())
+        if not {"x", "y", "flux"}.issubset(names):
+            return None
+        out = np.zeros(int(arr.shape[0]), dtype=_STAR_DETECT_DTYPE)
+        out["x"] = np.asarray(arr["x"], dtype=np.float32)
+        out["y"] = np.asarray(arr["y"], dtype=np.float32)
+        out["flux"] = np.maximum(np.asarray(arr["flux"], dtype=np.float32), np.float32(1.0))
+        finite = np.isfinite(out["x"]) & np.isfinite(out["y"]) & np.isfinite(out["flux"])
+        out = out[finite]
+        if out.size > 1:
+            order = np.argsort(out["flux"], kind="stable")[::-1]
+            out = out[order]
+        return out
+    except Exception:
+        return None
+
+
+def _load_near_diagnostic_catalog_stars_csv(path: str | Path | None) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    if not path:
+        return None
+    try:
+        csv_path = Path(path).expanduser().resolve()
+        if not csv_path.exists():
+            return None
+        arr = np.genfromtxt(
+            csv_path,
+            delimiter=",",
+            names=True,
+            dtype=None,
+            encoding="utf-8",
+            invalid_raise=False,
+        )
+        if arr is None or getattr(arr, "size", 0) == 0:
+            return (
+                np.empty((0, 2), dtype=np.float64),
+                np.empty((0, 2), dtype=np.float64),
+                np.empty(0, dtype=np.float32),
+            )
+        arr = np.atleast_1d(arr)
+        names = set(arr.dtype.names or ())
+        x_name = "x_tan_deg" if "x_tan_deg" in names else ("x_projected" if "x_projected" in names else "x")
+        y_name = "y_tan_deg" if "y_tan_deg" in names else ("y_projected" if "y_projected" in names else "y")
+        if x_name not in names or y_name not in names:
+            return None
+        x = np.asarray(arr[x_name], dtype=np.float64)
+        y = np.asarray(arr[y_name], dtype=np.float64)
+        # ASTAP internal dumps are in standard coordinates/arcsec. ZeNear
+        # diagnostic dumps use tangent degrees. Normalize to degrees here.
+        if "x_projected" in names or (np.nanmax(np.abs(x)) > 20.0 if x.size else False):
+            x_deg = x / 3600.0
+            y_deg = y / 3600.0
+        else:
+            x_deg = x
+            y_deg = y
+        if {"ra_deg", "dec_deg"}.issubset(names):
+            world = np.column_stack((np.asarray(arr["ra_deg"], dtype=np.float64), np.asarray(arr["dec_deg"], dtype=np.float64)))
+        else:
+            world = np.full((int(x_deg.size), 2), np.nan, dtype=np.float64)
+        mag_name = "mag" if "mag" in names else ("magnitude" if "magnitude" in names else None)
+        mags = np.asarray(arr[mag_name], dtype=np.float32) if mag_name else np.arange(int(x_deg.size), dtype=np.float32)
+        finite = np.isfinite(x_deg) & np.isfinite(y_deg)
+        return (
+            np.column_stack((x_deg[finite], y_deg[finite])).astype(np.float64, copy=False),
+            world[finite].astype(np.float64, copy=False),
+            mags[finite].astype(np.float32, copy=False),
+        )
+    except Exception:
+        return None
 
 
 def _stable_seed_for_path(path: Path) -> int:
@@ -306,6 +649,21 @@ _RAW_TILE_LOOKUP_CACHE_LOCK = threading.Lock()
 
 # Common dtype for star detection tuples.
 _STAR_DETECT_DTYPE = np.dtype([('x', 'f4'), ('y', 'f4'), ('flux', 'f4')])
+
+
+def astap_iso_image_for_solve(hdu: fits.PrimaryHDU) -> np.ndarray:
+    """Return the native-ADU mono image consumed by ASTAP-ISO strict detection."""
+    data = hdu.data
+    if data is None:
+        raise ValueError("FITS HDU has no data to generate strict ASTAP-ISO image")
+    raw_image = np.asarray(data)
+    if raw_image.ndim == 3:
+        image = np.mean(raw_image, axis=0, dtype=np.float32)
+    elif raw_image.ndim == 2:
+        image = np.asarray(raw_image, dtype=np.float32)
+    else:
+        raise ValueError(f"Unsupported FITS data shape for strict ASTAP-ISO image: {raw_image.shape}")
+    return np.nan_to_num(image, copy=False)
 
 
 def _get_cached_catalog_db(db_root: Path, family: str | None) -> CatalogDB:
@@ -447,22 +805,712 @@ def _detect_stars_astap_cli(fits_path: Path, *, snr_min: int = 10, timeout_s: in
     return out
 
 
-def _mean_bin_image(image: np.ndarray, factor: int) -> tuple[np.ndarray, float]:
+def astap_binned_to_full_coords(
+    x_binned: np.ndarray | float,
+    y_binned: np.ndarray | float,
+    factor: int,
+    *,
+    crop: float = 1.0,
+    width: int | None = None,
+    height: int | None = None,
+) -> tuple[np.ndarray | float, np.ndarray | float]:
+    """Convert ASTAP binned-image coordinates back to full-resolution pixels."""
+    factor_f = float(max(1, int(factor)))
+    crop_f = float(crop)
+    shift_x = (float(width) * (1.0 - crop_f) / 2.0) if width is not None else 0.0
+    shift_y = (float(height) * (1.0 - crop_f) / 2.0) if height is not None else 0.0
+    offset = (factor_f - 1.0) * 0.5
+    return offset + factor_f * x_binned + shift_x, offset + factor_f * y_binned + shift_y
+
+
+def astap_full_to_binned_coords(
+    x_full: np.ndarray | float,
+    y_full: np.ndarray | float,
+    factor: int,
+    *,
+    crop: float = 1.0,
+    width: int | None = None,
+    height: int | None = None,
+) -> tuple[np.ndarray | float, np.ndarray | float]:
+    """Inverse of :func:`astap_binned_to_full_coords` for diagnostics/tests."""
+    factor_f = float(max(1, int(factor)))
+    crop_f = float(crop)
+    shift_x = (float(width) * (1.0 - crop_f) / 2.0) if width is not None else 0.0
+    shift_y = (float(height) * (1.0 - crop_f) / 2.0) if height is not None else 0.0
+    offset = (factor_f - 1.0) * 0.5
+    return (x_full - shift_x - offset) / factor_f, (y_full - shift_y - offset) / factor_f
+
+
+def astap_compatible_mean_bin_image(image: np.ndarray, factor: int, *, crop: float = 1.0) -> tuple[np.ndarray, int]:
+    """ASTAP-style mono block-average binning with truncating dimensions."""
     factor = max(1, int(factor))
+    crop = min(1.0, max(0.01, float(crop)))
+    data = np.asarray(image, dtype=np.float32)
+    if data.ndim == 3:
+        # Accept either channel-first or channel-last arrays. FITS solve input is
+        # normally already mono, but tests/probes exercise color conversion.
+        if data.shape[0] in (3, 4) and data.shape[0] < min(data.shape[1], data.shape[2]):
+            data = np.mean(data[:3], axis=0, dtype=np.float32)
+        else:
+            data = np.mean(data[..., :3], axis=-1, dtype=np.float32)
+    elif data.ndim != 2:
+        data = np.squeeze(data).astype(np.float32, copy=False)
+    if data.ndim != 2:
+        raise ValueError("ASTAP-compatible binning expects a 2-D mono image or color image")
     if factor <= 1:
-        return image, 1.0
-    h0, w0 = int(image.shape[0]), int(image.shape[1])
-    hb = h0 // factor
-    wb = w0 // factor
-    if hb < 32 or wb < 32:
-        return image, 1.0
-    cropped = image[: hb * factor, : wb * factor]
+        return data.astype(np.float32, copy=False), 1
+    h0, w0 = int(data.shape[0]), int(data.shape[1])
+    shift_x = int(round(float(w0) * (1.0 - crop) / 2.0))
+    shift_y = int(round(float(h0) * (1.0 - crop) / 2.0))
+    hb = int(math.trunc(float(crop) * float(h0) / float(factor)))
+    wb = int(math.trunc(float(crop) * float(w0) / float(factor)))
+    if hb < 1 or wb < 1:
+        return data.astype(np.float32, copy=False), 1
+    cropped = data[shift_y : shift_y + hb * factor, shift_x : shift_x + wb * factor]
     binned = (
         cropped.reshape(hb, factor, wb, factor)
         .mean(axis=(1, 3), dtype=np.float32)
         .astype(np.float32, copy=False)
     )
-    return binned, float(factor)
+    return binned, factor
+
+
+def _mean_bin_image(image: np.ndarray, factor: int) -> tuple[np.ndarray, float]:
+    binned, used = astap_compatible_mean_bin_image(image, factor)
+    return binned, float(used)
+
+
+def choose_astap_compatible_bin_factor(
+    *,
+    width: int,
+    height: int,
+    fov_deg: float | None = None,
+    scale_arcsec: float | None = None,
+    requested: int | None = None,
+) -> int:
+    """Explicit binning policy for strict ASTAP-ISO diagnostics.
+
+    A user/requested factor wins. Otherwise this mirrors the observed M31
+    `-z 2` regime for tall 1080x1920 frames while keeping smaller/S30-style
+    control images at native scale.
+    """
+    if requested is not None and int(requested) > 0:
+        return max(1, int(requested))
+    major = max(int(width), int(height))
+    if major >= 1600:
+        return 2
+    if scale_arcsec is not None and math.isfinite(float(scale_arcsec)) and float(scale_arcsec) < 2.0 and major >= 1200:
+        return 2
+    if fov_deg is not None and math.isfinite(float(fov_deg)) and float(fov_deg) >= 1.0 and major >= 1400:
+        return 2
+    return 1
+
+
+def astap_background_noise_stats(image: np.ndarray) -> dict[str, float]:
+    data = np.asarray(image, dtype=np.float32)
+    finite = data[np.isfinite(data)]
+    if finite.size == 0:
+        return {"background": math.nan, "noise": math.nan, "threshold_7sigma": math.nan, "threshold_30sigma": math.nan}
+    med = float(np.median(finite))
+    mad = float(np.median(np.abs(finite - med)))
+    noise = float(1.4826 * mad) if mad > 0 else float(np.std(finite))
+    return {
+        "background": med,
+        "noise": noise,
+        "threshold_7sigma": med + 7.0 * noise,
+        "threshold_30sigma": med + 30.0 * noise,
+    }
+
+
+def _astap_histogram(image: np.ndarray, *, upper: int = 65000) -> tuple[np.ndarray, int]:
+    data = np.asarray(image, dtype=np.float32)
+    if data.ndim != 2:
+        data = np.squeeze(data).astype(np.float32, copy=False)
+    height, width = int(data.shape[0]), int(data.shape[1])
+    offset_w = int(math.trunc(float(width) * 0.042))
+    offset_h = int(math.trunc(float(height) * 0.015))
+    core = data[offset_h : height - offset_h, offset_w : width - offset_w]
+    values = np.rint(core).astype(np.int64, copy=False).ravel()
+    mask = (values >= 1) & (values < int(upper))
+    values = values[mask]
+    hist = np.bincount(values, minlength=int(upper) + 1)
+    hist_mean = int(round(float(np.sum(values)) / float(values.size + 1))) if values.size else 0
+    return hist.astype(np.int64, copy=False), hist_mean
+
+
+def estimate_astap_global_background(image: np.ndarray, *, max_stars: int = 500) -> dict[str, float]:
+    """Mirror ASTAP CLI ``get_background`` for solver star detection."""
+    data = np.asarray(image, dtype=np.float32)
+    if data.ndim != 2:
+        data = np.squeeze(data).astype(np.float32, copy=False)
+    if data.ndim != 2 or data.size == 0:
+        return {"background": math.nan, "noise": math.nan, "star_level": math.nan, "star_level2": math.nan}
+    hist, hist_mean = _astap_histogram(data)
+    background = float(data[0, 0])
+    if hist_mean <= 0:
+        background = 0.0
+    else:
+        peak_slice = hist[1 : hist_mean + 1]
+        if peak_slice.size:
+            background = float(int(np.argmax(peak_slice)) + 1)
+        if float(hist_mean) > 1.5 * background:
+            background = float(hist_mean)
+
+    height, width = int(data.shape[0]), int(data.shape[1])
+    step_size = int(round(float(height) / 71.0))
+    if step_size % 2 == 0:
+        step_size += 1
+    sd = 99999.0
+    iterations = 0
+    while True:
+        sd_old = float(sd)
+        total = 0.0
+        counter = 0
+        for fits_x in range(15, max(15, width - 15), step_size):
+            for fits_y in range(15, max(15, height - 15), step_size):
+                value = float(data[fits_y, fits_x])
+                if value < background * 2.0 and value != 0.0:
+                    if iterations == 0 or abs(value - background) <= 3.0 * sd_old:
+                        total += (value - background) * (value - background)
+                        counter += 1
+        sd = math.sqrt(total / float(counter)) if counter else 0.0
+        iterations += 1
+        if (sd_old - sd) < 0.05 * sd or iterations >= 7:
+            break
+
+    factor = 6 * int(max_stars)
+    factor2 = 24 * int(max_stars)
+    above = 0
+    star_level = 0
+    star_level2 = 0
+    i = 65001
+    while star_level == 0 and i > background + 1.0:
+        i -= 1
+        if i < hist.size:
+            above += int(hist[i])
+        if above >= factor:
+            star_level = i
+    while star_level2 == 0 and i > background + 1.0:
+        i -= 1
+        if i < hist.size:
+            above += int(hist[i])
+        if above >= factor2:
+            star_level2 = i
+    star_level_f = max(max(3.5 * sd, 1.0), float(star_level) - background - 1.0)
+    star_level2_f = max(max(3.5 * sd, 1.0), float(star_level2) - background - 1.0)
+    return {
+        "background": float(background),
+        "noise": float(sd),
+        "star_level": float(star_level_f),
+        "star_level2": float(star_level2_f),
+        "iterations": int(iterations),
+        "hist_mean": int(hist_mean),
+    }
+
+
+def _astap_sigma_clipped_mean_from_histogram(
+    image: np.ndarray,
+    start_x: int,
+    end_x: int,
+    start_y: int,
+    end_y: int,
+    upper_limit: int,
+    *,
+    max_iterations: int = 6,
+    convergence_threshold: float = 0.1,
+) -> tuple[float, float, int]:
+    data = np.asarray(image, dtype=np.float32)
+    upper = max(1, int(upper_limit))
+    sub = data[int(start_y) : int(end_y) + 1, int(start_x) : int(end_x) + 1]
+    values = np.rint(sub).astype(np.int64, copy=False).ravel()
+    values = values[(values >= 1) & (values < upper)]
+    if values.size == 0:
+        return 0.0, 0.0, 0
+    hist = np.bincount(values, minlength=upper + 1)
+    lower = 0
+    current_upper = upper
+    mean_v = 0.0
+    stdev = 0.0
+    iterations = 0
+    for iteration in range(max(1, int(max_iterations))):
+        previous_mean = mean_v
+        previous_stdev = stdev
+        bins = np.arange(lower, current_upper + 1, dtype=np.float64)
+        counts = hist[lower : current_upper + 1].astype(np.float64, copy=False)
+        total_count = float(np.sum(counts))
+        if total_count <= 0.0:
+            return 0.0, 0.0, int(iterations)
+        total = float(np.sum(bins * counts))
+        total_sq = float(np.sum(bins * bins * counts))
+        mean_v = total / total_count
+        if total_count > 1.0:
+            variance = (total_sq - (total * total) / total_count) / (total_count - 1.0)
+            stdev = math.sqrt(variance) if variance > 0.0 else 0.0
+        else:
+            stdev = 0.0
+        iterations = iteration + 1
+        if stdev > 0.0:
+            lower = 0
+            current_upper = min(upper, int(round(mean_v + 2.0 * stdev)))
+        if (
+            iteration > 0
+            and abs(mean_v - previous_mean) < float(convergence_threshold)
+            and abs(stdev - previous_stdev) < float(convergence_threshold)
+        ):
+            break
+    return float(mean_v), float(stdev), int(iterations)
+
+
+def astap_section_grid(width: int, height: int, *, rastersteps: int = 12) -> list[tuple[int, int, int, int, int]]:
+    if int(height) < int(width):
+        steps_x = int(rastersteps)
+        steps_y = int(round(float(rastersteps) * float(height) / max(1.0, float(width))))
+    else:
+        steps_y = int(rastersteps)
+        steps_x = int(round(float(rastersteps) * float(width) / max(1.0, float(height))))
+    sections: list[tuple[int, int, int, int, int]] = []
+    section_id = 0
+    for yy in range(steps_y + 1):
+        for xx in range(steps_x + 1):
+            start_x = 1 + int(round(float(width) * float(xx) / float(steps_x + 1)))
+            end_x = min(int(width) - 2, int(round(float(width) * float(xx + 1) / float(steps_x + 1))))
+            start_y = 1 + int(round(float(height) * float(yy) / float(steps_y + 1)))
+            end_y = min(int(height) - 2, int(round(float(height) * float(yy + 1) / float(steps_y + 1))))
+            sections.append((section_id, start_x, end_x, start_y, end_y))
+            section_id += 1
+    return sections
+
+
+def _astap_bilinear(image: np.ndarray, x: float, y: float) -> float:
+    width = int(image.shape[1])
+    height = int(image.shape[0])
+    x_trunc = int(math.trunc(float(x)))
+    y_trunc = int(math.trunc(float(y)))
+    if x_trunc <= 0 or x_trunc >= width - 2 or y_trunc <= 0 or y_trunc >= height - 2:
+        return 0.0
+    x_frac = float(x) - float(x_trunc)
+    y_frac = float(y) - float(y_trunc)
+    return (
+        float(image[y_trunc, x_trunc]) * (1.0 - x_frac) * (1.0 - y_frac)
+        + float(image[y_trunc, x_trunc + 1]) * x_frac * (1.0 - y_frac)
+        + float(image[y_trunc + 1, x_trunc]) * (1.0 - x_frac) * y_frac
+        + float(image[y_trunc + 1, x_trunc + 1]) * x_frac * y_frac
+    )
+
+
+def _astap_hfd_measure(image: np.ndarray, x1: int, y1: int, *, rs: int = 14) -> dict[str, float] | None:
+    data = np.asarray(image, dtype=np.float32)
+    width = int(data.shape[1])
+    height = int(data.shape[0])
+    rs_i = int(rs)
+    r2 = rs_i + 1
+    if x1 - r2 <= 0 or x1 + r2 >= width - 1 or y1 - r2 <= 0 or y1 + r2 >= height - 1:
+        return None
+    bg_values: list[float] = []
+    for i in range(-r2, r2 + 1):
+        for j in range(-r2, r2 + 1):
+            distance = i * i + j * j
+            if distance > rs_i * rs_i and distance <= r2 * r2:
+                bg_values.append(float(data[y1 + j, x1 + i]))
+    if not bg_values:
+        return None
+    bg_arr = np.asarray(bg_values, dtype=np.float64)
+    star_bg = float(np.median(bg_arr))
+    mad_bg = float(np.median(np.abs(bg_arr - star_bg)))
+    sd_bg = max(mad_bg * 1.4826, 1.0)
+
+    cur_rs = rs_i
+    while True:
+        sum_val = 0.0
+        sum_val_x = 0.0
+        sum_val_y = 0.0
+        signal_counter = 0
+        for i in range(-cur_rs, cur_rs + 1):
+            for j in range(-cur_rs, cur_rs + 1):
+                val = float(data[y1 + j, x1 + i]) - star_bg
+                if val > 3.0 * sd_bg:
+                    sum_val += val
+                    sum_val_x += val * float(i)
+                    sum_val_y += val * float(j)
+                    signal_counter += 1
+        if sum_val <= 12.0 * sd_bg or signal_counter <= 1:
+            return None
+        xc = float(x1) + sum_val_x / sum_val
+        yc = float(y1) + sum_val_y / sum_val
+        if xc - cur_rs < 0 or xc + cur_rs > width - 1 or yc - cur_rs < 0 or yc + cur_rs > height - 1:
+            return None
+        boxed = float(signal_counter) >= (2.0 / 9.0) * float((cur_rs + cur_rs + 1) ** 2)
+        if not boxed:
+            cur_rs -= 2 if cur_rs > 4 else 1
+        if boxed or cur_rs <= 1:
+            break
+
+    cur_rs += 2
+    distance_histogram = [0] * (cur_rs + 1)
+    valmax = 0.0
+    for i in range(-cur_rs, cur_rs + 1):
+        for j in range(-cur_rs, cur_rs + 1):
+            distance = int(round(math.sqrt(float(i * i + j * j))))
+            if distance <= cur_rs:
+                val = _astap_bilinear(data, xc + float(i), yc + float(j)) - star_bg
+                if val > 3.0 * sd_bg:
+                    distance_histogram[distance] += 1
+                    if val > valmax:
+                        valmax = val
+    r_aperture = -1
+    distance_top_value = 0
+    hist_start = False
+    illuminated_pixels = 0
+    while True:
+        r_aperture += 1
+        illuminated_pixels += distance_histogram[r_aperture]
+        if distance_histogram[r_aperture] > 0:
+            hist_start = True
+        if distance_top_value < distance_histogram[r_aperture]:
+            distance_top_value = distance_histogram[r_aperture]
+        if r_aperture >= cur_rs or (hist_start and distance_histogram[r_aperture] <= 0.1 * float(distance_top_value)):
+            break
+    if r_aperture >= cur_rs:
+        return None
+    if r_aperture > 2 and illuminated_pixels < 0.35 * float((r_aperture + r_aperture - 2) ** 2):
+        return None
+
+    sum_val = 0.0
+    sum_val_r = 0.0
+    pixel_counter = 0
+    for i in range(-r_aperture, r_aperture + 1):
+        for j in range(-r_aperture, r_aperture + 1):
+            val = _astap_bilinear(data, xc + float(i), yc + float(j)) - star_bg
+            radius = math.sqrt(float(i * i + j * j))
+            sum_val += val
+            sum_val_r += val * radius
+            if val >= valmax * 0.5:
+                pixel_counter += 1
+    flux = max(sum_val, 0.00001)
+    hfd1 = max(0.7, 2.0 * sum_val_r / flux)
+    fwhm = 2.0 * math.sqrt(float(pixel_counter) / math.pi)
+    snr = flux / math.sqrt(flux + float(r_aperture * r_aperture) * math.pi * sd_bg * sd_bg)
+    return {
+        "x": float(xc),
+        "y": float(yc),
+        "flux": float(flux),
+        "snr": float(snr),
+        "hfd": float(hfd1),
+        "fwhm": float(fwhm),
+        "background": float(star_bg),
+        "noise": float(sd_bg),
+        "aperture": float(r_aperture),
+    }
+
+
+def _astap_find_stars_routine(
+    image: np.ndarray,
+    *,
+    background: float,
+    noise: float,
+    detection_level: float,
+    retry_marker: int,
+    start_x: int,
+    end_x: int,
+    start_y: int,
+    end_y: int,
+    hfd_min: float,
+    img_sa: np.ndarray,
+) -> tuple[list[dict[str, float]], float]:
+    data = np.asarray(image, dtype=np.float32)
+    height, width = int(data.shape[0]), int(data.shape[1])
+    stars: list[dict[str, float]] = []
+    highest_snr = 0.0
+    for fits_y in range(int(start_y), int(end_y) + 1):
+        for fits_x in range(int(start_x), int(end_x) + 1):
+            if img_sa[fits_y, fits_x] == int(retry_marker):
+                continue
+            if float(data[fits_y, fits_x]) - float(background) <= float(detection_level):
+                continue
+            starpixels = 0
+            if float(data[fits_y, fits_x - 1]) - float(background) > 4.0 * float(noise):
+                starpixels += 1
+            if float(data[fits_y, fits_x + 1]) - float(background) > 4.0 * float(noise):
+                starpixels += 1
+            if float(data[fits_y - 1, fits_x]) - float(background) > 4.0 * float(noise):
+                starpixels += 1
+            if float(data[fits_y + 1, fits_x]) - float(background) > 4.0 * float(noise):
+                starpixels += 1
+            if starpixels < 2:
+                continue
+            measured = _astap_hfd_measure(data, fits_x, fits_y, rs=14)
+            if measured is None:
+                continue
+            hfd1 = float(measured["hfd"])
+            snr = float(measured["snr"])
+            xc = float(measured["x"])
+            yc = float(measured["y"])
+            xci = int(round(xc))
+            yci = int(round(yc))
+            if not (0 <= xci < width and 0 <= yci < height):
+                continue
+            if hfd1 <= 30.0 and snr > 10.0 and hfd1 > float(hfd_min) and img_sa[yci, xci] != int(retry_marker):
+                radius = int(round(3.0 * hfd1))
+                sqr_radius = radius * radius
+                for n in range(-radius, radius + 1):
+                    yy = yci + n
+                    if yy < 0 or yy >= height:
+                        continue
+                    for m in range(-radius, radius + 1):
+                        xx = xci + m
+                        if xx >= 0 and xx < width and (m * m + n * n) <= sqr_radius:
+                            img_sa[yy, xx] = int(retry_marker)
+                measured["scan_x"] = float(fits_x)
+                measured["scan_y"] = float(fits_y)
+                stars.append(measured)
+                if snr > highest_snr:
+                    highest_snr = snr
+    return stars, float(highest_snr)
+
+
+def _astap_select_brightest_stars(stars: list[dict[str, float]], max_stars: int, highest_snr: float) -> list[dict[str, float]]:
+    if int(max_stars) <= 0 or len(stars) <= int(max_stars):
+        return list(stars)
+    snr_values = np.asarray([float(s.get("snr", 0.0)) for s in stars], dtype=np.float64)
+    mask = astap_sqrt_snr_selection_mask(snr_values, int(max_stars))
+    return [star for star, keep in zip(stars, mask) if bool(keep)]
+
+
+def astap_adaptive_image_detection(
+    image: np.ndarray,
+    *,
+    bin_factor: int = 2,
+    max_stars: int = 500,
+    hfd_min: float = 0.8,
+    crop: float = 1.0,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Reproduce ASTAP CLI solver star detection in strict diagnostics."""
+    binned, used = astap_compatible_mean_bin_image(image, bin_factor, crop=crop)
+    data = np.asarray(binned, dtype=np.float32)
+    height, width = int(data.shape[0]), int(data.shape[1])
+    global_stats = estimate_astap_global_background(data, max_stars=int(max_stars))
+    background = float(global_stats["background"])
+    noise = float(global_stats["noise"])
+    passes: list[dict[str, object]] = []
+    final_stars: list[dict[str, float]] = []
+    highest_snr = 0.0
+    final_retry = 0
+
+    retries = 4
+    pass_id = 0
+    while True:
+        highest_snr = 0.0
+        stars: list[dict[str, float]] = []
+        img_sa = np.zeros((height, width), dtype=np.int16)
+        if retries == 4:
+            pass_id += 1
+            if float(global_stats["star_level"]) > 30.0 * noise:
+                detection_level = float(global_stats["star_level"])
+                stars, highest_snr = _astap_find_stars_routine(
+                    data,
+                    background=background,
+                    noise=noise,
+                    detection_level=detection_level,
+                    retry_marker=4,
+                    start_x=1,
+                    end_x=width - 2,
+                    start_y=1,
+                    end_y=height - 2,
+                    hfd_min=float(hfd_min),
+                    img_sa=img_sa,
+                )
+                passes.append({"pass_id": pass_id, "retry_index": 4, "threshold": detection_level, "background": background, "noise": noise, "candidate_count": len(stars), "reason": "star_level"})
+            else:
+                passes.append({"pass_id": pass_id, "retry_index": 4, "threshold": 0.0, "background": background, "noise": noise, "candidate_count": 0, "reason": "skipped_star_level"})
+                retries = 3
+        if retries == 3:
+            pass_id += 1
+            if float(global_stats["star_level2"]) > 30.0 * noise:
+                detection_level = float(global_stats["star_level2"])
+                stars, highest_snr = _astap_find_stars_routine(
+                    data,
+                    background=background,
+                    noise=noise,
+                    detection_level=detection_level,
+                    retry_marker=3,
+                    start_x=1,
+                    end_x=width - 2,
+                    start_y=1,
+                    end_y=height - 2,
+                    hfd_min=float(hfd_min),
+                    img_sa=img_sa,
+                )
+                passes.append({"pass_id": pass_id, "retry_index": 3, "threshold": detection_level, "background": background, "noise": noise, "candidate_count": len(stars), "reason": "star_level2"})
+            else:
+                passes.append({"pass_id": pass_id, "retry_index": 3, "threshold": 0.0, "background": background, "noise": noise, "candidate_count": 0, "reason": "skipped_star_level2"})
+                retries = 2
+        if retries == 2:
+            pass_id += 1
+            detection_level = 30.0 * noise
+            stars, highest_snr = _astap_find_stars_routine(
+                data,
+                background=background,
+                noise=noise,
+                detection_level=detection_level,
+                retry_marker=2,
+                start_x=1,
+                end_x=width - 2,
+                start_y=1,
+                end_y=height - 2,
+                hfd_min=float(hfd_min),
+                img_sa=img_sa,
+            )
+            passes.append({"pass_id": pass_id, "retry_index": 2, "threshold": detection_level, "background": background, "noise": noise, "candidate_count": len(stars), "reason": "thirty_sigma"})
+        if retries == 1:
+            pass_id += 1
+            img_sa = np.zeros((height, width), dtype=np.int16)
+            stars = []
+            highest_snr = 0.0
+            sections: list[dict[str, object]] = []
+            upper_limit = max(65500, int(math.trunc(background * 2.0)))
+            for section_id, start_x, end_x, start_y, end_y in astap_section_grid(width, height):
+                local_bg, local_noise, iterations = _astap_sigma_clipped_mean_from_histogram(
+                    data,
+                    start_x,
+                    end_x,
+                    start_y,
+                    end_y,
+                    upper_limit,
+                    max_iterations=6,
+                    convergence_threshold=0.1,
+                )
+                detection_level = 7.0 * local_noise
+                before = len(stars)
+                found, hi = _astap_find_stars_routine(
+                    data,
+                    background=local_bg,
+                    noise=local_noise,
+                    detection_level=detection_level,
+                    retry_marker=1,
+                    start_x=start_x,
+                    end_x=end_x,
+                    start_y=start_y,
+                    end_y=end_y,
+                    hfd_min=float(hfd_min),
+                    img_sa=img_sa,
+                )
+                stars.extend(found)
+                if hi > highest_snr:
+                    highest_snr = hi
+                sections.append(
+                    {
+                        "section_id": int(section_id),
+                        "x0": int(start_x),
+                        "x1": int(end_x),
+                        "y0": int(start_y),
+                        "y1": int(end_y),
+                        "background": float(local_bg),
+                        "noise": float(local_noise),
+                        "threshold_delta": float(detection_level),
+                        "candidate_count": int(len(stars) - before),
+                        "iterations": int(iterations),
+                    }
+                )
+            passes.append({"pass_id": pass_id, "retry_index": 1, "threshold": 7.0 * local_noise, "background": float(local_bg), "noise": float(local_noise), "candidate_count": len(stars), "reason": "section_sigma_clip", "sections": sections})
+        final_stars = stars
+        final_retry = retries
+        retries -= 1
+        if len(final_stars) >= int(max_stars) or retries <= 0:
+            break
+
+    selected = _astap_select_brightest_stars(final_stars, int(max_stars), highest_snr)
+    out = np.zeros(len(selected), dtype=_STAR_DETECT_DTYPE)
+    for idx, star in enumerate(selected):
+        x_full, y_full = astap_binned_to_full_coords(float(star["x"]), float(star["y"]), int(used), crop=crop)
+        out["x"][idx] = np.float32(x_full)
+        out["y"][idx] = np.float32(y_full)
+        out["flux"][idx] = np.float32(max(1.0e-5, float(star.get("flux", 1.0))))
+    diag: dict[str, object] = {
+        "bin_factor": int(used),
+        "binned_shape": [int(height), int(width)],
+        "global_background": global_stats,
+        "passes": passes,
+        "final_retry": int(final_retry),
+        "raw_candidates": int(len(final_stars)),
+        "selected_count": int(out.size),
+        "max_stars": int(max_stars),
+        "hfd_min": float(hfd_min),
+    }
+    return out, diag
+
+
+def astap_sqrt_snr_selection_mask(scores: np.ndarray, nr_stars_required: int) -> np.ndarray:
+    """ASTAP get_brightest_stars-style threshold mask preserving input order."""
+    values = np.asarray(scores, dtype=np.float64)
+    n = int(values.size)
+    if n == 0:
+        return np.zeros(0, dtype=bool)
+    required = max(0, int(nr_stars_required))
+    if required <= 0 or n <= required:
+        return np.ones(n, dtype=bool)
+    highest = float(np.nanmax(values))
+    if not math.isfinite(highest) or highest <= 0:
+        order = np.argsort(values, kind="stable")[::-1][:required]
+        mask = np.zeros(n, dtype=bool)
+        mask[order] = True
+        return mask
+    range_hi = 199
+    sqrt_range = math.sqrt(highest)
+    scaled = np.trunc(np.sqrt(np.maximum(values, 0.0)) * range_hi / max(sqrt_range, 1e-12)).astype(np.int64)
+    scaled = np.clip(scaled, 0, range_hi)
+    hist = np.bincount(scaled, minlength=range_hi + 1)
+    count = 0
+    i = range_hi
+    while True:
+        i -= 1
+        count += int(hist[i])
+        if i <= 0 or count >= required:
+            break
+    overshoot = ((count - required) / float(hist[i])) if int(hist[i]) != 0 else 0.0
+    snr_required = (sqrt_range * (float(i) + overshoot) / float(range_hi)) ** 2
+    return values >= snr_required
+
+
+def astap_compatible_image_detection(
+    image: np.ndarray,
+    *,
+    bin_factor: int = 2,
+    max_stars: int = 500,
+    k_sigma: float = 3.0,
+    min_area: int = 4,
+) -> tuple[np.ndarray, dict[str, object]]:
+    binned, used = astap_compatible_mean_bin_image(image, bin_factor)
+    stats = astap_background_noise_stats(binned)
+    stars = detect_stars(
+        binned,
+        backend="cpu",
+        mode="global",
+        k_sigma=float(k_sigma),
+        min_area=int(min_area),
+        max_labels=max(5000, int(max_stars) * 4),
+    )
+    if stars.size > 0 and used > 1:
+        stars = stars.copy()
+        x_full, y_full = astap_binned_to_full_coords(stars["x"], stars["y"], int(used))
+        stars["x"] = np.asarray(x_full, dtype=np.float32)
+        stars["y"] = np.asarray(y_full, dtype=np.float32)
+    if stars.size > 0 and int(max_stars) > 0:
+        mask = astap_sqrt_snr_selection_mask(np.asarray(stars["flux"], dtype=np.float64), int(max_stars))
+        stars = stars[mask]
+    diag = {
+        "bin_factor": int(used),
+        "binned_shape": [int(binned.shape[0]), int(binned.shape[1])],
+        "background": stats,
+        "detected_count": int(stars.size),
+        "k_sigma": float(k_sigma),
+        "min_area": int(min_area),
+    }
+    out = np.zeros(int(stars.size), dtype=_STAR_DETECT_DTYPE)
+    if stars.size > 0:
+        out["x"] = np.asarray(stars["x"], dtype=np.float32)
+        out["y"] = np.asarray(stars["y"], dtype=np.float32)
+        out["flux"] = np.asarray(stars["flux"], dtype=np.float32)
+    return out, diag
 
 
 def _detect_stars_astap_cli_binned(
@@ -504,8 +1552,9 @@ def _detect_stars_astap_cli_binned(
 
     if stars.size > 0:
         stars = stars.copy()
-        stars['x'] = stars['x'] * np.float32(scale)
-        stars['y'] = stars['y'] * np.float32(scale)
+        x_full, y_full = astap_binned_to_full_coords(stars['x'], stars['y'], int(scale))
+        stars['x'] = np.asarray(x_full, dtype=np.float32)
+        stars['y'] = np.asarray(y_full, dtype=np.float32)
     return stars, scale
 
 
@@ -586,6 +1635,31 @@ def _extract_angle(header: fits.Header, keys: Iterable[str], *, is_ra: bool) -> 
         value = parse_angle(header.get(key), is_ra=is_ra)
         if value is not None:
             return value
+    return None
+
+
+def _extract_near_center_angle(header: fits.Header, keys: Iterable[str], *, is_ra: bool, strict_astap_iso: bool) -> Optional[float]:
+    """Extract Near solve center with strict ASTAP-ISO FITS-key semantics.
+
+    `parse_angle(..., is_ra=True)` treats any numeric RA <= 24 as hours.  The
+    Seestar runtime copies used by the ASTAP parity probes store the plain `RA`
+    keyword as decimal degrees, while ASTAP CLI receives that value converted to
+    hours by the caller.  In strict ASTAP-ISO mode, keep numeric `RA` as degrees
+    and leave textual hour-angle forms (OBJCTRA, "hh:mm:ss") to parse_angle.
+    """
+    for key in keys:
+        if key not in header:
+            continue
+        raw = header.get(key)
+        if strict_astap_iso and is_ra and str(key).strip().upper() == "RA":
+            try:
+                value = float(raw)
+            except Exception:
+                value = parse_angle(raw, is_ra=True)
+        else:
+            value = parse_angle(raw, is_ra=is_ra)
+        if value is not None and math.isfinite(float(value)):
+            return float(value)
     return None
 
 
@@ -1335,6 +2409,7 @@ def _astap_iso_hypothesis(
     strict_astap_iso: bool = False,
     quad_tolerance: float = 0.007,
     diag: dict | None = None,
+    trace: dict | None = None,
 ) -> tuple[SimilarityTransform | None, np.ndarray | None, np.ndarray | None, int]:
     if image_positions.shape[0] < 8 or catalog_positions.shape[0] < 20:
         return None, None, None, 0
@@ -1350,16 +2425,29 @@ def _astap_iso_hypothesis(
         img_idx = np.argsort(img_ranks, kind='stable')[:img_n]
         img = image_positions[img_idx].astype(np.float64, copy=False)
     else:
+        img_idx = np.arange(int(image_positions.shape[0]), dtype=np.int64)[:img_n]
         img = image_positions[:img_n].astype(np.float64, copy=False)
 
     if cat_ranks is not None and cat_ranks.size == catalog_positions.shape[0]:
         cat_idx = np.argsort(cat_ranks, kind='stable')[:cat_n]
         cat = catalog_positions[cat_idx].astype(np.float64, copy=False)
     else:
+        cat_idx = np.arange(int(catalog_positions.shape[0]), dtype=np.int64)[:cat_n]
         cat = catalog_positions[:cat_n].astype(np.float64, copy=False)
 
     q_img = _astap_iso_find_quads(img, int(img.shape[0]))
     q_cat = _astap_iso_find_quads(cat, int(cat.shape[0]))
+
+    if trace is not None:
+        trace.clear()
+        trace.update({
+            "image_positions": img.copy(),
+            "catalog_positions": cat.copy(),
+            "image_source_indices": np.asarray(img_idx, dtype=np.int64).copy(),
+            "catalog_source_indices": np.asarray(cat_idx, dtype=np.int64).copy(),
+            "image_quads": q_img.copy(),
+            "catalog_quads": q_cat.copy(),
+        })
 
     if diag is not None:
         diag.clear()
@@ -1900,6 +2988,168 @@ def _compute_inliers(
     return mask, err_px.astype(np.float32, copy=False)
 
 
+def validate_strict_astap_iso_candidate(
+    wcs,
+    matches: np.ndarray,
+    *,
+    width: int,
+    height: int,
+    ra_hint_deg: float | None,
+    dec_hint_deg: float | None,
+    search_radius_deg: float | None,
+    approx_fov_deg: float | None,
+    approx_scale_arcsec: float | None,
+    pixel_tolerance: float,
+    iso_refs: int,
+    min_unique_matches: int = 12,
+    min_holdout_matches: int = 8,
+    max_rms_px: float = 3.0,
+    max_cd_cond: float = 1.0e4,
+    min_span_fraction: float = 0.12,
+) -> dict[str, object]:
+    """Runtime-only acceptance gate for strict ASTAP-ISO Near candidates."""
+    diag: dict[str, object] = {"decision": "REJECT", "reason": "STRICT_ACCEPTANCE_REJECTED"}
+
+    def reject(reason: str) -> dict[str, object]:
+        diag["decision"] = "REJECT"
+        diag["reason"] = reason
+        return diag
+
+    if wcs is None or not bool(getattr(wcs, "is_celestial", False)):
+        return reject("STRICT_ACCEPTANCE_NONFINITE_WCS")
+    try:
+        cd = getattr(wcs.wcs, "cd", None)
+        if cd is None:
+            pc = getattr(wcs.wcs, "pc", None)
+            cdelt = getattr(wcs.wcs, "cdelt", None)
+            if pc is not None and cdelt is not None:
+                cd = np.asarray(pc, dtype=np.float64)[:2, :2] @ np.diag(np.asarray(cdelt, dtype=np.float64)[:2])
+        cd_arr = np.asarray(cd, dtype=np.float64)[:2, :2]
+    except Exception:
+        return reject("STRICT_ACCEPTANCE_BAD_CD")
+    if cd_arr.shape != (2, 2) or not np.all(np.isfinite(cd_arr)):
+        return reject("STRICT_ACCEPTANCE_BAD_CD")
+    try:
+        cd_det = float(np.linalg.det(cd_arr))
+        cd_cond = float(np.linalg.cond(cd_arr))
+    except Exception:
+        return reject("STRICT_ACCEPTANCE_BAD_CD")
+    diag["cd_det"] = cd_det
+    diag["cd_cond"] = cd_cond
+    if (not np.isfinite(cd_det)) or abs(cd_det) < 1.0e-16 or (not np.isfinite(cd_cond)) or cd_cond > float(max_cd_cond):
+        return reject("STRICT_ACCEPTANCE_BAD_CD")
+
+    scales_arcsec = np.sqrt(np.sum(cd_arr * cd_arr, axis=0)) * 3600.0
+    finite_scales = scales_arcsec[np.isfinite(scales_arcsec)]
+    if finite_scales.size == 0:
+        return reject("STRICT_ACCEPTANCE_SCALE")
+    scale_arcsec = float(np.mean(np.abs(finite_scales)))
+    diag["pix_scale_arcsec"] = scale_arcsec
+    if not (0.3 <= scale_arcsec <= 15.0):
+        return reject("STRICT_ACCEPTANCE_SCALE")
+    if approx_scale_arcsec is not None:
+        try:
+            expected = float(approx_scale_arcsec)
+        except Exception:
+            expected = float("nan")
+        if np.isfinite(expected) and expected > 0:
+            ratio = scale_arcsec / expected
+            diag["scale_ratio_to_hint"] = float(ratio)
+            if not (0.45 <= ratio <= 2.20):
+                return reject("STRICT_ACCEPTANCE_SCALE")
+
+    if ra_hint_deg is not None and dec_hint_deg is not None:
+        try:
+            center = np.asarray(wcs.wcs_pix2world([[float(width) / 2.0, float(height) / 2.0]], 0), dtype=np.float64)
+            center_ra = float(center[0, 0])
+            center_dec = float(center[0, 1])
+            center_sep = _angular_distance(float(ra_hint_deg), float(dec_hint_deg), center_ra, center_dec)
+        except Exception:
+            return reject("STRICT_ACCEPTANCE_CENTER")
+        diag["center_ra_deg"] = center_ra
+        diag["center_dec_deg"] = center_dec
+        diag["center_sep_deg"] = float(center_sep)
+        try:
+            fov = float(approx_fov_deg) if approx_fov_deg is not None else 0.0
+        except Exception:
+            fov = 0.0
+        try:
+            radius = float(search_radius_deg) if search_radius_deg is not None else 0.0
+        except Exception:
+            radius = 0.0
+        center_tol = max(0.25, min(6.0, max(radius, 0.6 * fov) + 0.35))
+        diag["center_tol_deg"] = float(center_tol)
+        if (not np.isfinite(center_sep)) or center_sep > center_tol:
+            return reject("STRICT_ACCEPTANCE_CENTER")
+
+    pts = np.asarray(matches, dtype=np.float64)
+    if pts.ndim != 2 or pts.shape[1] < 4 or pts.shape[0] <= 0:
+        return reject("STRICT_ACCEPTANCE_TOO_FEW_UNIQUE_MATCHES")
+    pts = pts[np.isfinite(pts[:, :4]).all(axis=1)]
+    if pts.shape[0] <= 0:
+        return reject("STRICT_ACCEPTANCE_TOO_FEW_UNIQUE_MATCHES")
+    try:
+        key = np.round(pts[:, :2], decimals=3)
+        _, keep = np.unique(key, axis=0, return_index=True)
+        pts = pts[np.sort(keep)]
+    except Exception:
+        pass
+    unique_matches = int(pts.shape[0])
+    diag["unique_matches"] = unique_matches
+    min_unique = max(4, int(min_unique_matches))
+    if unique_matches < min_unique:
+        return reject("STRICT_ACCEPTANCE_TOO_FEW_UNIQUE_MATCHES")
+
+    try:
+        world = np.asarray(wcs.wcs_pix2world(pts[:, :2], 0), dtype=np.float64)
+        residual_deg = np.linalg.norm(world[:, :2] - pts[:, 2:4], axis=1)
+        residual_px = residual_deg / max(scale_arcsec / 3600.0, 1.0e-12)
+        residual_px = residual_px[np.isfinite(residual_px)]
+    except Exception:
+        return reject("STRICT_ACCEPTANCE_POOR_RESIDUALS")
+    if residual_px.size <= 0:
+        return reject("STRICT_ACCEPTANCE_POOR_RESIDUALS")
+    rms_px = float(np.sqrt(np.mean(residual_px * residual_px)))
+    median_px = float(np.median(residual_px))
+    p95_px = float(np.percentile(residual_px, 95))
+    diag["rms_px"] = rms_px
+    diag["median_residual_px"] = median_px
+    diag["p95_residual_px"] = p95_px
+    robust_limit = max(float(max_rms_px), 1.25 * float(pixel_tolerance))
+    diag["rms_limit_px"] = float(robust_limit)
+    if (not np.isfinite(rms_px)) or rms_px > robust_limit or p95_px > max(2.5 * robust_limit, robust_limit + 2.0):
+        return reject("STRICT_ACCEPTANCE_POOR_RESIDUALS")
+
+    span_x = float(np.nanmax(pts[:, 0]) - np.nanmin(pts[:, 0])) if pts.shape[0] else 0.0
+    span_y = float(np.nanmax(pts[:, 1]) - np.nanmin(pts[:, 1])) if pts.shape[0] else 0.0
+    span_x_frac = span_x / max(1.0, float(width))
+    span_y_frac = span_y / max(1.0, float(height))
+    diag["span_x_fraction"] = float(span_x_frac)
+    diag["span_y_fraction"] = float(span_y_frac)
+    min_span = max(0.02, float(min_span_fraction))
+    if span_x_frac < min_span or span_y_frac < min_span:
+        return reject("STRICT_ACCEPTANCE_POOR_SPATIAL_COVERAGE")
+    try:
+        qx = pts[:, 0] >= (float(width) / 2.0)
+        qy = pts[:, 1] >= (float(height) / 2.0)
+        quadrants = {int(x) + 2 * int(y) for x, y in zip(qx, qy, strict=False)}
+    except Exception:
+        quadrants = set()
+    diag["quadrants"] = int(len(quadrants))
+    if len(quadrants) < 2:
+        return reject("STRICT_ACCEPTANCE_POOR_SPATIAL_COVERAGE")
+
+    holdout = max(0, unique_matches - max(0, int(iso_refs)))
+    diag["holdout_matches"] = int(holdout)
+    min_holdout = max(0, int(min_holdout_matches))
+    if unique_matches >= (min_unique + min_holdout) and holdout < min_holdout:
+        return reject("STRICT_ACCEPTANCE_INSUFFICIENT_HOLDOUT")
+
+    diag["decision"] = "ACCEPT"
+    diag["reason"] = "STRICT_ACCEPTANCE_ACCEPTED"
+    return diag
+
+
 def _pix_scale_arcsec(wcs) -> Optional[float]:
     cd = getattr(wcs.wcs, "cd", None)
     if cd is None:
@@ -1994,20 +3244,24 @@ def solve_near(
         return _failure("index manifest has no tiles")
     if cancel_check and cancel_check():
         return _failure("cancelled")
+    strict_astap_iso = bool(getattr(cfg, "astap_iso_strict", True))
     try:
         with fits.open(fits_path, mode="readonly", memmap=False) as hdul:
             primary = hdul[0]
             if primary.data is None:
                 return _failure("FITS HDU has no image data")
-            image = to_luminance_for_solve(primary)
             header = primary.header
+            if strict_astap_iso:
+                image = astap_iso_image_for_solve(primary)
+            else:
+                image = to_luminance_for_solve(primary)
     except Exception as exc:
         return _failure(f"failed to read FITS data: {exc}")
     height, width = image.shape
     ra_keys = ("RA", "OBJCTRA", "OBJRA", "OBJ_RA", "CRVAL1")
     dec_keys = ("DEC", "OBJCTDEC", "OBJDEC", "OBJ_DEC", "CRVAL2")
-    ra0 = _extract_angle(header, ra_keys, is_ra=True)
-    dec0 = _extract_angle(header, dec_keys, is_ra=False)
+    ra0 = _extract_near_center_angle(header, ra_keys, is_ra=True, strict_astap_iso=strict_astap_iso)
+    dec0 = _extract_near_center_angle(header, dec_keys, is_ra=False, strict_astap_iso=strict_astap_iso)
     if ra0 is None or dec0 is None:
         return _failure("metadata RA/DEC missing for near solve")
     scale_arcsec, (fov_x, fov_y) = estimate_scale_and_fov(header, width, height)
@@ -2048,7 +3302,6 @@ def solve_near(
     radius = min(radius, _MAX_SEARCH_RADIUS)
     hint_fastpath = bool(getattr(cfg, "astap_hint_fastpath", True))
     hint_radius_deg = float(getattr(cfg, "astap_hint_radius_deg", 3.0) or 0.0)
-    strict_astap_iso = bool(getattr(cfg, "astap_iso_strict", True))
     if hint_fastpath and hint_radius_deg > 0:
         # Throughput-first hinted solve (ASTAP-like -r behavior).
         radius = max(_MIN_SEARCH_RADIUS, min(radius, float(hint_radius_deg)))
@@ -2263,7 +3516,7 @@ def solve_near(
     t_detect0 = time.perf_counter()
     detect_backend = str(getattr(cfg, "detect_backend", "auto") or "auto").lower()
     work_image = image
-    if detect_backend != "astap":
+    if detect_backend != "astap" and not strict_astap_iso:
         try:
             kernel = max(7, int(round(min(height, width) / 120)))
             work_image = remove_background(work_image, kernel_size=kernel)
@@ -2284,7 +3537,7 @@ def solve_near(
 
     detect_image = work_image
     detect_coord_scale = 1.0
-    if strict_astap_iso and detect_backend != "astap":
+    if strict_astap_iso and detect_backend == "legacy_strict_binned":
         # ASTAP commonly runs the solver detector on a binned grayscale image.
         # Emulate the dominant x2 case in strict mirror mode.
         try:
@@ -2320,6 +3573,17 @@ def solve_near(
         else:
             stars = _detect_stars_astap_cli(fits_path, snr_min=10, timeout_s=180)
             detect_trace["used"] = "astap"
+    elif strict_astap_iso:
+        stars, astap_detect_diag = astap_adaptive_image_detection(
+            image,
+            bin_factor=2,
+            max_stars=500,
+            hfd_min=0.8,
+            crop=1.0,
+        )
+        detect_trace["used"] = "astap_adaptive"
+        detect_trace["raw_candidates"] = str(astap_detect_diag.get("raw_candidates", ""))
+        detect_trace["selected_count"] = str(astap_detect_diag.get("selected_count", ""))
     else:
         use_gpu_slot_guard = False
         if detect_backend in {"cuda", "auto"}:
@@ -2362,7 +3626,7 @@ def solve_near(
     )
     # Faint/edge frames can be over-suppressed by aggressive background removal.
     # Retry on raw image with progressively looser thresholds only when support is low.
-    if detect_backend != "astap" and stars.size < 12:
+    if (not strict_astap_iso) and detect_backend != "astap" and stars.size < 12:
         logger.info("near detect fallback #1 (raw/global k=3.0), stars=%d", int(stars.size))
         detect_trace_fb1: dict[str, str] = {}
         stars_fb = detect_stars(
@@ -2389,7 +3653,7 @@ def solve_near(
             # Raw-image fallback already returns full-resolution coordinates.
             # Do not re-apply the strict-mode bin2 coordinate scale afterwards.
             detect_coord_scale = 1.0
-    if detect_backend != "astap" and stars.size < 8:
+    if (not strict_astap_iso) and detect_backend != "astap" and stars.size < 8:
         logger.info("near detect fallback #2 (raw/global k=2.5), stars=%d", int(stars.size))
         detect_trace_fb2: dict[str, str] = {}
         stars_fb2 = detect_stars(
@@ -2418,16 +3682,18 @@ def solve_near(
             detect_coord_scale = 1.0
     if detect_coord_scale != 1.0 and stars.size > 0:
         stars = stars.copy()
-        stars["x"] = stars["x"] * np.float32(detect_coord_scale)
-        stars["y"] = stars["y"] * np.float32(detect_coord_scale)
+        x_full, y_full = astap_binned_to_full_coords(stars["x"], stars["y"], int(detect_coord_scale))
+        stars["x"] = np.asarray(x_full, dtype=np.float32)
+        stars["y"] = np.asarray(y_full, dtype=np.float32)
 
     t_detect_s = time.perf_counter() - t_detect0
     if stars.size == 0:
         return _failure("no stars detected in the frame")
     logger.info("near detected stars: %d", int(stars.size))
     # Mirror ASTAP behavior more closely by working on brightest image stars.
-    # In strict ASTAP-ISO mode, do not apply the ZeNear hard cap here.
-    if stars.size > 1:
+    # Strict ASTAP-ISO already receives stars in ASTAP scan/selection order.
+    # Keep that order explicit via img_ranks below; do not encode it as fake flux.
+    if (not strict_astap_iso) and stars.size > 1:
         try:
             order = np.argsort(stars["flux"], kind="stable")[::-1]
             stars = stars[order]
@@ -2435,8 +3701,21 @@ def solve_near(
             pass
     if (not strict_astap_iso) and cfg.max_img_stars and stars.size > cfg.max_img_stars:
         stars = stars[: cfg.max_img_stars]
+    injected_stars = _load_near_diagnostic_image_stars_csv(getattr(cfg, "diagnostic_image_stars_csv", None))
+    if injected_stars is not None:
+        logger.info("near diagnostic image-star injection: %d -> %d stars", int(stars.size), int(injected_stars.size))
+        stars = injected_stars
 
-    if strict_astap_iso and cat_positions.shape[0] > 0:
+    injected_catalog = _load_near_diagnostic_catalog_stars_csv(getattr(cfg, "diagnostic_catalog_stars_csv", None))
+    if injected_catalog is not None:
+        cat_positions, cat_world, cat_mags = injected_catalog
+        cat_positions_iso = cat_positions.astype(np.float64, copy=False) * 3600.0
+        cat_positions_all = cat_positions
+        cat_world_all = cat_world
+        cat_mags_all = cat_mags
+        logger.info("near diagnostic catalog-star injection: selected=%d", int(cat_positions.shape[0]))
+
+    if strict_astap_iso and cat_positions.shape[0] > 0 and injected_catalog is None:
         # Mirror ASTAP database star request count (nrstars_required2).
         nrstars_image = int(stars.size)
         nrstars_required = max(32, int(round(float(nrstars_image) * (float(height) / max(1.0, float(width))))))
@@ -2668,8 +3947,19 @@ def solve_near(
         )
 
     image_positions = np.column_stack((stars["x"], stars["y"])).astype(np.float32, copy=False)
-    img_ranks = _compute_ranks(stars["flux"], descending=True)
+    if strict_astap_iso:
+        img_ranks = np.arange(int(stars.size), dtype=np.float64)
+    else:
+        img_ranks = _compute_ranks(stars["flux"], descending=True)
     cat_ranks = _compute_ranks(cat_mags, descending=False)
+    _dump_near_diagnostic_lists(
+        dump_dir=getattr(cfg, "diagnostic_dump_dir", None),
+        label=str(getattr(cfg, "diagnostic_dump_label", None) or fits_path.stem),
+        stars=stars,
+        cat_positions=cat_positions,
+        cat_world=cat_world,
+        cat_mags=cat_mags,
+    )
 
     # ASTAP ISO hypothesis path first (quad hash on-the-fly), before legacy pair pipeline.
     if strict_astap_iso:
@@ -2721,6 +4011,65 @@ def solve_near(
             except Exception:
                 pass
 
+    def _new_iso_trace() -> dict | None:
+        return {} if bool(getattr(cfg, "diagnostic_iso_trace", False)) else None
+
+    def _dump_iso_trace_stage(
+        stage: str,
+        trace: dict | None,
+        diag: dict | None,
+        minimum: int | None = None,
+        *,
+        catalog_world_for_trace: np.ndarray | None = None,
+        catalog_mags_for_trace: np.ndarray | None = None,
+        stage_meta: dict | None = None,
+    ) -> None:
+        if trace is None:
+            return
+        try:
+            img_src = np.asarray(trace.get("image_source_indices", np.empty(0, dtype=np.int64)), dtype=np.int64)
+            if img_src.size and stars.size:
+                fluxes = np.full(int(img_src.size), np.nan, dtype=np.float64)
+                ok = (img_src >= 0) & (img_src < int(stars.size))
+                if np.any(ok):
+                    fluxes[ok] = np.asarray(stars["flux"], dtype=np.float64)[img_src[ok]]
+                trace["image_fluxes"] = fluxes
+        except Exception:
+            pass
+        try:
+            cat_src = np.asarray(trace.get("catalog_source_indices", np.empty(0, dtype=np.int64)), dtype=np.int64)
+            if catalog_world_for_trace is not None and cat_src.size:
+                cw_arr = np.asarray(catalog_world_for_trace, dtype=np.float64)
+                world = np.full((int(cat_src.size), 2), np.nan, dtype=np.float64)
+                ok = (cat_src >= 0) & (cat_src < int(cw_arr.shape[0]))
+                if np.any(ok):
+                    world[ok] = cw_arr[cat_src[ok], :2]
+                trace["catalog_world"] = world
+            if catalog_mags_for_trace is not None and cat_src.size:
+                cm_arr = np.asarray(catalog_mags_for_trace, dtype=np.float64)
+                mags_trace = np.full(int(cat_src.size), np.nan, dtype=np.float64)
+                ok = (cat_src >= 0) & (cat_src < int(cm_arr.shape[0]))
+                if np.any(ok):
+                    mags_trace[ok] = cm_arr[cat_src[ok]]
+                trace["catalog_mags"] = mags_trace
+        except Exception:
+            pass
+        if isinstance(stage_meta, dict):
+            trace["stage_meta"] = {
+                k: (float(v) if isinstance(v, (int, float, np.integer, np.floating)) and np.isfinite(float(v)) else v)
+                for k, v in stage_meta.items()
+            }
+        _dump_astap_iso_trace(
+            dump_dir=getattr(cfg, "diagnostic_dump_dir", None),
+            label=str(getattr(cfg, "diagnostic_dump_label", None) or fits_path.stem),
+            stage=stage,
+            trace=trace,
+            diag=diag,
+            minimum_count=int(minimum if minimum is not None else minimum_quads),
+            quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
+        )
+
+    iso_trace_initial = _new_iso_trace()
     iso_transform, iso_matrix, iso_offset, iso_refs = _astap_iso_hypothesis(
         image_positions,
         cat_positions_iso,
@@ -2733,6 +4082,25 @@ def solve_near(
         strict_astap_iso=bool(strict_astap_iso),
         quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
         diag=iso_diag_initial,
+        trace=iso_trace_initial,
+    )
+    _dump_iso_trace_stage(
+        "initial",
+        iso_trace_initial,
+        iso_diag_initial,
+        catalog_world_for_trace=cat_world,
+        catalog_mags_for_trace=cat_mags,
+        stage_meta={
+            "stage_type": "initial",
+            "center_ra_deg": float(ra0),
+            "center_dec_deg": float(dec0),
+            "tangent_center_ra_deg": float(ra0),
+            "tangent_center_dec_deg": float(dec0),
+            "fov_deg": float(approx_fov or (approx_scale_deg * max(width, height))),
+            "search_window_deg": float(search_window_deg),
+            "search_radius_deg": float(radius),
+            "strict_db_target_stars": int(strict_db_target_stars) if strict_db_target_stars is not None else None,
+        },
     )
     _acc_iso_diag(iso_diag_initial)
     if iso_transform is not None:
@@ -2816,6 +4184,7 @@ def solve_near(
                     float(fac),
                 )
                 diag_retry: dict = {}
+                trace_retry = _new_iso_trace()
                 t_retry, m_retry, o_retry, r_retry = _astap_iso_hypothesis(
                     image_positions,
                     cat_positions_iso,
@@ -2828,6 +4197,25 @@ def solve_near(
                     strict_astap_iso=False,
                     quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
                     diag=diag_retry,
+                    trace=trace_retry,
+                )
+                _dump_iso_trace_stage(
+                    f"auto_scale_factor_{float(fac):.3f}",
+                    trace_retry,
+                    diag_retry,
+                    catalog_world_for_trace=cat_world,
+                    catalog_mags_for_trace=cat_mags,
+                    stage_meta={
+                        "stage_type": "auto_scale",
+                        "center_ra_deg": float(ra0),
+                        "center_dec_deg": float(dec0),
+                        "tangent_center_ra_deg": float(ra0),
+                        "tangent_center_dec_deg": float(dec0),
+                        "fov_deg": float(approx_fov or (approx_scale_deg * max(width, height))),
+                        "search_window_deg": float(search_window_deg),
+                        "search_radius_deg": float(radius),
+                        "scale_factor": float(fac),
+                    },
                 )
                 _acc_iso_diag(diag_retry)
                 iso_diag_autoscale.append(
@@ -2858,6 +4246,7 @@ def solve_near(
             ):
                 logger.info("near auto-scale retry: last chance without expected-scale gate")
                 diag_retry: dict = {}
+                trace_retry = _new_iso_trace()
                 t_retry, m_retry, o_retry, r_retry = _astap_iso_hypothesis(
                     image_positions,
                     cat_positions_iso,
@@ -2870,6 +4259,25 @@ def solve_near(
                     strict_astap_iso=False,
                     quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
                     diag=diag_retry,
+                    trace=trace_retry,
+                )
+                _dump_iso_trace_stage(
+                    "auto_scale_no_gate",
+                    trace_retry,
+                    diag_retry,
+                    catalog_world_for_trace=cat_world,
+                    catalog_mags_for_trace=cat_mags,
+                    stage_meta={
+                        "stage_type": "auto_scale",
+                        "center_ra_deg": float(ra0),
+                        "center_dec_deg": float(dec0),
+                        "tangent_center_ra_deg": float(ra0),
+                        "tangent_center_dec_deg": float(dec0),
+                        "fov_deg": float(approx_fov or (approx_scale_deg * max(width, height))),
+                        "search_window_deg": float(search_window_deg),
+                        "search_radius_deg": float(radius),
+                        "scale_factor": None,
+                    },
                 )
                 _acc_iso_diag(diag_retry)
                 iso_diag_autoscale.append(
@@ -2998,6 +4406,7 @@ def solve_near(
                 cr = _compute_ranks(cm, descending=False)
                 diag_retry: dict = {}
                 attempts += 1
+                trace_retry = _new_iso_trace()
                 t_retry, m_retry, o_retry, r_retry = _astap_iso_hypothesis(
                     image_positions,
                     cp_iso,
@@ -3010,6 +4419,26 @@ def solve_near(
                     strict_astap_iso=bool(strict_astap_iso),
                     quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
                     diag=diag_retry,
+                    trace=trace_retry,
+                )
+                _dump_iso_trace_stage(
+                    f"autofov_{attempts}_win_{float(win):.6f}",
+                    trace_retry,
+                    diag_retry,
+                    catalog_world_for_trace=cw,
+                    catalog_mags_for_trace=cm,
+                    stage_meta={
+                        "stage_type": "autofov",
+                        "attempt_order": int(attempts),
+                        "center_ra_deg": float(ra0),
+                        "center_dec_deg": float(dec0),
+                        "tangent_center_ra_deg": float(ra0),
+                        "tangent_center_dec_deg": float(dec0),
+                        "fov_deg": float(approx_fov or (approx_scale_deg * max(width, height))),
+                        "search_window_deg": float(win),
+                        "search_radius_deg": float(radius),
+                        "strict_db_target_stars": int(strict_db_target_stars) if strict_db_target_stars is not None else None,
+                    },
                 )
                 _acc_iso_diag(diag_retry)
                 iso_diag_autofov.append(
@@ -3287,6 +4716,7 @@ def solve_near(
             pos_px = pos_deg.astype(np.float64, copy=False) * 3600.0
             cat_r_tmp = _compute_ranks(mags, descending=False)
             iso_diag_tmp: dict = {}
+            iso_trace_tmp = _new_iso_trace()
             tr_tmp, M_tmp, t_tmp, refs_tmp = _astap_iso_hypothesis(
                 image_positions,
                 pos_px,
@@ -3299,6 +4729,29 @@ def solve_near(
                 strict_astap_iso=bool(strict_astap_iso),
                 quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
                 diag=iso_diag_tmp,
+                trace=iso_trace_tmp,
+            )
+            _dump_iso_trace_stage(
+                f"spiral_{len(seen_centers)}",
+                iso_trace_tmp,
+                iso_diag_tmp,
+                catalog_world_for_trace=wld,
+                catalog_mags_for_trace=mags,
+                stage_meta={
+                    "stage_type": "spiral",
+                    "attempt_order": int(len(seen_centers)),
+                    "center_ra_deg": float(cra),
+                    "center_dec_deg": float(cdec),
+                    "tangent_center_ra_deg": float(cra),
+                    "tangent_center_dec_deg": float(cdec),
+                    "initial_ra_deg": float(ra0),
+                    "initial_dec_deg": float(dec0),
+                    "offset_from_initial_deg": float(_angular_distance(float(cra), float(cdec), float(ra0), float(dec0))),
+                    "fov_deg": float(approx_fov or (approx_scale_deg * max(width, height))),
+                    "search_window_deg": float(search_window_deg),
+                    "search_radius_deg": float(radius),
+                    "strict_db_target_stars": int(strict_db_target_stars) if strict_db_target_stars is not None else None,
+                },
             )
             _acc_iso_diag(iso_diag_tmp)
             if tr_tmp is None or M_tmp is None or t_tmp is None:
@@ -3505,6 +4958,7 @@ def solve_near(
                     pos_iso = pos_deg.astype(np.float64, copy=False) * 3600.0
                     cat_r_tmp = _compute_ranks(mags, descending=False)
                     iso_diag_tmp2: dict = {}
+                    iso_trace_tmp2 = _new_iso_trace()
                     tr2, M2, t2, refs2 = _astap_iso_hypothesis(
                         image_positions,
                         pos_iso,
@@ -3517,6 +4971,27 @@ def solve_near(
                         strict_astap_iso=bool(strict_astap_iso),
                         quad_tolerance=float(getattr(cfg, "astap_iso_quad_tolerance", 0.007) or 0.007),
                         diag=iso_diag_tmp2,
+                        trace=iso_trace_tmp2,
+                    )
+                    _dump_iso_trace_stage(
+                        "recenter_second_pass",
+                        iso_trace_tmp2,
+                        iso_diag_tmp2,
+                        catalog_world_for_trace=wld,
+                        catalog_mags_for_trace=mags,
+                        stage_meta={
+                            "stage_type": "recenter_second_pass",
+                            "center_ra_deg": float(ra_ref),
+                            "center_dec_deg": float(dec_ref),
+                            "tangent_center_ra_deg": float(ra_ref),
+                            "tangent_center_dec_deg": float(dec_ref),
+                            "initial_ra_deg": float(ra0),
+                            "initial_dec_deg": float(dec0),
+                            "fov_deg": float(approx_fov or (approx_scale_deg * max(width, height))),
+                            "search_window_deg": float(search_window_deg),
+                            "search_radius_deg": float(radius),
+                            "strict_db_target_stars": int(strict_db_target_stars) if strict_db_target_stars is not None else None,
+                        },
                     )
                     _acc_iso_diag(iso_diag_tmp2)
                     if tr2 is not None and M2 is not None and t2 is not None:
@@ -4015,8 +5490,38 @@ def solve_near(
 
     if strict_astap_iso:
         pix_scale_arcsec = _pix_scale_arcsec(final_wcs)
-        zemo_ok, zemo_reason = True, "bypassed_in_strict_astap_iso"
-        near_ok, near_reason, near_diag = True, "bypassed_in_strict_astap_iso", {}
+        zemo_ok, zemo_reason = True, "strict_astap_iso_acceptance_gate"
+        mode = str(getattr(cfg, "strict_acceptance_mode", "diagnostic") or "diagnostic").strip().lower()
+        if mode not in {"off", "diagnostic", "enforce"}:
+            mode = "diagnostic"
+        near_diag = {}
+        if mode == "off":
+            near_ok, near_reason = True, "strict_acceptance_off"
+            near_diag = {"decision": "ACCEPT", "reason": "strict_acceptance_off", "mode": mode}
+        else:
+            near_diag = validate_strict_astap_iso_candidate(
+                final_wcs,
+                matches,
+                width=int(width),
+                height=int(height),
+                ra_hint_deg=float(ra0) if ra0 is not None else None,
+                dec_hint_deg=float(dec0) if dec0 is not None else None,
+                search_radius_deg=float(radius),
+                approx_fov_deg=float(approx_fov) if approx_fov is not None else None,
+                approx_scale_arcsec=float(scale_arcsec) if scale_arcsec is not None else None,
+                pixel_tolerance=float(cfg.pixel_tolerance),
+                iso_refs=int(iso_refs),
+                min_unique_matches=int(getattr(cfg, "strict_acceptance_min_unique_matches", 12) or 12),
+                min_holdout_matches=int(getattr(cfg, "strict_acceptance_min_holdout_matches", 8) or 8),
+                max_rms_px=float(getattr(cfg, "strict_acceptance_max_rms_px", 3.0) or 3.0),
+                max_cd_cond=float(getattr(cfg, "strict_acceptance_max_cd_cond", 1.0e4) or 1.0e4),
+                min_span_fraction=float(getattr(cfg, "strict_acceptance_min_span_fraction", 0.12) or 0.12),
+            )
+            near_diag["mode"] = mode
+            near_ok = str(near_diag.get("decision")) == "ACCEPT" or mode == "diagnostic"
+            near_reason = str(near_diag.get("reason", "STRICT_ACCEPTANCE_REJECTED"))
+        final_stats["strict_acceptance"] = dict(near_diag)
+        final_stats["strict_acceptance_mode"] = mode
     else:
         zemo_ok, zemo_reason, pix_scale_arcsec = validate_wcs_for_zemosaic(final_wcs)
         if not zemo_ok:
@@ -4110,9 +5615,9 @@ def solve_near(
     }
     try:
         if used_transform is not None:
-            header_updates["SEED_SCALE"] = float(used_transform.scale)
-            header_updates["SEED_ROT"] = float(used_transform.rotation)
-            header_updates["SEED_PAR"] = int(getattr(used_transform, "parity", 1))
+            final_stats["seed_scale"] = float(used_transform.scale)
+            final_stats["seed_rotation"] = float(used_transform.rotation)
+            final_stats["seed_parity"] = int(getattr(used_transform, "parity", 1))
     except Exception:
         pass
     if pix_scale_arcsec is None:

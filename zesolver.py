@@ -185,6 +185,7 @@ from zesolver.settings_store import (
     load_persistent_settings,
     save_persistent_settings,
 )
+from zesolver.blind4d_runtime import resolve_default_4d_manifest_path
 from zesolver.gui_profiles import apply_settings_easy_visibility, apply_solver_simple_visibility
 from zesolver.gui_settings_sections import (
     build_blind_group,
@@ -192,6 +193,16 @@ from zesolver.gui_settings_sections import (
     wire_settings_tab_callbacks,
 )
 from zeblindsolver.metadata_solver import NearSolveConfig as NearIndexConfig
+from zeblindsolver.index_manifest_4d import (
+    IndexManifestError,
+    Loaded4DManifest,
+    load_4d_index_manifest,
+)
+from zeblindsolver.profiles import (
+    HISTORICAL_PROFILE,
+    ZEBLIND_4D_EXPERIMENTAL_PROFILE,
+    get_solver_profile,
+)
 from zeblindsolver.db_convert import (
     DEFAULT_MAG_CAP,
     DEFAULT_MAX_QUADS_PER_TILE,
@@ -711,9 +722,9 @@ for _lang, _mapping in _GUI_DOWNLOADS_I18N.items():
 _GUI_ASTROMETRY_I18N = {
     "fr": {
         "solver.backend.label": "Solveur",
-        "solver.backend.local": "Local (ZeNear → ZeBlind → Astrometry*)",
+        "solver.backend.local": "Local (ZeNear → ZeBlind 4D → Astrometry*)",
         "solver.backend.astrometry": "Astrometry.net (web)",
-        "solver.backend.note": "Par défaut: ZeNear, puis ZeBlind, puis Astrometry si clé API renseignée.",
+        "solver.backend.note": "Chaîne locale : ZeNear → ZeBlind 4D. Astrometry.net est un fallback web optionnel si configuré.",
         "solver.status.blind_disabled": "Mode ZeNear seul (blind solver désactivé).",
         "solver.status.using_backend": "Solveur utilisé : {backend}",
         "astrometry.tab.title": "Astrometry.net",
@@ -732,9 +743,9 @@ _GUI_ASTROMETRY_I18N = {
     },
     "en": {
         "solver.backend.label": "Solver backend",
-        "solver.backend.local": "Local (ZeNear → ZeBlind → Astrometry*)",
+        "solver.backend.local": "Local (ZeNear → ZeBlind 4D → Astrometry*)",
         "solver.backend.astrometry": "Astrometry.net (web)",
-        "solver.backend.note": "Default: ZeNear, then ZeBlind, then Astrometry if an API key is configured.",
+        "solver.backend.note": "Local chain: ZeNear → ZeBlind 4D. Astrometry.net is an optional web fallback when configured.",
         "solver.status.blind_disabled": "ZeNear-only mode (blind solver disabled).",
         "solver.status.using_backend": "Using backend: {backend}",
         "astrometry.tab.title": "Astrometry.net",
@@ -753,6 +764,64 @@ _GUI_ASTROMETRY_I18N = {
     },
 }
 for _lang, _mapping in _GUI_ASTROMETRY_I18N.items():
+    base = GUI_TRANSLATIONS.setdefault(_lang, {})
+    for _k, _v in _mapping.items():
+        if _k not in base:
+            base[_k] = _v
+
+_GUI_ZEBLIND_4D_I18N = {
+    "fr": {
+        "blind_4d_easy_label": "Utiliser ZeBlind 4D",
+        "blind_4d_profile_label": "Profil ZeBlind",
+        "blind_4d_profile_historical": "Legacy diagnostic backend",
+        "blind_4d_profile_experimental": "ZeBlind 4D",
+        "blind_4d_manifest_label": "Manifest 4D",
+        "blind_4d_browse": "Parcourir…",
+        "blind_4d_verify": "Vérifier",
+        "blind_4d_not_verified": "Non vérifié",
+        "blind_4d_verifying": "Vérification en cours…",
+        "blind_4d_manifest_valid": "Manifest valide",
+        "blind_4d_manifest_invalid": "Manifest invalide",
+        "blind_4d_indexes_verified": "{count} index 4D vérifiés — tuiles {tiles}",
+        "blind_4d_limited_note": "Couverture limitée aux index 4D installés. Chaîne locale : ZeNear → ZeBlind 4D.",
+        "blind_4d_enable_failed_title": "Impossible d’activer ZeBlind 4D",
+        "blind_4d_enable_failed_body": "Manifest :\n{manifest}\n\nErreur :\n{error}",
+        "blind_4d_ready": "ZeBlind 4D prêt",
+        "blind_4d_unavailable": "ZeBlind 4D indisponible — manifest invalide",
+        "blind_4d_preflight_failed": "Preflight ZeBlind 4D impossible : {error}",
+        "blind_4d_manifest_filter": "Manifest JSON (*.json);;Tous les fichiers (*)",
+        "blind_4d_tooltip": "Active ZeBlind 4D. Couverture limitée aux six index 4D installés.",
+        "blind_4d_manifest_tooltip": "Manifest JSON 4D strict ; aucun dossier n’est scanné automatiquement.",
+        "solver.chain.historical": "Chaîne effective : ZeNear → ZeBlind 4D requis → Astrometry*",
+        "solver.chain.4d": "Chaîne effective : ZeNear → ZeBlind 4D → Astrometry.net optionnel",
+    },
+    "en": {
+        "blind_4d_easy_label": "Use ZeBlind 4D",
+        "blind_4d_profile_label": "ZeBlind profile",
+        "blind_4d_profile_historical": "Legacy diagnostic backend",
+        "blind_4d_profile_experimental": "ZeBlind 4D",
+        "blind_4d_manifest_label": "4D manifest",
+        "blind_4d_browse": "Browse…",
+        "blind_4d_verify": "Verify",
+        "blind_4d_not_verified": "Not verified",
+        "blind_4d_verifying": "Verification in progress…",
+        "blind_4d_manifest_valid": "Manifest valid",
+        "blind_4d_manifest_invalid": "Manifest invalid",
+        "blind_4d_indexes_verified": "{count} 4D indexes verified — tiles {tiles}",
+        "blind_4d_limited_note": "Coverage is limited to installed 4D indexes. Local chain: ZeNear → ZeBlind 4D.",
+        "blind_4d_enable_failed_title": "Unable to enable ZeBlind 4D",
+        "blind_4d_enable_failed_body": "Manifest:\n{manifest}\n\nError:\n{error}",
+        "blind_4d_ready": "ZeBlind 4D ready",
+        "blind_4d_unavailable": "ZeBlind 4D unavailable — manifest invalid",
+        "blind_4d_preflight_failed": "ZeBlind 4D preflight failed: {error}",
+        "blind_4d_manifest_filter": "JSON manifest (*.json);;All files (*)",
+        "blind_4d_tooltip": "Enables ZeBlind 4D. Coverage is limited to the six installed 4D indexes.",
+        "blind_4d_manifest_tooltip": "Strict 4D JSON manifest; no directory is scanned automatically.",
+        "solver.chain.historical": "Effective chain: ZeNear → ZeBlind 4D required → Astrometry*",
+        "solver.chain.4d": "Effective chain: ZeNear → ZeBlind 4D → optional Astrometry.net",
+    },
+}
+for _lang, _mapping in _GUI_ZEBLIND_4D_I18N.items():
     base = GUI_TRANSLATIONS.setdefault(_lang, {})
     for _k, _v in _mapping.items():
         if _k not in base:
@@ -1021,8 +1090,12 @@ class SolveConfig:
     search_radius_attempts: int = DEFAULT_SEARCH_RADIUS_ATTEMPTS
     max_search_radius_deg: Optional[float] = None
     blind_enabled: bool = True
+    blind_only: bool = False
     blind_skip_if_valid: bool = True
     blind_index_path: Optional[Path] = None
+    blind_backend_profile: str = ZEBLIND_4D_EXPERIMENTAL_PROFILE
+    blind_4d_manifest_path: Optional[Path] = None
+    blind_4d_loaded_manifest: Optional[Loaded4DManifest] = None
     hint_ra_deg: Optional[float] = None
     hint_dec_deg: Optional[float] = None
     hint_radius_deg: Optional[float] = None
@@ -1105,6 +1178,12 @@ class SolveConfig:
             object.__setattr__(self, "families", value)
         if self.blind_index_path:
             object.__setattr__(self, "blind_index_path", Path(self.blind_index_path).expanduser())
+        profile = str(getattr(self, "blind_backend_profile", ZEBLIND_4D_EXPERIMENTAL_PROFILE) or ZEBLIND_4D_EXPERIMENTAL_PROFILE).strip().lower()
+        if profile not in {HISTORICAL_PROFILE, ZEBLIND_4D_EXPERIMENTAL_PROFILE}:
+            raise ValueError(f"unsupported blind backend profile: {profile}")
+        object.__setattr__(self, "blind_backend_profile", profile)
+        if self.blind_4d_manifest_path:
+            object.__setattr__(self, "blind_4d_manifest_path", Path(self.blind_4d_manifest_path).expanduser())
         if self.search_radius_scale < 1.0:
             raise ValueError("search_radius_scale must be >= 1.0")
         if self.search_radius_attempts < 1:
@@ -1144,6 +1223,89 @@ class SolveConfig:
         else:
             api_key = None
         object.__setattr__(self, "astrometry_api_key", api_key)
+
+
+def ensure_loaded_4d_manifest(config: SolveConfig) -> Loaded4DManifest:
+    if config.blind_backend_profile != ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+        raise IndexManifestError("4D manifest requested while blind profile is not zeblind_4d_experimental")
+    if config.blind_4d_loaded_manifest is not None:
+        return config.blind_4d_loaded_manifest
+    if config.blind_4d_manifest_path is None:
+        raise IndexManifestError("blind_4d_manifest_required")
+    return load_4d_index_manifest(config.blind_4d_manifest_path)
+
+
+def build_blind_solve_config(
+    app_config: SolveConfig | PersistentSettings,
+    *,
+    ra_hint: Optional[float] = None,
+    dec_hint: Optional[float] = None,
+    log_level: Optional[str] = None,
+    loaded_manifest: Optional[Loaded4DManifest] = None,
+) -> BlindSolveConfig:
+    profile_name = str(getattr(app_config, "blind_backend_profile", ZEBLIND_4D_EXPERIMENTAL_PROFILE) or ZEBLIND_4D_EXPERIMENTAL_PROFILE).strip().lower()
+    profile = get_solver_profile(profile_name)
+    final_ra = getattr(app_config, "hint_ra_deg", None)
+    final_dec = getattr(app_config, "hint_dec_deg", None)
+    if final_ra is None:
+        final_ra = ra_hint
+    if final_dec is None:
+        final_dec = dec_hint
+
+    base = BlindSolveConfig(
+        max_candidates=int(getattr(app_config, "blind_max_candidates", 10) or 10),
+        max_stars=int(getattr(app_config, "blind_max_stars", 500) or 500),
+        max_quads=int(getattr(app_config, "blind_max_quads", 8000) or 8000),
+        detect_k_sigma=float(getattr(app_config, "dev_detect_k_sigma", 3.0) or 3.0),
+        detect_min_area=int(getattr(app_config, "dev_detect_min_area", 5) or 5),
+        bucket_cap_S=int(getattr(app_config, "dev_bucket_cap_S", 0) or 0),
+        bucket_cap_M=int(getattr(app_config, "dev_bucket_cap_M", 0) or 0),
+        bucket_cap_L=int(getattr(app_config, "dev_bucket_cap_L", 0) or 0),
+        sip_order=2,
+        quality_rms=float(getattr(app_config, "blind_quality_rms", 1.2) or 1.2),
+        quality_inliers=int(getattr(app_config, "blind_quality_inliers", 40) or 40),
+        pixel_tolerance=float(getattr(app_config, "blind_pixel_tolerance", 2.5) or 2.5),
+        fast_mode=bool(getattr(app_config, "blind_fast_mode", True)),
+        log_level=str(log_level or getattr(app_config, "log_level", "INFO") or "INFO").upper(),
+        bucket_limit_override=int(getattr(app_config, "dev_bucket_limit_override", 0) or 0),
+        vote_percentile=int(getattr(app_config, "dev_vote_percentile", 40) or 40),
+        collect_matches_vectorized_experimental=bool(getattr(app_config, "dev_collect_matches_vectorized_experimental", False)),
+        ra_hint_deg=final_ra,
+        dec_hint_deg=final_dec,
+        radius_hint_deg=getattr(app_config, "hint_radius_deg", getattr(app_config, "solver_hint_radius_deg", None)),
+        focal_length_mm=getattr(app_config, "hint_focal_mm", getattr(app_config, "solver_hint_focal_mm", None)),
+        pixel_size_um=getattr(app_config, "hint_pixel_um", getattr(app_config, "solver_hint_pixel_um", None)),
+        pixel_scale_arcsec=getattr(app_config, "hint_resolution_arcsec", getattr(app_config, "solver_hint_resolution_arcsec", None)),
+        pixel_scale_min_arcsec=getattr(app_config, "hint_resolution_min_arcsec", getattr(app_config, "solver_hint_resolution_min_arcsec", None)),
+        pixel_scale_max_arcsec=getattr(app_config, "hint_resolution_max_arcsec", getattr(app_config, "solver_hint_resolution_max_arcsec", None)),
+        downsample=max(1, int(getattr(app_config, "downsample", getattr(app_config, "solver_downsample", 1)) or 1)),
+        verify_logodds_enabled=bool(getattr(app_config, "dev_verify_logodds_enabled", False)),
+        verify_logodds_bail=float(getattr(app_config, "dev_verify_logodds_bail", -24.0) or -24.0),
+        verify_logodds_stoplooking=float(getattr(app_config, "dev_verify_logodds_stoplooking", 24.0) or 24.0),
+        verify_logodds_min_validations=int(getattr(app_config, "dev_verify_logodds_min_validations", 8) or 8),
+        hard_max_candidates_tried=int(getattr(app_config, "dev_hard_max_candidates_tried", 0) or 0),
+        hard_max_validations=int(getattr(app_config, "dev_hard_max_validations", 0) or 0),
+        depth_ladder_enabled=bool(getattr(app_config, "dev_depth_ladder_enabled", False)),
+        depth_ladder_caps=tuple(
+            int(v)
+            for v in getattr(app_config, "dev_depth_ladder_caps", (80, 160, 500))
+            if isinstance(v, (int, float)) and int(v) > 0
+        ) or (80, 160, 500),
+        blind_index_scale_overlap_prefilter_enabled=bool(getattr(app_config, "blind_index_scale_overlap_prefilter_enabled", False)),
+        blind_index_scale_overlap_proxy_lo_frac=float(getattr(app_config, "blind_index_scale_overlap_proxy_lo_frac", 0.05) or 0.05),
+        blind_index_scale_overlap_proxy_hi_frac=float(getattr(app_config, "blind_index_scale_overlap_proxy_hi_frac", 0.95) or 0.95),
+    )
+    if profile.name == HISTORICAL_PROFILE:
+        return base
+    manifest = loaded_manifest
+    if manifest is None:
+        manifest = getattr(app_config, "blind_4d_loaded_manifest", None)
+    if manifest is None:
+        manifest_path = getattr(app_config, "blind_4d_manifest_path", None)
+        if manifest_path is None:
+            raise IndexManifestError("blind_4d_manifest_required")
+        manifest = load_4d_index_manifest(manifest_path)
+    return profile.apply_to_config(base, index_paths=manifest.enabled_index_paths)
 
 
 @dataclass(slots=True)
@@ -1309,7 +1471,12 @@ def _system_memory_gb() -> Optional[float]:
     return None
 
 
-def _auto_blind_worker_count(requested_workers: int, ram_gb: Optional[float] = None) -> int:
+def _auto_blind_worker_count(
+    requested_workers: int,
+    ram_gb: Optional[float] = None,
+    *,
+    blind_backend_profile: str | None = None,
+) -> int:
     """Bound concurrent blind solves independently from the lighter Near phase."""
     requested = max(1, int(requested_workers or 1))
     override = str(os.environ.get("ZE_BLIND_WORKERS", "") or "").strip()
@@ -1318,6 +1485,9 @@ def _auto_blind_worker_count(requested_workers: int, ram_gb: Optional[float] = N
             return max(1, min(requested, int(override)))
         except ValueError:
             logging.warning("Ignoring invalid ZE_BLIND_WORKERS=%r", override)
+
+    if str(blind_backend_profile or "").strip().lower() == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+        return 1
 
     total_ram_gb = _system_memory_gb() if ram_gb is None else ram_gb
     if total_ram_gb is None:
@@ -1720,9 +1890,9 @@ def _cuda_runtime_summary() -> tuple[int, list[str], Optional[str]]:
 class ImageSolver:
     def __init__(self, config: SolveConfig) -> None:
         self.config = config
-        self.db = CatalogDB(config.db_root, families=config.families, cache_size=config.cache_size)
+        self.db = None if bool(getattr(config, "blind_only", False)) else CatalogDB(config.db_root, families=config.families, cache_size=config.cache_size)
         self._db_lock = threading.Lock()
-        self._family_candidates = self._init_family_candidates()
+        self._family_candidates = () if self.db is None else self._init_family_candidates()
         self._family_hint: Optional[str] = None
         # Sequential near-solver warm start: (scale_deg_per_px, rotation_rad, parity)
         self._near_seed: Optional[tuple[float, float, int]] = None
@@ -2261,6 +2431,29 @@ class ImageSolver:
             )
             if metadata.has_wcs and not self.config.overwrite:
                 raise SolveError("WCS already present (use --overwrite to recompute)", skip=True)
+            if bool(getattr(self.config, "blind_only", False)):
+                blind_result = self._run_blind_solver(
+                    path,
+                    run_info,
+                    skip_if_header_has_wcs=False,
+                    skip_if_valid=False,
+                    ra_hint=None,
+                    dec_hint=None,
+                    metadata=metadata,
+                    frame_data=data,
+                )
+                if blind_result and blind_result["success"]:
+                    solved = self._build_blind_result(path, blind_result, run_info)
+                    solved.duration_s = time.perf_counter() - start
+                    return solved
+                return ImageSolveResult(
+                    path=path,
+                    status="failed",
+                    message=(blind_result or {}).get("message", "blind-only solve failed"),
+                    metadata_source=metadata.source if metadata else None,
+                    duration_s=time.perf_counter() - start,
+                    run_info=list(run_info),
+                )
             # Prefer the internal index-powered near solver when an index root is configured.
             # This uses Python-only metadata-assisted solving without quads.
             if (
@@ -2808,14 +3001,72 @@ class ImageSolver:
             return None
         if not self._should_try_blind(path):
             return None
-        index_root = self.config.blind_index_path
-        if not index_root:
-            logging.info("Blind solver skipped for %s: no index root configured", path.name)
-            return None
+        blind_profile = str(getattr(self.config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower()
+        loaded_manifest: Loaded4DManifest | None = None
+        if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+            try:
+                loaded_manifest = ensure_loaded_4d_manifest(self.config)
+            except IndexManifestError as exc:
+                logging.error("Blind 4D manifest rejected for %s: %s", path.name, exc)
+                run_info.append(("run_info_blind_failed", {"message": f"4D manifest error: {exc}", "status": "BLIND4D_MANIFEST_INVALID"}))
+                return BlindSolveResult(
+                    success=False,
+                    message=f"BLIND4D_MANIFEST_INVALID: {exc}",
+                    elapsed_sec=0.0,
+                    tried_dbs=[],
+                    used_db=None,
+                    wrote_wcs=False,
+                    updated_keywords={},
+                    output_path=str(path),
+                    stats={
+                        "blind_backend_profile": blind_profile,
+                        "blind4d_preflight_ok": False,
+                        "blind4d_called": False,
+                        "blind4d_failure_reason": "BLIND4D_MANIFEST_INVALID",
+                        "historical_blind_called": False,
+                        "final_status": "BLIND4D_MANIFEST_INVALID",
+                    },
+                )
+            index_root = loaded_manifest.manifest_path.parent
+        else:
+            message = (
+                "BLIND4D_CONFIGURATION_REQUIRED: legacy blind backend profile "
+                f"{blind_profile!r} is not part of the product chain"
+            )
+            logging.warning("Blind solver skipped for %s: %s", path.name, message)
+            run_info.append(
+                (
+                    "run_info_blind_failed",
+                    {
+                        "message": message,
+                        "status": "BLIND4D_CONFIGURATION_REQUIRED",
+                        "historical_blind_called": False,
+                    },
+                )
+            )
+            return BlindSolveResult(
+                success=False,
+                message=message,
+                elapsed_sec=0.0,
+                tried_dbs=[],
+                used_db=None,
+                wrote_wcs=False,
+                updated_keywords={},
+                output_path=str(path),
+                stats={
+                    "blind_backend_profile": blind_profile,
+                    "blind4d_preflight_ok": False,
+                    "blind4d_called": False,
+                    "blind4d_failure_reason": "BLIND4D_CONFIGURATION_REQUIRED",
+                    "historical_blind_called": False,
+                    "final_status": "BLIND4D_CONFIGURATION_REQUIRED",
+                },
+            )
         run_info.append(("run_info_blind_started", {"path": path.name}))
         logging.info(
-            "Blind solver attempt for %s (index=%s, skip_if_valid=%s)",
+            "Blind solver attempt for %s (profile=%s, index=%s, skip_if_valid=%s)",
             path.name,
+            blind_profile,
             Path(index_root).name or str(index_root),
             skip_if_valid,
         )
@@ -2824,7 +3075,7 @@ class ImageSolver:
             try:
                 root = Path(index_root).expanduser().resolve()
                 needs_check = not self._blind_index_checked or (self._blind_index_checked_root != root)
-                if needs_check:
+                if needs_check and blind_profile != ZEBLIND_4D_EXPERIMENTAL_PROFILE:
                     preflight_start = time.perf_counter()
                     manifest = root / "manifest.json"
                     ht = root / "hash_tables"
@@ -2866,6 +3117,16 @@ class ImageSolver:
                     self._blind_index_checked = True
                     self._blind_index_checked_root = root
                     logging.info("Blind preflight completed in %.2fs", time.perf_counter() - preflight_start)
+                elif needs_check and loaded_manifest is not None:
+                    logging.info(
+                        "Blind 4D manifest loaded: manifest=%s enabled_indexes=%d tiles=%s schema=%s",
+                        loaded_manifest.manifest_path,
+                        len(loaded_manifest.entries),
+                        ",".join(loaded_manifest.tile_keys),
+                        loaded_manifest.schema,
+                    )
+                    self._blind_index_checked = True
+                    self._blind_index_checked_root = root
             except Exception:
                 # Non-fatal; proceed to solver which will report a clear error
                 pass
@@ -2874,7 +3135,10 @@ class ImageSolver:
             final_ra = self.config.hint_ra_deg if self.config.hint_ra_deg is not None else ra_hint
             final_dec = self.config.hint_dec_deg if self.config.hint_dec_deg is not None else dec_hint
             explicit_user_hint = self.config.hint_ra_deg is not None and self.config.hint_dec_deg is not None
-            if not explicit_user_hint:
+            if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+                final_ra = None
+                final_dec = None
+            elif not explicit_user_hint:
                 prev_ra, prev_dec = final_ra, final_dec
                 final_ra, final_dec, adaptive_reason = self._select_adaptive_blind_hint(
                     path=path,
@@ -2891,49 +3155,11 @@ class ImageSolver:
                         "-" if prev_dec is None else f"{float(prev_dec):.6f}",
                         "-" if final_dec is None else f"{float(final_dec):.6f}",
                     )
-            blind_cfg = BlindSolveConfig(
-                # Tunables from GUI / persistent settings
-                max_candidates=int(getattr(self.config, "blind_max_candidates", 10) or 10),
-                max_stars=int(getattr(self.config, "blind_max_stars", 500) or 500),
-                max_quads=int(getattr(self.config, "blind_max_quads", 8000) or 8000),
-                detect_k_sigma=float(getattr(self.config, "dev_detect_k_sigma", 3.0) or 3.0),
-                detect_min_area=int(getattr(self.config, "dev_detect_min_area", 5) or 5),
-                bucket_cap_S=int(getattr(self.config, "dev_bucket_cap_S", 0) or 0),
-                bucket_cap_M=int(getattr(self.config, "dev_bucket_cap_M", 0) or 0),
-                bucket_cap_L=int(getattr(self.config, "dev_bucket_cap_L", 0) or 0),
-                quality_rms=float(getattr(self.config, "blind_quality_rms", 1.2) or 1.2),
-                quality_inliers=int(getattr(self.config, "blind_quality_inliers", 40) or 40),
-                pixel_tolerance=float(getattr(self.config, "blind_pixel_tolerance", 2.5) or 2.5),
-                fast_mode=bool(getattr(self.config, "blind_fast_mode", True)),
-                log_level=getattr(self.config, "log_level", "INFO"),
-                bucket_limit_override=int(getattr(self.config, "dev_bucket_limit_override", 0) or 0),
-                vote_percentile=int(getattr(self.config, "dev_vote_percentile", 40) or 40),
-                collect_matches_vectorized_experimental=bool(getattr(self.config, "dev_collect_matches_vectorized_experimental", False)),
-                # Hints / optics
-                ra_hint_deg=final_ra,
-                dec_hint_deg=final_dec,
-                radius_hint_deg=self.config.hint_radius_deg,
-                focal_length_mm=self.config.hint_focal_mm,
-                pixel_size_um=self.config.hint_pixel_um,
-                pixel_scale_arcsec=self.config.hint_resolution_arcsec,
-                pixel_scale_min_arcsec=self.config.hint_resolution_min_arcsec,
-                pixel_scale_max_arcsec=self.config.hint_resolution_max_arcsec,
-                downsample=max(1, int(self.config.downsample or 1)),
-                verify_logodds_enabled=bool(getattr(self.config, "dev_verify_logodds_enabled", False)),
-                verify_logodds_bail=float(getattr(self.config, "dev_verify_logodds_bail", -24.0) or -24.0),
-                verify_logodds_stoplooking=float(getattr(self.config, "dev_verify_logodds_stoplooking", 24.0) or 24.0),
-                verify_logodds_min_validations=int(getattr(self.config, "dev_verify_logodds_min_validations", 8) or 8),
-                hard_max_candidates_tried=int(getattr(self.config, "dev_hard_max_candidates_tried", 0) or 0),
-                hard_max_validations=int(getattr(self.config, "dev_hard_max_validations", 0) or 0),
-                depth_ladder_enabled=bool(getattr(self.config, "dev_depth_ladder_enabled", False)),
-                depth_ladder_caps=tuple(
-                    int(v)
-                    for v in getattr(self.config, "dev_depth_ladder_caps", (80, 160, 500))
-                    if isinstance(v, (int, float)) and int(v) > 0
-                ) or (80, 160, 500),
-                blind_index_scale_overlap_prefilter_enabled=bool(getattr(self.config, "blind_index_scale_overlap_prefilter_enabled", False)),
-                blind_index_scale_overlap_proxy_lo_frac=float(getattr(self.config, "blind_index_scale_overlap_proxy_lo_frac", 0.05) or 0.05),
-                blind_index_scale_overlap_proxy_hi_frac=float(getattr(self.config, "blind_index_scale_overlap_proxy_hi_frac", 0.95) or 0.95),
+            blind_cfg = build_blind_solve_config(
+                self.config,
+                ra_hint=final_ra,
+                dec_hint=final_dec,
+                loaded_manifest=loaded_manifest,
             )
 
             quality_profile, quality_metrics = self._select_blind_quality_profile(
@@ -2941,9 +3167,13 @@ class ImageSolver:
                 peaks=peaks,
                 frame_data=frame_data,
             )
-            if bool(getattr(blind_cfg, "depth_ladder_enabled", False)) and quality_profile != "degraded":
+            if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+                quality_profile = "p220_contract"
+                quality_metrics["quality_profile"] = quality_profile
+                quality_metrics["quality_reasons"] = ["zeblind_4d_experimental_contract"]
+            elif bool(getattr(blind_cfg, "depth_ladder_enabled", False)) and quality_profile != "degraded":
                 blind_cfg = replace(blind_cfg, depth_ladder_enabled=False)
-            if quality_profile == "degraded":
+            if blind_profile != ZEBLIND_4D_EXPERIMENTAL_PROFILE and quality_profile == "degraded":
                 blind_cfg = replace(
                     blind_cfg,
                     max_candidates=min(int(blind_cfg.max_candidates), 8),
@@ -2965,6 +3195,18 @@ class ImageSolver:
             try:
                 # Log the effective blind config used
                 log_cfg = {
+                    "blind_backend_profile": blind_profile,
+                    "blind_4d_manifest": str(loaded_manifest.manifest_path) if loaded_manifest is not None else None,
+                    "blind_4d_enabled_indexes": [str(p) for p in loaded_manifest.enabled_index_paths] if loaded_manifest is not None else [],
+                    "blind_4d_tile_keys": list(loaded_manifest.tile_keys) if loaded_manifest is not None else [],
+                    "quad_hash_schema": getattr(blind_cfg, "quad_hash_schema", None),
+                    "blind_astrometry_4d_validation_catalog_policy": getattr(blind_cfg, "blind_astrometry_4d_validation_catalog_policy", None),
+                    "blind_astrometry_4d_accept_policy": getattr(blind_cfg, "blind_astrometry_4d_accept_policy", None),
+                    "blind_astrometry_4d_max_hypotheses": getattr(blind_cfg, "blind_astrometry_4d_max_hypotheses", None),
+                    "blind_astrometry_4d_max_accepts": getattr(blind_cfg, "blind_astrometry_4d_max_accepts", None),
+                    "blind_astrometry_4d_match_radius_px": getattr(blind_cfg, "blind_astrometry_4d_match_radius_px", None),
+                    "blind_global_hard_budget_s": getattr(blind_cfg, "blind_global_hard_budget_s", None),
+                    "blind_astrometry_4d_search_budget_s": getattr(blind_cfg, "blind_astrometry_4d_search_budget_s", None),
                     "max_candidates": blind_cfg.max_candidates,
                     "max_stars": blind_cfg.max_stars,
                     "max_quads": blind_cfg.max_quads,
@@ -3027,6 +3269,8 @@ class ImageSolver:
                     {"max_candidates": 36, "max_quads": 24000, "pixel_tolerance": 3.4, "quality_rms": 2.0},
                 )
             )
+            if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+                rescue_plans = ()
             for rescue_idx, plan in enumerate(rescue_plans, start=1):
                 if result.get("success"):
                     break
@@ -3188,6 +3432,37 @@ class ImageSolver:
         for db in result["tried_dbs"]:
             label = Path(db).name or db
             run_info.append(("run_info_blind_db", {"db": label}))
+        stats_for_run_info = result.get("stats") if isinstance(result, Mapping) else None
+        if isinstance(stats_for_run_info, Mapping):
+            useful_stat_keys = (
+                "quad_hash_schema",
+                "astrometry_4d_runtime_enabled",
+                "astrometry_4d_runtime_accepted",
+                "astrometry_4d_stop_reason",
+                "astrometry_4d_hits",
+                "astrometry_4d_candidates",
+                "astrometry_4d_hits_tested",
+                "astrometry_4d_first_accepted_rank",
+                "astrometry_4d_accepted_candidates",
+                "astrometry_4d_selected_origin_tile_key",
+                "astrometry_4d_selected_rank",
+                "astrometry_4d_total_s",
+                "astrometry_4d_route_s",
+                "astrometry_4d_search_budget_s",
+                "astrometry_4d_validation_s",
+                "blind_pre_route_s",
+                "blind_post_route_s",
+                "blind_total_s",
+                "blind_attempt_budget_s",
+                "global_hard_budget_triggered",
+                "global_hard_budget_elapsed_s",
+            )
+            run_info.append(
+                (
+                    "run_info_blind_stats",
+                    {key: stats_for_run_info.get(key) for key in useful_stat_keys if key in stats_for_run_info},
+                )
+            )
         if result["success"]:
             try:
                 tile_key = (str(result.get("used_db")) if isinstance(result, Mapping) and result.get("used_db") is not None else None)
@@ -3242,6 +3517,38 @@ class ImageSolver:
                 except Exception:
                     pass
             logging.info("Blind solver failed for %s: %s", path.name, result["message"])
+        try:
+            stats = result.get("stats") or {}
+            if not isinstance(stats, Mapping):
+                stats = {}
+            logging.info(
+                "ZN310B_EVENT %s",
+                json.dumps(
+                    {
+                        "event": "blind4d_result",
+                        "case_filename": path.name,
+                        "blind4d_preflight_ok": bool(blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE and loaded_manifest is not None),
+                        "blind4d_called": bool(blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE),
+                        "blind4d_call_count": 1 if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE else 0,
+                        "blind4d_profile": blind_profile,
+                        "blind4d_source_policy": str(getattr(blind_cfg, "blind_astrometry_4d_source_policy", "")),
+                        "blind4d_indexes_considered": [str(p) for p in getattr(blind_cfg, "blind_astrometry_4d_index_paths", ())],
+                        "blind4d_selected_index": str(stats.get("astrometry_4d_selected_origin_tile_key") or result.get("used_db") or ""),
+                        "blind4d_success": bool(result.get("success")),
+                        "blind4d_wcs_written": bool(result.get("success")),
+                        "historical_blind_called": False,
+                        "astrometry_web_called": False,
+                        "final_backend": "BLIND4D" if result.get("success") and blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE else "NONE",
+                        "final_status": "SOLVED" if result.get("success") else str(stats.get("final_status") or result.get("message") or "FAILED"),
+                        "elapsed_s": float(result.get("elapsed_sec", 0.0) or 0.0),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                ),
+            )
+        except Exception:
+            pass
         return result
 
     def _run_blind_on_raster(
@@ -3346,10 +3653,26 @@ class ImageSolver:
         result: BlindSolveResult,
         run_info: list[tuple[str, dict[str, Any]]],
     ) -> ImageSolveResult:
+        message = result["message"]
+        try:
+            stats = dict(result.get("stats") or {})
+            if bool(stats.get("astrometry_4d_runtime_accepted")):
+                tile = str(stats.get("astrometry_4d_selected_origin_tile_key") or result.get("used_db") or "?")
+                validation = stats.get("astrometry_4d_best_accepted_validation")
+                if not isinstance(validation, dict):
+                    validation = {}
+                inliers = validation.get("inliers", stats.get("astrometry_4d_best_inliers"))
+                rms = validation.get("rms_px", stats.get("astrometry_4d_best_rms_px"))
+                if inliers is not None and rms is not None:
+                    message = f"ZeBlind 4D - {tile} - {int(inliers)} inliers - RMS {float(rms):.3f} px"
+                else:
+                    message = f"ZeBlind 4D - {tile}"
+        except Exception:
+            message = result["message"]
         return ImageSolveResult(
             path=path,
             status="solved",
-            message=result["message"],
+            message=message,
             metadata_source="blind",
             duration_s=None,
             run_info=list(run_info),
@@ -3457,9 +3780,11 @@ class ImageSolver:
                     "astap_hint_radius_deg": near_cfg.astap_hint_radius_deg,
                     "second_pass_refine_in_fastpath": near_cfg.second_pass_refine_in_fastpath,
                     "astap_iso_strict": near_cfg.astap_iso_strict,
+                    "strict_acceptance_mode": getattr(near_cfg, "strict_acceptance_mode", "diagnostic"),
                     "allow_second_rescue": bool(getattr(self.config, "near_allow_second_rescue", False)),
                 }
                 logging.info("[ZENEAR] config: %s", json.dumps(log_near, ensure_ascii=False))
+                logging.info("Strict acceptance mode: %s", getattr(near_cfg, "strict_acceptance_mode", "diagnostic"))
             except Exception:
                 pass
             result = near_solve(
@@ -3550,7 +3875,7 @@ class ImageSolver:
                 ):
                     defer_blind = (not allow_blind_fallback) or bool(
                         getattr(self.config, "near_defer_blind_fallback", False)
-                    )
+                    ) or str(getattr(self.config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower() == ZEBLIND_4D_EXPERIMENTAL_PROFILE
                     if defer_blind:
                         logging.info(
                             "[ZENEAR] near attempts exhausted for %s; deferring blind fallback to batch blind phase",
@@ -3573,16 +3898,59 @@ class ImageSolver:
         except BlindSolverRuntimeError as exc:
             logging.info("Near solver (index) failed for %s: %s", path.name, exc)
             return None
+        try:
+            stats = result.get("stats", {}) if isinstance(result, Mapping) else {}
+            strict_acceptance = stats.get("strict_acceptance") if isinstance(stats, Mapping) else {}
+            if not isinstance(strict_acceptance, Mapping):
+                strict_acceptance = {}
+            logging.info(
+                "ZN310B_EVENT %s",
+                json.dumps(
+                    {
+                        "event": "near_result",
+                        "case_filename": path.name,
+                        "near_called": True,
+                        "near_success": bool(result.get("success")),
+                        "near_failure_reason": "" if result.get("success") else str(result.get("message") or ""),
+                        "near_gate_mode": str(strict_acceptance.get("mode", getattr(near_cfg, "strict_acceptance_mode", "diagnostic"))),
+                        "near_gate_decision": str(strict_acceptance.get("decision", "")),
+                        "near_gate_reason": str(strict_acceptance.get("reason", "")),
+                        "near_wcs_written": bool(result.get("success")),
+                        "historical_blind_called": False,
+                        "astrometry_web_called": False,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            )
+        except Exception:
+            pass
         if result["success"]:
             message = result.get("message") or "near solution found"
             # Update sequential seed from returned keywords when available
             try:
                 kw = result.get("updated_keywords", {}) or {}
-                s = float(kw.get("SEED_SCALE")) if kw.get("SEED_SCALE") is not None else None
-                r = float(kw.get("SEED_ROT")) if kw.get("SEED_ROT") is not None else None
-                p = int(kw.get("SEED_PAR")) if kw.get("SEED_PAR") is not None else 1
+                stats = result.get("stats", {}) or {}
+                s = float(stats.get("seed_scale")) if stats.get("seed_scale") is not None else None
+                r = float(stats.get("seed_rotation")) if stats.get("seed_rotation") is not None else None
+                p = int(stats.get("seed_parity")) if stats.get("seed_parity") is not None else 1
+                if s is None and kw.get("SEED_SCALE") is not None:
+                    s = float(kw.get("SEED_SCALE"))
+                if r is None and kw.get("SEED_ROT") is not None:
+                    r = float(kw.get("SEED_ROT"))
+                if kw.get("SEED_PAR") is not None and stats.get("seed_parity") is None:
+                    p = int(kw.get("SEED_PAR"))
                 if s and r is not None and use_seq_warm_start:
                     self._near_seed = (s, r, p)
+                strict_acceptance = stats.get("strict_acceptance") if isinstance(stats, Mapping) else None
+                if isinstance(strict_acceptance, Mapping):
+                    logging.info(
+                        "[ZENEAR] gate file=%s near_gate_mode=%s near_gate_decision=%s near_gate_reason=%s",
+                        path.name,
+                        str(strict_acceptance.get("mode", getattr(near_cfg, "strict_acceptance_mode", "diagnostic"))),
+                        str(strict_acceptance.get("decision", "")),
+                        str(strict_acceptance.get("reason", "")),
+                    )
                 tile_key = (str(result.get("used_db")) if result.get("used_db") is not None else None)
                 self._remember_keywords_hint(
                     path=path,
@@ -4159,7 +4527,11 @@ class BatchSolver:
         if self.config.blind_enabled and self.config.overwrite and final_unresolved:
             unresolved_paths = [p for p in self.files if p in final_unresolved]
             phase2_unresolved: dict[Path, ImageSolveResult] = {}
-            blind_workers = _auto_blind_worker_count(workers_base, ram_gb=ram_gb)
+            blind_workers = _auto_blind_worker_count(
+                workers_base,
+                ram_gb=ram_gb,
+                blind_backend_profile=getattr(self.config, "blind_backend_profile", None),
+            )
             logging.info(
                 "Blind auto strategy: workers=%d base_workers=%d ram_gb=%s override=%s",
                 blind_workers,
@@ -4415,10 +4787,26 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Path to the Zeblind index root (manifest + hash tables) used by the internal matcher",
     )
     parser.add_argument(
+        "--blind-profile",
+        choices=[HISTORICAL_PROFILE, ZEBLIND_4D_EXPERIMENTAL_PROFILE],
+        default=ZEBLIND_4D_EXPERIMENTAL_PROFILE,
+        help="Blind solver profile (default: zeblind_4d_experimental)",
+    )
+    parser.add_argument(
+        "--blind-4d-manifest",
+        type=Path,
+        help="Experimental ZeBlind 4D manifest JSON; required with --blind-profile zeblind_4d_experimental",
+    )
+    parser.add_argument(
         "--no-blind",
         dest="blind_enabled",
         action="store_false",
         help="Disable the automatic blind fallback when WCS metadata is missing",
+    )
+    parser.add_argument(
+        "--blind-only",
+        action="store_true",
+        help="Experimental: skip near/catalog solving and run the configured blind profile directly",
     )
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     parser.add_argument(
@@ -4530,6 +4918,37 @@ def run_cli(args: argparse.Namespace) -> int:
     families = _normalize_family_args(args.family)
     if bool(getattr(args, "near_astap_iso_strict", True)) is False:
         logging.warning("--no-near-astap-iso-strict is deprecated and ignored; strict mode is always enabled")
+    blind_profile = str(getattr(args, "blind_profile", ZEBLIND_4D_EXPERIMENTAL_PROFILE) or ZEBLIND_4D_EXPERIMENTAL_PROFILE).strip().lower()
+    loaded_4d_manifest: Loaded4DManifest | None = None
+    if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+        if args.blind_4d_manifest is None:
+            args.blind_4d_manifest = resolve_default_4d_manifest_path()
+        try:
+            loaded_4d_manifest = load_4d_index_manifest(args.blind_4d_manifest)
+        except IndexManifestError as exc:
+            raise SystemExit(f"4D manifest error: {exc}") from exc
+        scale_range = (
+            f"{args.pixel_scale_min:.2f}..{args.pixel_scale_max:.2f}\"/px"
+            if args.pixel_scale_min is not None and args.pixel_scale_max is not None
+            else "not specified"
+        )
+        profile = get_solver_profile(blind_profile)
+        logging.info("Blind profile: %s", blind_profile)
+        logging.info("4D manifest: %s", loaded_4d_manifest.manifest_path)
+        logging.info("4D enabled indexes: %d", len(loaded_4d_manifest.entries))
+        logging.info("4D tile keys: %s", ",".join(loaded_4d_manifest.tile_keys))
+        logging.info("4D schema: %s", profile.parameters.get("quad_hash_schema"))
+        logging.info("4D scale range: %s", scale_range)
+        logging.info(
+            "4D budgets: max_quads=%s max_hypotheses=%s max_accepts=%s max_wall_s=%s match_radius_px=%s",
+            profile.parameters.get("max_quads"),
+            profile.parameters.get("max_hypotheses"),
+            profile.parameters.get("max_accepts"),
+            profile.parameters.get("max_wall_s"),
+            profile.parameters.get("match_radius_px"),
+        )
+    elif args.blind_4d_manifest is not None:
+        logging.info("Ignoring --blind-4d-manifest because blind profile is historical")
     config = SolveConfig(
         db_root=args.db_root.expanduser().resolve(),
         input_dir=args.input_dir.expanduser().resolve(),
@@ -4546,7 +4965,11 @@ def run_cli(args: argparse.Namespace) -> int:
         search_radius_attempts=args.search_radius_attempts,
         max_search_radius_deg=args.max_search_radius_deg,
         blind_enabled=args.blind_enabled,
+        blind_only=bool(getattr(args, "blind_only", False)),
         blind_index_path=args.blind_index,
+        blind_backend_profile=blind_profile,
+        blind_4d_manifest_path=args.blind_4d_manifest,
+        blind_4d_loaded_manifest=loaded_4d_manifest,
         near_max_tile_candidates=max(1, int(args.near_max_tile_candidates or 48)),
         near_tile_cache_size=max(1, int(args.near_tile_cache_size or 128)),
         near_detect_backend=str(args.near_detect_backend or "auto"),
@@ -5252,9 +5675,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._last_result_ts: Optional[float] = None
             self._language_actions: dict[str, QtGui.QAction] = {}
             self._interface_actions: dict[str, QtGui.QAction] = {}
-            self._interface_mode = "easy"
+            self._interface_mode = str(getattr(settings, "interface_mode", "easy") or "easy").strip().lower()
+            if self._interface_mode not in {"easy", "expert"}:
+                self._interface_mode = "easy"
             self._settings = settings
             self._settings.solver_workers = self._dev_workers_choice
+            self._syncing_blind_profile_gui = False
+            self._blind_4d_verified_manifest: Loaded4DManifest | None = None
+            self._blind_4d_manifest_state = "not_verified"
             self._current_log_level = str(getattr(settings, "log_level", "INFO") or "INFO").upper()
             self._index_worker: Optional[IndexBuilder] = None
             self._blind_worker: Optional[BlindRunner] = None
@@ -5406,6 +5834,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             if mode not in ("expert", "easy"):
                 return
             self._interface_mode = mode
+            self._settings.interface_mode = mode
+            try:
+                save_persistent_settings(self._settings)
+            except Exception:
+                pass
             self._apply_interface_mode()
 
         def _set_tab_visible(self, tab_widget: QtWidgets.QWidget, visible: bool) -> None:
@@ -5450,6 +5883,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     action.blockSignals(False)
             self._apply_simple_mode_visibility()
             self._apply_settings_mode_visibility()
+            self._sync_blind_profile_controls()
 
         def _apply_simple_mode_visibility(self) -> None:
             simple = bool(hasattr(self, "simple_mode_check") and self.simple_mode_check.isChecked())
@@ -5458,6 +5892,171 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _apply_settings_mode_visibility(self) -> None:
             expert = (self._interface_mode == "expert")
             apply_settings_easy_visibility(self, expert=expert)
+
+        def _current_blind_profile(self) -> str:
+            profile = str(getattr(self._settings, "blind_backend_profile", ZEBLIND_4D_EXPERIMENTAL_PROFILE) or ZEBLIND_4D_EXPERIMENTAL_PROFILE).strip().lower()
+            if profile not in {HISTORICAL_PROFILE, ZEBLIND_4D_EXPERIMENTAL_PROFILE}:
+                profile = ZEBLIND_4D_EXPERIMENTAL_PROFILE
+            return profile
+
+        def _manifest_text_or_default(self) -> str:
+            text = ""
+            if hasattr(self, "blind_4d_manifest_edit"):
+                text = self.blind_4d_manifest_edit.text().strip()
+            if not text:
+                text = str(getattr(self._settings, "blind_4d_manifest_path", "") or "").strip()
+            return str(resolve_default_4d_manifest_path(text or None))
+
+        def _set_manifest_status(self, key: str, *, manifest: Loaded4DManifest | None = None, error: Exception | str | None = None) -> None:
+            self._blind_4d_manifest_state = key
+            label = getattr(self, "blind_4d_manifest_status_label", None)
+            if label is None:
+                return
+            if key == "valid" and manifest is not None:
+                tiles = ", ".join(manifest.tile_keys)
+                if len(tiles) > 80:
+                    tiles = tiles[:77] + "..."
+                label.setText(self._text("blind_4d_indexes_verified", count=len(manifest.entries), tiles=tiles))
+                label.setStyleSheet("color: #2b8a3e;")
+            elif key == "invalid":
+                label.setText(f"{self._text('blind_4d_manifest_invalid')}: {error}")
+                label.setStyleSheet("color: #c92a2a;")
+            elif key == "verifying":
+                label.setText(self._text("blind_4d_verifying"))
+                label.setStyleSheet("color: #5c7cfa;")
+            else:
+                label.setText(self._text("blind_4d_not_verified"))
+                label.setStyleSheet("color: #6c757d;")
+
+        def _sync_blind_profile_controls(self) -> None:
+            if self._syncing_blind_profile_gui:
+                return
+            self._syncing_blind_profile_gui = True
+            try:
+                profile = self._current_blind_profile()
+                is_4d = profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE
+                running = bool(getattr(self, "_gui_run_active", False))
+                blind_enabled = (bool(self.blind_check.isChecked()) if hasattr(self, "blind_check") else True) and not running
+                expert = (self._interface_mode == "expert")
+                if hasattr(self, "blind_4d_easy_row"):
+                    self.blind_4d_easy_row.setVisible(not expert)
+                if hasattr(self, "blind_4d_note_label"):
+                    self.blind_4d_note_label.setVisible(not expert)
+                if hasattr(self, "blind_4d_expert_container"):
+                    self.blind_4d_expert_container.setVisible(expert)
+                if hasattr(self, "blind_4d_easy_check"):
+                    self.blind_4d_easy_check.blockSignals(True)
+                    self.blind_4d_easy_check.setChecked(is_4d)
+                    self.blind_4d_easy_check.setEnabled(blind_enabled)
+                    self.blind_4d_easy_check.blockSignals(False)
+                if hasattr(self, "blind_4d_profile_combo"):
+                    self.blind_4d_profile_combo.blockSignals(True)
+                    idx = self.blind_4d_profile_combo.findData(profile)
+                    if idx < 0:
+                        idx = self.blind_4d_profile_combo.findData(HISTORICAL_PROFILE)
+                    self.blind_4d_profile_combo.setCurrentIndex(max(0, idx))
+                    self.blind_4d_profile_combo.setEnabled(blind_enabled)
+                    self.blind_4d_profile_combo.blockSignals(False)
+                manifest_enabled = blind_enabled and is_4d and expert
+                for name in ("blind_4d_manifest_label", "blind_4d_manifest_edit", "blind_4d_manifest_browse_btn", "blind_4d_manifest_verify_btn", "blind_4d_manifest_status_label"):
+                    widget = getattr(self, name, None)
+                    if widget is not None:
+                        widget.setEnabled(manifest_enabled)
+                if hasattr(self, "effective_chain_label"):
+                    chain_key = "solver.chain.4d" if is_4d else "solver.chain.historical"
+                    self.effective_chain_label.setText(self._text(chain_key))
+            finally:
+                self._syncing_blind_profile_gui = False
+
+        def _set_blind_profile_from_gui(self, profile: str, *, source: str) -> None:
+            normalized = str(profile or ZEBLIND_4D_EXPERIMENTAL_PROFILE).strip().lower()
+            if normalized not in {HISTORICAL_PROFILE, ZEBLIND_4D_EXPERIMENTAL_PROFILE}:
+                normalized = ZEBLIND_4D_EXPERIMENTAL_PROFILE
+            if normalized == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+                manifest_path = self._manifest_text_or_default()
+                if hasattr(self, "blind_4d_manifest_edit") and not self.blind_4d_manifest_edit.text().strip():
+                    self.blind_4d_manifest_edit.setText(manifest_path)
+                self._settings.blind_4d_manifest_path = manifest_path
+                if self.blind_check.isChecked():
+                    loaded = self._verify_4d_manifest_from_gui(show_error=(source == "easy"), rollback_on_failure=(source == "easy"))
+                    if loaded is None and source == "easy":
+                        return
+            self._settings.blind_backend_profile = normalized
+            if normalized == HISTORICAL_PROFILE:
+                self._blind_4d_verified_manifest = None
+            try:
+                save_persistent_settings(self._settings)
+            except Exception:
+                pass
+            self._sync_blind_profile_controls()
+
+        def _on_blind_enabled_toggled(self, _checked: bool) -> None:
+            self._settings.solver_blind_enabled = bool(self.blind_check.isChecked())
+            self._sync_blind_profile_controls()
+
+        def _on_easy_4d_toggled(self, checked: bool) -> None:
+            if self._syncing_blind_profile_gui:
+                return
+            self._set_blind_profile_from_gui(
+                ZEBLIND_4D_EXPERIMENTAL_PROFILE,
+                source="easy",
+            )
+
+        def _on_blind_profile_combo_changed(self, _index: int) -> None:
+            if self._syncing_blind_profile_gui:
+                return
+            data = self.blind_4d_profile_combo.currentData()
+            self._set_blind_profile_from_gui(str(data or ZEBLIND_4D_EXPERIMENTAL_PROFILE), source="expert")
+
+        def _pick_4d_manifest_file(self) -> None:
+            start = self.blind_4d_manifest_edit.text().strip() or str(resolve_default_4d_manifest_path())
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self,
+                self._text("blind_4d_manifest_label"),
+                start,
+                self._text("blind_4d_manifest_filter"),
+            )
+            if path:
+                self.blind_4d_manifest_edit.setText(path)
+                self._settings.blind_4d_manifest_path = path
+                self._blind_4d_verified_manifest = None
+                self._set_manifest_status("not_verified")
+
+        def _verify_4d_manifest_from_gui(self, *, show_error: bool = True, rollback_on_failure: bool = False) -> Loaded4DManifest | None:
+            path_text = self._manifest_text_or_default()
+            if hasattr(self, "blind_4d_manifest_edit"):
+                self.blind_4d_manifest_edit.setText(path_text)
+            self._set_manifest_status("verifying")
+            try:
+                loaded = load_4d_index_manifest(path_text)
+            except IndexManifestError as exc:
+                self._blind_4d_verified_manifest = None
+                self._set_manifest_status("invalid", error=exc)
+                if rollback_on_failure:
+                    self._settings.blind_backend_profile = ZEBLIND_4D_EXPERIMENTAL_PROFILE
+                    self._sync_blind_profile_controls()
+                if show_error:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        self._text("blind_4d_enable_failed_title"),
+                        self._text("blind_4d_enable_failed_body", manifest=path_text, error=str(exc)),
+                    )
+                return None
+            self._blind_4d_verified_manifest = loaded
+            self._settings.blind_4d_manifest_path = str(loaded.manifest_path)
+            self._set_manifest_status("valid", manifest=loaded)
+            self._log(f"{self._text('blind_4d_ready')}: {loaded.manifest_path} ({len(loaded.entries)} index)")
+            return loaded
+
+        def _preflight_4d_manifest_for_run(self, config: SolveConfig) -> Loaded4DManifest:
+            manifest_path = config.blind_4d_manifest_path or self._manifest_text_or_default()
+            loaded = load_4d_index_manifest(manifest_path)
+            self._blind_4d_verified_manifest = loaded
+            self._set_manifest_status("valid", manifest=loaded)
+            self._log(
+                f"ZeBlind 4D preflight: manifest={loaded.manifest_path} indexes={len(loaded.entries)} tiles={','.join(loaded.tile_keys)}"
+            )
+            return loaded
 
         def _run_startup_wizard_from_menu(self) -> None:
             ok = self._run_simple_startup_wizard()
@@ -6449,6 +7048,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.backend_note_label = QtWidgets.QLabel()
             self.backend_note_label.setWordWrap(True)
             form.addRow(self.backend_note_label)
+            self.effective_chain_label = QtWidgets.QLabel()
+            self.effective_chain_label.setWordWrap(True)
+            form.addRow(self.effective_chain_label)
             self.fov_spin = QtWidgets.QDoubleSpinBox()
             self.fov_spin.setRange(0.0, 20.0)
             self.fov_spin.setDecimals(2)
@@ -6537,6 +7139,43 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.overwrite_check.setChecked(bool(self._settings.solver_overwrite))
             self.blind_check = QtWidgets.QCheckBox()
             self.blind_check.setChecked(bool(self._settings.solver_blind_enabled))
+            self.blind_check.toggled.connect(self._on_blind_enabled_toggled)
+            self.blind_4d_easy_check = QtWidgets.QCheckBox()
+            self.blind_4d_easy_check.setChecked(self._current_blind_profile() == ZEBLIND_4D_EXPERIMENTAL_PROFILE)
+            self.blind_4d_easy_check.toggled.connect(self._on_easy_4d_toggled)
+            self.blind_4d_easy_row = QtWidgets.QWidget()
+            easy_row_layout = QtWidgets.QHBoxLayout(self.blind_4d_easy_row)
+            easy_row_layout.setContentsMargins(24, 0, 0, 0)
+            easy_row_layout.addWidget(self.blind_4d_easy_check)
+            self.blind_4d_note_label = QtWidgets.QLabel()
+            self.blind_4d_note_label.setWordWrap(True)
+            self.blind_4d_note_label.setStyleSheet("color: #6c757d;")
+            self.blind_4d_profile_label = QtWidgets.QLabel()
+            self.blind_4d_profile_combo = QtWidgets.QComboBox()
+            self.blind_4d_profile_combo.addItem(self._text("blind_4d_profile_historical"), HISTORICAL_PROFILE)
+            self.blind_4d_profile_combo.addItem(self._text("blind_4d_profile_experimental"), ZEBLIND_4D_EXPERIMENTAL_PROFILE)
+            self.blind_4d_profile_combo.currentIndexChanged.connect(self._on_blind_profile_combo_changed)
+            self.blind_4d_manifest_label = QtWidgets.QLabel()
+            self.blind_4d_manifest_edit = QtWidgets.QLineEdit(str(resolve_default_4d_manifest_path(getattr(self._settings, "blind_4d_manifest_path", None))))
+            self.blind_4d_manifest_edit.textChanged.connect(lambda _text: self._set_manifest_status("not_verified"))
+            self.blind_4d_manifest_browse_btn = QtWidgets.QPushButton()
+            self.blind_4d_manifest_browse_btn.clicked.connect(self._pick_4d_manifest_file)
+            self.blind_4d_manifest_verify_btn = QtWidgets.QPushButton()
+            self.blind_4d_manifest_verify_btn.clicked.connect(lambda: self._verify_4d_manifest_from_gui(show_error=True, rollback_on_failure=False))
+            manifest_row = QtWidgets.QWidget()
+            manifest_layout = QtWidgets.QHBoxLayout(manifest_row)
+            manifest_layout.setContentsMargins(0, 0, 0, 0)
+            manifest_layout.addWidget(self.blind_4d_manifest_edit, 1)
+            manifest_layout.addWidget(self.blind_4d_manifest_browse_btn)
+            manifest_layout.addWidget(self.blind_4d_manifest_verify_btn)
+            self.blind_4d_manifest_status_label = QtWidgets.QLabel()
+            self.blind_4d_manifest_status_label.setWordWrap(True)
+            self.blind_4d_expert_container = QtWidgets.QWidget()
+            expert_layout = QtWidgets.QFormLayout(self.blind_4d_expert_container)
+            expert_layout.setContentsMargins(0, 0, 0, 0)
+            expert_layout.addRow(self.blind_4d_profile_label, self.blind_4d_profile_combo)
+            expert_layout.addRow(self.blind_4d_manifest_label, manifest_row)
+            expert_layout.addRow(self.blind_4d_manifest_status_label)
             self.simple_mode_check = QtWidgets.QCheckBox()
             self.simple_mode_check.setChecked(True)
             self.simple_mode_check.toggled.connect(lambda _checked: self._apply_simple_mode_visibility())
@@ -6575,9 +7214,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.formats_label_widget, self.formats_edit)
             form.addRow(self.families_label_widget, self.families_combo)
             form.addRow(self.blind_check)
+            form.addRow(self.blind_4d_easy_row)
+            form.addRow(self.blind_4d_note_label)
+            form.addRow(self.blind_4d_expert_container)
             form.addRow(self.overwrite_check)
             form.addRow(self.simple_mode_check)
             form.addRow(self.simple_clean_wcs_check)
+            self._set_manifest_status("not_verified")
+            self._sync_blind_profile_controls()
             self._apply_simple_mode_visibility()
             return self.options_box
 
@@ -7224,6 +7868,15 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self.backend_combo.setCurrentIndex(idx)
             except Exception:
                 pass
+            try:
+                if hasattr(self, "blind_4d_manifest_edit"):
+                    self.blind_4d_manifest_edit.setText(
+                        str(resolve_default_4d_manifest_path(getattr(settings, "blind_4d_manifest_path", None)))
+                    )
+                self._set_manifest_status("not_verified")
+                self._sync_blind_profile_controls()
+            except Exception:
+                pass
             # Astrometry tab fields
             try:
                 if hasattr(self, 'ast_api_url_edit'):
@@ -7489,6 +8142,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_search_margin=float(self.fast_search_margin_spin.value()) if hasattr(self, 'fast_search_margin_spin') else 1.2,
                 # Backend + astrometry
                 solver_backend=(self.backend_combo.currentData() if hasattr(self, 'backend_combo') else "local"),
+                interface_mode=str(getattr(self, "_interface_mode", "easy") or "easy"),
+                blind_backend_profile=self._current_blind_profile(),
+                blind_4d_manifest_path=(
+                    self.blind_4d_manifest_edit.text().strip()
+                    if hasattr(self, "blind_4d_manifest_edit") and self.blind_4d_manifest_edit.text().strip()
+                    else (getattr(self._settings, "blind_4d_manifest_path", None) or None)
+                ),
                 astrometry_api_url=(self.ast_api_url_edit.text().strip() if hasattr(self, 'ast_api_url_edit') else "https://nova.astrometry.net/api"),
                 astrometry_api_key=(self.ast_api_key_edit.text().strip() if hasattr(self, 'ast_api_key_edit') and self.ast_api_key_edit.text().strip() else (os.environ.get("ASTROMETRY_API_KEY") or None)),
                 astrometry_parallel_jobs=int(self.ast_parallel_spin.value()) if hasattr(self, 'ast_parallel_spin') else 2,
@@ -7791,52 +8451,31 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._settings = settings
             save_persistent_settings(settings)
             self.settings_run_blind_btn.setEnabled(False)
-            # Build blind config from settings
-            blind_cfg = BlindSolveConfig(
-                max_candidates=settings.blind_max_candidates,
-                max_stars=settings.blind_max_stars,
-                max_quads=settings.blind_max_quads,
-                detect_k_sigma=float(getattr(settings, "dev_detect_k_sigma", 3.0) or 3.0),
-                detect_min_area=int(getattr(settings, "dev_detect_min_area", 5) or 5),
-                bucket_cap_S=int(getattr(settings, "dev_bucket_cap_S", 0) or 0),
-                bucket_cap_M=int(getattr(settings, "dev_bucket_cap_M", 0) or 0),
-                bucket_cap_L=int(getattr(settings, "dev_bucket_cap_L", 0) or 0),
-                sip_order=2,
-                quality_rms=settings.blind_quality_rms,
-                quality_inliers=settings.blind_quality_inliers,
-                pixel_tolerance=settings.blind_pixel_tolerance,
-                fast_mode=settings.blind_fast_mode,
-                log_level=self._current_log_level,
-                bucket_limit_override=int(settings.dev_bucket_limit_override or 0),
-                vote_percentile=int(settings.dev_vote_percentile or 40),
-                ra_hint_deg=settings.solver_hint_ra_deg,
-                dec_hint_deg=settings.solver_hint_dec_deg,
-                radius_hint_deg=settings.solver_hint_radius_deg,
-                focal_length_mm=settings.solver_hint_focal_mm,
-                pixel_size_um=settings.solver_hint_pixel_um,
-                pixel_scale_arcsec=settings.solver_hint_resolution_arcsec,
-                pixel_scale_min_arcsec=settings.solver_hint_resolution_min_arcsec,
-                pixel_scale_max_arcsec=settings.solver_hint_resolution_max_arcsec,
-                downsample=max(1, int(settings.solver_downsample or 1)),
-                verify_logodds_enabled=bool(getattr(settings, "dev_verify_logodds_enabled", False)),
-                verify_logodds_bail=float(getattr(settings, "dev_verify_logodds_bail", -24.0) or -24.0),
-                verify_logodds_stoplooking=float(getattr(settings, "dev_verify_logodds_stoplooking", 24.0) or 24.0),
-                verify_logodds_min_validations=int(getattr(settings, "dev_verify_logodds_min_validations", 8) or 8),
-                hard_max_candidates_tried=int(getattr(settings, "dev_hard_max_candidates_tried", 0) or 0),
-                hard_max_validations=int(getattr(settings, "dev_hard_max_validations", 0) or 0),
-                depth_ladder_enabled=bool(getattr(settings, "dev_depth_ladder_enabled", False)),
-                depth_ladder_caps=tuple(
-                    int(v)
-                    for v in getattr(settings, "dev_depth_ladder_caps", (80, 160, 500))
-                    if isinstance(v, (int, float)) and int(v) > 0
-                ) or (80, 160, 500),
-                blind_index_scale_overlap_prefilter_enabled=bool(getattr(settings, "blind_index_scale_overlap_prefilter_enabled", False)),
-                blind_index_scale_overlap_proxy_lo_frac=float(getattr(settings, "blind_index_scale_overlap_proxy_lo_frac", 0.05) or 0.05),
-                blind_index_scale_overlap_proxy_hi_frac=float(getattr(settings, "blind_index_scale_overlap_proxy_hi_frac", 0.95) or 0.95),
-            )
+            loaded_manifest = None
+            index_root = settings.index_root
+            if str(getattr(settings, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower() == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+                try:
+                    if not settings.blind_4d_manifest_path:
+                        raise IndexManifestError("blind_4d_manifest_required")
+                    loaded_manifest = load_4d_index_manifest(settings.blind_4d_manifest_path)
+                    index_root = str(loaded_manifest.manifest_path.parent)
+                except IndexManifestError as exc:
+                    self.settings_run_blind_btn.setEnabled(True)
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), f"4D manifest error: {exc}")
+                    return
+            try:
+                blind_cfg = build_blind_solve_config(
+                    settings,
+                    log_level=self._current_log_level,
+                    loaded_manifest=loaded_manifest,
+                )
+            except Exception as exc:
+                self.settings_run_blind_btn.setEnabled(True)
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                return
             self._blind_worker = BlindRunner(
                 fits_path=sample_path,
-                index_root=settings.index_root,
+                index_root=index_root,
                 blind_config=blind_cfg,
             )
             self._blind_worker.log.connect(self._log_settings)
@@ -8107,11 +8746,38 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception:
                 pass
             self.blind_check.setText(self._text("blind_label"))
+            if hasattr(self, "blind_4d_easy_check"):
+                self.blind_4d_easy_check.setText(self._text("blind_4d_easy_label"))
+                self.blind_4d_easy_check.setToolTip(self._text("blind_4d_tooltip"))
+            if hasattr(self, "blind_4d_note_label"):
+                self.blind_4d_note_label.setText(self._text("blind_4d_limited_note"))
+            if hasattr(self, "blind_4d_profile_label"):
+                self.blind_4d_profile_label.setText(self._text("blind_4d_profile_label"))
+            if hasattr(self, "blind_4d_profile_combo"):
+                hist_idx = self.blind_4d_profile_combo.findData(HISTORICAL_PROFILE)
+                if hist_idx >= 0:
+                    self.blind_4d_profile_combo.setItemText(hist_idx, self._text("blind_4d_profile_historical"))
+                exp_idx = self.blind_4d_profile_combo.findData(ZEBLIND_4D_EXPERIMENTAL_PROFILE)
+                if exp_idx >= 0:
+                    self.blind_4d_profile_combo.setItemText(exp_idx, self._text("blind_4d_profile_experimental"))
+            if hasattr(self, "blind_4d_manifest_label"):
+                self.blind_4d_manifest_label.setText(self._text("blind_4d_manifest_label"))
+            if hasattr(self, "blind_4d_manifest_edit"):
+                self.blind_4d_manifest_edit.setToolTip(self._text("blind_4d_manifest_tooltip"))
+            if hasattr(self, "blind_4d_manifest_browse_btn"):
+                self.blind_4d_manifest_browse_btn.setText(self._text("blind_4d_browse"))
+            if hasattr(self, "blind_4d_manifest_verify_btn"):
+                self.blind_4d_manifest_verify_btn.setText(self._text("blind_4d_verify"))
+            if hasattr(self, "effective_chain_label"):
+                self.effective_chain_label.setText(
+                    self._text("solver.chain.4d" if self._current_blind_profile() == ZEBLIND_4D_EXPERIMENTAL_PROFILE else "solver.chain.historical")
+                )
             self.overwrite_check.setText(self._text("overwrite_label"))
             if hasattr(self, "simple_mode_check"):
                 self.simple_mode_check.setText(self._text("simple_mode_label"))
             if hasattr(self, "simple_clean_wcs_check"):
                 self.simple_clean_wcs_check.setText(self._text("simple_clean_wcs_label"))
+            self._sync_blind_profile_controls()
             self.files_view.setHeaderLabels(
                 [
                     self._text("files_header"),
@@ -8810,6 +9476,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._settings.solver_family = str(sel_fam).strip().lower() or None
                 self._settings.solver_blind_enabled = bool(self.blind_check.isChecked())
                 self._settings.solver_overwrite = bool(self.overwrite_check.isChecked())
+                self._settings.interface_mode = str(getattr(self, "_interface_mode", "easy") or "easy")
+                self._settings.blind_backend_profile = self._current_blind_profile()
+                self._settings.blind_4d_manifest_path = (
+                    self.blind_4d_manifest_edit.text().strip()
+                    if hasattr(self, "blind_4d_manifest_edit") and self.blind_4d_manifest_edit.text().strip()
+                    else (getattr(self._settings, "blind_4d_manifest_path", None) or None)
+                )
                 self._settings.solver_hint_ra_deg = (
                     None if self.ra_hint_spin.value() <= -0.5 else float(self.ra_hint_spin.value())
                 )
@@ -8897,6 +9570,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                 max_search_radius_deg=max_radius,
                 blind_enabled=self.blind_check.isChecked(),
                 blind_index_path=index_root,
+                blind_backend_profile=self._current_blind_profile(),
+                blind_4d_manifest_path=(
+                    self.blind_4d_manifest_edit.text().strip()
+                    if hasattr(self, "blind_4d_manifest_edit") and self.blind_4d_manifest_edit.text().strip()
+                    else (getattr(self._settings, "blind_4d_manifest_path", None) or None)
+                ),
                 hint_ra_deg=ra_hint,
                 hint_dec_deg=dec_hint,
                 hint_radius_deg=radius_hint,
@@ -9107,6 +9786,31 @@ def launch_gui(args: argparse.Namespace) -> int:
             except ValueError as exc:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
+            if (
+                config.blind_enabled
+                and str(getattr(config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower()
+                == ZEBLIND_4D_EXPERIMENTAL_PROFILE
+            ):
+                try:
+                    loaded_manifest = self._preflight_4d_manifest_for_run(config)
+                    config = replace(
+                        config,
+                        blind_4d_manifest_path=loaded_manifest.manifest_path,
+                        blind_4d_loaded_manifest=loaded_manifest,
+                    )
+                except IndexManifestError as exc:
+                    message = self._text("blind_4d_preflight_failed", error=str(exc))
+                    self._log(message)
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        self._text("blind_4d_enable_failed_title"),
+                        self._text(
+                            "blind_4d_enable_failed_body",
+                            manifest=(config.blind_4d_manifest_path or self._manifest_text_or_default()),
+                            error=str(exc),
+                        ),
+                    )
+                    return
             self._results_seen = 0
             try:
                 self._log(
@@ -9134,6 +9838,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._set_running(True)
             backend = (self.backend_combo.currentData() if hasattr(self, 'backend_combo') else 'local')
             self._log(self._text("solver.status.using_backend", backend=self.backend_combo.currentText() if hasattr(self, 'backend_combo') else 'Local'))
+            self._log(self._text("solver.chain.4d" if config.blind_backend_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE else "solver.chain.historical"))
+            self._log("Strict acceptance mode: diagnostic")
+            self._log(
+                "Astrometry.net web: "
+                + ("enabled" if str(backend).strip().lower() == "astrometry" or bool(config.astrometry_api_key) else "disabled")
+            )
             if not config.blind_enabled:
                 self._log(self._text("solver.status.blind_disabled"))
             if backend == 'astrometry':
@@ -9191,10 +9901,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._log(self._text("log_stop_requested"))
 
         def _set_running(self, running: bool) -> None:
+            self._gui_run_active = bool(running)
             self.start_btn.setEnabled(not running)
             self.stop_btn.setEnabled(running)
             self.scan_btn.setEnabled(not running)
             self.input_edit.setEnabled(not running)
+            if hasattr(self, "blind_check"):
+                self.blind_check.setEnabled(not running)
+            self._sync_blind_profile_controls()
 
         def _on_worker_started(self, total: int) -> None:
             if total == 0:
