@@ -39,6 +39,7 @@ import zlib
 from itertools import combinations, permutations
 from collections import OrderedDict, Counter
 from dataclasses import dataclass, replace
+from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 import threading
@@ -146,6 +147,10 @@ class SolveConfig:
     # historical unlimited behavior. The deadline is also propagated through
     # internal ladders via the composed cancel callback.
     blind_global_hard_budget_s: float = 0.0
+    # Optional wall-clock cap scoped to the Astrometry AB/C/D 4D route only.
+    # Zero preserves the pre-P2.24 behavior where no separate route deadline
+    # exists and callers may still use blind_global_hard_budget_s.
+    blind_astrometry_4d_search_budget_s: float = 0.0
     global_budget_fast_s: float = 8.0
     global_budget_slow_s: float = 18.0
     blind_astrometry_try_all_codes_mode: bool = True
@@ -207,6 +212,12 @@ class SolveConfig:
     blind_astrometry_4d_trace_candidate_origin_tile: str = ""
     blind_astrometry_4d_trace_candidate_image_quad_indices: tuple[int, ...] = ()
     blind_astrometry_4d_trace_candidate_catalog_quad_indices: tuple[int, ...] = ()
+    # P2.23 diagnostics only. Defaults preserve the experimental product profile.
+    blind_astrometry_4d_diagnostic_candidate_order_policy: str = "index_order"
+    blind_astrometry_4d_diagnostic_validation_catalog_groups: tuple[str, ...] = ()
+    blind_astrometry_4d_diagnostic_skip_legacy_inverse: bool = False
+    blind_astrometry_4d_diagnostic_skip_mono_validation: bool = False
+    blind_astrometry_4d_diagnostic_reuse_image_kdtree: bool = False
     blind_astrometry_code_rangesearch_adapt_disable_enabled: bool = False
     blind_astrometry_code_rangesearch_adapt_disable_after_candidates: int = 12
     blind_astrometry_code_rangesearch_adapt_disable_after_validations: int = 0
@@ -809,6 +820,17 @@ class WcsSolution:
     stats: dict[str, Any]
     tile_key: str | None
     header_updates: dict[str, Any]
+
+
+class SolveStopReason(str, Enum):
+    USER_CANCELLED = "user_cancelled"
+    BLIND_ATTEMPT_BUDGET_EXCEEDED = "blind_attempt_budget_exceeded"
+    ASTROMETRY_4D_SEARCH_BUDGET_EXCEEDED = "astrometry_4d_search_budget_exceeded"
+    MAX_HYPOTHESES = "max_hypotheses"
+    MAX_ACCEPTS = "max_accepts"
+    CANDIDATE_EXHAUSTED = "candidate_exhausted"
+    CONFIDENT_ACCEPT = "confident_accept"
+    BEST_WITHIN_BUDGET = "best_within_budget"
 
 
 def _onefield_logodds_score_from_row(row: dict[str, Any] | None) -> float:
@@ -6203,6 +6225,43 @@ def _astrometry_4d_index_paths(config: SolveConfig) -> tuple[str, ...]:
     return tuple(dedup)
 
 
+def _astrometry_4d_manifest_view(config: SolveConfig) -> tuple[dict[str, Any], list[str], list[str], list[str]]:
+    """Build the minimal manifest view needed before the 4D route owns solving."""
+    index_paths = _astrometry_4d_index_paths(config)
+    if not index_paths:
+        return {"levels": [], "tiles": []}, [], [], []
+    levels: list[str] = []
+    tile_entries: list[dict[str, Any]] = []
+    seen_levels: set[str] = set()
+    seen_tiles: set[str] = set()
+    for raw_path in index_paths:
+        index_path = Path(raw_path).expanduser().resolve()
+        with np.load(index_path, allow_pickle=False) as data:
+            metadata = json.loads(str(data["metadata"][0]))
+            level = str(metadata.get("level") or "S")
+            if level not in seen_levels:
+                seen_levels.add(level)
+                levels.append(level)
+            tile_keys = [str(v) for v in data["tile_keys"].astype(str).tolist()]
+            for tile_key in tile_keys:
+                if tile_key in seen_tiles:
+                    continue
+                seen_tiles.add(tile_key)
+                tile_entries.append(
+                    {
+                        "tile_key": tile_key,
+                        "level": level,
+                        "source": "astrometry_4d_explicit_index",
+                    }
+                )
+    manifest = {
+        "schema": ASTROMETRY_AB_CODE_4D_SCHEMA,
+        "levels": [{"name": str(level)} for level in levels],
+        "tiles": tile_entries,
+    }
+    return manifest, levels, levels, []
+
+
 def _astrometry_4d_validation_catalog_policy(config: SolveConfig) -> str:
     policy = str(getattr(config, "blind_astrometry_4d_validation_catalog_policy", "source_tile") or "source_tile").strip().lower()
     if policy in {"source_tile", "union_candidate_tiles"}:
@@ -6230,6 +6289,20 @@ def _astrometry_4d_dedup_catalog_world(catalogs: Iterable[np.ndarray]) -> np.nda
     union = np.vstack(arrays).astype(np.float64, copy=False)
     _vals, idx = np.unique(np.round(union, decimals=8), axis=0, return_index=True)
     return union[np.sort(idx)].astype(np.float64, copy=False)
+
+
+def _astrometry_4d_parse_validation_groups(raw_groups: Iterable[Any]) -> tuple[tuple[str, ...], ...]:
+    groups: list[tuple[str, ...]] = []
+    for raw in raw_groups or ():
+        if isinstance(raw, str):
+            parts = [part.strip() for part in raw.replace(";", ",").split(",") if part.strip()]
+        elif isinstance(raw, Iterable) and not isinstance(raw, (bytes, bytearray)):
+            parts = [str(part).strip() for part in raw if str(part).strip()]
+        else:
+            parts = []
+        if parts:
+            groups.append(tuple(parts))
+    return tuple(groups)
 
 
 def _astrometry_4d_accept_sort_key(candidate: Mapping[str, Any]) -> tuple[int, float, int, float, int]:
@@ -6365,6 +6438,7 @@ def _astrometry_4d_build_match_details(
     catalog_world: np.ndarray,
     *,
     radius_px: float,
+    image_tree: cKDTree | None = None,
 ) -> dict[str, Any]:
     empty = np.empty((0, 2), dtype=np.float64)
     if image_positions.size == 0 or catalog_world.size == 0:
@@ -6423,7 +6497,7 @@ def _astrometry_4d_build_match_details(
             "catalog_indices": np.empty((0,), dtype=np.int64),
         }
     cat_indices = np.flatnonzero(finite)
-    tree = cKDTree(np.asarray(image_positions, dtype=np.float64))
+    tree = image_tree if image_tree is not None else cKDTree(np.asarray(image_positions, dtype=np.float64))
     distances, image_indices = tree.query(
         projected[finite],
         k=1,
@@ -6649,8 +6723,13 @@ def _solve_astrometry_4d_runtime_route(
     image_shape: tuple[int, int],
     scale_bounds_arcsec: tuple[float, float] | None,
     cancel_check: Optional[Callable[[], bool]],
+    cancel_reason_provider: Optional[Callable[[], str | None]] = None,
 ) -> WcsSolution:
     t_total0 = time.perf_counter()
+    route_budget_s = max(
+        0.0,
+        float(getattr(config, "blind_astrometry_4d_search_budget_s", 0.0) or 0.0),
+    )
     stats: dict[str, Any] = {
         "quad_hash_schema": ASTROMETRY_AB_CODE_4D_SCHEMA,
         "astrometry_4d_runtime_enabled": True,
@@ -6661,6 +6740,7 @@ def _solve_astrometry_4d_runtime_route(
         "astrometry_4d_accept_policy": _astrometry_4d_accept_policy(config),
         "blind_star_quality_filter": bool(getattr(config, "blind_star_quality_filter", True)),
         "astrometry_4d_fallback_forbidden": True,
+        "astrometry_4d_search_budget_s": float(route_budget_s),
     }
     index_paths = _astrometry_4d_index_paths(config)
     stats["astrometry_4d_index_paths"] = [str(path) for path in index_paths]
@@ -6762,6 +6842,22 @@ def _solve_astrometry_4d_runtime_route(
     max_accepts = max(1, int(getattr(config, "blind_astrometry_4d_max_accepts", 64) or 64))
     validation_catalog_policy = _astrometry_4d_validation_catalog_policy(config)
     accept_policy = _astrometry_4d_accept_policy(config)
+    candidate_order_policy = str(
+        getattr(config, "blind_astrometry_4d_diagnostic_candidate_order_policy", "index_order") or "index_order"
+    ).strip().lower()
+    if candidate_order_policy not in {"index_order", "global_distance", "round_robin_local_rank"}:
+        candidate_order_policy = "index_order"
+    diagnostic_groups = _astrometry_4d_parse_validation_groups(
+        getattr(config, "blind_astrometry_4d_diagnostic_validation_catalog_groups", ()) or ()
+    )
+    skip_legacy_inverse = bool(getattr(config, "blind_astrometry_4d_diagnostic_skip_legacy_inverse", False))
+    skip_mono_validation = bool(getattr(config, "blind_astrometry_4d_diagnostic_skip_mono_validation", False))
+    reuse_image_kdtree = bool(getattr(config, "blind_astrometry_4d_diagnostic_reuse_image_kdtree", False))
+    stats["astrometry_4d_candidate_order_policy"] = candidate_order_policy
+    stats["astrometry_4d_diagnostic_validation_catalog_groups"] = [list(group) for group in diagnostic_groups]
+    stats["astrometry_4d_diagnostic_skip_legacy_inverse"] = bool(skip_legacy_inverse)
+    stats["astrometry_4d_diagnostic_skip_mono_validation"] = bool(skip_mono_validation)
+    stats["astrometry_4d_diagnostic_reuse_image_kdtree"] = bool(reuse_image_kdtree)
     union_catalog = np.empty((0, 2), dtype=np.float64)
     if validation_catalog_policy == "union_candidate_tiles":
         union_catalog = _astrometry_4d_dedup_catalog_world(index.catalog_ra_dec for index in disk_indexes)
@@ -6772,6 +6868,19 @@ def _solve_astrometry_4d_runtime_route(
             stats["astrometry_4d_stop_reason"] = "union_catalog_empty"
             stats["astrometry_4d_total_s"] = float(time.perf_counter() - t_total0)
             return WcsSolution(False, "astrometry 4D runtime failed: union catalogue is empty", None, stats, None, {})
+
+    group_catalogs: dict[tuple[str, ...], np.ndarray] = {}
+    if diagnostic_groups:
+        for group in diagnostic_groups:
+            wanted = set(group)
+            group_catalogs[group] = _astrometry_4d_dedup_catalog_world(
+                index.catalog_ra_dec
+                for index in disk_indexes
+                if any(str(tile) in wanted for tile in index.tile_keys)
+            )
+        stats["astrometry_4d_diagnostic_group_catalog_stars"] = {
+            ",".join(group): int(catalog.shape[0]) for group, catalog in group_catalogs.items()
+        }
 
     t_lookup0 = time.perf_counter()
     candidates: list[dict[str, Any]] = []
@@ -6799,7 +6908,38 @@ def _solve_astrometry_4d_runtime_route(
                     "local_rank": int(local_rank),
                 }
             )
-    candidates.sort(key=lambda row: (int(row["index_order"]), float(row["hit"].code_distance), int(row["local_rank"])))
+    if candidate_order_policy == "global_distance":
+        candidates.sort(key=lambda row: (float(row["hit"].code_distance), int(row["index_order"]), int(row["local_rank"])))
+    elif candidate_order_policy == "round_robin_local_rank":
+        candidates.sort(key=lambda row: (int(row["local_rank"]), float(row["hit"].code_distance), int(row["index_order"])))
+    else:
+        candidates.sort(key=lambda row: (int(row["index_order"]), float(row["hit"].code_distance), int(row["local_rank"])))
+    candidate_ranges: dict[str, dict[str, Any]] = {
+        str(index.path): {
+            "index_order": int(order),
+            "tile_keys": [str(v) for v in index.tile_keys],
+            "candidate_count": 0,
+            "first_global_rank": None,
+            "last_global_rank": None,
+            "first_local_rank": None,
+            "last_local_rank": None,
+            "best_code_distance": None,
+        }
+        for order, index in enumerate(disk_indexes)
+    }
+    for global_rank, row in enumerate(candidates, start=1):
+        key = str(row["index"].path)
+        bucket = candidate_ranges.setdefault(key, {})
+        bucket["candidate_count"] = int(bucket.get("candidate_count", 0) or 0) + 1
+        if bucket.get("first_global_rank") is None:
+            bucket["first_global_rank"] = int(global_rank)
+            bucket["first_local_rank"] = int(row["local_rank"])
+        bucket["last_global_rank"] = int(global_rank)
+        bucket["last_local_rank"] = int(row["local_rank"])
+        dist = float(row["hit"].code_distance)
+        old_dist = bucket.get("best_code_distance")
+        if old_dist is None or dist < float(old_dist):
+            bucket["best_code_distance"] = dist
     stats["astrometry_4d_code_tol"] = float(code_tol)
     stats["astrometry_4d_max_hits"] = int(max_hits)
     stats["astrometry_4d_max_hits_per_image_quad"] = int(max_hits_per_quad)
@@ -6808,6 +6948,7 @@ def _solve_astrometry_4d_runtime_route(
     stats["astrometry_4d_hits"] = int(sum(int(v["hits"]) for v in hits_by_index.values()))
     stats["astrometry_4d_candidates"] = int(len(candidates))
     stats["astrometry_4d_hits_by_index"] = hits_by_index
+    stats["astrometry_4d_candidate_ranges_by_index"] = candidate_ranges
     stats["astrometry_4d_kd_lookup_s"] = float(time.perf_counter() - t_lookup0)
 
     reason_counts: Counter[str] = Counter()
@@ -6822,24 +6963,73 @@ def _solve_astrometry_4d_runtime_route(
         "best_rms_invalid_reject": None,
         "best_geometry_invalid_reject": None,
     }
+    per_index_validation: dict[str, dict[str, Any]] = {
+        str(index.path): {
+            "index_order": int(order),
+            "tile_keys": [str(v) for v in index.tile_keys],
+            "hits": int(hits_by_index.get(str(index.path), {}).get("hits", 0) or 0),
+            "hypotheses_tested": 0,
+            "accepted_candidates": 0,
+            "validation_s": 0.0,
+            "first_tested_rank": None,
+            "last_tested_rank": None,
+            "first_accepted_rank": None,
+            "best_reject": {},
+            "reject_reason_counts": {},
+            "validation_cost_s": {},
+        }
+        for order, index in enumerate(disk_indexes)
+    }
     accepted_candidates: list[dict[str, Any]] = []
     selected: dict[str, Any] | None = None
     thresholds = _astrometry_4d_final_thresholds(config, scale_bounds_arcsec=scale_bounds_arcsec)
     match_radius_px = max(0.5, float(getattr(config, "blind_astrometry_4d_match_radius_px", 3.0) or 3.0))
+    image_tree_cache = cKDTree(np.asarray(verification_image_positions, dtype=np.float64)) if reuse_image_kdtree else None
+    validation_cost_s: Counter[str] = Counter()
     t_val0 = time.perf_counter()
     tested = 0
-    stop_reason = "candidate_exhausted"
+    stop_reason = SolveStopReason.CANDIDATE_EXHAUSTED.value
     seen_hypotheses: set[tuple[str, tuple[int, ...], tuple[int, ...]]] = set()
     for rank, item in enumerate(candidates, start=1):
         if cancel_check and cancel_check():
-            reason_counts["cancelled"] += 1
-            stop_reason = "cancelled"
+            reported_reason = None
+            if cancel_reason_provider is not None:
+                try:
+                    reported_reason = cancel_reason_provider()
+                except Exception:
+                    reported_reason = None
+            if reported_reason == SolveStopReason.BLIND_ATTEMPT_BUDGET_EXCEEDED.value:
+                stop_reason = SolveStopReason.BLIND_ATTEMPT_BUDGET_EXCEEDED.value
+            else:
+                stop_reason = SolveStopReason.USER_CANCELLED.value
+            reason_counts[str(stop_reason)] += 1
+            break
+        if route_budget_s > 0.0 and (time.perf_counter() - t_total0) >= route_budget_s:
+            reason_counts[SolveStopReason.ASTROMETRY_4D_SEARCH_BUDGET_EXCEEDED.value] += 1
+            stop_reason = SolveStopReason.ASTROMETRY_4D_SEARCH_BUDGET_EXCEEDED.value
             break
         if tested >= max_hypotheses:
-            reason_counts["max_hypotheses"] += 1
-            stop_reason = "max_hypotheses"
+            reason_counts[SolveStopReason.MAX_HYPOTHESES.value] += 1
+            stop_reason = SolveStopReason.MAX_HYPOTHESES.value
             break
         disk_index = item["index"]
+        index_stats = per_index_validation.setdefault(
+            str(disk_index.path),
+            {
+                "index_order": int(item["index_order"]),
+                "tile_keys": [str(v) for v in disk_index.tile_keys],
+                "hits": 0,
+                "hypotheses_tested": 0,
+                "accepted_candidates": 0,
+                "validation_s": 0.0,
+                "first_tested_rank": None,
+                "last_tested_rank": None,
+                "first_accepted_rank": None,
+                "best_reject": {},
+                "reject_reason_counts": {},
+                "validation_cost_s": {},
+            },
+        )
         hit = item["hit"]
         dedup_key = (
             str(disk_index.path),
@@ -6851,6 +7041,11 @@ def _solve_astrometry_4d_runtime_route(
             continue
         seen_hypotheses.add(dedup_key)
         tested += 1
+        index_stats["hypotheses_tested"] = int(index_stats.get("hypotheses_tested", 0) or 0) + 1
+        if index_stats.get("first_tested_rank") is None:
+            index_stats["first_tested_rank"] = int(rank)
+        index_stats["last_tested_rank"] = int(rank)
+        t_index_validation0 = time.perf_counter()
         image_record = image_records[hit.image_record_index]
         cat_hash = int(disk_index.ratio_hashes[hit.catalog_record_index]) if disk_index.ratio_hashes.shape[0] else -1
         img_hash = -1 if image_record.ratio_hash is None else int(image_record.ratio_hash)
@@ -6858,38 +7053,70 @@ def _solve_astrometry_4d_runtime_route(
         if lost_by_hash and first_lost_hash_rank is None:
             first_lost_hash_rank = int(rank)
         try:
+            local_cost_s: Counter[str] = Counter()
+            t_step = time.perf_counter()
             image_quad_points = image_positions[np.asarray(hit.image_quad_indices, dtype=np.int64)]
             catalog_quad_world = disk_index.catalog_ra_dec[np.asarray(hit.catalog_quad_indices, dtype=np.int64)]
             wcs = _fit_astrometry_4d_quad_wcs(image_quad_points, catalog_quad_world)
+            local_cost_s["wcs_quad_fit"] += float(time.perf_counter() - t_step)
 
-            mono_details = _astrometry_4d_build_match_details(
-                wcs,
-                verification_image_positions,
-                disk_index.catalog_ra_dec,
-                radius_px=match_radius_px,
-            )
-            mono_matches_array = np.asarray(mono_details["matches"], dtype=np.float64)
-            mono_matched_image_points = np.asarray(mono_details["matched_image_points"], dtype=np.float64)
+            if skip_mono_validation:
+                mono_details = {
+                    "matches": np.empty((0, 4), dtype=np.float64),
+                    "matched_image_points": np.empty((0, 2), dtype=np.float64),
+                    "distances_px": np.empty((0,), dtype=np.float64),
+                }
+                mono_matches_array = np.empty((0, 4), dtype=np.float64)
+                mono_matched_image_points = np.empty((0, 2), dtype=np.float64)
+            else:
+                t_step = time.perf_counter()
+                mono_details = _astrometry_4d_build_match_details(
+                    wcs,
+                    verification_image_positions,
+                    disk_index.catalog_ra_dec,
+                    radius_px=match_radius_px,
+                    image_tree=image_tree_cache,
+                )
+                local_cost_s["mono_projection_matching"] += float(time.perf_counter() - t_step)
+                mono_matches_array = np.asarray(mono_details["matches"], dtype=np.float64)
+                mono_matched_image_points = np.asarray(mono_details["matched_image_points"], dtype=np.float64)
 
             validation_catalog = disk_index.catalog_ra_dec
             if validation_catalog_policy == "union_candidate_tiles":
                 validation_catalog = union_catalog
+                for group, catalog in group_catalogs.items():
+                    if str(hit.tile_key) in set(group):
+                        validation_catalog = catalog
+                        break
+                if validation_catalog.size == 0:
+                    validation_catalog = union_catalog
+            t_step = time.perf_counter()
             match_details = _astrometry_4d_build_match_details(
                 wcs,
                 verification_image_positions,
                 validation_catalog,
                 radius_px=match_radius_px,
+                image_tree=image_tree_cache,
             )
+            local_cost_s["direct_projection_matching"] += float(time.perf_counter() - t_step)
             matches_array = np.asarray(match_details["matches"], dtype=np.float64)
             matched_image_points = np.asarray(match_details["matched_image_points"], dtype=np.float64)
 
-            legacy_validation = validate_solution(wcs, matches_array, thresholds)
+            if skip_legacy_inverse:
+                legacy_validation = {"quality": "SKIPPED", "success": False, "inliers": 0, "rms_px": float("nan"), "reason": "diagnostic_skipped"}
+            else:
+                t_step = time.perf_counter()
+                legacy_validation = validate_solution(wcs, matches_array, thresholds)
+                local_cost_s["legacy_inverse_validation"] += float(time.perf_counter() - t_step)
+            t_step = time.perf_counter()
             validation = _astrometry_4d_validate_pixel_matches(
                 wcs,
                 matches_array,
                 np.asarray(match_details["distances_px"], dtype=np.float64),
                 thresholds,
             )
+            local_cost_s["direct_metric"] += float(time.perf_counter() - t_step)
+            t_step = time.perf_counter()
             geo_ok, geo = _blind_geometric_guardrails(
                 matched_image_points,
                 image_shape,
@@ -6899,22 +7126,42 @@ def _solve_astrometry_4d_runtime_route(
                 dense_min_area=float(getattr(config, "blind_geo_dense_min_area", 0.005) or 0.005),
                 dense_max_cond=float(getattr(config, "blind_geo_dense_max_cond", 2.0e4) or 2.0e4),
             )
-            mono_legacy_validation = validate_solution(wcs, mono_matches_array, thresholds)
-            mono_validation = _astrometry_4d_validate_pixel_matches(
-                wcs,
-                mono_matches_array,
-                np.asarray(mono_details["distances_px"], dtype=np.float64),
-                thresholds,
-            )
-            mono_geo_ok, mono_geo = _blind_geometric_guardrails(
-                mono_matched_image_points,
-                image_shape,
-                sparse_min_span=float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08),
-                sparse_min_area=float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003),
-                dense_min_span=float(getattr(config, "blind_geo_dense_min_span", 0.10) or 0.10),
-                dense_min_area=float(getattr(config, "blind_geo_dense_min_area", 0.005) or 0.005),
-                dense_max_cond=float(getattr(config, "blind_geo_dense_max_cond", 2.0e4) or 2.0e4),
-            )
+            local_cost_s["geometry_guard"] += float(time.perf_counter() - t_step)
+            if skip_mono_validation:
+                mono_legacy_validation = {"quality": "SKIPPED", "success": False, "inliers": 0, "rms_px": float("nan"), "reason": "diagnostic_skipped"}
+                mono_validation = {"quality": "SKIPPED", "success": False, "inliers": 0, "rms_px": float("nan"), "reason": "diagnostic_skipped"}
+                mono_geo_ok, mono_geo = False, {}
+            else:
+                if skip_legacy_inverse:
+                    mono_legacy_validation = {"quality": "SKIPPED", "success": False, "inliers": 0, "rms_px": float("nan"), "reason": "diagnostic_skipped"}
+                else:
+                    t_step = time.perf_counter()
+                    mono_legacy_validation = validate_solution(wcs, mono_matches_array, thresholds)
+                    local_cost_s["mono_legacy_inverse_validation"] += float(time.perf_counter() - t_step)
+                t_step = time.perf_counter()
+                mono_validation = _astrometry_4d_validate_pixel_matches(
+                    wcs,
+                    mono_matches_array,
+                    np.asarray(mono_details["distances_px"], dtype=np.float64),
+                    thresholds,
+                )
+                local_cost_s["mono_direct_metric"] += float(time.perf_counter() - t_step)
+                t_step = time.perf_counter()
+                mono_geo_ok, mono_geo = _blind_geometric_guardrails(
+                    mono_matched_image_points,
+                    image_shape,
+                    sparse_min_span=float(getattr(config, "blind_geo_sparse_min_span", 0.08) or 0.08),
+                    sparse_min_area=float(getattr(config, "blind_geo_sparse_min_area", 0.003) or 0.003),
+                    dense_min_span=float(getattr(config, "blind_geo_dense_min_span", 0.10) or 0.10),
+                    dense_min_area=float(getattr(config, "blind_geo_dense_min_area", 0.005) or 0.005),
+                    dense_max_cond=float(getattr(config, "blind_geo_dense_max_cond", 2.0e4) or 2.0e4),
+                )
+                local_cost_s["mono_geometry_guard"] += float(time.perf_counter() - t_step)
+            for cost_key, cost_value in local_cost_s.items():
+                validation_cost_s[cost_key] += float(cost_value)
+            index_costs = index_stats.setdefault("validation_cost_s", {})
+            for cost_key, cost_value in local_cost_s.items():
+                index_costs[cost_key] = float(index_costs.get(cost_key, 0.0) or 0.0) + float(cost_value)
             mono_validation = dict(mono_validation)
             mono_validation.update(
                 {
@@ -7032,6 +7279,9 @@ def _solve_astrometry_4d_runtime_route(
                     first_accepted_rank = int(rank)
                 if lost_by_hash and first_lost_hash_accepted_rank is None:
                     first_lost_hash_accepted_rank = int(rank)
+                index_stats["accepted_candidates"] = int(index_stats.get("accepted_candidates", 0) or 0) + 1
+                if index_stats.get("first_accepted_rank") is None:
+                    index_stats["first_accepted_rank"] = int(rank)
                 accepted_row = {
                     "wcs": wcs,
                     "validation": dict(validation),
@@ -7045,14 +7295,19 @@ def _solve_astrometry_4d_runtime_route(
                 reason_counts["accepted"] += 1
                 if accept_policy == "first_accept":
                     selected = accepted_row
-                    stop_reason = "first_accept"
+                    stop_reason = SolveStopReason.CONFIDENT_ACCEPT.value
                     break
                 if len(accepted_candidates) >= max_accepts:
-                    stop_reason = "max_accepts"
+                    stop_reason = SolveStopReason.MAX_ACCEPTS.value
                     break
                 continue
             reason = str(validation.get("reason", "validation_failed") or "validation_failed")
             reason_counts[reason] += 1
+            index_reason_counts = index_stats.setdefault("reject_reason_counts", {})
+            index_reason_counts[reason] = int(index_reason_counts.get(reason, 0) or 0) + 1
+            old_index_reject = index_stats.get("best_reject")
+            if not old_index_reject or _astrometry_4d_reject_sort_key(validation) > _astrometry_4d_reject_sort_key(old_index_reject):
+                index_stats["best_reject"] = dict(validation)
             if best_reject is None or _astrometry_4d_reject_sort_key(validation) > _astrometry_4d_reject_sort_key(best_reject):
                 best_reject = dict(validation)
             reject_kind = "best_plausible_reject"
@@ -7067,13 +7322,17 @@ def _solve_astrometry_4d_runtime_route(
                 reject_buckets[reject_kind] = dict(validation)
         except Exception as exc:
             reason_counts["fit_or_validate_failed"] += 1
+            index_reason_counts = index_stats.setdefault("reject_reason_counts", {})
+            index_reason_counts["fit_or_validate_failed"] = int(index_reason_counts.get("fit_or_validate_failed", 0) or 0) + 1
             if best_reject is None:
                 best_reject = {"reason": str(exc), "hit_rank": int(rank), "inliers": 0, "rms_px": float("inf")}
+        finally:
+            index_stats["validation_s"] = float(index_stats.get("validation_s", 0.0) or 0.0) + float(time.perf_counter() - t_index_validation0)
 
     if selected is None and accepted_candidates:
         selected = max(accepted_candidates, key=_astrometry_4d_accept_sort_key)
-        if stop_reason == "candidate_exhausted":
-            stop_reason = "best_within_budget"
+        if stop_reason == SolveStopReason.CANDIDATE_EXHAUSTED.value:
+            stop_reason = SolveStopReason.BEST_WITHIN_BUDGET.value
 
     stats["astrometry_4d_hits_tested"] = int(tested)
     stats["astrometry_4d_first_plausible_rank"] = first_plausible_rank
@@ -7083,7 +7342,9 @@ def _solve_astrometry_4d_runtime_route(
     stats["astrometry_4d_accepted_candidates"] = int(len(accepted_candidates))
     stats["astrometry_4d_stop_reason"] = str(stop_reason)
     stats["astrometry_4d_reject_reason_counts"] = {str(k): int(v) for k, v in reason_counts.items()}
+    stats["astrometry_4d_per_index_validation"] = per_index_validation
     stats["astrometry_4d_validation_s"] = float(time.perf_counter() - t_val0)
+    stats["astrometry_4d_validation_cost_s"] = {str(k): float(v) for k, v in validation_cost_s.items()}
     stats["astrometry_4d_match_radius_px"] = float(match_radius_px)
     stats["astrometry_4d_thresholds"] = dict(thresholds)
     if best_reject is not None:
@@ -7180,15 +7441,19 @@ def solve_blind(
     _scale_ladder_internal: bool = False,
 ) -> WcsSolution:
     config = config or SolveConfig()
+    _attempt_started_perf = time.perf_counter()
     _external_cancel_check = cancel_check
     _global_hard_budget_s = max(
         0.0, float(getattr(config, "blind_global_hard_budget_s", 0.0) or 0.0)
     )
     _global_hard_budget_started = time.monotonic()
     _global_hard_budget_state = {"triggered": False, "elapsed_s": 0.0}
+    _cancel_state: dict[str, str | None] = {"reason": None}
+    _route_timing_state: dict[str, float | None] = {"enter": None, "exit": None}
 
     def _combined_cancel_check() -> bool:
         if _external_cancel_check and _external_cancel_check():
+            _cancel_state["reason"] = SolveStopReason.USER_CANCELLED.value
             return True
         if _global_hard_budget_s <= 0.0:
             return False
@@ -7196,8 +7461,12 @@ def solve_blind(
         if elapsed >= _global_hard_budget_s:
             _global_hard_budget_state["triggered"] = True
             _global_hard_budget_state["elapsed_s"] = float(elapsed)
+            _cancel_state["reason"] = SolveStopReason.BLIND_ATTEMPT_BUDGET_EXCEEDED.value
             return True
         return False
+
+    def _cancel_reason() -> str | None:
+        return _cancel_state.get("reason")
 
     cancel_check = _combined_cancel_check
     try:
@@ -7265,8 +7534,26 @@ def solve_blind(
         return "unknown"
 
     def _finish(result: WcsSolution) -> WcsSolution:
+        stats = dict(result.stats or {})
+        now_perf = time.perf_counter()
+        stats["blind_total_s"] = float(now_perf - _attempt_started_perf)
+        stats["blind_attempt_budget_s"] = float(_global_hard_budget_s)
+        stats["astrometry_4d_search_budget_s"] = float(
+            max(0.0, float(getattr(config, "blind_astrometry_4d_search_budget_s", 0.0) or 0.0))
+        )
+        route_enter = _route_timing_state.get("enter")
+        route_exit = _route_timing_state.get("exit")
+        if route_enter is not None:
+            stats["blind_pre_route_s"] = float(max(0.0, route_enter - _attempt_started_perf))
+            if route_exit is not None:
+                stats["astrometry_4d_route_s"] = float(max(0.0, route_exit - route_enter))
+                stats["blind_post_route_s"] = float(max(0.0, now_perf - route_exit))
+            else:
+                stats["astrometry_4d_route_s"] = float(
+                    stats.get("astrometry_4d_total_s", 0.0) or 0.0
+                )
+                stats["blind_post_route_s"] = 0.0
         if bool(_global_hard_budget_state["triggered"]):
-            stats = dict(result.stats or {})
             stats["global_hard_budget_triggered"] = True
             stats["global_hard_budget_s"] = float(_global_hard_budget_s)
             stats["global_hard_budget_elapsed_s"] = float(
@@ -7276,11 +7563,21 @@ def solve_blind(
             stats["fail_early_abort_reason"] = (
                 f"global_hard_budget>{_global_hard_budget_s:.1f}s"
             )
+            if stats.get("astrometry_4d_stop_reason") in {"cancelled", SolveStopReason.USER_CANCELLED.value}:
+                stats["astrometry_4d_stop_reason"] = SolveStopReason.BLIND_ATTEMPT_BUDGET_EXCEEDED.value
+                counts = dict(stats.get("astrometry_4d_reject_reason_counts") or {})
+                key = SolveStopReason.BLIND_ATTEMPT_BUDGET_EXCEEDED.value
+                counts[key] = int(counts.get(key, 0) or 0) + 1
+                counts.pop("cancelled", None)
+                counts.pop(SolveStopReason.USER_CANCELLED.value, None)
+                stats["astrometry_4d_reject_reason_counts"] = counts
             result.stats = stats
             if not bool(result.success):
                 result.message = (
-                    f"global hard budget exceeded ({_global_hard_budget_s:.1f}s)"
+                    f"blind attempt budget exceeded ({_global_hard_budget_s:.1f}s)"
                 )
+        else:
+            result.stats = stats
         if logger.isEnabledFor(logging.DEBUG):
             hits, misses = _tile_cache_stats()
             total = hits + misses
@@ -7465,41 +7762,50 @@ def solve_blind(
     vote_percentile = min(95, max(5, vote_percentile))
     if cancel_check and cancel_check():
         return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
-    manifest = load_manifest(index_root)
-    levels = [level["name"] for level in manifest.get("levels", [])] or ["L", "M", "S"]
-    # Prefer trying smaller-diameter levels first for selectivity
-    pref = ("S", "M", "L")
-    levels = [lvl for lvl in pref if lvl in levels] + [lvl for lvl in levels if lvl not in pref]
-    # Preflight: ensure there is at least one quad hash table present.
-    ht_root = index_root / "hash_tables"
-    def _has_quad_table(level_name: str) -> bool:
-        return (ht_root / f"quads_{level_name}.npz").exists() or (ht_root / f"quads_{level_name}").is_dir()
+    astrometry_4d_requested = _astrometry_4d_runtime_requested(config)
+    if astrometry_4d_requested:
+        try:
+            manifest, levels, present_levels, missing_levels = _astrometry_4d_manifest_view(config)
+        except Exception as exc:
+            msg = f"astrometry 4D explicit index manifest view failed: {exc}"
+            logger.error(msg)
+            return _finish(WcsSolution(False, msg, None, {}, None, {}))
+    else:
+        manifest = load_manifest(index_root)
+        levels = [level["name"] for level in manifest.get("levels", [])] or ["L", "M", "S"]
+        # Prefer trying smaller-diameter levels first for selectivity
+        pref = ("S", "M", "L")
+        levels = [lvl for lvl in pref if lvl in levels] + [lvl for lvl in levels if lvl not in pref]
+        # Preflight: ensure there is at least one quad hash table present.
+        ht_root = index_root / "hash_tables"
+        def _has_quad_table(level_name: str) -> bool:
+            return (ht_root / f"quads_{level_name}.npz").exists() or (ht_root / f"quads_{level_name}").is_dir()
 
-    present_levels = [lvl for lvl in levels if _has_quad_table(lvl)]
-    missing_levels = [lvl for lvl in levels if lvl not in present_levels]
-    if not present_levels:
-        manifest_path = index_root / "manifest.json"
-        details = [
-            f"root={index_root}",
-            f"manifest={'ok' if manifest_path.exists() else 'missing'}",
-        ]
-        for lvl in levels:
-            details.append(f"{lvl}={'ok' if _has_quad_table(lvl) else 'missing'}")
-        msg = (
-            "index has no quad hash tables (levels: "
-            + ", ".join(levels)
-            + ") — details: "
-            + ", ".join(details)
-            + ". Build the index with zebuildindex (see firstrun.txt)"
-        )
-        logger.error(msg)
-        return _finish(WcsSolution(False, msg, None, {}, None, {}))
-    if missing_levels:
-        logger.warning(
-            "some quad hash tables are missing: %s (continuing with %s)",
-            ", ".join(missing_levels),
-            ", ".join(present_levels),
-        )
+        present_levels = [lvl for lvl in levels if _has_quad_table(lvl)]
+        missing_levels = [lvl for lvl in levels if lvl not in present_levels]
+        if not present_levels:
+            manifest_path = index_root / "manifest.json"
+            details = [
+                f"root={index_root}",
+                f"manifest={'ok' if manifest_path.exists() else 'missing'}",
+            ]
+            for lvl in levels:
+                details.append(f"{lvl}={'ok' if _has_quad_table(lvl) else 'missing'}")
+            msg = (
+                "index has no quad hash tables (levels: "
+                + ", ".join(levels)
+                + ") — details: "
+                + ", ".join(details)
+                + ". Build the index with zebuildindex (see firstrun.txt)"
+            )
+            logger.error(msg)
+            return _finish(WcsSolution(False, msg, None, {}, None, {}))
+        if missing_levels:
+            logger.warning(
+                "some quad hash tables are missing: %s (continuing with %s)",
+                ", ".join(missing_levels),
+                ", ".join(present_levels),
+            )
     if cancel_check and cancel_check():
         return _finish(WcsSolution(False, "cancelled", None, {}, None, {}))
     tile_entries = manifest.get("tiles", [])
@@ -7550,14 +7856,14 @@ def solve_blind(
     preferred_tile_hint: str | None = None
     forced_tile_key = str(getattr(config, "blind_forensic_force_tile_key", "") or "").strip()
     seeded_wcs_runtime: WCS | None = None
-    if header is not None:
+    if header is not None and not astrometry_4d_requested:
         ra0 = parse_angle(header.get("RA") or header.get("OBJCTRA") or header.get("OBJRA") or header.get("OBJ_RA") or header.get("CRVAL1"), is_ra=True)
         dec0 = parse_angle(header.get("DEC") or header.get("OBJCTDEC") or header.get("OBJDEC") or header.get("OBJ_DEC") or header.get("CRVAL2"), is_ra=False)
         if ra_hint is None and ra0 is not None:
             ra_hint = float(ra0)
         if dec_hint is None and dec0 is not None:
             dec_hint = float(dec0)
-    if tile_entries and ra_hint is not None and dec_hint is not None:
+    if (not astrometry_4d_requested) and tile_entries and ra_hint is not None and dec_hint is not None:
         preferred_tile_hint = _nearest_tile_key(tile_entries, ra_hint, dec_hint)
     forced_tile_indices_global: set[int] | None = None
     if forced_tile_key:
@@ -7846,7 +8152,7 @@ def solve_blind(
     radius_for_filter = _radius_from_hints(config, approx_scale_deg, width, height)
     if scale_bounds_arcsec is not None:
         index_selection_policy["scale_bounds_arcsec"] = [float(scale_bounds_arcsec[0]), float(scale_bounds_arcsec[1])]
-    if ra_hint is not None and dec_hint is not None and radius_for_filter is not None:
+    if (not astrometry_4d_requested) and ra_hint is not None and dec_hint is not None and radius_for_filter is not None:
         index_selection_policy["hint_cone_requested"] = True
         selected = select_tiles_in_cone(manifest, ra_hint, dec_hint, radius_for_filter)
         index_selection_policy["hint_cone_selected_count"] = int(len(selected))
@@ -7879,7 +8185,7 @@ def solve_blind(
 
     # Build a widened RA/Dec cone for a second hinted pass before global blind.
     # This keeps ASTAP-like progressive expansion while preserving global fallback safety.
-    if ra_hint is not None and dec_hint is not None and tile_count > 0:
+    if (not astrometry_4d_requested) and ra_hint is not None and dec_hint is not None and tile_count > 0:
         base_radius = radius_for_filter
         if base_radius is None:
             fallback_fov = approx_fov_deg or 1.5
@@ -7998,6 +8304,7 @@ def solve_blind(
     cache_sig: tuple[int, int] | None = None
     cached_stars: np.ndarray | None = None
     cache_entry: dict[str, Any] | None = None
+    astrometry_4d_verification_stars_runtime: np.ndarray | None = None
     external_image2xy_stats: dict[str, Any] = {"enabled": False}
     if prep_cache is not None:
         try:
@@ -8088,16 +8395,23 @@ def solve_blind(
             stage = time.time()
         if stars.size == 0:
             return _finish(WcsSolution(False, "no stars found", None, {}, None, {}))
+        if _astrometry_4d_runtime_requested(config):
+            astrometry_4d_verification_stars_runtime = stars.copy()
         if (not source_list_gate_enabled) and config.max_stars and stars.size > config.max_stars:
             stars = stars[: config.max_stars]
         if downsample_factor > 1:
             stars["x"] *= downsample_factor
             stars["y"] *= downsample_factor
+            if astrometry_4d_verification_stars_runtime is not None:
+                astrometry_4d_verification_stars_runtime["x"] *= downsample_factor
+                astrometry_4d_verification_stars_runtime["y"] *= downsample_factor
     else:
         stage = time.time()
         _log_phase("preprocess", stage)
         stage = time.time()
         stars = cached_stars
+        if _astrometry_4d_runtime_requested(config):
+            astrometry_4d_verification_stars_runtime = stars.copy()
         if (not source_list_gate_enabled) and config.max_stars and stars.size > config.max_stars:
             stars = stars[: config.max_stars]
 
@@ -8242,6 +8556,8 @@ def solve_blind(
         verification_image_positions_solver: np.ndarray | None = None
         try:
             verification_stars = cache_entry.get("astrometry_4d_verification_stars") if isinstance(cache_entry, dict) else None
+            if not (isinstance(verification_stars, np.ndarray) and verification_stars.size > 0):
+                verification_stars = astrometry_4d_verification_stars_runtime
             if isinstance(verification_stars, np.ndarray) and verification_stars.size > 0:
                 verification_image_positions_solver = np.asarray(_image_positions(verification_stars), dtype=np.float64).copy()
                 if solver_pixel_xscale > 0.0:
@@ -8253,15 +8569,20 @@ def solve_blind(
                 )
         except Exception:
             verification_image_positions_solver = None
-        result_4d = _solve_astrometry_4d_runtime_route(
-            config=config,
-            obs_stars=obs_stars,
-            image_positions_solver=image_positions_solver,
-            verification_image_positions_solver=verification_image_positions_solver,
-            image_shape=(int(image.shape[0]), int(image.shape[1])),
-            scale_bounds_arcsec=scale_bounds_arcsec,
-            cancel_check=cancel_check,
-        )
+        _route_timing_state["enter"] = time.perf_counter()
+        try:
+            result_4d = _solve_astrometry_4d_runtime_route(
+                config=config,
+                obs_stars=obs_stars,
+                image_positions_solver=image_positions_solver,
+                verification_image_positions_solver=verification_image_positions_solver,
+                image_shape=(int(image.shape[0]), int(image.shape[1])),
+                scale_bounds_arcsec=scale_bounds_arcsec,
+                cancel_check=cancel_check,
+                cancel_reason_provider=_cancel_reason,
+            )
+        finally:
+            _route_timing_state["exit"] = time.perf_counter()
         if bool(result_4d.success) and is_fits and result_4d.wcs is not None:
             header_updates_4d = {
                 **dict(result_4d.header_updates or {}),
@@ -24278,6 +24599,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--fail-attempt-budget-s", type=float, default=70.0, help="Fail-fast budget (s) for weak blind attempts; <=0 disables")
     parser.add_argument("--blind-global-hard-budget-s", type=float, default=0.0, help="Hard wall-clock cap (s) for the complete blind attempt; <=0 disables")
+    parser.add_argument("--blind-astrometry-4d-search-budget-s", type=float, default=0.0, help="Hard wall-clock cap (s) scoped to the Astrometry 4D route only; <=0 disables")
     parser.add_argument("--fail-attempt-min-validations", type=int, default=18, help="Minimum failed validations before fail-fast abort")
     parser.add_argument("--fail-attempt-max-best-inliers", type=int, default=4, help="Maximum best inliers considered weak for fail-fast abort")
     parser.add_argument("--fail-attempt-min-candidates", type=int, default=20, help="Minimum tried candidates before fail-fast abort")
@@ -24639,6 +24961,9 @@ def main(argv: list[str] | None = None) -> int:
         fail_attempt_budget_s=max(0.0, float(args.fail_attempt_budget_s or 0.0)),
         blind_global_hard_budget_s=max(
             0.0, float(args.blind_global_hard_budget_s or 0.0)
+        ),
+        blind_astrometry_4d_search_budget_s=max(
+            0.0, float(args.blind_astrometry_4d_search_budget_s or 0.0)
         ),
         fail_attempt_min_validations=max(0, int(args.fail_attempt_min_validations or 0)),
         fail_attempt_max_best_inliers=max(0, int(args.fail_attempt_max_best_inliers or 0)),

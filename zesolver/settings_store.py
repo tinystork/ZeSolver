@@ -45,7 +45,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 8
+SETTINGS_SCHEMA_VERSION = 9
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -133,6 +133,9 @@ class PersistentSettings:
     solver_family: Optional[str] = None  # lower-case key, None = Auto
     solver_blind_enabled: bool = True
     solver_overwrite: bool = True
+    interface_mode: str = "easy"
+    blind_backend_profile: str = "zeblind_4d_experimental"
+    blind_4d_manifest_path: Optional[str] = None
     solver_hint_ra_deg: Optional[float] = None
     solver_hint_dec_deg: Optional[float] = None
     solver_hint_radius_deg: Optional[float] = None
@@ -298,6 +301,9 @@ def load_persistent_settings() -> PersistentSettings:
         solver_family=(payload.get("solver_family") or None),
         solver_blind_enabled=bool(payload.get("solver_blind_enabled", True)),
         solver_overwrite=bool(payload.get("solver_overwrite", True)),
+        interface_mode=str(payload.get("interface_mode", "easy") or "easy"),
+        blind_backend_profile=str(payload.get("blind_backend_profile", "zeblind_4d_experimental") or "zeblind_4d_experimental"),
+        blind_4d_manifest_path=(payload.get("blind_4d_manifest_path") or None),
         solver_hint_ra_deg=_float_or_none(payload.get("solver_hint_ra_deg")),
         solver_hint_dec_deg=_float_or_none(payload.get("solver_hint_dec_deg")),
         solver_hint_radius_deg=_float_or_none(payload.get("solver_hint_radius_deg")),
@@ -379,6 +385,25 @@ def _migrate_settings_if_needed(settings: PersistentSettings) -> tuple[Persisten
     # v8: retire legacy non-strict Near mode.
     if settings.near_astap_iso_strict is not True:
         settings.near_astap_iso_strict = True
+        changed = True
+
+    profile = str(getattr(settings, "blind_backend_profile", "zeblind_4d_experimental") or "zeblind_4d_experimental").strip().lower()
+    if profile not in {"historical", "zeblind_4d_experimental"}:
+        settings.blind_backend_profile = "zeblind_4d_experimental"
+        changed = True
+    elif profile == "historical":
+        settings.blind_backend_profile = "zeblind_4d_experimental"
+        changed = True
+    elif settings.blind_backend_profile != profile:
+        settings.blind_backend_profile = profile
+        changed = True
+
+    interface_mode = str(getattr(settings, "interface_mode", "easy") or "easy").strip().lower()
+    if interface_mode not in {"easy", "expert"}:
+        settings.interface_mode = "easy"
+        changed = True
+    elif settings.interface_mode != interface_mode:
+        settings.interface_mode = interface_mode
         changed = True
 
     if current_version < SETTINGS_SCHEMA_VERSION:

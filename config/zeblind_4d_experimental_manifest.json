@@ -1,0 +1,194 @@
+{
+  "description": "Portable experimental ZeBlind 4D runtime manifest. Contains no image names, targets, image centers, or image-to-index mapping.",
+  "generated_at": "2026-07-13T21:28:25",
+  "indexes": [
+    {
+      "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+      "code_tol_recommended": 0.015,
+      "enabled": true,
+      "file_size_bytes": 1057701,
+      "filename": "d50_2823_S_q40000.npz",
+      "generation_metadata": {
+        "dtype": "float32",
+        "entry_count": 40000,
+        "generated_at": "2026-07-09T09:58:22Z",
+        "max_quads_per_tile": 40000,
+        "max_stars_per_tile": 2000,
+        "star_count": 2000
+      },
+      "id": "d50_2823_S_q40000",
+      "index_version": 1,
+      "level": "S",
+      "path": "../indexes/astrometry_4d/d50_2823_S_q40000.npz",
+      "priority": 0,
+      "quad_count": 40000,
+      "quad_schema": "astrometry_ab_code_4d_v1",
+      "sampler_tag": "catalog_ring_coverage",
+      "scale_note": "Index is sky-region/catalogue specific, not intrinsically instrument-scale specific.",
+      "sha256": "63ede21d82d4bb885ad10b73ececff2750e49bd914c2625f321ed16a3a1529e5",
+      "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/s3_focused_index_20260701_p16_multicase_v3/index",
+      "star_count": 2000,
+      "supported_scale_range_arcsec": null,
+      "tile_keys": [
+        "d50_2823"
+      ]
+    },
+    {
+      "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+      "code_tol_recommended": 0.015,
+      "enabled": true,
+      "file_size_bytes": 1057322,
+      "filename": "d50_2822_S_q40000.npz",
+      "generation_metadata": {
+        "dtype": "float32",
+        "entry_count": 40000,
+        "generated_at": "2026-07-09T09:04:39Z",
+        "max_quads_per_tile": 40000,
+        "max_stars_per_tile": 2000,
+        "star_count": 2000
+      },
+      "id": "d50_2822_S_q40000",
+      "index_version": 1,
+      "level": "S",
+      "path": "../indexes/astrometry_4d/d50_2822_S_q40000.npz",
+      "priority": 1,
+      "quad_count": 40000,
+      "quad_schema": "astrometry_ab_code_4d_v1",
+      "sampler_tag": "catalog_ring_coverage",
+      "scale_note": "Index is sky-region/catalogue specific, not intrinsically instrument-scale specific.",
+      "sha256": "04ecc3ea867307e64cbc8a8bf00cdca847b590b822289edce991e96aa9db1967",
+      "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/s3_focused_index_20260701_p16_multicase_v3/index",
+      "star_count": 2000,
+      "supported_scale_range_arcsec": null,
+      "tile_keys": [
+        "d50_2822"
+      ]
+    },
+    {
+      "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+      "code_tol_recommended": 0.015,
+      "enabled": true,
+      "file_size_bytes": 1057306,
+      "filename": "d50_2644_S_q40000.npz",
+      "generation_metadata": {
+        "dtype": "float32",
+        "entry_count": 40000,
+        "generated_at": "2026-07-12T22:32:14Z",
+        "max_quads_per_tile": 40000,
+        "max_stars_per_tile": 2000,
+        "star_count": 2000
+      },
+      "id": "d50_2644_S_q40000",
+      "index_version": 1,
+      "level": "S",
+      "path": "../indexes/astrometry_4d/d50_2644_S_q40000.npz",
+      "priority": 2,
+      "quad_count": 40000,
+      "quad_schema": "astrometry_ab_code_4d_v1",
+      "sampler_tag": "catalog_ring_coverage",
+      "scale_note": "Index is sky-region/catalogue specific, not intrinsically instrument-scale specific.",
+      "sha256": "577bb69cbe23063a718f177d58a8e1b1367f4ccc19a0c2dab09bfbad26c7c9e7",
+      "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/r47i_s8_p30_multifield10_focused_v4_index_q4000_20260704/index",
+      "star_count": 2000,
+      "supported_scale_range_arcsec": null,
+      "tile_keys": [
+        "d50_2644"
+      ]
+    },
+    {
+      "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+      "code_tol_recommended": 0.015,
+      "enabled": true,
+      "file_size_bytes": 1057767,
+      "filename": "d50_2645_S_q40000.npz",
+      "generation_metadata": {
+        "dtype": "float32",
+        "entry_count": 40000,
+        "generated_at": "2026-07-12T22:32:49Z",
+        "max_quads_per_tile": 40000,
+        "max_stars_per_tile": 2000,
+        "star_count": 2000
+      },
+      "id": "d50_2645_S_q40000",
+      "index_version": 1,
+      "level": "S",
+      "path": "../indexes/astrometry_4d/d50_2645_S_q40000.npz",
+      "priority": 3,
+      "quad_count": 40000,
+      "quad_schema": "astrometry_ab_code_4d_v1",
+      "sampler_tag": "catalog_ring_coverage",
+      "scale_note": "Index is sky-region/catalogue specific, not intrinsically instrument-scale specific.",
+      "sha256": "b963ebe462c98556b98520584e515b77b5ab87bd08de70de52ec9d871c91b2df",
+      "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/r47i_s8_p30_multifield10_focused_v4_index_q4000_20260704/index",
+      "star_count": 2000,
+      "supported_scale_range_arcsec": null,
+      "tile_keys": [
+        "d50_2645"
+      ]
+    },
+    {
+      "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+      "code_tol_recommended": 0.015,
+      "enabled": true,
+      "file_size_bytes": 1057143,
+      "filename": "d50_2602_S_q40000.npz",
+      "generation_metadata": {
+        "dtype": "float32",
+        "entry_count": 40000,
+        "generated_at": "2026-07-13T17:03:04Z",
+        "max_quads_per_tile": 40000,
+        "max_stars_per_tile": 2000,
+        "star_count": 2000
+      },
+      "id": "d50_2602_S_q40000",
+      "index_version": 1,
+      "level": "S",
+      "path": "../indexes/astrometry_4d/d50_2602_S_q40000.npz",
+      "priority": 4,
+      "quad_count": 40000,
+      "quad_schema": "astrometry_ab_code_4d_v1",
+      "sampler_tag": "catalog_ring_coverage",
+      "scale_note": "Index is sky-region/catalogue specific, not intrinsically instrument-scale specific.",
+      "sha256": "3ab3a747d2005ac6523a5dc62ef82fc19374fc31df27c8757307b36ade556693",
+      "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/r47i_s8_p30_multifield10_focused_v4_index_q4000_20260704/index",
+      "star_count": 2000,
+      "supported_scale_range_arcsec": null,
+      "tile_keys": [
+        "d50_2602"
+      ]
+    },
+    {
+      "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+      "code_tol_recommended": 0.015,
+      "enabled": true,
+      "file_size_bytes": 1058508,
+      "filename": "d50_2702_S_q40000.npz",
+      "generation_metadata": {
+        "dtype": "float32",
+        "entry_count": 40000,
+        "generated_at": "2026-07-13T17:04:03Z",
+        "max_quads_per_tile": 40000,
+        "max_stars_per_tile": 2000,
+        "star_count": 2000
+      },
+      "id": "d50_2702_S_q40000",
+      "index_version": 1,
+      "level": "S",
+      "path": "../indexes/astrometry_4d/d50_2702_S_q40000.npz",
+      "priority": 5,
+      "quad_count": 40000,
+      "quad_schema": "astrometry_ab_code_4d_v1",
+      "sampler_tag": "catalog_ring_coverage",
+      "scale_note": "Index is sky-region/catalogue specific, not intrinsically instrument-scale specific.",
+      "sha256": "15d82411ab1213505660be448a9290b9129e2bc3243cff960dfa79b6475d0fd6",
+      "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/r47i_s8_p30_multifield10_focused_v4_index_q4000_20260704/index",
+      "star_count": 2000,
+      "supported_scale_range_arcsec": null,
+      "tile_keys": [
+        "d50_2702"
+      ]
+    }
+  ],
+  "manifest_version": 1,
+  "schema": "zeblind.astrometry_4d_index_manifest.v1"
+}

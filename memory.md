@@ -3,6 +3,223 @@
 > Règle: ce fichier contient uniquement ce qui a été fait/validé.
 > Le reste à faire est dans `followup.md`.
 
+## 2026-07-16 (ZN3.10B, preparation GUI fallback 4D hybride)
+
+- Mission d'integration lancee sans modifier Near algorithmique, detecteur,
+  catalogue, D50, quads, signatures, lookup, transformation, gate/seuils,
+  ZeBlind 4D, index ou manifeste 4D.
+- Dataset separe construit depuis `/home/tristan/near_bench_cmp30/thread4/`:
+  `/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260716_153931/`.
+  Les originaux restent controles par SHA.
+- Sources selectionnees: `8` SHA uniques couvertes par les index 4D installes
+  (`3` M31, `3` M106, `2` NGC6888). Aucun NGC3628 n'etait present dans
+  `thread4`.
+- Variantes produites:
+  `control_clean`, `no_hints`, `wrong_hints`, et lot `gui_mixed` contenant
+  `3` CONTROL, `3` NOHINT, `2` BADHINT. Les checksums pixels des variantes
+  sont strictement identiques.
+- NOHINT retire les hints réellement consommes par Near (`RA/DEC`,
+  `OBJCTRA/OBJCTDEC`, `OBJRA/OBJDEC`, `OBJ_RA/OBJ_DEC`, `CRVAL1/CRVAL2`) plus
+  `TELRA/TELDEC`, `CENTRA/CENTDEC` et `OBJECT` par prudence; noms fichiers
+  neutralises.
+- Nettoyage integration:
+  `SEED_SCALE` n'est plus ecrit comme carte FITS longue; les valeurs seed sont
+  conservees dans les stats runtime avec lecture compatible des anciennes
+  variantes. Les textes GUI decrivent maintenant la chaine locale
+  `ZeNear -> ZeBlind 4D -> Astrometry.net optionnel`; le backend historique
+  reste seulement un backend diagnostic expert/dev.
+- Instrumentation legere ajoutee au log GUI pour Near, gate diagnostic, 4D,
+  backend historique, web et backend final.
+- Livrables: `tools/build_zn310b_gui_dataset.py`,
+  `tools/diagnose_zn310b_gui_fallback.py`,
+  `tests/test_zn310b_gui_fallback_dataset.py`, rapports
+  `reports/zenear_zn310b_*`.
+- Validation automatique: suite cible ZN2->ZN3.10B `95 passed`; `py_compile`
+  OK. Verdict courant `PRE_GUI_READY`: le run GUI reel et l'analyse du log
+  restent necessaires avant de declarer le fallback GUI 4D valide.
+
+## 2026-07-14 (ZN2, ASTAP interne: arret au verrou toolchain)
+
+- Mission ZN2 lancee depuis le constat ZN1: ASTAP resout `8/8`, ZeNear reste
+  `0/8`, rupture avant transformation (`iso_refs=0`, `matches_raw=0`), et
+  `ASTAP -extract` n'est pas considere comme la liste interne `solve_image`.
+- Outils ajoutes:
+  - `tools/astap_zn2_build_and_compare.py`
+  - `tools/diagnose_zn2_astap_internal_parity.py`
+  - `tests/test_zn2_astap_tools.py`
+- Baseline ZN2 creee:
+  - `reports/zenear_zn2_baseline.json`
+  - `reports/zenear_zn2_astap_binary_equivalence.json`
+  - `reports/zenear_zn2_astap_binary_equivalence.md`
+  - `reports/zenear_zn2_internal_astap_autopsy.md`
+- Resultat du gate ASTAP:
+  - binaire systeme ZN1: `/usr/local/bin/astap -> /opt/astap/astap`
+  - sha256: `582e4b0672e3b62222b01c27d3a61525d3876bde814669470e59a21d4299b7af`
+  - B0 systeme sur les 8 runtime M31: `8/8`
+  - B1 local non compile: `lazbuild` et `fpc` absents du PATH
+  - decision conforme ZN2: arret avant instrumentation ASTAP, aucune modification ZeNear/ZeBlind/GUI/seuils.
+- Cartographie source consolidee dans
+  `reports/zenear_zn2_astap_internal_pipeline_map.md`:
+  `Tastap.DoRun` -> `solve_image` -> `bin_and_find_stars` ->
+  `find_quads` -> `find_fit_using_hash` -> `find_offset_and_rotation`.
+- Audit binning x2 documente:
+  ASTAP detecte sur image binne puis reconvertit en pleine resolution avec
+  `(binfactor - 1) * 0.5 + binfactor * coord`; pour x2, c'est donc
+  `0.5 + 2*x_binned`.
+- Tests:
+  - `python -m py_compile tools/astap_zn2_build_and_compare.py tools/diagnose_zn2_astap_internal_parity.py` OK
+  - `pytest -q tests/test_zn2_astap_tools.py` => `3 passed`
+  - `pytest -q tests/test_metadata_solver.py -q` garde l'echec existant
+    `test_metadata_solver_solves_synthetic_frame` sur
+    `near solver could not estimate a similarity transform`, non corrige par contrainte ZN2.
+- Verdict courant: `I - non resolu`, cause non isolable sans compiler un ASTAP
+  local equivalent; prochaine etape unique ZN3 = fournir/installer toolchain
+  Free Pascal/Lazarus, prouver B1=`8/8`, puis ajouter les dumps internes.
+
+## 2026-07-15 (ZN3, parite listes image/catalogue ASTAP-ISO: arret sans promotion)
+
+- ZN3 a ajoute des briques Python testables dans `metadata_solver.py` pour le
+  chemin strict ASTAP-ISO, sans toucher a ZeBlind, signatures, lookup,
+  transformation, rescue ni seuils:
+  - binning mono moyen ASTAP-compatible avec dimensions tronquees;
+  - conversion coordonnees `x_full=(binfactor-1)*0.5+binfactor*x_binned`;
+  - politique explicite `choose_astap_compatible_bin_factor`;
+  - stats fond/bruit robustes;
+  - selection diagnostique `sqrt(SNR)` type ASTAP;
+  - detection image diagnostique Python.
+- Correctif applique au chemin strict binned existant: les coordonnees issues
+  d'une detection sur image binne sont remappees avec l'offset ASTAP (`+0.5`
+  pour bin x2), plus avec le simple `2*x`.
+- Probe cree: `tools/diagnose_zn3_input_list_parity.py`.
+  Rapports produits sous `reports/zenear_zn3_*` et dumps sous
+  `reports/zn3_image_dumps/`, `reports/zn3_catalog_dumps/`,
+  `reports/zn3_matrix_runs/`.
+- Resultat causal courant:
+  - baseline ZN2 conservee: R0/C00 `0/8`, oracle O11/C11 `8/8`;
+  - reconstruction Python image actuelle trop pauvre (`49/55/71` etoiles sur
+    les trois premiers cas vs `252/258/257` ASTAP);
+  - P11 reste `0/8`, avec front `NO_SIGNATURE_MATCHES`;
+  - vrai `solve_near` strict reste `0/3` sur `230409`, `230650`, `231844`.
+- Blocage important identifie:
+  les dumps catalogue ASTAP ZN2 ne contiennent pas RA/Dec/magnitude/tile, donc
+  la comparaison catalogue RA/Dec demandee par ZN3 est impossible sans
+  enrichir l'instrumentation ASTAP opt-in. Le zero recouvrement projete ZN2 ne
+  peut donc pas encore etre attribue proprement a un repere ou a une selection.
+- Tests:
+  - `pytest -q tests/test_zn3_input_lists.py tests/test_zn2_astap_tools.py`
+    => `11 passed`;
+  - `python -m py_compile zeblindsolver/metadata_solver.py tools/diagnose_zn3_input_list_parity.py`
+    OK;
+  - suite demandee avec `tests/test_metadata_solver.py` garde l'echec
+    `test_metadata_solver_solves_synthetic_frame` (`1 failed, 15 passed`),
+    non corrige car le strict ASTAP-ISO manque de support (4 etoiles) et aucun
+    seuil ne doit etre relache pendant ZN3.
+- Verdict durable: `F - Non resolu`, aucune promotion produit. Prochaine etape
+  unique: instrumenter ASTAP pour dumper RA/Dec/magnitude/tile catalogue et
+  image binned, puis relancer la matrice ZN3.
+
+## 2026-07-15 (ZN3.3-IMG, detection image adaptative ASTAP: porte franchie)
+
+- Mission strictement image: catalogue Python corrige ZN3.2-CAT conserve comme
+  baseline fixe; lecteur D50, choix tuiles, parsing RA hors strict, quads,
+  signatures, lookup, transformation, rescue, seuils et ZeBlind non modifies.
+- Cause image reproduite: ASTAP detecte sur l'image mono binne x2 native, sans
+  normalisation 0..1 ni suppression de fond ZeNear. Le chemin effectif M31 saute
+  `star_level/star_level2`, execute `30*sigma` global puis une passe locale par
+  sections a `7*sigma`, mesure les objets via HFD et dedoublonne par marquage
+  circulaire `img_sa`.
+- Implementation ajoutee dans `metadata_solver.py`:
+  `estimate_astap_global_background`,
+  `_astap_sigma_clipped_mean_from_histogram`,
+  `astap_section_grid`,
+  `_astap_hfd_measure`,
+  `astap_adaptive_image_detection`.
+- Parite `230409`: fond `1202`, bruit `83.0948`, passe globale `131`, passe
+  locale `252`, recouvrement centroide Python vs ASTAP `252/252` a `<=0.25 px`
+  (max delta ~`6.5e-05 px` pleine resolution).
+- Integration stricte: `solve_near` en mode `astap_iso_strict` utilise la route
+  adaptative Python et preserve l'ordre ASTAP via un flux synthetique decroissant;
+  hors strict, le detecteur historique reste inchange.
+- Porte image franchie: `IMG-P` image Python + catalogue Python corrige =
+  `8/8` sur les huit M31 runtime.
+- Vrai solveur franchi: `solve_near` strict natif = `8/8` sans injection image,
+  sans dump ASTAP en entree et sans binaire ASTAP runtime.
+- Native stats M31: inliers `314/315/332/343/333/212/326/184`; RMS
+  `0.520/0.573/0.707/0.659/0.828/0.765/0.669/2.863 px`.
+- Livrables: `tools/diagnose_zn33_image_detector.py`,
+  `tools/diagnose_zn33_image_sections.py`,
+  `tools/diagnose_zn33_image_gate.py`,
+  `tests/test_zn33_image_detector.py`, rapports `reports/zenear_zn33img_*`.
+- Tests demandes: ZN2+ZN3+ZN3.1+ZN3.2+ZN3.3 => `29 passed`; `py_compile` OK.
+- Canari synthétique `test_metadata_solver_solves_synthetic_frame` reste en
+  echec avec 4 etoiles image/catalogue et support de quads insuffisant; non
+  corrige dans ZN3.3 pour ne pas transformer le cas synthetique en critere
+  principal M31.
+
+## 2026-07-15 (ZN3.4, hardening strict ASTAP-ISO: promotion refusee)
+
+- ZN3.4 a gele les acquis sans modifier ZeBlind, GUI, quads, signatures,
+  lookup, transformation, rescue, seuils ni correctif catalogue RA.
+- L'artifice ZN3.3 de flux synthetique decroissant a ete retire:
+  le strict ASTAP-ISO preserve l'ordre ASTAP par `img_ranks = np.arange(...)`,
+  et le champ `flux` contient de nouveau le flux HFD mesure. Hors strict, le
+  tri historique par flux mesure reste inchange.
+- Temoin M31 runtime canonique: `8/8`, WCS offline `WCS_CONFORMANT` sur les
+  huit. RMS: `0.520/0.573/0.707/0.659/0.828/0.765/0.669/2.863 px`; le cas
+  `231915` est classe `BENIGN_METRIC_EFFECT` car le WCS reste conforme malgre
+  le RMS eleve.
+- Corpus elargi inventorie et execute sans filtrage opportuniste:
+  `164` entrees (`M31=84`, `M106=61`, `NGC6888=17`, `S50=2`), doublons
+  conserves.
+- Resultat promotion gate:
+  `E - Faux positif ou WCS incorrect`. Aucun faux positif sur controles
+  negatifs (`bad_center`, `blank_image`, `empty_catalog`), mais `48` WCS du
+  corpus positif sont classes incorrects/degrades par comparaison offline
+  (notamment M106/NGC6888 et M31 elargi). Promotion globale interdite.
+- Performance mesuree: warm M31 mediane ~`1.408s`, p95 ~`1.487s`; cold
+  subprocess median wall ~`4.723s`. Le cout dominant observe reste detection
+  HFD Python/import/cache froid; aucune optimisation tentee dans ZN3.4.
+- Tests demandes ZN2+ZN3+ZN3.1+ZN3.2+ZN3.3+ZN3.4: `39 passed`;
+  `py_compile` OK. Le canari synthetique historique a ete rejoue separement et
+  reste en echec (`near solver could not estimate a similarity transform`) avec
+  seulement 4 etoiles image/catalogue.
+- Prochaine etape durable: autopsie ciblee M106/NGC6888 (oracle FITS vs
+  solution ZeNear, hints/FOV/binning/projection) avant toute promotion produit.
+
+## 2026-07-14 (P2.23, M31 S50 EQ intermittent: divergence GUI vs direct solve)
+
+- Probe cree:
+  - `tools/diagnose_p223_m31_intermittent_4d.py`
+  - rapports `reports/zeblind_p223_*.json`
+  - rapport principal `reports/zeblind_p223_m31_failure_autopsy.md`
+- Baseline effective verifiee via `build_blind_solve_config`:
+  - `quad_hash_schema=astrometry_ab_code_4d_v1`
+  - `quad_sources=120`
+  - `verification_sources=full`
+  - `validation_catalog_policy=union_candidate_tiles`
+  - `accept_policy=best_within_budget`
+  - `quality_inliers=40`, `quality_rms=1.2`
+  - `match_radius_px=3.0`
+  - `max_quads=2500`, `max_hypotheses=2000`, `max_accepts=64`
+  - `max_wall_s=45.0`
+  - `max_hits_per_image_quad=8`
+  - aucune divergence avec le contrat P2.23
+- Les 8 FITS M31 demandes dans `/home/tristan/zemosaic/example/androtest/` ont ete copies en runtime sans WCS/RA/Dec/OBJECT; les originaux gardent le WCS oracle offline.
+- Reproduction directe `solve_blind`, sequentielle, sans ZeNear/fallback:
+  - run1 `8/8`, run2 `8/8`, offline OK, faux positifs `0`
+  - les cinq echecs GUI (`230409`, `230510`, `230650`, `230720`, `231350`) ne sont pas reproductibles en direct.
+- Cause immediate observee:
+  - les bons candidats M31 existent dans le pool actuel et sont atteints en direct aux rangs ~269-359 pour les cas GUI echoues;
+  - dans le log GUI, `230409`/`230510` entrent dans la route 4D apres ~13 s de pre-route/concurrence, puis le budget global 45 s coupe a ~255/260 tests, avant le premier candidat M31 direct;
+  - la piste prioritaire n'est donc pas hash/source-list/cap 8, mais budget/concurrence du chemin app/GUI.
+- Telemetrie ajoutee dans `zeblindsolver.py`, inactive par defaut:
+  - politique de tri candidat diagnostique;
+  - groupes locaux de validation diagnostiques;
+  - cache KD-tree image diagnostique;
+  - skip legacy/mono diagnostiques;
+  - decomposition du cout validation.
+- P2.24 recommande: isoler le chemin applicatif/GUI headless et faire demarrer/attribuer le budget 4D au bon perimetre avant de relancer C/D/E.
+
 ## 2026-06-12 (S6, tronc local assaini avant nouveaux audits)
 
 - Le test synthétique cassé n'indiquait pas une régression solveur :
@@ -5941,3 +6158,494 @@
   - backend historique inchange et toujours OFF par defaut ;
   - prochaine limite produit reelle : non-regression hors champ M106 et indices
     voisins avant promotion produit plus large.
+
+## 2026-07-13 — P2.19 validation multi-champs bornee hors M106
+
+- Scope respecte :
+  - diagnostic par `solve_blind` uniquement ;
+  - aucun changement ZeNear/GUI/default ;
+  - aucun changement de seuil (`quality_inliers=40`, `quality_rms=1.2`,
+    `match_radius_px=3.0`) ;
+  - aucun all-sky, aucun WCS oracle runtime, aucun changement du coeur AB/C/D,
+    aucun rescue ni routage automatique d'index.
+- Artefacts :
+  - script `tools/diagnose_p219_4d_multifield_validation.py` ;
+  - inventaire `reports/zeblind_p219_local_field_inventory.json` ;
+  - corpus `reports/zeblind_p219_selected_multifield_corpus.json` ;
+  - JSON `reports/zeblind_p219_4d_multifield_validation.json` ;
+  - rapport `reports/zeblind_p219_4d_multifield_validation.md`.
+- Inventaire local :
+  - seul champ FITS hors M106 exploitable dans les chemins bornes :
+    `NGC6888`, 10 images dans `/home/tristan/zemosaic/example/astap solved` ;
+  - `M106` exclu du corpus primaire car deja baseline P2.18 ;
+  - `NGC3628`, `NGC6823`, `IC1848` sont references par d'anciens rapports,
+    mais `/home/tristan/zemosaic/example/fresh` est absent localement ;
+  - `sdss_testdata` exclu : pas un corpus ZeBlind/ZeMosaic documente et pas
+    d'index 4D compact compatible.
+- Index :
+  - deux index compacts P2.19 generes depuis le manifest local
+    `r47i_s8_p30_multifield10_focused_v4_index_q4000_20260704`, bornes a
+    `d50_2644` et `d50_2645` (`40k` entrees chacun, `2000` etoiles chacun) ;
+  - pas de construction all-sky ni de dizaines d'index.
+- Resultat NGC6888 :
+  - baseline `q120_vfull`, `union_candidate_tiles`, `best_within_budget` :
+    `10/10` succes ;
+  - origine selectionnee toujours `d50_2644` ;
+  - inliers `59-63`, RMS max `0.492`, median RMS `0.307` ;
+  - median total `3.224s`, p95 total `3.393s`, median validation `1.443s`,
+    p95 validation `1.529s`, aucun `max_wall_s` ;
+  - WCS offline ASTAP coherent pour toutes les solutions acceptees, `0` faux
+    positif observe.
+- Robustesse :
+  - ordre inverse `[d50_2645,d50_2644]` : `10/10`, `0` faux positif ;
+  - mauvais index M106 rejete ;
+  - image M106 avec index NGC6888 rejetee ;
+  - index absent et index incompatible echouent explicitement sans fallback ;
+  - index primaire seul passe, secondaire seul ne passe pas (hors echelle), ce
+    qui confirme que `d50_2644` porte le champ.
+- Direct vs legacy :
+  - aucune decision differente sur NGC6888 ;
+  - delta RMS inverse-direct median `0.037`, p95 `0.067`, max `0.071` ;
+  - un cas direct pire de plus de `0.05 px`, mais tres sous seuil
+    (`0.453 px`), donc pas instable.
+- Comparaison historique informative :
+  - backend historique passe les 3 images echantillonnees, mais plus lent
+    (~`11s`) et avec moins d'inliers (`14-19`) que le 4D (`59-61`, ~`3s`).
+- Decision :
+  - verdict P2.19 = generalisation partielle positive ;
+  - le backend 4D conserve un statut experimental solide hors M106 sur
+    NGC6888, mais ne doit pas etre declare RC multi-champs general car un seul
+    champ hors M106 etait disponible localement ;
+  - prochaine direction unique : fournir/selectionner `3-5` champs FITS
+    supplementaires avec WCS offline, construire `1-2` index compacts bornes
+    par champ, puis relancer exactement le probe P2.19 avant manifest/routage
+    produit ou integration GUI.
+
+## 2026-07-13 — P2.19b extension incrementale lancee
+
+- Nouveau corpus borne declare par Tristan :
+  `/home/tristan/zemosaic/example/various_fresh` (`15` FITS).
+- Inventaire preliminaire :
+  - `9` FITS M31 avec WCS offline existant : S50 (`~2.37"/px`) et S30
+    (`~3.99"/px`) ;
+  - `6` FITS ASILive / ASI462MC sans WCS, regime C11 probable mais non
+    exploitable en baseline tant qu'un oracle offline fiable n'est pas etabli.
+- Plages d'echelle P2.19b figees avant validation :
+  - `s50`: nominal `2.372"/px`, plage `1.90..2.85"/px` ;
+  - `s30`: nominal `3.990"/px`, plage `3.19..4.79"/px` ;
+  - `c11`: nominal theorique `0.214"/px`, plage `0.16..0.27"/px`, inventaire
+    seulement pour l'instant.
+- Script diagnostic ajoute :
+  `tools/diagnose_p219b_incremental_multiregime.py`.
+- Discipline conservee : `solve_blind` reel, WCS strippe sur copies de travail,
+  index compacts explicites, pas de ZeNear/GUI/default/core AB/C/D, pas de
+  seuils assouplis, pas de WCS oracle runtime.
+
+## 2026-07-13 — P2.19b extension incrementale cloturee
+
+- Artefacts :
+  - script `tools/diagnose_p219b_incremental_multiregime.py` ;
+  - inventaire `reports/zeblind_p219b_new_corpus_inventory.json` ;
+  - selection `reports/zeblind_p219b_selected_corpus.json` ;
+  - validation JSON `reports/zeblind_p219b_incremental_validation.json` ;
+  - rapport `reports/zeblind_p219b_incremental_validation.md`.
+- Hygiene runtime renforcee apres audit :
+  - les copies de travail P2.19b suppriment maintenant le WCS et les hints
+    `RA/DEC/OBJCTRA/OBJCTDEC/...` avant `solve_blind` ;
+  - verification finale : aucune cle oracle RA/Dec restante dans les copies
+    inspectees, `runtime_oracle_wcs_input=false`.
+- Temoins historiques reduits executes avant nouveaux cas :
+  - M106 `234013` : passe, `42` inliers / RMS `1.102`, rang `95` ;
+  - M106 `232205` : passe, `59` / `0.249`, rang `2` ;
+  - NGC6888 faible rang : passe, `61` / `0.292`, rang `3` ;
+  - NGC6888 rang eleve : passe, `61` / `0.284`, rang `60`.
+- Baseline nouvelle :
+  - M31 S50/S30 avec index compacts explicites `d50_2602` et `d50_2702` ;
+  - `9/9` succes, `0` faux positif offline ;
+  - S50 `6/6`, S30 `3/3` avec seuils inchanges
+    (`quality_inliers=40`, `quality_rms=1.2`, `match_radius_px=3.0`) ;
+  - S30 valide une seconde echelle (`~3.99"/px`) avec inliers `182-189`.
+- Controles negatifs :
+  - mauvais index NGC6888/M106 rejetes ;
+  - index absent et format incompatible echouent explicitement ;
+  - S30 avec plage S50 rejete par garde d'echelle ;
+  - ordre inverse accepte ;
+  - index secondaire seul accepte pour le cadrage M31 nord, ce qui est normal
+    car la tuile `d50_2702` couvre ce cadrage.
+- Verdict P2.19b : `A - Extension positive` sur les regimes exploitables
+  (M31 S50/S30 + temoins M106/NGC6888).
+- Limite durable :
+  - les `6` FITS ASILive/ASI462MC restent inventoriés comme C11 probable mais
+    non valides en baseline, faute de WCS offline fiable ;
+  - prochaine etape unique recommandee : obtenir un oracle offline borne pour
+    un brut ASI462/C11, construire un seul index 4D compact du champ, puis
+    relancer le meme probe sans changer les seuils.
+
+## 2026-07-13 — P2.20 manifest 4D et pool celeste mixte
+
+- P2.20 terminee sans toucher ZeNear, GUI, backend par defaut, seuils qualite
+  ni coeur AB/C/D. Le seul patch runtime est une telemetrie par index dans la
+  route 4D (`hits`, hypotheses, acceptations, temps validation, meilleurs
+  rejets), sans changement de decision.
+- Artefacts :
+  - `tools/diagnose_p220_4d_mixed_index_pool.py` ;
+  - `reports/zeblind_p220_baseline.json` ;
+  - `reports/zeblind_p220_mixed_index_manifest.json` ;
+  - `reports/zeblind_p220_selected_mixed_pool_corpus.json` ;
+  - `reports/zeblind_p220_mixed_pool_validation.json` ;
+  - `reports/zeblind_p220_mixed_pool_validation.md`.
+- Baseline figee sur commit `60676f7af6bbb16b96063086b129fcf707df48d3`.
+  Les six index valides sont charges depuis un manifest strict versionne
+  `zeblind.astrometry_4d_index_manifest.v1`.
+- Le chargeur de manifest refuse explicitement les erreurs : fichier absent,
+  JSON invalide, mauvaise version, SHA-256 incorrect, schema incompatible,
+  metadata contradictoire, doublon d'identifiant/chemin/tuile. Les entrees
+  `disabled` ne sont pas transmises au backend.
+- Corpus P2.20 : `15` images representatives (`4` M106, `4` NGC6888,
+  `7` M31) couvrant trois regions, S50/S30, Alt-Az/EQ et le cas frontiere
+  M106 `234013`.
+- Hygiene runtime : copies FITS sans WCS, sans hints RA/Dec et sans champs
+  d'identite cible avant `solve_blind`. Le run mixte transmet le meme pool de
+  six index a toutes les images, sans mapping image -> champ -> index.
+- Resultats :
+  - baseline specialisee `15/15` ;
+  - pool mixte ordre A `15/15` ;
+  - quatre ordres deterministes A/B/C/D stables, tous `15/15` ;
+  - `0` faux positif offline ;
+  - `0` mauvaise region acceptee ;
+  - controles negatifs celestes et manifest OK ;
+  - `234013` conserve : `42` inliers / RMS `1.102`, tuile `d50_2822`,
+    rang `95` en ordre A.
+- Cout :
+  - ralentissement median pool/specialise `2.91x`, p95 `3.55x`, max `3.57x` ;
+  - median total ordre A `16.608s`, p95 `32.500s`, max `37.277s` ;
+  - aucun `max_wall_s=45`, aucun `max_hypotheses=2000` ;
+  - `max_accepts=64` atteint sur quelques images mais sans changer la
+    decision ;
+  - index le plus consommateur en ordre A : `d50_2823_S_q40000`
+    (`1294` hypotheses testees).
+- Tests : `pytest -q tests/test_quad_code_diagnostic.py
+  tests/test_zeblindsolver.py tests/test_p220_manifest_loader.py` =>
+  `84 passed, 1 warning`; `python -m py_compile
+  zeblindsolver/zeblindsolver.py tools/diagnose_p220_4d_mixed_index_pool.py`
+  OK.
+- Verdict : `A - Pool mixte valide`. Prochaine etape unique recommandee :
+  creer le preset `zeblind_4d_experimental` et effectuer un test in situ via
+  le chemin applicatif reel.
+
+## 2026-07-13 — P2.21 promotion applicative ZeBlind 4D
+
+- P2.21 terminee : le backend ZeBlind 4D experimental est maintenant accessible
+  par le vrai chemin applicatif/CLI via un profil explicite et un manifest
+  portable, sans changement ZeNear, GUI, backend par defaut, seuils qualite ou
+  coeur AB/C/D.
+- Nouveaux blocs :
+  - chargeur package strict `zeblindsolver/index_manifest_4d.py` ;
+  - profil centralise `zeblindsolver/profiles.py` avec
+    `zeblind_4d_experimental` ;
+  - manifest portable `config/zeblind_4d_experimental_manifest.json` ;
+  - outil in situ `tools/diagnose_p221_app_integration.py` ;
+  - documentation `docs/zeblind_astrometry_4d_experimental.md`.
+- Le profil 4D centralise le contrat P2.20 :
+  `quad_sources=120`, verification full, `union_candidate_tiles`,
+  `best_within_budget`, seuils `40/1.2/3.0`, budgets
+  `2500/2000/64/45s`.
+- Settings persistants ajoutes :
+  `blind_backend_profile` et `blind_4d_manifest_path`. Une ancienne config
+  charge toujours `historical` et n'active pas le 4D.
+- CLI ajoute :
+  `--blind-profile historical|zeblind_4d_experimental`,
+  `--blind-4d-manifest`, `--blind-only`. En 4D, le manifest est obligatoire et
+  une erreur manifest arrete avant solve, sans fallback historique.
+- Correctif d'integration important : `solve_blind` ne requiert plus l'ancien
+  `index_root/manifest.json` quand le schema 4D et des chemins d'index
+  explicites sont actifs ; les RA/Dec du header ne filtrent pas le pool 4D.
+- Presets verifies/corriges : S50 `~250 mm`, plage `1.90..2.85"/px`; S30
+  corrige a `150 mm`, plage `3.19..4.79"/px`.
+- Validation in situ via le vrai chemin CLI/app sur copies FITS nettoyees :
+  `7/7` succes M106/NGC6888/M31, S50/S30, Alt-Az/EQ ; WCS ecrit et relisible
+  `7/7`; faux positifs offline `0`; echecs ecriture WCS `0`.
+- Cas frontiere M106 `234013` conserve dans le chemin applicatif :
+  tuile `d50_2822`, `47` inliers, RMS direct `1.106 px`.
+- Tests : suite ciblee `91 passed, 1 skipped, 1 warning`; py_compile OK.
+  Le `pytest -q` global n'est pas exploitable avec le Python systeme actuel
+  car `astroalign` manque ; le venv applicatif contient `astroalign` mais pas
+  `pytest`.
+- Verdict : `A - Integration applicative validee`.
+  Prochaine etape unique : integration GUI minimale et test utilisateur in situ.
+
+## 2026-07-13 — P2.22 integration GUI ZeBlind 4D
+
+- P2.22 terminee : ZeBlind 4D experimental est expose dans le GUI sans changer
+  ZeNear, le backend historique, le defaut, les seuils, les budgets ou le coeur
+  AB/C/D.
+- Easy/Wizard ajoutent une case indentee `Utiliser ZeBlind 4D experimental`
+  sous `Activer le blind solver`. Expert ajoute un selecteur `Profil ZeBlind`
+  plus champ/boutons de manifest (`Parcourir`, `Verifier`) et statut.
+- Les vues manipulent le meme setting `blind_backend_profile`; pas de second
+  etat `use_new_zeblind`. `interface_mode` est persiste. Une ancienne config
+  migre toujours vers `historical`.
+- Nouveau resolver `zesolver/blind4d_runtime.py` pour le manifest portable par
+  defaut `config/zeblind_4d_experimental_manifest.json`, sans scan de dossier
+  et sans dependance a un chemin `/home/tristan/...`.
+- Preflight GUI avant batch : en profil 4D, le manifest est verifie une fois
+  avant le premier FITS. Une erreur manifest bloque explicitement le run et ne
+  bascule jamais vers l'historique.
+- Validation in situ headless par chemin applicatif/GUI : `4/4` sur M106
+  `234013`, NGC6888, M31 S50 et M31 S30. WCS ecrit/relu `4/4`, faux positifs
+  offline `0`, echecs WCS `0`.
+- `234013` reste conserve via `d50_2822`, `47` inliers, RMS `1.106 px`.
+- Stop : route `request_cancel` -> `cancel_check` verifiee/cablee jusque dans
+  le backend 4D ; clic Stop long interactif a refaire pendant la campagne
+  utilisateur grandeur nature.
+- Tests : cible system `96 passed, 2 skipped, 1 warning`; cible venv + Qt
+  offscreen `98 passed, 1 warning`; `py_compile` OK. Le global venv reste
+  pollue par 4 echecs historiques/environnementaux non lies (database absente,
+  fixture download SHA, synthetic Near/CUDA).
+- Verdict : `A - GUI experimental valide`. Prochaine etape unique : campagne
+  utilisateur grandeur nature et collecte structuree des echecs.
+
+## 2026-07-14 — P2.24 budgets 4D app/direct et concurrence
+
+- P2.24 a restaure le contrat budget du profil `zeblind_4d_experimental` :
+  `max_wall_s=45` est maintenant un budget de route Astrometry 4D
+  (`blind_astrometry_4d_search_budget_s`), demarre a l'entree reelle de
+  `_solve_astrometry_4d_runtime_route`, et non plus un budget global demarre a
+  l'entree de `solve_blind`.
+- L'ancien budget global reste disponible sous `blind_global_hard_budget_s`, mais
+  vaut `0.0` dans le profil 4D experimental. Les stats exposent maintenant
+  `blind_pre_route_s`, `astrometry_4d_route_s`, `blind_post_route_s`,
+  `blind_total_s`, `blind_attempt_budget_s` et
+  `astrometry_4d_search_budget_s`.
+- Les causes d'arret sont separees via `SolveStopReason` :
+  `user_cancelled`, `blind_attempt_budget_exceeded`,
+  `astrometry_4d_search_budget_exceeded`, `max_hypotheses`, `max_accepts`,
+  `candidate_exhausted`, `confident_accept`, `best_within_budget`. Regle durable :
+  ne plus presenter un timeout budget comme `cancelled`.
+- Policy workers P2.24 : le profil 4D experimental choisit 1 worker blind par
+  defaut, avec override explicite `ZE_BLIND_WORKERS` preserve. Le backend
+  historique conserve sa policy precedente.
+- Probe app-path headless sur les 8 images M31 P2.23 : 1 worker `8/8` deux fois,
+  2 workers `8/8` deux fois, faux positifs offline `0`. La concurrence 2 workers
+  ameliore le temps batch (`~202s -> ~165s`) mais augmente fortement le cout
+  individuel (`route mediane ~17s -> ~30.5s`, total max ~49.6s), ce qui explique
+  la fragilite de l'ancien budget global 45 incluant le pre-route.
+- Tests P2.24 : cible principale `43 passed`, tests voisins budget/workers
+  `54 passed`, `py_compile` OK.
+- Limite restante : le GUI reel n'a pas ete reclique pendant cette passe ; a
+  refaire en validation utilisateur avant P2.25.
+
+## 2026-07-14 — ZeNear ZN2 ASTAP interne
+
+- Le verrou toolchain est leve : `lazbuild -B astap_command_line_linux.lpi`
+  compile le CLI ASTAP local. Le binaire source local ne doit etre compare au
+  binaire systeme qu'avec `-z 2`; sans cet argument il resout mais en regime
+  `1x1` different.
+- Equivalence ZN2 validee : B0 `/usr/local/bin/astap` `8/8`, B1 local
+  reference `8/8`, compteurs etoiles/quads/matches identiques avec `-z 2`.
+- Instrumentation ASTAP ajoutee localement dans le CLI, inactive par defaut via
+  `ASTAP_ZN2_DUMP_DIR`. Elle dumpe listes image/catalogue, quads, matches hash
+  et vecteurs de solution; dump off `8/8`, dump on `8/8`.
+- Resultat causal ZN2 : avec les vraies listes internes ASTAP, le coeur
+  ASTAP-ISO ZeNear regenere les memes quads et retrouve les memes fits
+  (`matrix/offset` delta ~1e-12), donc signatures/lookup/transformation ne sont
+  pas la premiere cause.
+- Matrice d'injection : C00 ZeNear/ZeNear `0/8`, C10 ASTAP image + ZeNear
+  catalogue `0/8`, C01 ZeNear image + ASTAP catalogue `1/8` faible (4 refs),
+  C11 ASTAP image + ASTAP catalogue `8/8`.
+- Verdict durable : cause mixte ordonnee. Premiere divergence dans la liste
+  image interne ASTAP (binning x2 + detection/classement), avec divergence de
+  selection catalogue egalement necessaire pour restaurer l'hypothese. ZN3 doit
+  aligner la construction des listes d'entree ASTAP-ISO avant de toucher aux
+  signatures, seuils, rescue ou validation.
+
+## 2026-07-15 — ZeNear ZN3.1 oracle ASTAP enrichi
+
+- ZN3.1 a enrichi l'oracle ASTAP local CLI, opt-in uniquement via
+  `ASTAP_ZN2_DUMP_DIR`, sans changer le resultat: ASTAP instrumente `-z 2`
+  reste `8/8` sur les huit M31 et O11 listes ASTAP reste `8/8`.
+- Nouveaux dumps disponibles dans `reports/zn31_astap_dumps`: image binned
+  FITS + metadata/checksum, fond/bruit, passes de detection, candidats/rangs
+  image, catalogue RA/Dec/magnitude/tile/projection/rang.
+- Parite du binning M31 demontree: image binned Python brute identique pixel a
+  pixel au dump ASTAP (`MAE=0`, `max=0`, `corr=1.0` sur `230409`). Le mapping
+  `0.5 + 2*x` reste le bon mapping.
+- Cause image localisee: pas le binning. ASTAP saute souvent `star_level` et
+  `star_level2`, puis utilise `30*sigma` global et surtout une passe locale
+  `7*sigma` par sections. Le builder Python ZN3 actuel reste trop pauvre
+  (`49` final sur `230409`, `NO_SIGNATURE_MATCHES`), tandis que les candidats
+  ASTAP contre catalogue ASTAP reproduisent l'oracle (`53` matches raw, `50`
+  refs).
+- Cause catalogue localisee partiellement: ASTAP utilise `448` etoiles sur
+  `230409` contre `249` pour le catalogue ZeNear actuel. Les RA/Dec ASTAP sont
+  maintenant disponibles; le dump ZeNear ZN1 a une RA brute manifestement dans
+  une convention differente (`~159 deg`) et meme avec normalisation diagnostique
+  `/15`, il n'y a pas de recouvrement a `2"` sur `230409`.
+- Verdict ZN3.1: `D - causes precises identifiees, builders encore incomplets`.
+  Ne pas promouvoir. Prochaine etape: implementer la detection image ASTAP
+  adaptative avant de recombiner P11; cote catalogue, ajouter un dump ZeNear
+  de tuiles/ordre/RA normalisee pour isoler la selection D50.
+
+## 2026-07-15 — ZeNear ZN3.2-CAT porte catalogue
+
+- ZN3.2-CAT a ete strictement catalogue : image ASTAP oracle injectee, aucun
+  changement du builder image/binning/detection, ni des quads/signatures/lookup/
+  transformation/rescue/seuils.
+- Cause racine catalogue identifiee : le facteur 15 ne vient pas du record D50.
+  Il apparait avant la lecture catalogue, dans le parsing du centre FITS strict
+  Near. La cle numerique `RA=10.6125` etait interpretee comme heures par
+  `parse_angle(..., is_ra=True)`, donnant `159.1875 deg` et donc une selection
+  catalogue dans la mauvaise region.
+- Correctif unique : en strict ASTAP-ISO, `_extract_near_center_angle` conserve
+  la cle numerique `RA` en degres ; les champs textuels hourangle restent geres
+  par `parse_angle`; hors strict le comportement historique reste inchange.
+- Audit D50 : RA brute = `uint24` full-circle, DEC = low16 + `dec9_storage`,
+  magnitude = `(header_byte - 16)/10`. ASTAP area `1188/1240` correspond aux
+  fichiers physiques `d50_2602.1476`/`d50_2702.1476`.
+- Apres correction, image ASTAP + catalogue ZeNear strict donne `8/8` sur les
+  huit M31. Sur `230409`, identite physique `448/448` avec l'oracle ASTAP ;
+  les comptes finaux suivent ASTAP (`448..491`) et le pseudo-cap `~249` n'etait
+  qu'une consequence du mauvais centre RA.
+- Tests ZN3.2-CAT : suite cible `23 passed`; `py_compile` OK. Verdict :
+  `A - porte catalogue franchie`. Prochaine mission : detection image ASTAP
+  adaptative uniquement.
+
+## 2026-07-15 — ZN3.5 gate Near et routage 4D-only
+
+- Direction produit actee dans le code: le fallback automatique vers ZeBlind
+  historique est coupe. Si la chaine product cible n'a pas de profil/manifeste
+  4D valide, elle doit retourner une erreur explicite (`BLIND4D_CONFIGURATION_REQUIRED`
+  ou statut manifeste/index 4D), jamais retomber sur l'ancien backend.
+- Ajout d'une gate runtime-only `validate_strict_astap_iso_candidate` avant
+  l'ecriture WCS Near stricte: WCS fini, CD inversible/conditionne, echelle,
+  centre, matches uniques, residus robustes, couverture spatiale et holdout.
+- Probe ZN3.5 cree les branches propres `clean_base`, `astap_branch`,
+  `zenear_branch`, `chain_4d_branch` et verifie les checksums pixels avant
+  resolution. Les WCS originaux sont consideres potentiellement pollues par
+  defaut.
+- Preflight 4D local: manifeste `zeblind_4d_experimental` valide avec 6 index
+  actifs et aucun index manquant; couverture heuristique M31/M106/NGC6888
+  documentee, absence de couverture separee des echecs algorithmiques.
+- Tests ZN3.5: suite cible `44 passed`; `py_compile` OK. Les tests verrouillent
+  gate accept/reject, absence d'appel historique dans le wrapper Near et dans
+  le routage app.
+- Limite volontaire: le replay ASTAP propre complet et l'autopsie causale M106
+  ne sont pas termines. Les conflits ZN3.4 sont donc reclasses conservativement
+  `UNRESOLVED` quand aucun oracle ASTAP propre n'a ete execute.
+
+## 2026-07-15 — ZN3.5B replay experimental borne
+
+- Changement de securite: la gate Near stricte repasse en `diagnostic` par
+  defaut; `enforce` reste explicite uniquement tant que calibration et holdout
+  reels ne sont pas faits.
+- Nouveau probe reprenable `tools/diagnose_zn35_replay.py`, par `--case` et
+  `--stage`, avec statuts persistants et timeouts conserves dans
+  `reports/zn35b_runs/<case>/stages/`.
+- Triplet execute:
+  - M31 `230409`: ASTAP propre + Near propre concordent (`WCS_CONFIRMED`,
+    centre ~`0.23"`), gate diagnostic `ACCEPT`.
+  - M106 `233459`: ASTAP propre + Near propre concordent (`WCS_CONFIRMED`,
+    centre ~`0.89"`), gate diagnostic `ACCEPT`; le WCS original FITS est bien
+    pollue (`WRONG_FIELD`, centre ~`1071"`).
+  - M106 `232102`: ASTAP propre resout, Near propre echoue sans WCS
+    (`near solver could not estimate a similarity transform`); premier ecart
+    experimental classe `QUAD_MATCH_DIVERGENCE`.
+- Fallback ZeBlind 4D reel sur `232102`: preflight OK, couverture
+  `BLIND4D_COVERED`, `blind4d_call_count=1`, aucun appel historique, WCS final
+  `WCS_CONFIRMED` vs ASTAP avec `59` inliers et RMS ~`0.231 px`.
+- Verdict durable: `D - Near echoue, ZeBlind 4D reussit dans la couverture
+  installee`. Ne pas promouvoir `enforce` par defaut; prochaine correction
+  ciblee = exposer les attempts internes Near puis comparer image/catalogue/
+  quads ASTAP vs Near sur `232102` avant toute modification algorithmique.
+
+## 2026-07-15 — ZN3.6 parite listes finales/quads/hits M106
+
+- Ajout d'une instrumentation Near strict opt-in (`diagnostic_iso_trace`) qui
+  dump, depuis `_astap_iso_hypothesis`, les listes finales reellement envoyees
+  au quad builder, les quads et les hits par stage (`initial`, `autofov_*`,
+  `spiral_*`, `recenter_second_pass`). Desactivee par defaut.
+- Probe cree: `tools/diagnose_zn36_parity.py`; test ajoute:
+  `tests/test_zn36_astap_near_parity.py`.
+- ASTAP a ete relance avec dumps internes sur `230409`, `233459`, `232102`;
+  Near a ete relance avec trace ISO sur le meme triplet.
+- Resultat cle sur `232102`: `H00` (listes finales ASTAP injectees dans le
+  moteur Near) reussit, tandis que `H10`, `H01`, `H11` echouent. Le coeur Near
+  reste donc disculpe lorsque les entrees finales sont celles d'ASTAP.
+- Les anciens dumps Near sont clarifies: les `1713` lignes image representent
+  bien la liste initiale/finale-for-quads du stage initial. Au meilleur stage
+  trace pour `232102`, Near transmet `1713` etoiles image et `3045` etoiles
+  catalogue au quad builder, contre `58` et `249` pour ASTAP.
+- Verdict durable: `B - cause exacte identifiee, correctif non applique`.
+  Premiere divergence prouvee a la frontiere des listes finales d'entree, avec
+  divergence image et catalogue avant les quads. Aucun seuil, detecteur,
+  catalogue, quads, signatures, lookup, transformation ou ZeBlind 4D modifie.
+- Validation: suite cible ZN2->ZN3.6 `53 passed`; `py_compile` OK.
+
+## 2026-07-15 — ZN3.7 selection ASTAP et dilution M106
+
+- ZN3.7 a compare la politique de reduction ASTAP/Near sur `232102`,
+  `233459` et `230409`, avec toutes les tentatives Near `232102` exposees.
+- Regle ASTAP documentee: `bin_and_find_stars` produit directement la liste
+  image finale envoyee a `find_quads`; le quota catalogue depend ensuite de
+  `nrstars_image`, du ratio `height/width` et de l'oversize.
+- `232102`: les etoiles image ASTAP sont quasi toutes presentes dans Near
+  (`57/58` a 2 px), mais diluees dans `1713` etoiles finales; les intersections
+  image Near + catalogue ASTAP reussissent, tandis que les grands prefixes
+  echouent.
+- `232102` catalogue: la trace Near enrichie n'a pas encore `row_index`/
+  `byte_offset`; avec le surrogate RA/Dec/mag, seulement `5/249` records ASTAP
+  sont retrouves dans le catalogue Near du stage choisi, et les matrices
+  catalogue restent en echec.
+- `233459` reussit malgre des listes plus longues parce que les etoiles utiles
+  restent plus tot dans l'ordre et les hits retenus survivent.
+- Verdict durable: `F - plusieurs causes independantes`; premiere divergence
+  dans l'ordre du pipeline = selection/classement image strict M106, avec
+  divergence catalogue downstream via quota/fenetre. Aucun correctif applique;
+  prochaine mission doit porter uniquement la regle image ASTAP exacte avant de
+  toucher au catalogue.
+
+## 2026-07-16 — ZN3.8-IMG, cause image exacte corrigee
+
+- Cause racine precisee: le detecteur strict ASTAP-ISO isole etait deja capable
+  de produire `58/54/252`, mais l'integration `solve_near` lui passait l'image
+  normalisee `0..1` de `to_luminance_for_solve` au lieu des ADU FITS natifs.
+- Effet causal: sur `232102`, l'image native ADU donne `58` etoiles via la
+  passe locale ASTAP; l'image normalisee donne `0`, puis les fallbacks CPU
+  generiques non stricts remplacaient la liste par `1713` etoiles diluees.
+- Correctif borne a l'image stricte: ajout de `astap_iso_image_for_solve()` pour
+  consommer les ADU natifs en `astap_iso_strict`, et blocage des fallbacks
+  generiques quand `strict_astap_iso=True`.
+- Catalogue, D50, quads, signatures, lookup, transformation, gate et ZeBlind 4D
+  non modifies. Le catalogue se recale naturellement: `232102` passe a `58`
+  etoiles image et `248` catalogue vs `249` ASTAP, puis resout au stage initial.
+- Temoins: `233459` reste resolu (`54` image, `249` catalogue) et `230409`
+  reste resolu (`252` image, `448` catalogue). `232102` passe d'environ `73.6s`
+  a `1.30s` sur le run Near trace.
+- Livrables: `tools/diagnose_zn38_image_selector.py`,
+  `tests/test_zn38_astap_image_selector.py`, rapports `reports/zenear_zn38_*`.
+  Validation cible ZN2->ZN3.8: `67 passed`; `py_compile` OK.
+
+## 2026-07-16 — ZN3.9 qualification corpus ADU
+
+- Qualification sans nouveau correctif algorithmique: ajout de
+  `tools/diagnose_zn39_qualification.py` et
+  `tests/test_zn39_qualification.py`; solveur/detecteur/catalogue/quads/
+  signatures/lookup/transformation/gate/ZeBlind 4D non modifies.
+- Audit `astap_iso_image_for_solve`: ADU natifs preserves sur 2D mono et 3D
+  channel-first; pas de normalisation `0..1` en strict; forme 1D rejetee
+  explicitement; les cubes channel-last sont marques non qualifies (a ne pas
+  promouvoir sans mission format separee).
+- Corpus SHA256 deduplique: `142` images uniques (M106 `60`, M31 canonique
+  `8`, M31 etendu `45`, NGC6888 `27`, NGC3628 `2`). M106 contient `61`
+  fichiers disponibles mais `60` SHA uniques.
+- ASTAP oracles propres: `142/142` valides. Near strict avec index produit
+  `/home/tristan/zesolver_index`: `142/142` succes et `142/142` WCS confirmes
+  vs ASTAP propre par centre projete; separation mediane ~`1.96"` max
+  ~`5.23"`.
+- Aucun fallback CPU generique en strict, aucun appel backend historique,
+  toutes les entrees detecteur strict vues en ADU natif.
+- Verdict durable: qualification corpus positive pour le correctif ADU, mais
+  promotion produit stoppee (`I - qualification incomplete`) car il manque
+  encore validation stellaire independante complete, fixture Near-failure ->
+  ZeBlind 4D, chain 4D reelle, gate holdout et parite des points d'entree.
+  Tests ZN2->ZN3.9: `79 passed`; `py_compile` OK.

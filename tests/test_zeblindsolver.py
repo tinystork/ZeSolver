@@ -275,9 +275,10 @@ def test_blind_global_hard_budget_is_reported(tmp_path) -> None:
     cfg = core_solver.SolveConfig(blind_global_hard_budget_s=1.0e-9)
     result = core_solver.solve_blind(str(fits_path), str(tmp_path), config=cfg)
     assert not result.success
-    assert "global hard budget exceeded" in result.message
+    assert "blind attempt budget exceeded" in result.message
     assert result.stats["global_hard_budget_triggered"] is True
     assert result.stats["global_hard_budget_s"] == pytest.approx(1.0e-9)
+    assert result.stats["blind_attempt_budget_s"] == pytest.approx(1.0e-9)
 
 
 def _build_simple_tan_wcs(*, crval1: float, crval2: float, scale_arcsec: float = 2.37) -> WCS:
