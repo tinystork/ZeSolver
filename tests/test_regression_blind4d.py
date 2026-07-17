@@ -36,7 +36,8 @@ def test_blind4d_manifest_loads_when_configured() -> None:
         pytest.skip("ZESOLVER_BLIND4D_MANIFEST is not set")
 
     loaded = load_4d_index_manifest(Path(manifest))
-    assert loaded.tiles
+    assert loaded.enabled_index_paths
+    assert loaded.tile_keys
 
 
 @pytest.mark.corpus
