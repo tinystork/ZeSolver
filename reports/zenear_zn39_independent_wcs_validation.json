@@ -1,0 +1,6676 @@
+{
+  "m106_000_001_Light_mosaic_M_106_20.0s_IRCUT_20250518-233459": {
+    "astap_center_deg": [
+      184.8111326913655,
+      47.45206659187473
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.8111326913655,
+        47.45206659187473
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.96573971600213,
+    "center_separation_deg_vs_astap": 0.0005460388100005917,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.81066781694108,
+      47.45162011616059
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -95.771764477436,
+        954.30133531452
+      ],
+      "crval": [
+        185.43101409041,
+        47.451736741825
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371473082210471,
+        2.371473082210471
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_001_027_Light_mosaic_M_106_20.0s_IRCUT_20250518-232102": {
+    "astap_center_deg": [
+      184.6282076618362,
+      47.29900281007409
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.6282076618362,
+        47.29900281007409
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.844427677827385,
+    "center_separation_deg_vs_astap": 0.000512341021618718,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.62777087563467,
+      47.298584781528135
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -53.813439055377,
+        954.95149339441
+      ],
+      "crval": [
+        185.20561944811,
+        47.298685817175
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3717138060454057,
+        2.3717138060454057
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_002_028_Light_mosaic_M_106_20.0s_IRCUT_20250518-232144": {
+    "astap_center_deg": [
+      184.61263037091618,
+      47.44440331200743
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.61263037091618,
+        47.44440331200743
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.5997176471653825,
+    "center_separation_deg_vs_astap": 0.0004443660131014951,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.61221051477128,
+      47.444061504729824
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        217.70108337482,
+        1170.6951714657
+      ],
+      "crval": [
+        184.924995,
+        47.304167
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3714941137865155,
+        2.3714941137865155
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_003_029_Light_mosaic_M_106_20.0s_IRCUT_20250518-232205": {
+    "astap_center_deg": [
+      184.6083798758734,
+      47.44444778069208
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.6083798758734,
+        47.44444778069208
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.9419492412784156,
+    "center_separation_deg_vs_astap": 0.0008172081225773376,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.6082412778334,
+      47.443635965951884
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -109.74834794857,
+        953.89187245065
+      ],
+      "crval": [
+        185.24210202396,
+        47.444125437257
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371437428862733,
+        2.371437428862733
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_004_030_Light_mosaic_M_106_20.0s_IRCUT_20250518-232247": {
+    "astap_center_deg": [
+      184.43901247253982,
+      47.44583379708819
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.43901247253982,
+        47.44583379708819
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8416367059856151,
+    "center_separation_deg_vs_astap": 0.0005115657516626709,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.4385796000978,
+      47.44541427569915
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        206.22383560504,
+        1176.4187219921
+      ],
+      "crval": [
+        184.7625,
+        47.301667
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371704370971764,
+        2.371704370971764
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_005_031_Light_mosaic_M_106_20.0s_IRCUT_20250518-232329": {
+    "astap_center_deg": [
+      184.40699884483965,
+      47.443207187776835
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.40699884483965,
+        47.443207187776835
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.800386430778114,
+    "center_separation_deg_vs_astap": 0.0005001073418828095,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.4065756302271,
+      47.44279708932107
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        216.20438655642,
+        1172.5494398706
+      ],
+      "crval": [
+        184.72083,
+        47.301667
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.37173562205446,
+        2.37173562205446
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_006_032_Light_mosaic_M_106_20.0s_IRCUT_20250518-232350": {
+    "astap_center_deg": [
+      184.40348187746028,
+      47.44314890343294
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.40348187746028,
+        47.44314890343294
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.7628370582242252,
+    "center_separation_deg_vs_astap": 0.0004896769606178404,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.40306711607104,
+      47.44274753646093
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        212.5640641107,
+        1172.4701973839
+      ],
+      "crval": [
+        184.72083,
+        47.301667
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371476271551048,
+        2.371476271551048
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_007_033_Light_mosaic_M_106_20.0s_IRCUT_20250518-232431": {
+    "astap_center_deg": [
+      184.23745370893548,
+      47.44320305252839
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.23745370893548,
+        47.44320305252839
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.275806629671956,
+    "center_separation_deg_vs_astap": 0.00063216850824221,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.23701162761017,
+      47.44264605901812
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -118.66034021757,
+        953.66552271999
+      ],
+      "crval": [
+        184.87970338623,
+        47.442877950934
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3720373093647673,
+        2.3720373093647673
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_008_034_Light_mosaic_M_106_20.0s_IRCUT_20250518-232513": {
+    "astap_center_deg": [
+      184.2031253288468,
+      47.441813722856715
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.2031253288468,
+        47.441813722856715
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8165044116587157,
+    "center_separation_deg_vs_astap": 0.0005045845587940877,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.20264770417717,
+      47.44142609801483
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        225.01753497961,
+        1168.4412790406
+      ],
+      "crval": [
+        184.50834,
+        47.303056
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3715871321350375,
+        2.3715871321350375
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_009_035_Light_mosaic_M_106_20.0s_IRCUT_20250518-232534": {
+    "astap_center_deg": [
+      184.20633687341697,
+      47.44145994519725
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.20633687341697,
+        47.44145994519725
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8737629681753132,
+    "center_separation_deg_vs_astap": 0.0005204897133820315,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.20588687085538,
+      47.44103771860463
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        228.36716837394,
+        1167.8632527278
+      ],
+      "crval": [
+        184.50834,
+        47.303056
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371727555819475,
+        2.371727555819475
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_010_036_Light_mosaic_M_106_20.0s_IRCUT_20250518-232658": {
+    "astap_center_deg": [
+      183.76050670291085,
+      47.01281949458627
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.76050670291085,
+        47.01281949458627
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.756633897244622,
+    "center_separation_deg_vs_astap": 0.0004879538603457283,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.76010569423843,
+      47.012415341576244
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        247.33939935674,
+        1187.8787308579
+      ],
+      "crval": [
+        184.04166,
+        46.861389
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371668025997955,
+        2.371668025997955
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_011_037_Light_mosaic_M_106_20.0s_IRCUT_20250518-232739": {
+    "astap_center_deg": [
+      183.59978412736405,
+      47.009017348790046
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.59978412736405,
+        47.009017348790046
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 3.557743490883532,
+    "center_separation_deg_vs_astap": 0.000988262080800981,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.59947655914576,
+      47.00805159754587
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -124.06233806377,
+        953.41776439034
+      ],
+      "crval": [
+        184.24237632264,
+        47.00869941848
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.37289302870001,
+        2.37289302870001
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_012_038_Light_mosaic_M_106_20.0s_IRCUT_20250518-232821": {
+    "astap_center_deg": [
+      183.55667844797475,
+      47.008507821000414
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.55667844797475,
+        47.008507821000414
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.2469357825675056,
+    "center_separation_deg_vs_astap": 0.0006241488284909738,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.55594432108867,
+      47.00813503944859
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -110.65851891408,
+        954.00932139162
+      ],
+      "crval": [
+        184.18549055627,
+        47.008180002606
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371423069435136,
+        2.371423069435136
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_013_039_Light_mosaic_M_106_20.0s_IRCUT_20250518-232842": {
+    "astap_center_deg": [
+      183.55407096402425,
+      47.008483614799964
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.55407096402425,
+        47.008483614799964
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9636745458547473,
+    "center_separation_deg_vs_astap": 0.0005454651516263187,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.5537475073147,
+      47.007984730695334
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -115.42191804701,
+        953.84584427385
+      ],
+      "crval": [
+        184.18808238275,
+        47.00815004604
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.372122246541168,
+        2.372122246541168
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_014_040_Light_mosaic_M_106_20.0s_IRCUT_20250518-232924": {
+    "astap_center_deg": [
+      183.53920837792958,
+      46.858327880933054
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.53920837792958,
+        46.858327880933054
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.1976101292374408,
+    "center_separation_deg_vs_astap": 0.00033266948034373355,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.53898207733448,
+      46.85803339379693
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        202.85182012071,
+        1182.112899403
+      ],
+      "crval": [
+        183.8625,
+        46.710556
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3713140253423663,
+        2.3713140253423663
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_015_041_Light_mosaic_M_106_20.0s_IRCUT_20250518-232945": {
+    "astap_center_deg": [
+      183.534531692981,
+      46.858490650081485
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.534531692981,
+        46.858490650081485
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.2549853252993857,
+    "center_separation_deg_vs_astap": 0.0006263848125831627,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.5341281947886,
+      46.85792830754932
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -140.53664774897,
+        953.45793518163
+      ],
+      "crval": [
+        184.19098828642,
+        46.85813283274
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3724753226493216,
+        2.3724753226493216
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_016_042_Light_mosaic_M_106_20.0s_IRCUT_20250518-233027": {
+    "astap_center_deg": [
+      183.70792410264204,
+      46.70889282039258
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.70792410264204,
+        46.70889282039258
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.743960976243446,
+    "center_separation_deg_vs_astap": 0.0004844336045120683,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.7074130562106,
+      46.708558342652715
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        208.13400915291,
+        1176.1476137973
+      ],
+      "crval": [
+        184.024995,
+        46.565
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371335550403555,
+        2.371335550403555
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_017_043_Light_mosaic_M_106_20.0s_IRCUT_20250518-233048": {
+    "astap_center_deg": [
+      183.70693278131438,
+      46.70800153341752
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.70693278131438,
+        46.70800153341752
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.6498196462752939,
+    "center_separation_deg_vs_astap": 0.0004582832350764705,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.70657666528004,
+      46.70761372919058
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        207.33687507433,
+        1174.6679479663
+      ],
+      "crval": [
+        184.024995,
+        46.565
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3717893100771597,
+        2.3717893100771597
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_018_044_Light_mosaic_M_106_20.0s_IRCUT_20250518-233130": {
+    "astap_center_deg": [
+      183.89828638989044,
+      46.72140259929857
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.89828638989044,
+        46.72140259929857
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.0999717900338544,
+    "center_separation_deg_vs_astap": 0.0005833254972316262,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.89769545863828,
+      46.720982893246855
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -114.05275905411,
+        954.01570914837
+      ],
+      "crval": [
+        184.52719154402,
+        46.721079052168
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3716003867247095,
+        2.3716003867247095
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_019_045_Light_mosaic_M_106_20.0s_IRCUT_20250518-233211": {
+    "astap_center_deg": [
+      183.94887854869572,
+      46.72160164848661
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.94887854869572,
+        46.72160164848661
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.758778353153621,
+    "center_separation_deg_vs_astap": 0.0004885495425426725,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.94845244098252,
+      46.72121005115034
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -129.80965977472,
+        953.92700576994
+      ],
+      "crval": [
+        184.59322962881,
+        46.721272321458
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3721071750793006,
+        2.3721071750793006
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_020_046_Light_mosaic_M_106_20.0s_IRCUT_20250518-233232": {
+    "astap_center_deg": [
+      183.9505181894793,
+      46.720168895467154
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.9505181894793,
+        46.720168895467154
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.2911922764690638,
+    "center_separation_deg_vs_astap": 0.0006364422990191844,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.95003855086125,
+      46.71962397900783
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -126.54775504278,
+        953.53729014589
+      ],
+      "crval": [
+        184.59162913647,
+        46.719852543905
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3719671885109066,
+        2.3719671885109066
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_021_047_Light_mosaic_M_106_20.0s_IRCUT_20250518-233314": {
+    "astap_center_deg": [
+      184.5892111222037,
+      47.27851669274793
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.5892111222037,
+        47.27851669274793
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.648788637771726,
+    "center_separation_deg_vs_astap": 0.00045799684382547945,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.58879284325627,
+      47.27815720343764
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -65.705711787721,
+        954.70819803416
+      ],
+      "crval": [
+        185.17795088088,
+        47.278193720449
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3716470009319695,
+        2.3716470009319695
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_022_048_Light_mosaic_M_106_20.0s_IRCUT_20250518-233356": {
+    "astap_center_deg": [
+      184.7632071063289,
+      47.296626561129344
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.7632071063289,
+        47.296626561129344
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9288479309375575,
+    "center_separation_deg_vs_astap": 0.0005357910919270993,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.76264556984873,
+      47.29624968502396
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -102.08078069691,
+        954.07260032819
+      ],
+      "crval": [
+        185.38729033084,
+        47.296303415488
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3714511018545643,
+        2.3714511018545643
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_023_049_Light_mosaic_M_106_20.0s_IRCUT_20250518-233417": {
+    "astap_center_deg": [
+      184.75949713442748,
+      47.296595362011466
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.75949713442748,
+        47.296595362011466
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.110252907050868,
+    "center_separation_deg_vs_astap": 0.0005861813630696856,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.75903513877398,
+      47.29609994903064
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -109.46821989309,
+        953.84963351852
+      ],
+      "crval": [
+        185.39106510827,
+        47.296280305049
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.372236891320995,
+        2.372236891320995
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_024_050_Light_mosaic_M_106_20.0s_IRCUT_20250518-233459": {
+    "astap_center_deg": [
+      184.8111326913655,
+      47.45206659187473
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.8111326913655,
+        47.45206659187473
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.96573971600213,
+    "center_separation_deg_vs_astap": 0.0005460388100005917,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.81066781694108,
+      47.45162011616059
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -95.771764477436,
+        954.30133531452
+      ],
+      "crval": [
+        185.43101409041,
+        47.451736741825
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371473082210471,
+        2.371473082210471
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_025_051_Light_mosaic_M_106_20.0s_IRCUT_20250518-233520": {
+    "astap_center_deg": [
+      184.8080787325759,
+      47.45184048649683
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.8080787325759,
+        47.45184048649683
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.7201700230896873,
+    "center_separation_deg_vs_astap": 0.000477825006413802,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.80769955744194,
+      47.45143728233746
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -101.90084649471,
+        954.05223407753
+      ],
+      "crval": [
+        185.43409556936,
+        47.451513716338
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371773825526299,
+        2.371773825526299
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_026_052_Light_mosaic_M_106_20.0s_IRCUT_20250518-233602": {
+    "astap_center_deg": [
+      184.66635674000412,
+      47.59018048249782
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.66635674000412,
+        47.59018048249782
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.785038643536248,
+    "center_separation_deg_vs_astap": 0.0004958440676489578,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.66595856937087,
+      47.58976365148259
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -100.44968859924,
+        953.81552727368
+      ],
+      "crval": [
+        185.29247995569,
+        47.589865363579
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.37134368636885,
+        2.37134368636885
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_027_053_Light_mosaic_M_106_20.0s_IRCUT_20250518-233644": {
+    "astap_center_deg": [
+      184.63307997901575,
+      47.58744900424758
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.63307997901575,
+        47.58744900424758
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.1720528316584238,
+    "center_separation_deg_vs_astap": 0.0006033480087940066,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.63271136429762,
+      47.5868992613307
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -83.135120282282,
+        953.93580623365
+      ],
+      "crval": [
+        185.24246705001,
+        47.587128848758
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3720334047961193,
+        2.3720334047961193
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_028_054_Light_mosaic_M_106_20.0s_IRCUT_20250518-233705": {
+    "astap_center_deg": [
+      184.6348710895103,
+      47.587264840658975
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.6348710895103,
+        47.587264840658975
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.319866637863135,
+    "center_separation_deg_vs_astap": 0.0006444073994064264,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.63445746172664,
+      47.586683952945165
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -79.3687224715,
+        954.11814202091
+      ],
+      "crval": [
+        185.24065322012,
+        47.58692682056
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3725169583157792,
+        2.3725169583157792
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_029_055_Light_mosaic_M_106_20.0s_IRCUT_20250518-233828": {
+    "astap_center_deg": [
+      184.49709588650916,
+      47.58744690770723
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.49709588650916,
+        47.58744690770723
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.261949840144714,
+    "center_separation_deg_vs_astap": 0.0006283194000401982,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.4970020891311,
+      47.58682178104206
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -28.600581386603,
+        954.79598480082
+      ],
+      "crval": [
+        185.05344181196,
+        47.587061674091
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3718809250964905,
+        2.3718809250964905
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_030_056_Light_mosaic_M_106_20.0s_IRCUT_20250518-234013": {
+    "astap_center_deg": [
+      183.5611760033083,
+      46.987881724947464
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.5611760033083,
+        46.987881724947464
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.752343567446787,
+    "center_separation_deg_vs_astap": 0.0007645398798463298,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.5609494702552,
+      46.98713296552747
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -161.19538932815,
+        952.49837768125
+      ],
+      "crval": [
+        184.23927196813,
+        46.987531710721
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3721570780282373,
+        2.3721570780282373
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_031_069_Light_mosaic_M_106_20.0s_IRCUT_20250518-232102": {
+    "astap_center_deg": [
+      184.6282076618362,
+      47.29900281007409
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.6282076618362,
+        47.29900281007409
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.844427677827385,
+    "center_separation_deg_vs_astap": 0.000512341021618718,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.62777087563467,
+      47.298584781528135
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -53.813439055377,
+        954.95149339441
+      ],
+      "crval": [
+        185.20561944811,
+        47.298685817175
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3717138060454057,
+        2.3717138060454057
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_032_070_Light_mosaic_M_106_20.0s_IRCUT_20250518-232144": {
+    "astap_center_deg": [
+      184.61263037091618,
+      47.44440331200743
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.61263037091618,
+        47.44440331200743
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.5997176471653825,
+    "center_separation_deg_vs_astap": 0.0004443660131014951,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.61221051477128,
+      47.444061504729824
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        217.70108337482,
+        1170.6951714657
+      ],
+      "crval": [
+        184.924995,
+        47.304167
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3714941137865155,
+        2.3714941137865155
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_033_071_Light_mosaic_M_106_20.0s_IRCUT_20250518-232205": {
+    "astap_center_deg": [
+      184.6083798758734,
+      47.44444778069208
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.6083798758734,
+        47.44444778069208
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.9419492412784156,
+    "center_separation_deg_vs_astap": 0.0008172081225773376,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.6082412778334,
+      47.443635965951884
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -109.74834794857,
+        953.89187245065
+      ],
+      "crval": [
+        185.24210202396,
+        47.444125437257
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371437428862733,
+        2.371437428862733
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_034_072_Light_mosaic_M_106_20.0s_IRCUT_20250518-232247": {
+    "astap_center_deg": [
+      184.43901247253982,
+      47.44583379708819
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.43901247253982,
+        47.44583379708819
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8416367059856151,
+    "center_separation_deg_vs_astap": 0.0005115657516626709,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.4385796000978,
+      47.44541427569915
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        206.22383560504,
+        1176.4187219921
+      ],
+      "crval": [
+        184.7625,
+        47.301667
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371704370971764,
+        2.371704370971764
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_035_073_Light_mosaic_M_106_20.0s_IRCUT_20250518-232329": {
+    "astap_center_deg": [
+      184.40699884483965,
+      47.443207187776835
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.40699884483965,
+        47.443207187776835
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.800386430778114,
+    "center_separation_deg_vs_astap": 0.0005001073418828095,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.4065756302271,
+      47.44279708932107
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        216.20438655642,
+        1172.5494398706
+      ],
+      "crval": [
+        184.72083,
+        47.301667
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.37173562205446,
+        2.37173562205446
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_036_074_Light_mosaic_M_106_20.0s_IRCUT_20250518-232350": {
+    "astap_center_deg": [
+      184.40348187746028,
+      47.44314890343294
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.40348187746028,
+        47.44314890343294
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.7628370582242252,
+    "center_separation_deg_vs_astap": 0.0004896769606178404,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.40306711607104,
+      47.44274753646093
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        212.5640641107,
+        1172.4701973839
+      ],
+      "crval": [
+        184.72083,
+        47.301667
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371476271551048,
+        2.371476271551048
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_037_075_Light_mosaic_M_106_20.0s_IRCUT_20250518-232431": {
+    "astap_center_deg": [
+      184.23745370893548,
+      47.44320305252839
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.23745370893548,
+        47.44320305252839
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.275806629671956,
+    "center_separation_deg_vs_astap": 0.00063216850824221,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.23701162761017,
+      47.44264605901812
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -118.66034021757,
+        953.66552271999
+      ],
+      "crval": [
+        184.87970338623,
+        47.442877950934
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3720373093647673,
+        2.3720373093647673
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_038_076_Light_mosaic_M_106_20.0s_IRCUT_20250518-232513": {
+    "astap_center_deg": [
+      184.2031253288468,
+      47.441813722856715
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.2031253288468,
+        47.441813722856715
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8165044116587157,
+    "center_separation_deg_vs_astap": 0.0005045845587940877,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.20264770417717,
+      47.44142609801483
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        225.01753497961,
+        1168.4412790406
+      ],
+      "crval": [
+        184.50834,
+        47.303056
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3715871321350375,
+        2.3715871321350375
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_039_077_Light_mosaic_M_106_20.0s_IRCUT_20250518-232534": {
+    "astap_center_deg": [
+      184.20633687341697,
+      47.44145994519725
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.20633687341697,
+        47.44145994519725
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8737629681753132,
+    "center_separation_deg_vs_astap": 0.0005204897133820315,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.20588687085538,
+      47.44103771860463
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        228.36716837394,
+        1167.8632527278
+      ],
+      "crval": [
+        184.50834,
+        47.303056
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371727555819475,
+        2.371727555819475
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_040_078_Light_mosaic_M_106_20.0s_IRCUT_20250518-232658": {
+    "astap_center_deg": [
+      183.76050670291085,
+      47.01281949458627
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.76050670291085,
+        47.01281949458627
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.756633897244622,
+    "center_separation_deg_vs_astap": 0.0004879538603457283,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.76010569423843,
+      47.012415341576244
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        247.33939935674,
+        1187.8787308579
+      ],
+      "crval": [
+        184.04166,
+        46.861389
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371668025997955,
+        2.371668025997955
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_041_079_Light_mosaic_M_106_20.0s_IRCUT_20250518-232739": {
+    "astap_center_deg": [
+      183.59978412736405,
+      47.009017348790046
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.59978412736405,
+        47.009017348790046
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 3.557743490883532,
+    "center_separation_deg_vs_astap": 0.000988262080800981,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.59947655914576,
+      47.00805159754587
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -124.06233806377,
+        953.41776439034
+      ],
+      "crval": [
+        184.24237632264,
+        47.00869941848
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.37289302870001,
+        2.37289302870001
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_042_080_Light_mosaic_M_106_20.0s_IRCUT_20250518-232821": {
+    "astap_center_deg": [
+      183.55667844797475,
+      47.008507821000414
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.55667844797475,
+        47.008507821000414
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.2469357825675056,
+    "center_separation_deg_vs_astap": 0.0006241488284909738,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.55594432108867,
+      47.00813503944859
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -110.65851891408,
+        954.00932139162
+      ],
+      "crval": [
+        184.18549055627,
+        47.008180002606
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371423069435136,
+        2.371423069435136
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_043_081_Light_mosaic_M_106_20.0s_IRCUT_20250518-232842": {
+    "astap_center_deg": [
+      183.55407096402425,
+      47.008483614799964
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.55407096402425,
+        47.008483614799964
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9636745458547473,
+    "center_separation_deg_vs_astap": 0.0005454651516263187,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.5537475073147,
+      47.007984730695334
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -115.42191804701,
+        953.84584427385
+      ],
+      "crval": [
+        184.18808238275,
+        47.00815004604
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.372122246541168,
+        2.372122246541168
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_044_082_Light_mosaic_M_106_20.0s_IRCUT_20250518-232924": {
+    "astap_center_deg": [
+      183.53920837792958,
+      46.858327880933054
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.53920837792958,
+        46.858327880933054
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.1976101292374408,
+    "center_separation_deg_vs_astap": 0.00033266948034373355,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.53898207733448,
+      46.85803339379693
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        202.85182012071,
+        1182.112899403
+      ],
+      "crval": [
+        183.8625,
+        46.710556
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3713140253423663,
+        2.3713140253423663
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_045_083_Light_mosaic_M_106_20.0s_IRCUT_20250518-232945": {
+    "astap_center_deg": [
+      183.534531692981,
+      46.858490650081485
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.534531692981,
+        46.858490650081485
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.2549853252993857,
+    "center_separation_deg_vs_astap": 0.0006263848125831627,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.5341281947886,
+      46.85792830754932
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -140.53664774897,
+        953.45793518163
+      ],
+      "crval": [
+        184.19098828642,
+        46.85813283274
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3724753226493216,
+        2.3724753226493216
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_046_084_Light_mosaic_M_106_20.0s_IRCUT_20250518-233027": {
+    "astap_center_deg": [
+      183.70792410264204,
+      46.70889282039258
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.70792410264204,
+        46.70889282039258
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.743960976243446,
+    "center_separation_deg_vs_astap": 0.0004844336045120683,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.7074130562106,
+      46.708558342652715
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        208.13400915291,
+        1176.1476137973
+      ],
+      "crval": [
+        184.024995,
+        46.565
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371335550403555,
+        2.371335550403555
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_047_085_Light_mosaic_M_106_20.0s_IRCUT_20250518-233048": {
+    "astap_center_deg": [
+      183.70693278131438,
+      46.70800153341752
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.70693278131438,
+        46.70800153341752
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.6498196462752939,
+    "center_separation_deg_vs_astap": 0.0004582832350764705,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.70657666528004,
+      46.70761372919058
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        207.33687507433,
+        1174.6679479663
+      ],
+      "crval": [
+        184.024995,
+        46.565
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3717893100771597,
+        2.3717893100771597
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_048_086_Light_mosaic_M_106_20.0s_IRCUT_20250518-233130": {
+    "astap_center_deg": [
+      183.89828638989044,
+      46.72140259929857
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.89828638989044,
+        46.72140259929857
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.0999717900338544,
+    "center_separation_deg_vs_astap": 0.0005833254972316262,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.89769545863828,
+      46.720982893246855
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -114.05275905411,
+        954.01570914837
+      ],
+      "crval": [
+        184.52719154402,
+        46.721079052168
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3716003867247095,
+        2.3716003867247095
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_049_087_Light_mosaic_M_106_20.0s_IRCUT_20250518-233211": {
+    "astap_center_deg": [
+      183.94887854869572,
+      46.72160164848661
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.94887854869572,
+        46.72160164848661
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.758778353153621,
+    "center_separation_deg_vs_astap": 0.0004885495425426725,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.94845244098252,
+      46.72121005115034
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -129.80965977472,
+        953.92700576994
+      ],
+      "crval": [
+        184.59322962881,
+        46.721272321458
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3721071750793006,
+        2.3721071750793006
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_050_088_Light_mosaic_M_106_20.0s_IRCUT_20250518-233232": {
+    "astap_center_deg": [
+      183.9505181894793,
+      46.720168895467154
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.9505181894793,
+        46.720168895467154
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.2911922764690638,
+    "center_separation_deg_vs_astap": 0.0006364422990191844,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.95003855086125,
+      46.71962397900783
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -126.54775504278,
+        953.53729014589
+      ],
+      "crval": [
+        184.59162913647,
+        46.719852543905
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3719671885109066,
+        2.3719671885109066
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_051_089_Light_mosaic_M_106_20.0s_IRCUT_20250518-233314": {
+    "astap_center_deg": [
+      184.5892111222037,
+      47.27851669274793
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.5892111222037,
+        47.27851669274793
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.648788637771726,
+    "center_separation_deg_vs_astap": 0.00045799684382547945,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.58879284325627,
+      47.27815720343764
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -65.705711787721,
+        954.70819803416
+      ],
+      "crval": [
+        185.17795088088,
+        47.278193720449
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3716470009319695,
+        2.3716470009319695
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_052_090_Light_mosaic_M_106_20.0s_IRCUT_20250518-233356": {
+    "astap_center_deg": [
+      184.7632071063289,
+      47.296626561129344
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.7632071063289,
+        47.296626561129344
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9288479309375575,
+    "center_separation_deg_vs_astap": 0.0005357910919270993,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.76264556984873,
+      47.29624968502396
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -102.08078069691,
+        954.07260032819
+      ],
+      "crval": [
+        185.38729033084,
+        47.296303415488
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3714511018545643,
+        2.3714511018545643
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_053_091_Light_mosaic_M_106_20.0s_IRCUT_20250518-233417": {
+    "astap_center_deg": [
+      184.75949713442748,
+      47.296595362011466
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.75949713442748,
+        47.296595362011466
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.110252907050868,
+    "center_separation_deg_vs_astap": 0.0005861813630696856,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.75903513877398,
+      47.29609994903064
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -109.46821989309,
+        953.84963351852
+      ],
+      "crval": [
+        185.39106510827,
+        47.296280305049
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.372236891320995,
+        2.372236891320995
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_054_092_Light_mosaic_M_106_20.0s_IRCUT_20250518-233459": {
+    "astap_center_deg": [
+      184.8111326913655,
+      47.45206659187473
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.8111326913655,
+        47.45206659187473
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.96573971600213,
+    "center_separation_deg_vs_astap": 0.0005460388100005917,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.81066781694108,
+      47.45162011616059
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -95.771764477436,
+        954.30133531452
+      ],
+      "crval": [
+        185.43101409041,
+        47.451736741825
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371473082210471,
+        2.371473082210471
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_055_093_Light_mosaic_M_106_20.0s_IRCUT_20250518-233520": {
+    "astap_center_deg": [
+      184.8080787325759,
+      47.45184048649683
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.8080787325759,
+        47.45184048649683
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.7201700230896873,
+    "center_separation_deg_vs_astap": 0.000477825006413802,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.80769955744194,
+      47.45143728233746
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -101.90084649471,
+        954.05223407753
+      ],
+      "crval": [
+        185.43409556936,
+        47.451513716338
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371773825526299,
+        2.371773825526299
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_056_094_Light_mosaic_M_106_20.0s_IRCUT_20250518-233602": {
+    "astap_center_deg": [
+      184.66635674000412,
+      47.59018048249782
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.66635674000412,
+        47.59018048249782
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.785038643536248,
+    "center_separation_deg_vs_astap": 0.0004958440676489578,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.66595856937087,
+      47.58976365148259
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -100.44968859924,
+        953.81552727368
+      ],
+      "crval": [
+        185.29247995569,
+        47.589865363579
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.37134368636885,
+        2.37134368636885
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_057_095_Light_mosaic_M_106_20.0s_IRCUT_20250518-233644": {
+    "astap_center_deg": [
+      184.63307997901575,
+      47.58744900424758
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.63307997901575,
+        47.58744900424758
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.1720528316584238,
+    "center_separation_deg_vs_astap": 0.0006033480087940066,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.63271136429762,
+      47.5868992613307
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -83.135120282282,
+        953.93580623365
+      ],
+      "crval": [
+        185.24246705001,
+        47.587128848758
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3720334047961193,
+        2.3720334047961193
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_058_096_Light_mosaic_M_106_20.0s_IRCUT_20250518-233705": {
+    "astap_center_deg": [
+      184.6348710895103,
+      47.587264840658975
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        184.6348710895103,
+        47.587264840658975
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.319866637863135,
+    "center_separation_deg_vs_astap": 0.0006444073994064264,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      184.63445746172664,
+      47.586683952945165
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -79.3687224715,
+        954.11814202091
+      ],
+      "crval": [
+        185.24065322012,
+        47.58692682056
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3725169583157792,
+        2.3725169583157792
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m106_059_098_Light_mosaic_M_106_20.0s_IRCUT_20250518-234013": {
+    "astap_center_deg": [
+      183.5611760033083,
+      46.987881724947464
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        183.5611760033083,
+        46.987881724947464
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.752343567446787,
+    "center_separation_deg_vs_astap": 0.0007645398798463298,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      183.5609494702552,
+      46.98713296552747
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -161.19538932815,
+        952.49837768125
+      ],
+      "crval": [
+        184.23927196813,
+        46.987531710721
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3721570780282373,
+        2.3721570780282373
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_canonical_060_Light_M_31_11_30.0s_IRCUT_20250922-230409_runtime": {
+    "astap_center_deg": [
+      10.262921413043022,
+      40.72379752554284
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262921413043022,
+        40.72379752554284
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.827685111660777,
+    "center_separation_deg_vs_astap": 0.0005076903087946603,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.262686749110117,
+      40.723322003731006
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -262.67467123346,
+        960.55116446785
+      ],
+      "crval": [
+        10.96251318415,
+        40.723461307264
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3758409439961117,
+        2.3758409439961117
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_canonical_061_Light_M_31_11_30.0s_IRCUT_20250922-230510_runtime": {
+    "astap_center_deg": [
+      10.257323200350639,
+      40.7233718143502
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.257323200350639,
+        40.7233718143502
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8813404265580282,
+    "center_separation_deg_vs_astap": 0.0005225945629327856,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.256849657029225,
+      40.722991937331315
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -275.84173519723,
+        960.51455412654
+      ],
+      "crval": [
+        10.968112957166,
+        40.723034514961
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3757601826558,
+        2.3757601826558
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_canonical_062_Light_M_31_11_30.0s_IRCUT_20250922-230650_runtime": {
+    "astap_center_deg": [
+      10.262087587728788,
+      40.66120383605019
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262087587728788,
+        40.66120383605019
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.0139254634673276,
+    "center_separation_deg_vs_astap": 0.0005594237398520354,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.261612663163673,
+      40.660775860933995
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -265.50942936429,
+        960.6662048486
+      ],
+      "crval": [
+        10.963347439454,
+        40.660882586561
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3761767300073937,
+        2.3761767300073937
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_canonical_063_Light_M_31_11_30.0s_IRCUT_20250922-230720_runtime": {
+    "astap_center_deg": [
+      10.262163484026447,
+      40.65926770525093
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262163484026447,
+        40.65926770525093
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.122995354797835,
+    "center_separation_deg_vs_astap": 0.0005897209318882875,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.261706195897775,
+      40.65879080729557
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -265.4387113192,
+        960.57275341289
+      ],
+      "crval": [
+        10.963261278123,
+        40.658938411828
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3758464347952946,
+        2.3758464347952946
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_canonical_064_Light_M_31_11_30.0s_IRCUT_20250922-230853_runtime": {
+    "astap_center_deg": [
+      10.247638951296434,
+      40.6589054824099
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.247638951296434,
+        40.6589054824099
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.15508076517906,
+    "center_separation_deg_vs_astap": 0.0005986335458830723,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.247212353355907,
+      40.658401863152804
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -298.73317315691,
+        960.55392530622
+      ],
+      "crval": [
+        10.977811903039,
+        40.658564549739
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.376126135841247,
+        2.376126135841247
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_canonical_065_Light_M_31_11_30.0s_IRCUT_20250922-231350_runtime": {
+    "astap_center_deg": [
+      10.258866469800612,
+      40.72622390578478
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.258866469800612,
+        40.72622390578478
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.1570813195055827,
+    "center_separation_deg_vs_astap": 0.00032141147764043964,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.258684395360945,
+      40.7259336182249
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -271.96755235492,
+        961.10487155425
+      ],
+      "crval": [
+        10.966561364876,
+        40.725887705704
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3756132766969635,
+        2.3756132766969635
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_canonical_066_Light_M_31_11_30.0s_IRCUT_20250922-231844_runtime": {
+    "astap_center_deg": [
+      10.251306113827699,
+      40.681864513772716
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.251306113827699,
+        40.681864513772716
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.2828600869596687,
+    "center_separation_deg_vs_astap": 0.0003563500241554635,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.251068073541292,
+      40.681557269010206
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -290.08208307761,
+        961.14237495748
+      ],
+      "crval": [
+        10.974144915914,
+        40.681534611869
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.375316607823,
+        2.375316607823
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_canonical_067_Light_M_31_11_30.0s_IRCUT_20250922-231915_runtime": {
+    "astap_center_deg": [
+      10.251496477992774,
+      40.68097308632537
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.251496477992774,
+        40.68097308632537
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9168109989211322,
+    "center_separation_deg_vs_astap": 0.0005324474997003145,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.25112162823345,
+      40.680522872878555
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -289.64249677212,
+        961.00278094157
+      ],
+      "crval": [
+        10.97394434797,
+        40.6806345236
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3757729290935194,
+        2.3757729290935194
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_068_002_Light_M_31_11_30.0s_IRCUT_20250922-230409": {
+    "astap_center_deg": [
+      10.262921413043022,
+      40.72379752554284
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262921413043022,
+        40.72379752554284
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.827685111660777,
+    "center_separation_deg_vs_astap": 0.0005076903087946603,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.262686749110117,
+      40.723322003731006
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -262.67467123346,
+        960.55116446785
+      ],
+      "crval": [
+        10.96251318415,
+        40.723461307264
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3758409439961117,
+        2.3758409439961117
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_069_003_Light_M_31_11_30.0s_IRCUT_20250922-230510": {
+    "astap_center_deg": [
+      10.257323200350639,
+      40.7233718143502
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.257323200350639,
+        40.7233718143502
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8813404265580282,
+    "center_separation_deg_vs_astap": 0.0005225945629327856,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.256849657029225,
+      40.722991937331315
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -275.84173519723,
+        960.51455412654
+      ],
+      "crval": [
+        10.968112957166,
+        40.723034514961
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3757601826558,
+        2.3757601826558
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_070_004_Light_M_31_11_30.0s_IRCUT_20250922-230650": {
+    "astap_center_deg": [
+      10.262087587728788,
+      40.66120383605019
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262087587728788,
+        40.66120383605019
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.0139254634673276,
+    "center_separation_deg_vs_astap": 0.0005594237398520354,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.261612663163673,
+      40.660775860933995
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -265.50942936429,
+        960.6662048486
+      ],
+      "crval": [
+        10.963347439454,
+        40.660882586561
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3761767300073937,
+        2.3761767300073937
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_071_005_Light_M_31_11_30.0s_IRCUT_20250922-230720": {
+    "astap_center_deg": [
+      10.262163484026447,
+      40.65926770525093
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262163484026447,
+        40.65926770525093
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.122995354797835,
+    "center_separation_deg_vs_astap": 0.0005897209318882875,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.261706195897775,
+      40.65879080729557
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -265.4387113192,
+        960.57275341289
+      ],
+      "crval": [
+        10.963261278123,
+        40.658938411828
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3758464347952946,
+        2.3758464347952946
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_072_006_Light_M_31_11_30.0s_IRCUT_20250922-230853": {
+    "astap_center_deg": [
+      10.247638951296434,
+      40.6589054824099
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.247638951296434,
+        40.6589054824099
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.15508076517906,
+    "center_separation_deg_vs_astap": 0.0005986335458830723,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.247212353355907,
+      40.658401863152804
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -298.73317315691,
+        960.55392530622
+      ],
+      "crval": [
+        10.977811903039,
+        40.658564549739
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.376126135841247,
+        2.376126135841247
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_073_007_Light_M_31_11_30.0s_IRCUT_20250922-231350": {
+    "astap_center_deg": [
+      10.258866469800612,
+      40.72622390578478
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.258866469800612,
+        40.72622390578478
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.1570813195055827,
+    "center_separation_deg_vs_astap": 0.00032141147764043964,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.258684395360945,
+      40.7259336182249
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -271.96755235492,
+        961.10487155425
+      ],
+      "crval": [
+        10.966561364876,
+        40.725887705704
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3756132766969635,
+        2.3756132766969635
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_074_008_Light_M_31_11_30.0s_IRCUT_20250922-231844": {
+    "astap_center_deg": [
+      10.251306113827699,
+      40.681864513772716
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.251306113827699,
+        40.681864513772716
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.2828600869596687,
+    "center_separation_deg_vs_astap": 0.0003563500241554635,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.251068073541292,
+      40.681557269010206
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -290.08208307761,
+        961.14237495748
+      ],
+      "crval": [
+        10.974144915914,
+        40.681534611869
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.375316607823,
+        2.375316607823
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_075_009_Light_M_31_11_30.0s_IRCUT_20250922-231915": {
+    "astap_center_deg": [
+      10.251496477992774,
+      40.68097308632537
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.251496477992774,
+        40.68097308632537
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9168109989211322,
+    "center_separation_deg_vs_astap": 0.0005324474997003145,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.25112162823345,
+      40.680522872878555
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -289.64249677212,
+        961.00278094157
+      ],
+      "crval": [
+        10.97394434797,
+        40.6806345236
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3757729290935194,
+        2.3757729290935194
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_076_057_Light_mosaic_M_31_10.0s_IRCUT_20250804-004908": {
+    "astap_center_deg": [
+      9.943415451205508,
+      41.110240479848784
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        9.943415451205508,
+        41.110240479848784
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.8762188544937732,
+    "center_separation_deg_vs_astap": 0.0007989496818038259,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      9.942829391060465,
+      41.1095746429071
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        66.641929305132,
+        958.64391168171
+      ],
+      "crval": [
+        10.640666918866,
+        41.109664229927
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.9903627933830097,
+        3.9903627933830097
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_077_058_Light_mosaic_M_31_10.0s_IRCUT_20250804-004954": {
+    "astap_center_deg": [
+      9.930733099180335,
+      40.87336613776425
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        9.930733099180335,
+        40.87336613776425
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.266685156849965,
+    "center_separation_deg_vs_astap": 0.0006296347657916569,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      9.93021694691516,
+      40.87287206152376
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        59.025700179901,
+        958.866045627
+      ],
+      "crval": [
+        10.636701499766,
+        40.872792815615
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.9902889894748808,
+        3.9902889894748808
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_078_059_Light_mosaic_M_31_10.0s_IRCUT_20250804-005128": {
+    "astap_center_deg": [
+      10.501899633196617,
+      40.874654065376255
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.501899633196617,
+        40.874654065376255
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9969979265431879,
+    "center_separation_deg_vs_astap": 0.0005547216462619966,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.501582402069774,
+      40.87415388894758
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        53.845995546184,
+        958.79573737593
+      ],
+      "crval": [
+        11.21552328473,
+        40.874074312662
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.9894514145497104,
+        3.9894514145497104
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_079_060_Light_mosaic_M_31_10.0s_IRCUT_20250804-005203": {
+    "astap_center_deg": [
+      11.078457084579291,
+      41.33837689566325
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        11.078457084579291,
+        41.33837689566325
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.8199502849443308,
+    "center_separation_deg_vs_astap": 0.0007833195235956474,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      11.077837534306337,
+      41.33774665622376
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        64.909577668909,
+        958.67077784825
+      ],
+      "crval": [
+        11.780593040995,
+        41.337812946565
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.9899193652714104,
+        3.9899193652714104
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_080_061_Light_mosaic_M_31_10.0s_IRCUT_20250804-005250": {
+    "astap_center_deg": [
+      11.21297829800917,
+      41.35667047350695
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        11.21297829800917,
+        41.35667047350695
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.475621615777943,
+    "center_separation_deg_vs_astap": 0.0006876726710494287,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      11.212547290322842,
+      41.35606365541065
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        72.449751423821,
+        958.71953948449
+      ],
+      "crval": [
+        11.904441109077,
+        41.356105555204
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.9903426830921433,
+        3.9903426830921433
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_081_062_Light_mosaic_M_31_10.0s_IRCUT_20250804-005326": {
+    "astap_center_deg": [
+      11.240757904676109,
+      41.618866373089546
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        11.240757904676109,
+        41.618866373089546
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.5165680914943405,
+    "center_separation_deg_vs_astap": 0.0006990466920817613,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      11.24024383170867,
+      41.61828244687547
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        72.361248321205,
+        958.78248727903
+      ],
+      "crval": [
+        11.934995742786,
+        41.618286273205
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.989892343403511,
+        3.989892343403511
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_082_063_Light_mosaic_M_31_10.0s_IRCUT_20250804-005349": {
+    "astap_center_deg": [
+      11.237948306933095,
+      41.86831108916343
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        11.237948306933095,
+        41.86831108916343
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.9183427764391334,
+    "center_separation_deg_vs_astap": 0.0008106507712330926,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      11.237512557244596,
+      41.867568219215094
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        70.504376557221,
+        958.6548545609
+      ],
+      "crval": [
+        11.937803752958,
+        41.867731578221
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.9903008400157685,
+        3.9903008400157685
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_083_064_Light_mosaic_M_31_10.0s_IRCUT_20250804-005640": {
+    "astap_center_deg": [
+      9.65365892218151,
+      41.115159899222455
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        9.65365892218151,
+        41.115159899222455
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.6040250505482483,
+    "center_separation_deg_vs_astap": 0.0007233402918189578,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      9.653194647781323,
+      41.11452675248478
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        80.733213050368,
+        958.87169684214
+      ],
+      "crval": [
+        10.330399090132,
+        41.114590087312
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.990634115732864,
+        3.990634115732864
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_084_065_Light_mosaic_M_31_10.0s_IRCUT_20250804-010058": {
+    "astap_center_deg": [
+      11.525244671772734,
+      41.60138460996791
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        11.525244671772734,
+        41.60138460996791
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.630633371243331,
+    "center_separation_deg_vs_astap": 0.0007307314920120365,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      11.524951235097353,
+      41.60068760202977
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        73.979725397411,
+        958.74441819261
+      ],
+      "crval": [
+        12.217173599994,
+        41.600810407663
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.9902242405089132,
+        3.9902242405089132
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_085_066_Light_mosaic_M_31_10.0s_IRCUT_20250804-010133": {
+    "astap_center_deg": [
+      11.567135684182572,
+      41.84269035475053
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        11.567135684182572,
+        41.84269035475053
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 3.146873887255445,
+    "center_separation_deg_vs_astap": 0.0008741316353487347,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      11.56645434000027,
+      41.84197869535015
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        75.823530703299,
+        958.61151950716
+      ],
+      "crval": [
+        12.258591295505,
+        41.842123404942
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.990525688007494,
+        3.990525688007494
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_086_067_Light_mosaic_M_31_10.0s_IRCUT_20250804-010500": {
+    "astap_center_deg": [
+      10.278571414911344,
+      40.37834984207303
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.278571414911344,
+        40.37834984207303
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.6573556491329553,
+    "center_separation_deg_vs_astap": 0.0007381543469813764,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.27796510141373,
+      40.377774049256075
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        69.599129358923,
+        958.89398262138
+      ],
+      "crval": [
+        10.963819937943,
+        40.377791391095
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.9901200589922463,
+        3.9901200589922463
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_087_068_Light_mosaic_M_31_10.0s_IRCUT_20250804-010657": {
+    "astap_center_deg": [
+      10.283455047847701,
+      41.35650796777049
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.283455047847701,
+        41.35650796777049
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.7119089990201504,
+    "center_separation_deg_vs_astap": 0.0007533080552833752,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.282818711547339,
+      41.35592544858682
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        77.514406860128,
+        958.9542017956
+      ],
+      "crval": [
+        10.967265938525,
+        41.355926040239
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.9905465978413575,
+        3.9905465978413575
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_088_Light_M_31_11_30.0s_IRCUT_20250922-230409": {
+    "astap_center_deg": [
+      10.262921413043022,
+      40.72379752554284
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262921413043022,
+        40.72379752554284
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.827685111660777,
+    "center_separation_deg_vs_astap": 0.0005076903087946603,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.262686749110117,
+      40.723322003731006
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -262.67467123346,
+        960.55116446785
+      ],
+      "crval": [
+        10.96251318415,
+        40.723461307264
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3758409439961117,
+        2.3758409439961117
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_089_Light_M_31_11_30.0s_IRCUT_20250922-230510": {
+    "astap_center_deg": [
+      10.257323200350639,
+      40.7233718143502
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.257323200350639,
+        40.7233718143502
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8813404265580282,
+    "center_separation_deg_vs_astap": 0.0005225945629327856,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.256849657029225,
+      40.722991937331315
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -275.84173519723,
+        960.51455412654
+      ],
+      "crval": [
+        10.968112957166,
+        40.723034514961
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3757601826558,
+        2.3757601826558
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_090_Light_M_31_11_30.0s_IRCUT_20250922-230650": {
+    "astap_center_deg": [
+      10.262087587728788,
+      40.66120383605019
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262087587728788,
+        40.66120383605019
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.0139254634673276,
+    "center_separation_deg_vs_astap": 0.0005594237398520354,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.261612663163673,
+      40.660775860933995
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -265.50942936429,
+        960.6662048486
+      ],
+      "crval": [
+        10.963347439454,
+        40.660882586561
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3761767300073937,
+        2.3761767300073937
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_091_Light_M_31_11_30.0s_IRCUT_20250922-230720": {
+    "astap_center_deg": [
+      10.262163484026447,
+      40.65926770525093
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262163484026447,
+        40.65926770525093
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.122995354797835,
+    "center_separation_deg_vs_astap": 0.0005897209318882875,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.261706195897775,
+      40.65879080729557
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -265.4387113192,
+        960.57275341289
+      ],
+      "crval": [
+        10.963261278123,
+        40.658938411828
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3758464347952946,
+        2.3758464347952946
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_092_Light_M_31_11_30.0s_IRCUT_20250922-230853": {
+    "astap_center_deg": [
+      10.247638951296434,
+      40.6589054824099
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.247638951296434,
+        40.6589054824099
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.15508076517906,
+    "center_separation_deg_vs_astap": 0.0005986335458830723,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.247212353355907,
+      40.658401863152804
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -298.73317315691,
+        960.55392530622
+      ],
+      "crval": [
+        10.977811903039,
+        40.658564549739
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.376126135841247,
+        2.376126135841247
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_093_Light_M_31_11_30.0s_IRCUT_20250922-231350": {
+    "astap_center_deg": [
+      10.258866469800612,
+      40.72622390578478
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.258866469800612,
+        40.72622390578478
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.1570813195055827,
+    "center_separation_deg_vs_astap": 0.00032141147764043964,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.258684395360945,
+      40.7259336182249
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -271.96755235492,
+        961.10487155425
+      ],
+      "crval": [
+        10.966561364876,
+        40.725887705704
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3756132766969635,
+        2.3756132766969635
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_094_Light_M_31_11_30.0s_IRCUT_20250922-231844": {
+    "astap_center_deg": [
+      10.251306113827699,
+      40.681864513772716
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.251306113827699,
+        40.681864513772716
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.2828600869596687,
+    "center_separation_deg_vs_astap": 0.0003563500241554635,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.251068073541292,
+      40.681557269010206
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -290.08208307761,
+        961.14237495748
+      ],
+      "crval": [
+        10.974144915914,
+        40.681534611869
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.375316607823,
+        2.375316607823
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_095_Light_M_31_11_30.0s_IRCUT_20250922-231915": {
+    "astap_center_deg": [
+      10.251496477992774,
+      40.68097308632537
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.251496477992774,
+        40.68097308632537
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9168109989211322,
+    "center_separation_deg_vs_astap": 0.0005324474997003145,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.25112162823345,
+      40.680522872878555
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -289.64249677212,
+        961.00278094157
+      ],
+      "crval": [
+        10.97394434797,
+        40.6806345236
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3757729290935194,
+        2.3757729290935194
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_096_Light_M_31_20.0s_IRCUT_20251117-225718": {
+    "astap_center_deg": [
+      10.724591471210292,
+      40.36851689754413
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.724591471210292,
+        40.36851689754413
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 5.233329953564028,
+    "center_separation_deg_vs_astap": 0.0014537027648788966,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.724591077771716,
+      40.3670631949079
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -330.40784135109,
+        960.44340503266
+      ],
+      "crval": [
+        11.475860789375,
+        40.368174913547
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.364783108217961,
+        2.364783108217961
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_097_Light_M_31_20.0s_IRCUT_20251117-225739": {
+    "astap_center_deg": [
+      10.678149938211545,
+      40.33630318323933
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.678149938211545,
+        40.33630318323933
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.4713807700988515,
+    "center_separation_deg_vs_astap": 0.0004087168805830143,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.67775510150202,
+      40.336026654785115
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -319.61274468303,
+        973.33787681271
+      ],
+      "crval": [
+        11.422293031313,
+        40.335970029681
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3738540648068343,
+        2.3738540648068343
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_098_Light_M_31_20.0s_IRCUT_20251117-225801": {
+    "astap_center_deg": [
+      10.682755199164339,
+      40.33674304976198
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.682755199164339,
+        40.33674304976198
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.4964540764808572,
+    "center_separation_deg_vs_astap": 0.0004156816879113492,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.682414926195872,
+      40.3364182169162
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -308.87334560596,
+        973.22617569188
+      ],
+      "crval": [
+        11.417683607102,
+        40.336401609011
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.373906120076217,
+        2.373906120076217
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_099_Light_M_31_11_30.0s_IRCUT_20250922-230409_A0_zenear_native_run1": {
+    "astap_center_deg": [
+      10.262921413043022,
+      40.72379752554284
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262921413043022,
+        40.72379752554284
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.827685111660777,
+    "center_separation_deg_vs_astap": 0.0005076903087946603,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.262686749110117,
+      40.723322003731006
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -262.67467123346,
+        960.55116446785
+      ],
+      "crval": [
+        10.96251318415,
+        40.723461307264
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3758409439961117,
+        2.3758409439961117
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_100_Light_M_31_11_30.0s_IRCUT_20250922-230510_A0_zenear_native_run1": {
+    "astap_center_deg": [
+      10.257323200350639,
+      40.7233718143502
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.257323200350639,
+        40.7233718143502
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8813404265580282,
+    "center_separation_deg_vs_astap": 0.0005225945629327856,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.256849657029225,
+      40.722991937331315
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -275.84173519723,
+        960.51455412654
+      ],
+      "crval": [
+        10.968112957166,
+        40.723034514961
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3757601826558,
+        2.3757601826558
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_101_Light_M_31_11_30.0s_IRCUT_20250922-230650_A0_zenear_native_run1": {
+    "astap_center_deg": [
+      10.262087587728788,
+      40.66120383605019
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262087587728788,
+        40.66120383605019
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.0139254634673276,
+    "center_separation_deg_vs_astap": 0.0005594237398520354,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.261612663163673,
+      40.660775860933995
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -265.50942936429,
+        960.6662048486
+      ],
+      "crval": [
+        10.963347439454,
+        40.660882586561
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3761767300073937,
+        2.3761767300073937
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_102_Light_M_31_11_30.0s_IRCUT_20250922-230720_A0_zenear_native_run1": {
+    "astap_center_deg": [
+      10.262163484026447,
+      40.65926770525093
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.262163484026447,
+        40.65926770525093
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.122995354797835,
+    "center_separation_deg_vs_astap": 0.0005897209318882875,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.261706195897775,
+      40.65879080729557
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -265.4387113192,
+        960.57275341289
+      ],
+      "crval": [
+        10.963261278123,
+        40.658938411828
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3758464347952946,
+        2.3758464347952946
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_103_Light_M_31_11_30.0s_IRCUT_20250922-230853_A0_zenear_native_run1": {
+    "astap_center_deg": [
+      10.247638951296434,
+      40.6589054824099
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.247638951296434,
+        40.6589054824099
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.15508076517906,
+    "center_separation_deg_vs_astap": 0.0005986335458830723,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.247212353355907,
+      40.658401863152804
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -298.73317315691,
+        960.55392530622
+      ],
+      "crval": [
+        10.977811903039,
+        40.658564549739
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.376126135841247,
+        2.376126135841247
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_104_Light_M_31_11_30.0s_IRCUT_20250922-231350_A0_zenear_native_run1": {
+    "astap_center_deg": [
+      10.258866469800612,
+      40.72622390578478
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.258866469800612,
+        40.72622390578478
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.1570813195055827,
+    "center_separation_deg_vs_astap": 0.00032141147764043964,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.258684395360945,
+      40.7259336182249
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -271.96755235492,
+        961.10487155425
+      ],
+      "crval": [
+        10.966561364876,
+        40.725887705704
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3756132766969635,
+        2.3756132766969635
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_105_Light_M_31_11_30.0s_IRCUT_20250922-231844_A0_zenear_native_run1": {
+    "astap_center_deg": [
+      10.251306113827699,
+      40.681864513772716
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.251306113827699,
+        40.681864513772716
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.2828600869596687,
+    "center_separation_deg_vs_astap": 0.0003563500241554635,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.251068073541292,
+      40.681557269010206
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -290.08208307761,
+        961.14237495748
+      ],
+      "crval": [
+        10.974144915914,
+        40.681534611869
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.375316607823,
+        2.375316607823
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_106_Light_M_31_11_30.0s_IRCUT_20250922-231915_A0_zenear_native_run1": {
+    "astap_center_deg": [
+      10.251496477992774,
+      40.68097308632537
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.251496477992774,
+        40.68097308632537
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9168109989211322,
+    "center_separation_deg_vs_astap": 0.0005324474997003145,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.25112162823345,
+      40.680522872878555
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -289.64249677212,
+        961.00278094157
+      ],
+      "crval": [
+        10.97394434797,
+        40.6806345236
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3757729290935194,
+        2.3757729290935194
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_107_Light_mosaic_M_31_10.0s_IRCUT_20250115-202105": {
+    "astap_center_deg": [
+      9.568197086512773,
+      41.48316199189231
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        9.568197086512773,
+        41.48316199189231
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.4329830476092753,
+    "center_separation_deg_vs_astap": 0.000398050846558132,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      9.56766656324454,
+      41.483139973394124
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        221.93297430706,
+        265.48262338044
+      ],
+      "crval": [
+        10.24075686194,
+        41.483306919107
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.372319978604899,
+        2.3723199786048825
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_108_Light_mosaic_M_31_10.0s_IRCUT_20250115-202117": {
+    "astap_center_deg": [
+      9.569236710228601,
+      41.482800514190046
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        9.569236710228601,
+        41.482800514190046
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.5632919902848716,
+    "center_separation_deg_vs_astap": 0.000434247775079131,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      9.568700507820173,
+      41.48296546984522
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        567.64558918537,
+        529.1012716671
+      ],
+      "crval": [
+        9.90417,
+        41.618333
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3729345427874944,
+        2.372934542787465
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_109_Light_mosaic_M_31_10.0s_IRCUT_20250115-202143": {
+    "astap_center_deg": [
+      9.620186403625699,
+      41.40311737466695
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        9.620186403625699,
+        41.40311737466695
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.7128392506958996,
+    "center_separation_deg_vs_astap": 0.00047578868074886103,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      9.619568543956287,
+      41.40322506521044
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        561.48121713247,
+        526.7754973164
+      ],
+      "crval": [
+        9.958335,
+        41.536111
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3728088640046403,
+        2.3728088640046208
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_110_Light_mosaic_M_31_60.0s_IRCUT_20250904-015506": {
+    "astap_center_deg": [
+      10.39106928433593,
+      40.79191193859418
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.39106928433593,
+        40.79191193859418
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.7413829374854743,
+    "center_separation_deg_vs_astap": 0.0007614952604126317,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.390349063737899,
+      40.791380381298794
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        61.017479079733,
+        963.39138790873
+      ],
+      "crval": [
+        11.093000995504,
+        40.79133935216
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.989999276516924,
+        3.989999276516924
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_111_Light_mosaic_M_31_60.0s_IRCUT_20250904-020408": {
+    "astap_center_deg": [
+      11.386099500324082,
+      40.8017874925837
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        11.386099500324082,
+        40.8017874925837
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.3540652491890173,
+    "center_separation_deg_vs_astap": 0.0006539070136636159,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      11.385515046488798,
+      40.801305974408535
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        60.105473558855,
+        963.49562560959
+      ],
+      "crval": [
+        12.089640685845,
+        40.801211332095
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.9901861176884315,
+        3.9901861176884315
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "m31_extended_112_Light_mosaic_M_31_60.0s_IRCUT_20250904-023014": {
+    "astap_center_deg": [
+      10.005850084772804,
+      41.77682223313338
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        10.005850084772804,
+        41.77682223313338
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.6928535119528516,
+    "center_separation_deg_vs_astap": 0.0007480148644313477,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      10.005243608290575,
+      41.776226440183756
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        48.948982081326,
+        963.51960158006
+      ],
+      "crval": [
+        10.736571453637,
+        41.776253661977
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        3.990296943997716,
+        3.990296943997716
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc3628_113_099_Light_NGC_3628_10.0s_IRCUT_20250220-022101": {
+    "astap_center_deg": [
+      169.9552637990896,
+      13.321210975812884
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        169.9552637990896,
+        13.321210975812884
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8854083679169398,
+    "center_separation_deg_vs_astap": 0.0005237245466435944,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      169.95487629766714,
+      13.320847517256784
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -464.96061374989,
+        928.11581217951
+      ],
+      "crval": [
+        170.63676089753,
+        13.320898521321
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3734222546489936,
+        2.3734222546489936
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc3628_114_100_Light_NGC_3628_10.0s_IRCUT_20250220-022310": {
+    "astap_center_deg": [
+      169.90844332195638,
+      13.274885350734214
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        169.90844332195638,
+        13.274885350734214
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.5248359079099751,
+    "center_separation_deg_vs_astap": 0.0004235655299749931,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      169.90818941702537,
+      13.274541346499474
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -418.81123941961,
+        936.80841649904
+      ],
+      "crval": [
+        170.55857350042,
+        13.2745587937
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.373583130964129,
+        2.373583130964129
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_115_010_Light_NGC_6888_30.0s_LP_20250619-015627": {
+    "astap_center_deg": [
+      303.01703056913436,
+      38.37238047469406
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.01703056913436,
+        38.37238047469406
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8821737910930292,
+    "center_separation_deg_vs_astap": 0.000522826053081397,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0165113800001,
+      38.37205235208203
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -14.888539146662,
+        956.67430462019
+      ],
+      "crval": [
+        303.48340432128,
+        38.372041701195
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3704917965116445,
+        2.3704917965116445
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_116_011_Light_NGC_6888_30.0s_LP_20250619-015658": {
+    "astap_center_deg": [
+      303.0205038569962,
+      38.37308482608811
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.0205038569962,
+        38.37308482608811
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9623198268795141,
+    "center_separation_deg_vs_astap": 0.0005450888407998651,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.02001686289293,
+      38.372695785374866
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -6.5525016163318,
+        956.71734597675
+      ],
+      "crval": [
+        303.47993967459,
+        38.372752940122
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.370629560398808,
+        2.370629560398808
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_117_012_Light_NGC_6888_30.0s_LP_20250619-015728": {
+    "astap_center_deg": [
+      303.02252543837864,
+      38.37381793878805
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.02252543837864,
+        38.37381793878805
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.8997516139833082,
+    "center_separation_deg_vs_astap": 0.00052770878166203,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0219962564071,
+      38.37349180675103
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -1.8545225681748,
+        956.83902188967
+      ],
+      "crval": [
+        303.47791630513,
+        38.373483648263
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.370312406835064,
+        2.370312406835064
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_118_013_Light_NGC_6888_30.0s_LP_20250619-015805": {
+    "astap_center_deg": [
+      303.00996698949905,
+      38.385402650458495
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.00996698949905,
+        38.385402650458495
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.127573722126939,
+    "center_separation_deg_vs_astap": 0.0005909927005908164,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.00934416959484,
+      38.38506958368537
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -31.694676186456,
+        956.47880151426
+      ],
+      "crval": [
+        303.49044830859,
+        38.385081123712
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3705359991130006,
+        2.3705359991130006
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_119_014_Light_NGC_6888_30.0s_LP_20250619-015906": {
+    "astap_center_deg": [
+      303.01916351240834,
+      38.38682178172215
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.01916351240834,
+        38.38682178172215
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.871619024856462,
+    "center_separation_deg_vs_astap": 0.0005198941735712394,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.01865501119573,
+      38.38648798180784
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -9.6240881647339,
+        956.70750508549
+      ],
+      "crval": [
+        303.48127459088,
+        38.386490357487
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.370777638219017,
+        2.370777638219017
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_120_015_Light_NGC_6888_30.0s_LP_20250619-015937": {
+    "astap_center_deg": [
+      303.01674846412243,
+      38.38759083918413
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.01674846412243,
+        38.38759083918413
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.6438997569627118,
+    "center_separation_deg_vs_astap": 0.00045663882137853104,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.01624710908294,
+      38.38735827047355
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -15.485210350387,
+        956.77829726437
+      ],
+      "crval": [
+        303.48368614714,
+        38.387271754485
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3702231518425902,
+        2.3702231518425902
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_121_016_Light_NGC_6888_30.0s_LP_20250619-020145": {
+    "astap_center_deg": [
+      303.02737654844856,
+      38.38296810810349
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.02737654844856,
+        38.38296810810349
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.4501389929937716,
+    "center_separation_deg_vs_astap": 0.0006805941647204921,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0268150328063,
+      38.38244900656887
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        9.9306224666053,
+        956.64081316599
+      ],
+      "crval": [
+        303.4730683814,
+        38.382629728283
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371232925369382,
+        2.371232925369382
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_122_017_Light_NGC_6888_30.0s_LP_20250619-020322": {
+    "astap_center_deg": [
+      303.06794342396626,
+      38.392444902346945
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.06794342396626,
+        38.392444902346945
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.2272827454430715,
+    "center_separation_deg_vs_astap": 0.0006186896515119643,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.06736830903367,
+      38.39202112022377
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        106.44720461613,
+        957.67158440591
+      ],
+      "crval": [
+        303.43248832746,
+        38.392127231568
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.370718817503947,
+        2.370718817503947
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_123_018_Light_NGC_6888_30.0s_LP_20250619-020352": {
+    "astap_center_deg": [
+      303.0738399589738,
+      38.392754656372226
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.0738399589738,
+        38.392754656372226
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.0037134961928023,
+    "center_separation_deg_vs_astap": 0.0005565870822757784,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.073349319725,
+      38.39235227539826
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        120.51282615719,
+        957.86263569795
+      ],
+      "crval": [
+        303.42660782072,
+        38.392439607209
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3704200720686273,
+        2.3704200720686273
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_124_019_Light_NGC_6888_30.0s_LP_20250619-020423": {
+    "astap_center_deg": [
+      303.07315379860296,
+      38.39335107139685
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.07315379860296,
+        38.39335107139685
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.4325149043937775,
+    "center_separation_deg_vs_astap": 0.0003979208067760493,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.07279330882363,
+      38.39307087037219
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        119.08542866477,
+        958.03952422471
+      ],
+      "crval": [
+        303.42726744338,
+        38.393036612109
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3705161758756987,
+        2.3705161758756987
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_125_020_Light_NGC_6888_30.0s_LP_20250619-020454": {
+    "astap_center_deg": [
+      303.0703173487448,
+      38.39421645920065
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.0703173487448,
+        38.39421645920065
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.075423421120874,
+    "center_separation_deg_vs_astap": 0.0005765065058669094,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.06980370292905,
+      38.393803793404395
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        112.14945256337,
+        957.78336814965
+      ],
+      "crval": [
+        303.43012340662,
+        38.393894424328
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3706026234297264,
+        2.3706026234297264
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_126_021_Light_NGC_6888_30.0s_LP_20250619-020524": {
+    "astap_center_deg": [
+      303.0717422471345,
+      38.394790000049426
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.0717422471345,
+        38.394790000049426
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.046834624719323,
+    "center_separation_deg_vs_astap": 0.0005685651735331453,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0712098480498,
+      38.394403797879384
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        115.5537917474,
+        957.86112904104
+      ],
+      "crval": [
+        303.42865086105,
+        38.394453255799
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3704636048179095,
+        2.3704636048179095
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_127_022_Light_NGC_6888_30.0s_LP_20250619-020601": {
+    "astap_center_deg": [
+      303.0216064911881,
+      38.386280602012725
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.0216064911881,
+        38.386280602012725
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.164201188407647,
+    "center_separation_deg_vs_astap": 0.000601166996779902,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0210199810916,
+      38.38589324304836
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -3.9510005276112,
+        956.70478142464
+      ],
+      "crval": [
+        303.47881838703,
+        38.385960865264
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.370510154389878,
+        2.370510154389878
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_128_023_Light_NGC_6888_30.0s_LP_20250619-020632": {
+    "astap_center_deg": [
+      303.0249893394481,
+      38.38694302223586
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.0249893394481,
+        38.38694302223586
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.1024176021701004,
+    "center_separation_deg_vs_astap": 0.0005840048894916945,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0245401067134,
+      38.386477114770386
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        4.3515418561572,
+        956.74558880727
+      ],
+      "crval": [
+        303.47542946,
+        38.386610855443
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3708337294586337,
+        2.3708337294586337
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_129_024_Light_NGC_6888_30.0s_LP_20250619-020803": {
+    "astap_center_deg": [
+      303.042004427517,
+      38.38904134075021
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.042004427517,
+        38.38904134075021
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.1181573487920886,
+    "center_separation_deg_vs_astap": 0.0005883770413311357,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0414394993022,
+      38.38865389023945
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        44.60337980323,
+        957.16025451765
+      ],
+      "crval": [
+        303.4584326051,
+        38.388714354075
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3703261406259912,
+        2.3703261406259912
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_130_025_Light_NGC_6888_30.0s_LP_20250619-020840": {
+    "astap_center_deg": [
+      303.02437476549613,
+      38.3884748586698
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.02437476549613,
+        38.3884748586698
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9295163516673786,
+    "center_separation_deg_vs_astap": 0.0005359767643520496,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.02392331235654,
+      38.388072297341026
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        2.8272582354264,
+        956.79891165222
+      ],
+      "crval": [
+        303.4760471651,
+        38.388151886047
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3705424205494774,
+        2.3705424205494774
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_131_026_Light_NGC_6888_30.0s_LP_20250619-020911": {
+    "astap_center_deg": [
+      303.02336128347827,
+      38.389177783148156
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.02336128347827,
+        38.389177783148156
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.129939052109263,
+    "center_separation_deg_vs_astap": 0.0005916497366970175,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0228576032526,
+      38.38873711364081
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        0.35477756441848,
+        956.72619669052
+      ],
+      "crval": [
+        303.47706252537,
+        38.388835403617
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.370539205916526,
+        2.370539205916526
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_132_Light_NGC_6888_30.0s_LP_20250619-015658": {
+    "astap_center_deg": [
+      303.0205038569962,
+      38.37308482608811
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.0205038569962,
+        38.37308482608811
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9623198268795141,
+    "center_separation_deg_vs_astap": 0.0005450888407998651,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.02001686289293,
+      38.372695785374866
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -6.5525016163318,
+        956.71734597675
+      ],
+      "crval": [
+        303.47993967459,
+        38.372752940122
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.370629560398808,
+        2.370629560398808
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_133_Light_NGC_6888_30.0s_LP_20250619-015906": {
+    "astap_center_deg": [
+      303.01916351240834,
+      38.38682178172215
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.01916351240834,
+        38.38682178172215
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.871619024856462,
+    "center_separation_deg_vs_astap": 0.0005198941735712394,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.01865501119573,
+      38.38648798180784
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -9.6240881647339,
+        956.70750508549
+      ],
+      "crval": [
+        303.48127459088,
+        38.386490357487
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.370777638219017,
+        2.370777638219017
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_134_Light_NGC_6888_30.0s_LP_20250619-015937": {
+    "astap_center_deg": [
+      303.01674846412243,
+      38.38759083918413
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.01674846412243,
+        38.38759083918413
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.6438997569627118,
+    "center_separation_deg_vs_astap": 0.00045663882137853104,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.01624710908294,
+      38.38735827047355
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -15.485210350387,
+        956.77829726437
+      ],
+      "crval": [
+        303.48368614714,
+        38.387271754485
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3702231518425902,
+        2.3702231518425902
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_135_Light_NGC_6888_30.0s_LP_20250619-020145": {
+    "astap_center_deg": [
+      303.02737654844856,
+      38.38296810810349
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.02737654844856,
+        38.38296810810349
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.4501389929937716,
+    "center_separation_deg_vs_astap": 0.0006805941647204921,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0268150328063,
+      38.38244900656887
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        9.9306224666053,
+        956.64081316599
+      ],
+      "crval": [
+        303.4730683814,
+        38.382629728283
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.371232925369382,
+        2.371232925369382
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_136_Light_NGC_6888_30.0s_LP_20250619-020352": {
+    "astap_center_deg": [
+      303.0738399589738,
+      38.392754656372226
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.0738399589738,
+        38.392754656372226
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.0037134961928023,
+    "center_separation_deg_vs_astap": 0.0005565870822757784,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.073349319725,
+      38.39235227539826
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        120.51282615719,
+        957.86263569795
+      ],
+      "crval": [
+        303.42660782072,
+        38.392439607209
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3704200720686273,
+        2.3704200720686273
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_137_Light_NGC_6888_30.0s_LP_20250619-020601": {
+    "astap_center_deg": [
+      303.0216064911881,
+      38.386280602012725
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.0216064911881,
+        38.386280602012725
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.164201188407647,
+    "center_separation_deg_vs_astap": 0.000601166996779902,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0210199810916,
+      38.38589324304836
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        -3.9510005276112,
+        956.70478142464
+      ],
+      "crval": [
+        303.47881838703,
+        38.385960865264
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.370510154389878,
+        2.370510154389878
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_138_Light_NGC_6888_30.0s_LP_20250619-020632": {
+    "astap_center_deg": [
+      303.0249893394481,
+      38.38694302223586
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.0249893394481,
+        38.38694302223586
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.1024176021701004,
+    "center_separation_deg_vs_astap": 0.0005840048894916945,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0245401067134,
+      38.386477114770386
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        4.3515418561572,
+        956.74558880727
+      ],
+      "crval": [
+        303.47542946,
+        38.386610855443
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3708337294586337,
+        2.3708337294586337
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_139_Light_NGC_6888_30.0s_LP_20250619-020803": {
+    "astap_center_deg": [
+      303.042004427517,
+      38.38904134075021
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.042004427517,
+        38.38904134075021
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.1181573487920886,
+    "center_separation_deg_vs_astap": 0.0005883770413311357,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0414394993022,
+      38.38865389023945
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        44.60337980323,
+        957.16025451765
+      ],
+      "crval": [
+        303.4584326051,
+        38.388714354075
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3703261406259912,
+        2.3703261406259912
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_140_Light_NGC_6888_30.0s_LP_20250619-020840": {
+    "astap_center_deg": [
+      303.02437476549613,
+      38.3884748586698
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.02437476549613,
+        38.3884748586698
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 1.9295163516673786,
+    "center_separation_deg_vs_astap": 0.0005359767643520496,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.02392331235654,
+      38.388072297341026
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        2.8272582354264,
+        956.79891165222
+      ],
+      "crval": [
+        303.4760471651,
+        38.388151886047
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.3705424205494774,
+        2.3705424205494774
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  },
+  "ngc6888_141_Light_NGC_6888_30.0s_LP_20250619-020911": {
+    "astap_center_deg": [
+      303.02336128347827,
+      38.389177783148156
+    ],
+    "astap_classification": "ASTAP_ORACLE_VALID",
+    "astap_wcs": {
+      "classification": "WCS_READABLE",
+      "crval": [
+        303.02336128347827,
+        38.389177783148156
+      ],
+      "exists": true,
+      "has_celestial": true,
+      "height": 0,
+      "width": 0
+    },
+    "center_separation_arcsec_vs_astap": 2.129939052109263,
+    "center_separation_deg_vs_astap": 0.0005916497366970175,
+    "classification": "WCS_CONFIRMED",
+    "near_center_deg": [
+      303.0228576032526,
+      38.38873711364081
+    ],
+    "near_success": true,
+    "near_wcs": {
+      "classification": "WCS_READABLE",
+      "crpix": [
+        0.35477756441848,
+        956.72619669052
+      ],
+      "crval": [
+        303.47706252537,
+        38.388835403617
+      ],
+      "exists": true,
+      "scale_arcsec": [
+        2.370539205916526,
+        2.370539205916526
+      ],
+      "shape": [
+        1920,
+        1080
+      ]
+    },
+    "support_method": "WCS center/scale comparison to clean ASTAP oracle; full independent stellar holdout not implemented in this pass"
+  }
+}

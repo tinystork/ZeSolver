@@ -1,0 +1,1114 @@
+{
+  "Light_M_31_11_30.0s_IRCUT_20250922-230409": {
+    "IMG-B1": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 47,
+      "image_stars": 63,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1203.5,
+          "noise": 83.39625,
+          "threshold_30sigma": 3705.3875,
+          "threshold_7sigma": 1787.2737499999998
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 63,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-B2": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 47,
+      "image_stars": 63,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1203.5,
+          "noise": 83.39625,
+          "threshold_30sigma": 3705.3875,
+          "threshold_7sigma": 1787.2737499999998
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 63,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-D1": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 189,
+      "image_stars": 252,
+      "matches_kept": 50,
+      "matches_raw": 53,
+      "refs": 50,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": -0.36168870658455715,
+        "scale": 2.375555229441069,
+        "translation": [
+          -329.0447992042406,
+          1771.1348500354388
+        ]
+      }
+    },
+    "IMG-D2": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 160,
+      "image_stars": 49,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "note": "Python candidates with current ZN3 ranking; ASTAP ranking formula not promoted.",
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-O0": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 189,
+      "image_stars": 252,
+      "matches_kept": 50,
+      "matches_raw": 53,
+      "refs": 50,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": -0.36168870658455715,
+        "scale": 2.375555229441069,
+        "translation": [
+          -329.0447992042406,
+          1771.1348500354388
+        ]
+      }
+    },
+    "IMG-P": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 160,
+      "image_stars": 49,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 0.6085846424102783,
+          "noise": 0.0252387815952301,
+          "threshold_30sigma": 1.3657480902671812,
+          "threshold_7sigma": 0.785256113576889
+        },
+        "bin_factor": 2,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 49,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    }
+  },
+  "Light_M_31_11_30.0s_IRCUT_20250922-230510": {
+    "IMG-B1": {
+      "catalog_quads": 335,
+      "catalog_stars": 459,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 45,
+      "image_stars": 61,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1216.75,
+          "noise": 83.76689999999999,
+          "threshold_30sigma": 3729.7569999999996,
+          "threshold_7sigma": 1803.1183
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 61,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-B2": {
+      "catalog_quads": 335,
+      "catalog_stars": 459,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 45,
+      "image_stars": 61,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1216.75,
+          "noise": 83.76689999999999,
+          "threshold_30sigma": 3729.7569999999996,
+          "threshold_7sigma": 1803.1183
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 61,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-D1": {
+      "catalog_quads": 335,
+      "catalog_stars": 459,
+      "failure_stage": null,
+      "image_quads": 197,
+      "image_stars": 258,
+      "matches_kept": 50,
+      "matches_raw": 52,
+      "refs": 50,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": 0.11842645289004186,
+        "scale": 2.3754739237314997,
+        "translation": [
+          -313.5993843366509,
+          1769.5622595256414
+        ]
+      }
+    },
+    "IMG-D2": {
+      "catalog_quads": 335,
+      "catalog_stars": 459,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 181,
+      "image_stars": 55,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "note": "Python candidates with current ZN3 ranking; ASTAP ranking formula not promoted.",
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-O0": {
+      "catalog_quads": 335,
+      "catalog_stars": 459,
+      "failure_stage": null,
+      "image_quads": 197,
+      "image_stars": 258,
+      "matches_kept": 50,
+      "matches_raw": 52,
+      "refs": 50,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": 0.11842645289004186,
+        "scale": 2.3754739237314997,
+        "translation": [
+          -313.5993843366509,
+          1769.5622595256414
+        ]
+      }
+    },
+    "IMG-P": {
+      "catalog_quads": 335,
+      "catalog_stars": 459,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 181,
+      "image_stars": 55,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 0.6156661510467529,
+          "noise": 0.02532503056526184,
+          "threshold_30sigma": 1.375417068004608,
+          "threshold_7sigma": 0.7929413650035858
+        },
+        "bin_factor": 2,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 55,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    }
+  },
+  "Light_M_31_11_30.0s_IRCUT_20250922-230650": {
+    "IMG-B1": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 47,
+      "image_stars": 63,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1219.75,
+          "noise": 83.0256,
+          "threshold_30sigma": 3710.518,
+          "threshold_7sigma": 1800.9292
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 63,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-B2": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 47,
+      "image_stars": 63,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1219.75,
+          "noise": 83.0256,
+          "threshold_30sigma": 3710.518,
+          "threshold_7sigma": 1800.9292
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 63,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-D1": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": null,
+      "image_quads": 198,
+      "image_stars": 257,
+      "matches_kept": 61,
+      "matches_raw": 61,
+      "refs": 61,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": -0.2316396955401687,
+        "scale": 2.3756002773295566,
+        "translation": [
+          -325.63321177867,
+          1548.9698843069648
+        ]
+      }
+    },
+    "IMG-D2": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 50,
+      "image_stars": 71,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "note": "Python candidates with current ZN3 ranking; ASTAP ranking formula not promoted.",
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-O0": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": null,
+      "image_quads": 198,
+      "image_stars": 257,
+      "matches_kept": 61,
+      "matches_raw": 61,
+      "refs": 61,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": -0.2316396955401687,
+        "scale": 2.3756002773295566,
+        "translation": [
+          -325.63321177867,
+          1548.9698843069648
+        ]
+      }
+    },
+    "IMG-P": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 50,
+      "image_stars": 71,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 0.6385238170623779,
+          "noise": 0.026046747100353238,
+          "threshold_30sigma": 1.4199262300729751,
+          "threshold_7sigma": 0.8208510467648507
+        },
+        "bin_factor": 2,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 71,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    }
+  },
+  "Light_M_31_11_30.0s_IRCUT_20250922-230720": {
+    "IMG-B1": {
+      "catalog_quads": 337,
+      "catalog_stars": 462,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 48,
+      "image_stars": 62,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1221.5,
+          "noise": 83.39625,
+          "threshold_30sigma": 3723.3875,
+          "threshold_7sigma": 1805.2737499999998
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 62,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-B2": {
+      "catalog_quads": 337,
+      "catalog_stars": 462,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 48,
+      "image_stars": 62,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1221.5,
+          "noise": 83.39625,
+          "threshold_30sigma": 3723.3875,
+          "threshold_7sigma": 1805.2737499999998
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 62,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-D1": {
+      "catalog_quads": 337,
+      "catalog_stars": 462,
+      "failure_stage": null,
+      "image_quads": 198,
+      "image_stars": 260,
+      "matches_kept": 50,
+      "matches_raw": 52,
+      "refs": 50,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": 0.028636171425554042,
+        "scale": 2.3756061105998345,
+        "translation": [
+          -325.67240422711245,
+          1541.9836686677468
+        ]
+      }
+    },
+    "IMG-D2": {
+      "catalog_quads": 337,
+      "catalog_stars": 462,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 51,
+      "image_stars": 74,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "note": "Python candidates with current ZN3 ranking; ASTAP ranking formula not promoted.",
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-O0": {
+      "catalog_quads": 337,
+      "catalog_stars": 462,
+      "failure_stage": null,
+      "image_quads": 198,
+      "image_stars": 260,
+      "matches_kept": 50,
+      "matches_raw": 52,
+      "refs": 50,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": 0.028636171425554042,
+        "scale": 2.3756061105998345,
+        "translation": [
+          -325.67240422711245,
+          1541.9836686677468
+        ]
+      }
+    },
+    "IMG-P": {
+      "catalog_quads": 337,
+      "catalog_stars": 462,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 51,
+      "image_stars": 74,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 0.6427300572395325,
+          "noise": 0.02619238060712814,
+          "threshold_30sigma": 1.4285014754533767,
+          "threshold_7sigma": 0.8260767214894295
+        },
+        "bin_factor": 2,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 74,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    }
+  },
+  "Light_M_31_11_30.0s_IRCUT_20250922-230853": {
+    "IMG-B1": {
+      "catalog_quads": 354,
+      "catalog_stars": 484,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 48,
+      "image_stars": 65,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1221.75,
+          "noise": 82.65495,
+          "threshold_30sigma": 3701.3985,
+          "threshold_7sigma": 1800.33465
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 65,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-B2": {
+      "catalog_quads": 354,
+      "catalog_stars": 484,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 48,
+      "image_stars": 65,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1221.75,
+          "noise": 82.65495,
+          "threshold_30sigma": 3701.3985,
+          "threshold_7sigma": 1800.33465
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 65,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-D1": {
+      "catalog_quads": 354,
+      "catalog_stars": 484,
+      "failure_stage": null,
+      "image_quads": 204,
+      "image_stars": 272,
+      "matches_kept": 58,
+      "matches_raw": 60,
+      "refs": 58,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": -0.26444052879323204,
+        "scale": 2.3755120103652057,
+        "translation": [
+          -286.038456898899,
+          1540.8016082630213
+        ]
+      }
+    },
+    "IMG-D2": {
+      "catalog_quads": 354,
+      "catalog_stars": 484,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 42,
+      "image_stars": 62,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "note": "Python candidates with current ZN3 ranking; ASTAP ranking formula not promoted.",
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-O0": {
+      "catalog_quads": 354,
+      "catalog_stars": 484,
+      "failure_stage": null,
+      "image_quads": 204,
+      "image_stars": 272,
+      "matches_kept": 58,
+      "matches_raw": 60,
+      "refs": 58,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": -0.26444052879323204,
+        "scale": 2.3755120103652057,
+        "translation": [
+          -286.038456898899,
+          1540.8016082630213
+        ]
+      }
+    },
+    "IMG-P": {
+      "catalog_quads": 354,
+      "catalog_stars": 484,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 42,
+      "image_stars": 62,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 0.6621196269989014,
+          "noise": 0.027030568599700926,
+          "threshold_30sigma": 1.4730366849899292,
+          "threshold_7sigma": 0.8513336071968078
+        },
+        "bin_factor": 2,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 62,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    }
+  },
+  "Light_M_31_11_30.0s_IRCUT_20250922-231350": {
+    "IMG-B1": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 46,
+      "image_stars": 61,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1220.25,
+          "noise": 84.13754999999999,
+          "threshold_30sigma": 3744.3765,
+          "threshold_7sigma": 1809.21285
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 61,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-B2": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 46,
+      "image_stars": 61,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1220.25,
+          "noise": 84.13754999999999,
+          "threshold_30sigma": 3744.3765,
+          "threshold_7sigma": 1809.21285
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 61,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-D1": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": null,
+      "image_quads": 197,
+      "image_stars": 257,
+      "matches_kept": 47,
+      "matches_raw": 49,
+      "refs": 47,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": -0.053526206162511844,
+        "scale": 2.37566067158959,
+        "translation": [
+          -317.0511086921742,
+          1782.4861576335484
+        ]
+      }
+    },
+    "IMG-D2": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": "MATCHES_REJECTED_BY_SCALE",
+      "image_quads": 184,
+      "image_stars": 54,
+      "matches_kept": 0,
+      "matches_raw": 1,
+      "note": "Python candidates with current ZN3 ranking; ASTAP ranking formula not promoted.",
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-O0": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": null,
+      "image_quads": 197,
+      "image_stars": 257,
+      "matches_kept": 47,
+      "matches_raw": 49,
+      "refs": 47,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": -0.053526206162511844,
+        "scale": 2.37566067158959,
+        "translation": [
+          -317.0511086921742,
+          1782.4861576335484
+        ]
+      }
+    },
+    "IMG-P": {
+      "catalog_quads": 332,
+      "catalog_stars": 457,
+      "failure_stage": "MATCHES_REJECTED_BY_SCALE",
+      "image_quads": 184,
+      "image_stars": 54,
+      "matches_kept": 0,
+      "matches_raw": 1,
+      "python_diag": {
+        "background": {
+          "background": 0.6141119003295898,
+          "noise": 0.02525115337371826,
+          "threshold_30sigma": 1.3716465015411377,
+          "threshold_7sigma": 0.7908699739456176
+        },
+        "bin_factor": 2,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 54,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    }
+  },
+  "Light_M_31_11_30.0s_IRCUT_20250922-231844": {
+    "IMG-B1": {
+      "catalog_quads": 360,
+      "catalog_stars": 491,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 50,
+      "image_stars": 64,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1213.25,
+          "noise": 83.0256,
+          "threshold_30sigma": 3704.018,
+          "threshold_7sigma": 1794.4292
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 64,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-B2": {
+      "catalog_quads": 360,
+      "catalog_stars": 491,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 50,
+      "image_stars": 64,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1213.25,
+          "noise": 83.0256,
+          "threshold_30sigma": 3704.018,
+          "threshold_7sigma": 1794.4292
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 64,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-D1": {
+      "catalog_quads": 360,
+      "catalog_stars": 491,
+      "failure_stage": null,
+      "image_quads": 209,
+      "image_stars": 276,
+      "matches_kept": 61,
+      "matches_raw": 62,
+      "refs": 61,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": -0.37585869889125395,
+        "scale": 2.3755778327943577,
+        "translation": [
+          -295.2313538098128,
+          1624.2005726557875
+        ]
+      }
+    },
+    "IMG-D2": {
+      "catalog_quads": 360,
+      "catalog_stars": 491,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 41,
+      "image_stars": 63,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "note": "Python candidates with current ZN3 ranking; ASTAP ranking formula not promoted.",
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-O0": {
+      "catalog_quads": 360,
+      "catalog_stars": 491,
+      "failure_stage": null,
+      "image_quads": 209,
+      "image_stars": 276,
+      "matches_kept": 61,
+      "matches_raw": 62,
+      "refs": 61,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": -0.37585869889125395,
+        "scale": 2.3755778327943577,
+        "translation": [
+          -295.2313538098128,
+          1624.2005726557875
+        ]
+      }
+    },
+    "IMG-P": {
+      "catalog_quads": 360,
+      "catalog_stars": 491,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 41,
+      "image_stars": 63,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 0.6272522211074829,
+          "noise": 0.025785967683792113,
+          "threshold_30sigma": 1.4008312516212462,
+          "threshold_7sigma": 0.8077539948940278
+        },
+        "bin_factor": 2,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 63,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    }
+  },
+  "Light_M_31_11_30.0s_IRCUT_20250922-231915": {
+    "IMG-B1": {
+      "catalog_quads": 317,
+      "catalog_stars": 443,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 50,
+      "image_stars": 65,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1212.5,
+          "noise": 83.0256,
+          "threshold_30sigma": 3703.268,
+          "threshold_7sigma": 1793.6792
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 65,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-B2": {
+      "catalog_quads": 317,
+      "catalog_stars": 443,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 50,
+      "image_stars": 65,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 1212.5,
+          "noise": 83.0256,
+          "threshold_30sigma": 3703.268,
+          "threshold_7sigma": 1793.6792
+        },
+        "bin_factor": 1,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 65,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-D1": {
+      "catalog_quads": 317,
+      "catalog_stars": 443,
+      "failure_stage": null,
+      "image_quads": 179,
+      "image_stars": 249,
+      "matches_kept": 46,
+      "matches_raw": 47,
+      "refs": 46,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": 0.12981054475371206,
+        "scale": 2.3755272242231236,
+        "translation": [
+          -295.61194105544405,
+          1620.907966056604
+        ]
+      }
+    },
+    "IMG-D2": {
+      "catalog_quads": 317,
+      "catalog_stars": 443,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 197,
+      "image_stars": 57,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "note": "Python candidates with current ZN3 ranking; ASTAP ranking formula not promoted.",
+      "refs": 0,
+      "success": false,
+      "transform": null
+    },
+    "IMG-O0": {
+      "catalog_quads": 317,
+      "catalog_stars": 443,
+      "failure_stage": null,
+      "image_quads": 179,
+      "image_stars": 249,
+      "matches_kept": 46,
+      "matches_raw": 47,
+      "refs": 46,
+      "success": true,
+      "transform": {
+        "parity": -1,
+        "rotation": 0.12981054475371206,
+        "scale": 2.3755272242231236,
+        "translation": [
+          -295.61194105544405,
+          1620.907966056604
+        ]
+      }
+    },
+    "IMG-P": {
+      "catalog_quads": 317,
+      "catalog_stars": 443,
+      "failure_stage": "NO_SIGNATURE_MATCHES",
+      "image_quads": 197,
+      "image_stars": 57,
+      "matches_kept": 0,
+      "matches_raw": 0,
+      "python_diag": {
+        "background": {
+          "background": 0.6289553046226501,
+          "noise": 0.025876546776294706,
+          "threshold_30sigma": 1.4052517079114915,
+          "threshold_7sigma": 0.8100911320567131
+        },
+        "bin_factor": 2,
+        "binned_shape": [
+          960,
+          540
+        ],
+        "detected_count": 57,
+        "k_sigma": 3.0,
+        "min_area": 4
+      },
+      "refs": 0,
+      "success": false,
+      "transform": null
+    }
+  }
+}

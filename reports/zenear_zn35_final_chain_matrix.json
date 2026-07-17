@@ -1,0 +1,14 @@
+{
+  "4D indisponible": 0,
+  "4D non couvert": 0,
+  "Near correct": 0,
+  "Near failure": 0,
+  "Near rejected correctly": 0,
+  "ZeBlind 4D correct": 0,
+  "appels historiques observ\u00e9s": 0,
+  "counts": {
+    "ORACLE_UNAVAILABLE": 16
+  },
+  "faux WCS 4D accept\u00e9s": 0,
+  "faux WCS Near accept\u00e9s": 0
+}

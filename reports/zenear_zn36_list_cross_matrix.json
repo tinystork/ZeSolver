@@ -1,0 +1,52 @@
+{
+  "232102": {
+    "H00": {
+      "catalog_quads": 188,
+      "catalog_stars": 249,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "path_used": "find_fit_using_hash",
+      "refs": 28,
+      "success": true
+    },
+    "H01": {
+      "catalog_quads": 187,
+      "catalog_stars": 248,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "path_used": "find_fit_using_hash",
+      "refs": 28,
+      "success": true
+    },
+    "H10": {
+      "catalog_quads": 188,
+      "catalog_stars": 249,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "path_used": "find_fit_using_hash",
+      "refs": 28,
+      "success": true
+    },
+    "H11": {
+      "catalog_quads": 187,
+      "catalog_stars": 248,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "path_used": "find_fit_using_hash",
+      "refs": 28,
+      "success": true
+    }
+  }
+}

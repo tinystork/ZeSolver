@@ -212,5 +212,9 @@ class FakeBackend(DownloaderBackend):
                 f.write(chunk)
                 done += len(chunk)
                 progress(done, total)
+            if done < total and not stop_event.is_set():
+                chunk = self._content[done:total]
+                f.write(chunk)
+                done += len(chunk)
+                progress(done, total)
         tmp.replace(item.dest_path)
-

@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source_report": "reports/zeblind_p29_4d_bounded_multi_index_union_validation.json",
+  "date": "2026-07-09",
+  "profile": "zeblind_4d_experimental bounded multi-index union",
+  "validation": "P29 bounded multi-index union validation report",
+  "indexes": "4D indexes referenced by the P29 report; actual NPZ files remain external",
+  "summary": {
+    "global_verdict": "See source report",
+    "known_case": "232329",
+    "minimum_inliers_for_reference_case": 40,
+    "maximum_rms_px_for_reference_case": 1.2
+  }
+}

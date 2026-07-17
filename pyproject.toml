@@ -38,6 +38,12 @@ addopts = "-ra"
 testpaths = [
   "tests",
 ]
+markers = [
+  "external_catalog: requires a local ASTAP/HNSKY catalog database outside the repository",
+  "corpus: requires local FITS corpus data",
+  "slow: long-running integration or corpus validation",
+  "blind4d: exercises ZeBlind 4D runtime/index behavior",
+]
 
 [tool.black]
 line-length = 100

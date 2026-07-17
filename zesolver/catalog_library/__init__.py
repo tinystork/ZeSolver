@@ -1,0 +1,62 @@
+"""Read-only CatalogLibrary core for ZeSolver."""
+
+from .adapters import blind4d_index_descriptors, near_source_descriptor
+from .discovery import discover_existing
+from .manifest import (
+    CatalogCompatibilityError,
+    CatalogCorruptionError,
+    CatalogIncompleteError,
+    CatalogLibrary,
+    CatalogLibraryError,
+    CatalogManifestError,
+    CatalogMissingError,
+    CatalogVersionError,
+    load_manifest,
+)
+from .models import (
+    Blind4DIndexDescriptor,
+    CatalogCapabilities,
+    CatalogCoverage,
+    CatalogDataStatus,
+    CatalogDiscoveryResult,
+    CatalogIndex,
+    CatalogIssue,
+    CatalogManifest,
+    CatalogSource,
+    CatalogStatus,
+    CatalogValidationReport,
+    CoverageStatus,
+    IssueSeverity,
+    LegacyIndexDescriptor,
+    NearCatalogDescriptor,
+)
+
+__all__ = [
+    "Blind4DIndexDescriptor",
+    "CatalogCapabilities",
+    "CatalogCompatibilityError",
+    "CatalogCorruptionError",
+    "CatalogCoverage",
+    "CatalogDataStatus",
+    "CatalogDiscoveryResult",
+    "CatalogIncompleteError",
+    "CatalogIndex",
+    "CatalogIssue",
+    "CatalogLibrary",
+    "CatalogLibraryError",
+    "CatalogManifest",
+    "CatalogManifestError",
+    "CatalogMissingError",
+    "CatalogSource",
+    "CatalogStatus",
+    "CatalogValidationReport",
+    "CatalogVersionError",
+    "CoverageStatus",
+    "IssueSeverity",
+    "LegacyIndexDescriptor",
+    "NearCatalogDescriptor",
+    "blind4d_index_descriptors",
+    "discover_existing",
+    "load_manifest",
+    "near_source_descriptor",
+]

@@ -1,0 +1,356 @@
+{
+  "230409": {
+    "E0_astap_image_astap_catalog": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 189,
+      "image_stars": 252,
+      "matches_kept": 50,
+      "matches_raw": 53,
+      "path_used": "find_fit_using_hash",
+      "refs": 50,
+      "success": true
+    },
+    "E1_near_intersection_near_order": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 189,
+      "image_stars": 252,
+      "matches_kept": 50,
+      "matches_raw": 53,
+      "path_used": "find_fit_using_hash",
+      "refs": 50,
+      "success": true
+    },
+    "E2_near_intersection_astap_order": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 189,
+      "image_stars": 252,
+      "matches_kept": 50,
+      "matches_raw": 53,
+      "path_used": "find_fit_using_hash",
+      "refs": 50,
+      "success": true
+    },
+    "E3_near_prefix_100": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 75,
+      "image_stars": 100,
+      "matches_kept": 24,
+      "matches_raw": 27,
+      "path_used": "find_fit_using_hash",
+      "refs": 24,
+      "success": true
+    },
+    "E3_near_prefix_120": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 89,
+      "image_stars": 120,
+      "matches_kept": 30,
+      "matches_raw": 32,
+      "path_used": "find_fit_using_hash",
+      "refs": 30,
+      "success": true
+    },
+    "E3_near_prefix_146": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 108,
+      "image_stars": 146,
+      "matches_kept": 33,
+      "matches_raw": 35,
+      "path_used": "find_fit_using_hash",
+      "refs": 33,
+      "success": true
+    },
+    "E3_near_prefix_250": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 188,
+      "image_stars": 250,
+      "matches_kept": 50,
+      "matches_raw": 53,
+      "path_used": "find_fit_using_hash",
+      "refs": 50,
+      "success": true
+    },
+    "E3_near_prefix_32": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": "TRANSFORM_FAILED",
+      "image_quads": 117,
+      "image_stars": 32,
+      "matches_kept": 2,
+      "matches_raw": 3,
+      "path_used": "find_fit_using_hash",
+      "refs": 2,
+      "success": false
+    },
+    "E3_near_prefix_48": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 165,
+      "image_stars": 48,
+      "matches_kept": 5,
+      "matches_raw": 6,
+      "path_used": "find_fit_using_hash",
+      "refs": 5,
+      "success": true
+    },
+    "E3_near_prefix_500": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 189,
+      "image_stars": 252,
+      "matches_kept": 50,
+      "matches_raw": 53,
+      "path_used": "find_fit_using_hash",
+      "refs": 50,
+      "success": true
+    },
+    "E3_near_prefix_58": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 203,
+      "image_stars": 58,
+      "matches_kept": 14,
+      "matches_raw": 15,
+      "path_used": "find_fit_using_hash",
+      "refs": 14,
+      "success": true
+    },
+    "E3_near_prefix_64": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 47,
+      "image_stars": 64,
+      "matches_kept": 11,
+      "matches_raw": 12,
+      "path_used": "find_fit_using_hash",
+      "refs": 11,
+      "success": true
+    },
+    "E3_near_prefix_80": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 60,
+      "image_stars": 80,
+      "matches_kept": 16,
+      "matches_raw": 19,
+      "path_used": "find_fit_using_hash",
+      "refs": 16,
+      "success": true
+    },
+    "E4_astap_policy_proxy": {
+      "catalog_quads": 324,
+      "catalog_stars": 448,
+      "failure_stage": null,
+      "image_quads": 189,
+      "image_stars": 252,
+      "matches_kept": 50,
+      "matches_raw": 53,
+      "path_used": "find_fit_using_hash",
+      "refs": 50,
+      "success": true
+    }
+  },
+  "232102": {
+    "E0_astap_image_astap_catalog": {
+      "catalog_quads": 188,
+      "catalog_stars": 249,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "path_used": "find_fit_using_hash",
+      "refs": 28,
+      "success": true
+    },
+    "E1_near_intersection_near_order": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E2_near_intersection_astap_order": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_100": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_120": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_146": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_250": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_32": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_48": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_500": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_58": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_64": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_80": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E4_astap_policy_proxy": {
+      "catalog_stars": 249,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    }
+  },
+  "233459": {
+    "E0_astap_image_astap_catalog": {
+      "catalog_quads": 181,
+      "catalog_stars": 248,
+      "failure_stage": null,
+      "image_quads": 178,
+      "image_stars": 54,
+      "matches_kept": 26,
+      "matches_raw": 26,
+      "path_used": "find_fit_using_hash",
+      "refs": 26,
+      "success": true
+    },
+    "E1_near_intersection_near_order": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E2_near_intersection_astap_order": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_100": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_120": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_146": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_250": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_32": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_48": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_500": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_58": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_64": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E3_near_prefix_80": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    },
+    "E4_astap_policy_proxy": {
+      "catalog_stars": 248,
+      "failure_stage": "INSUFFICIENT_INPUTS",
+      "image_stars": 0,
+      "success": false
+    }
+  }
+}

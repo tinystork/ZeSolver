@@ -1,0 +1,51 @@
+{
+  "astap_rule": "bin_and_find_stars consumes native ADU mono/binned pixels, then retry 30 sigma/local sections returns starlist2.",
+  "authorized_verdict": "A - Cause image corrigee, Near restaure",
+  "correctif_applied": true,
+  "effect": {
+    "230409": {
+      "astap_catalog_final": 448,
+      "catalog_delta_vs_astap": 0,
+      "catalog_final": 448,
+      "hits": {
+        "matches_kept": 50,
+        "matches_raw": 53,
+        "median_ratio": 2.375050353966092,
+        "path_used": "find_fit_using_hash"
+      },
+      "near_success": true,
+      "nrstars_image": 252
+    },
+    "232102": {
+      "astap_catalog_final": 249,
+      "catalog_delta_vs_astap": -1,
+      "catalog_final": 248,
+      "hits": {
+        "matches_kept": 28,
+        "matches_raw": 28,
+        "median_ratio": 2.3716615355284825,
+        "path_used": "find_fit_using_hash"
+      },
+      "near_success": true,
+      "nrstars_image": 58
+    },
+    "233459": {
+      "astap_catalog_final": 248,
+      "catalog_delta_vs_astap": 1,
+      "catalog_final": 249,
+      "hits": {
+        "matches_kept": 26,
+        "matches_raw": 26,
+        "median_ratio": 2.3718651383112643,
+        "path_used": "find_fit"
+      },
+      "near_success": true,
+      "nrstars_image": 54
+    }
+  },
+  "first_divergent_stage": "solve_near strict image input conversion",
+  "fix": "Use astap_iso_image_for_solve() native ADU pixels for astap_iso_strict and disable generic detector fallbacks in strict mode.",
+  "last_compatible_stage": "FITS native ADU image and ASTAP binned pixels",
+  "python_pre_fix_behavior": "solve_near fed normalized 0..1 luminance to astap_adaptive_image_detection; strict detector returned zero and non-strict CPU fallbacks replaced the list.",
+  "verdict": "PIXEL_TYPE_DIVERGENCE"
+}

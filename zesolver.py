@@ -186,6 +186,11 @@ from zesolver.settings_store import (
     save_persistent_settings,
 )
 from zesolver.blind4d_runtime import resolve_default_4d_manifest_path
+from zesolver.catalog_resources import (
+    CatalogResourceResolutionError,
+    SolverCatalogResources,
+    resolve_catalog_resources,
+)
 from zesolver.gui_profiles import apply_settings_easy_visibility, apply_solver_simple_visibility
 from zesolver.gui_settings_sections import (
     build_blind_group,
@@ -1096,6 +1101,7 @@ class SolveConfig:
     blind_backend_profile: str = ZEBLIND_4D_EXPERIMENTAL_PROFILE
     blind_4d_manifest_path: Optional[Path] = None
     blind_4d_loaded_manifest: Optional[Loaded4DManifest] = None
+    catalog_library_path: Optional[Path] = None
     hint_ra_deg: Optional[float] = None
     hint_dec_deg: Optional[float] = None
     hint_radius_deg: Optional[float] = None
@@ -1184,6 +1190,8 @@ class SolveConfig:
         object.__setattr__(self, "blind_backend_profile", profile)
         if self.blind_4d_manifest_path:
             object.__setattr__(self, "blind_4d_manifest_path", Path(self.blind_4d_manifest_path).expanduser())
+        if self.catalog_library_path:
+            object.__setattr__(self, "catalog_library_path", Path(self.catalog_library_path).expanduser())
         if self.search_radius_scale < 1.0:
             raise ValueError("search_radius_scale must be >= 1.0")
         if self.search_radius_attempts < 1:
@@ -1233,6 +1241,34 @@ def ensure_loaded_4d_manifest(config: SolveConfig) -> Loaded4DManifest:
     if config.blind_4d_manifest_path is None:
         raise IndexManifestError("blind_4d_manifest_required")
     return load_4d_index_manifest(config.blind_4d_manifest_path)
+
+
+def resolve_catalog_resources_for_config(config: SolveConfig) -> SolverCatalogResources:
+    return resolve_catalog_resources(
+        catalog_library=config.catalog_library_path,
+        legacy_db_root=config.db_root,
+        legacy_families=tuple(config.families or ()),
+        legacy_blind4d_manifest=config.blind_4d_manifest_path,
+        legacy_index_root=config.blind_index_path,
+        enable_environment_discovery=False,
+    )
+
+
+def apply_catalog_resources_to_config(config: SolveConfig) -> tuple[SolveConfig, SolverCatalogResources]:
+    resources = resolve_catalog_resources_for_config(config)
+    updates: dict[str, object] = {}
+    if resources.source in {"library", "environment"} and resources.near is not None:
+        updates["db_root"] = resources.near.root
+        updates["families"] = resources.near.families or None
+    if (
+        resources.source in {"library", "environment"}
+        and resources.blind4d_manifest_path is not None
+        and config.blind_backend_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE
+    ):
+        updates["blind_4d_manifest_path"] = resources.blind4d_manifest_path
+        updates["blind_4d_loaded_manifest"] = None
+    resolved = replace(config, **updates) if updates else config
+    return resolved, resources
 
 
 def build_blind_solve_config(
@@ -1889,8 +1925,8 @@ def _cuda_runtime_summary() -> tuple[int, list[str], Optional[str]]:
 
 class ImageSolver:
     def __init__(self, config: SolveConfig) -> None:
-        self.config = config
-        self.db = None if bool(getattr(config, "blind_only", False)) else CatalogDB(config.db_root, families=config.families, cache_size=config.cache_size)
+        self.config, self.catalog_resources = apply_catalog_resources_to_config(config)
+        self.db = None if bool(getattr(self.config, "blind_only", False)) else CatalogDB(self.config.db_root, families=self.config.families, cache_size=self.config.cache_size)
         self._db_lock = threading.Lock()
         self._family_candidates = () if self.db is None else self._init_family_candidates()
         self._family_hint: Optional[str] = None
@@ -2018,6 +2054,7 @@ class ImageSolver:
                     "quality_rms": float(getattr(self.config, "blind_quality_rms", 1.2) or 1.2),
                     "fast_mode": bool(getattr(self.config, "blind_fast_mode", True)),
                 },
+                "catalog": self.catalog_resources.telemetry(include_paths=False),
             }
             logging.info("Run configuration: %s", json.dumps(run_cfg, ensure_ascii=False))
             try:
@@ -4008,9 +4045,9 @@ class ImageSolver:
 
 class BatchSolver:
     def __init__(self, config: SolveConfig, files: Optional[Sequence[Path]] = None) -> None:
-        self.config = config
+        self.config, self.catalog_resources = apply_catalog_resources_to_config(config)
         self.files: List[Path] = list(files) if files is not None else self._collect_files()
-        self.solver = ImageSolver(config)
+        self.solver = ImageSolver(self.config)
 
     def _collect_files(self) -> List[Path]:
         files = list(_iter_image_files(self.config.input_dir, self.config.formats))
@@ -4630,6 +4667,7 @@ class BatchSolver:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ZeSolver batch GUI/CLI")
+    parser.add_argument("--catalog-library", type=Path, help="ZeSolver CatalogLibrary root or catalog.json")
     parser.add_argument("--db-root", type=Path, help="Directory containing the ASTAP/HNSKY catalogues")
     parser.add_argument("--input-dir", type=Path, help="Directory containing FITS/TIFF/PNG files to solve")
     parser.add_argument("--family", action="append", help="Restrict to specific catalogue families (e.g. d50)")
@@ -4913,14 +4951,34 @@ def _format_run_info_cli(key: str, payload: dict[str, Any], path: Path) -> Optio
 def run_cli(args: argparse.Namespace) -> int:
     _configure_logging(args.log_level)
     formats = tuple(_parse_formats_value(args.formats))
-    if not args.db_root or not args.input_dir:
-        raise SystemExit("--db-root and --input-dir are required in CLI mode (use --gui to launch the GUI)")
+    if not args.input_dir or (not args.db_root and not args.catalog_library):
+        raise SystemExit("--db-root and --input-dir are required in CLI mode unless --catalog-library provides the catalogue")
     families = _normalize_family_args(args.family)
+    pre_catalog_resources: SolverCatalogResources | None = None
+    db_root_for_config = args.db_root.expanduser().resolve() if args.db_root else None
+    if args.catalog_library:
+        try:
+            pre_catalog_resources = resolve_catalog_resources(
+                catalog_library=args.catalog_library,
+                legacy_db_root=args.db_root,
+                legacy_families=tuple(families or ()),
+                legacy_blind4d_manifest=args.blind_4d_manifest,
+                legacy_index_root=args.blind_index,
+                enable_environment_discovery=False,
+            )
+        except CatalogResourceResolutionError as exc:
+            raise SystemExit(f"Catalog library error: {exc}") from exc
+        if db_root_for_config is None and pre_catalog_resources.near is not None:
+            db_root_for_config = pre_catalog_resources.near.root
+        elif db_root_for_config is None:
+            if not bool(getattr(args, "blind_only", False)):
+                raise SystemExit("Catalog library does not provide a Near source; use --blind-only or provide --db-root")
+            db_root_for_config = Path(".").resolve()
     if bool(getattr(args, "near_astap_iso_strict", True)) is False:
         logging.warning("--no-near-astap-iso-strict is deprecated and ignored; strict mode is always enabled")
     blind_profile = str(getattr(args, "blind_profile", ZEBLIND_4D_EXPERIMENTAL_PROFILE) or ZEBLIND_4D_EXPERIMENTAL_PROFILE).strip().lower()
     loaded_4d_manifest: Loaded4DManifest | None = None
-    if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+    if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE and not args.catalog_library:
         if args.blind_4d_manifest is None:
             args.blind_4d_manifest = resolve_default_4d_manifest_path()
         try:
@@ -4950,7 +5008,7 @@ def run_cli(args: argparse.Namespace) -> int:
     elif args.blind_4d_manifest is not None:
         logging.info("Ignoring --blind-4d-manifest because blind profile is historical")
     config = SolveConfig(
-        db_root=args.db_root.expanduser().resolve(),
+        db_root=db_root_for_config,
         input_dir=args.input_dir.expanduser().resolve(),
         families=families,
         fov_deg=args.fov_deg,
@@ -4970,6 +5028,7 @@ def run_cli(args: argparse.Namespace) -> int:
         blind_backend_profile=blind_profile,
         blind_4d_manifest_path=args.blind_4d_manifest,
         blind_4d_loaded_manifest=loaded_4d_manifest,
+        catalog_library_path=args.catalog_library,
         near_max_tile_candidates=max(1, int(args.near_max_tile_candidates or 48)),
         near_tile_cache_size=max(1, int(args.near_tile_cache_size or 128)),
         near_detect_backend=str(args.near_detect_backend or "auto"),
@@ -8095,6 +8154,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     tile_compression_value = data.strip().lower()
 
             return PersistentSettings(
+                catalog_library_path=getattr(self._settings, "catalog_library_path", None),
                 db_root=db_root,
                 index_root=index_root,
                 mag_cap=float(self.settings_mag_spin.value()),
@@ -9576,6 +9636,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     if hasattr(self, "blind_4d_manifest_edit") and self.blind_4d_manifest_edit.text().strip()
                     else (getattr(self._settings, "blind_4d_manifest_path", None) or None)
                 ),
+                catalog_library_path=getattr(self._settings, "catalog_library_path", None),
                 hint_ra_deg=ra_hint,
                 hint_dec_deg=dec_hint,
                 hint_radius_deg=radius_hint,
@@ -9783,7 +9844,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 return
             try:
                 config = self._build_config()
-            except ValueError as exc:
+                config, catalog_resources = apply_catalog_resources_to_config(config)
+                self._log("Catalog resources: " + json.dumps(catalog_resources.telemetry(include_paths=False), ensure_ascii=False))
+            except (ValueError, CatalogResourceResolutionError) as exc:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
             if (

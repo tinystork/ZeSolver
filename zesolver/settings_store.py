@@ -54,6 +54,7 @@ TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
 @dataclass
 class PersistentSettings:
     schema_version: int = SETTINGS_SCHEMA_VERSION
+    catalog_library_path: Optional[str] = None
     db_root: Optional[str] = None
     index_root: Optional[str] = None
     mag_cap: float = DEFAULT_MAG_CAP
@@ -227,6 +228,7 @@ def load_persistent_settings() -> PersistentSettings:
     bench_tile_cache = int(payload.get("benchmark_tile_cache_size", 128) or 128)
     settings = PersistentSettings(
         schema_version=int(payload.get("schema_version", 1)),
+        catalog_library_path=(payload.get("catalog_library_path") or None),
         db_root=payload.get("db_root"),
         index_root=payload.get("index_root"),
         mag_cap=float(payload.get("mag_cap", DEFAULT_MAG_CAP)),
