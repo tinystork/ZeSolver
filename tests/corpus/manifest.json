@@ -14,7 +14,12 @@
       "source_group": "m106",
       "root_env": "ZESOLVER_CORPUS_ROOT",
       "relative_path": "near_bench100_input/027_Light_mosaic_M 106_20.0s_IRCUT_20250518-232102.fit",
-      "sha256": "3edf2580268376dc51409591fd9f91452c8f1e3c2817d3fe29b77ae2d7980821",
+      "sha256": "d40f655f40475928d921755a6dc1c46290f03b487e417de81c53eecef229355f",
+      "fixture_provenance": {
+        "parent_sha256": "3edf2580268376dc51409591fd9f91452c8f1e3c2817d3fe29b77ae2d7980821",
+        "transformation": "strip_solver_wcs_cards_v1",
+        "pixels_unchanged": true
+      },
       "solver_mode": "near",
       "expected_status": "solved",
       "expected_backend": "NEAR",
@@ -38,7 +43,13 @@
       "source_group": "m106",
       "root_env": "ZESOLVER_CORPUS_ROOT",
       "relative_path": "near_bench100_input/001_Light_mosaic_M 106_20.0s_IRCUT_20250518-233459.fit",
-      "sha256": "6eaae759a5b33542c5a8df763c6e26d4f7d7000f8c3970ca7280b9c57ade46e6",
+      "sha256": "284ea1bc73ed341cdca92edc54106367bb779df580139a32579d7a4811ec606a",
+      "fixture_provenance": {
+        "parent_sha256": "b0953a0a88999487f4071bf3785551ad28464e1f266297c23b252409a0ed68e0",
+        "previous_manifest_sha256": "6eaae759a5b33542c5a8df763c6e26d4f7d7000f8c3970ca7280b9c57ade46e6",
+        "transformation": "strip_solver_wcs_cards_v1",
+        "pixels_unchanged": true
+      },
       "solver_mode": "near",
       "expected_status": "solved",
       "expected_backend": "NEAR",
