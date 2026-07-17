@@ -1,18 +1,14 @@
 from __future__ import annotations
 
-import importlib.util
 import logging
 import shutil
-import sys
 import tempfile
-from functools import lru_cache
 from pathlib import Path
-from types import SimpleNamespace
 
 from zeblindsolver.index_manifest_4d import IndexManifestError, Loaded4DManifest, load_4d_index_manifest
-from zeblindsolver.profiles import ZEBLIND_4D_EXPERIMENTAL_PROFILE
 
 from zesolver.catalog_resources import SolverCatalogResources
+from zesolver.solver_config import build_blind_config_inputs, build_blind_solve_config
 from zesolver.zeblindsolver import BlindSolverRuntimeError, blind_solve
 
 from .blind_models import BlindSolveRequest
@@ -111,62 +107,16 @@ class ProductionBlindSolverPort:
             if resources.blind4d_manifest_path is None:
                 raise IndexManifestError("blind_4d_manifest_required")
             manifest = load_4d_index_manifest(resources.blind4d_manifest_path)
-        shim = _legacy_config_shim(request, resources=resources, configuration=configuration, loaded_manifest=manifest)
-        app = _load_entrypoint_module()
+        inputs = build_blind_config_inputs(request, resources=resources, configuration=configuration, loaded_manifest=manifest)
         # The validated 4D product profile clears RA/Dec hints in the profile
         # application itself; pass them through here so config parity stays owned
         # by the existing builder.
-        return app.build_blind_solve_config(
-            shim,
+        return build_blind_solve_config(
+            inputs,
             ra_hint=request.ra_hint_deg,
             dec_hint=request.dec_hint_deg,
             loaded_manifest=manifest,
         )
-
-
-def _legacy_config_shim(
-    request: BlindSolveRequest,
-    *,
-    resources: SolverCatalogResources,
-    configuration,
-    loaded_manifest: Loaded4DManifest,
-) -> SimpleNamespace:
-    values = dict(configuration.legacy_solve_config_values)
-    return SimpleNamespace(
-        blind_backend_profile=ZEBLIND_4D_EXPERIMENTAL_PROFILE,
-        blind_4d_manifest_path=loaded_manifest.manifest_path,
-        blind_4d_loaded_manifest=loaded_manifest,
-        blind_index_path=loaded_manifest.manifest_path.parent,
-        blind_max_candidates=values.get("blind_max_candidates", 10),
-        blind_max_stars=values.get("blind_max_stars", 500),
-        blind_max_quads=values.get("blind_max_quads", 8000),
-        blind_pixel_tolerance=values.get("blind_pixel_tolerance", 2.5),
-        blind_quality_inliers=values.get("blind_quality_inliers", 40),
-        blind_quality_rms=values.get("blind_quality_rms", 1.2),
-        blind_fast_mode=values.get("blind_fast_mode", True),
-        blind_index_scale_overlap_prefilter_enabled=values.get("blind_index_scale_overlap_prefilter_enabled", False),
-        blind_index_scale_overlap_proxy_lo_frac=values.get("blind_index_scale_overlap_proxy_lo_frac", 0.05),
-        blind_index_scale_overlap_proxy_hi_frac=values.get("blind_index_scale_overlap_proxy_hi_frac", 0.95),
-        log_level=values.get("log_level", "INFO"),
-        downsample=values.get("downsample", 1),
-        hint_ra_deg=request.ra_hint_deg,
-        hint_dec_deg=request.dec_hint_deg,
-        hint_radius_deg=request.radius_hint_deg,
-        hint_focal_mm=request.focal_length_mm,
-        hint_pixel_um=request.pixel_size_um,
-        hint_resolution_arcsec=request.pixel_scale_arcsec,
-        hint_resolution_min_arcsec=request.pixel_scale_min_arcsec,
-        hint_resolution_max_arcsec=request.pixel_scale_max_arcsec,
-        dev_bucket_limit_override=values.get("dev_bucket_limit_override", 0),
-        dev_vote_percentile=values.get("dev_vote_percentile", 40),
-        dev_collect_matches_vectorized_experimental=values.get("dev_collect_matches_vectorized_experimental", False),
-        dev_bucket_cap_S=values.get("dev_bucket_cap_S", 0),
-        dev_bucket_cap_M=values.get("dev_bucket_cap_M", 0),
-        dev_bucket_cap_L=values.get("dev_bucket_cap_L", 0),
-        dev_detect_k_sigma=values.get("dev_detect_k_sigma", 3.0),
-        dev_detect_min_area=values.get("dev_detect_min_area", 5),
-        catalog_library_path=resources.library_path,
-    )
 
 
 def _cancel_check(configuration):
@@ -183,20 +133,3 @@ def _cancel_check(configuration):
         return bool(token)
 
     return _check
-
-
-@lru_cache(maxsize=1)
-def _load_entrypoint_module():
-    repo_root = Path(__file__).resolve().parents[2]
-    path = repo_root / "zesolver.py"
-    name = "zesolver_entrypoint_blind_port"
-    module = sys.modules.get(name)
-    if module is not None:
-        return module
-    spec = importlib.util.spec_from_file_location(name, path)
-    if spec is None or spec.loader is None:
-        raise ImportError(f"unable to load {path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[name] = module
-    spec.loader.exec_module(module)
-    return module
