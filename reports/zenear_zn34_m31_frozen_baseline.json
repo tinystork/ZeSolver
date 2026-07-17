@@ -1,0 +1,466 @@
+[
+  {
+    "checksum": "499a9c0d33e28dc8e97656020450eadac75fc72aa04a2c566e84ea6205ddf440",
+    "counts": {
+      "catalog_stars": 784,
+      "image_stars": 441
+    },
+    "detector": {
+      "background": 1202.0,
+      "bin_factor": 2,
+      "final_image_stars": 252,
+      "global_candidates": 131,
+      "local_candidates": 252,
+      "noise": 83.09478030237668,
+      "retry_selected": 1,
+      "sections_active": 90,
+      "star_level2_candidates": 0,
+      "star_level_candidates": 0
+    },
+    "expected_class": "M31 frozen,S50,binning 2 expected,good hint,oracle_wcs",
+    "expected_success": true,
+    "group": "M31",
+    "label": "zn34_007_Light_M_31_11_30.0s_IRCUT_20250922-230409_runtime",
+    "oracle_available": true,
+    "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230409_runtime.fit",
+    "reason": "M31 frozen strict baseline",
+    "solve": {
+      "dump_label": "zn34_007_Light_M_31_11_30.0s_IRCUT_20250922-230409_runtime",
+      "elapsed_s": 1.4562987020035507,
+      "message": "near solution found",
+      "source_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230409_runtime.fit",
+      "stats": {
+        "inliers": 314,
+        "inliers_raw": 314,
+        "pix_scale_arcsec": 2.3756065023677113,
+        "quality": "GOOD",
+        "reason": "strict_astap_iso_mirror",
+        "rms_px": 0.5200583523485258,
+        "success": true
+      },
+      "success": true,
+      "tile_key": null,
+      "work_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn34_work/zn34_007_Light_M_31_11_30.0s_IRCUT_20250922-230409_runtime_Light_M_31_11_30.0s_IRCUT_20250922-230409_runtime.fit"
+    },
+    "wcs": {
+      "center_separation_arcsec": 0.0,
+      "classification": "WCS_CONFORMANT",
+      "corner_separation_arcsec": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_corner_separation_arcsec": 0.0,
+      "pixel_scale_delta_arcsec": 0.0,
+      "pixel_scale_oracle_arcsec": 2.375606502367711,
+      "pixel_scale_zenear_arcsec": 2.375606502367711
+    }
+  },
+  {
+    "checksum": "4b436191028721125365843d6bbe18d809e598f6a741e77cd59347b7ace344c4",
+    "counts": {
+      "catalog_stars": 779,
+      "image_stars": 438
+    },
+    "detector": {
+      "background": 1196.0,
+      "bin_factor": 2,
+      "final_image_stars": 258,
+      "global_candidates": 126,
+      "local_candidates": 258,
+      "noise": 82.08355678502265,
+      "retry_selected": 1,
+      "sections_active": 92,
+      "star_level2_candidates": 0,
+      "star_level_candidates": 0
+    },
+    "expected_class": "M31 frozen,S50,binning 2 expected,good hint,oracle_wcs",
+    "expected_success": true,
+    "group": "M31",
+    "label": "zn34_015_Light_M_31_11_30.0s_IRCUT_20250922-230510_runtime",
+    "oracle_available": true,
+    "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230510_runtime.fit",
+    "reason": "M31 frozen strict baseline",
+    "solve": {
+      "dump_label": "zn34_015_Light_M_31_11_30.0s_IRCUT_20250922-230510_runtime",
+      "elapsed_s": 1.3242953250010032,
+      "message": "near solution found",
+      "source_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230510_runtime.fit",
+      "stats": {
+        "inliers": 315,
+        "inliers_raw": 315,
+        "pix_scale_arcsec": 2.3755587643530243,
+        "quality": "GOOD",
+        "reason": "strict_astap_iso_mirror",
+        "rms_px": 0.5731050447675275,
+        "success": true
+      },
+      "success": true,
+      "tile_key": null,
+      "work_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn34_work/zn34_015_Light_M_31_11_30.0s_IRCUT_20250922-230510_runtime_Light_M_31_11_30.0s_IRCUT_20250922-230510_runtime.fit"
+    },
+    "wcs": {
+      "center_separation_arcsec": 0.0,
+      "classification": "WCS_CONFORMANT",
+      "corner_separation_arcsec": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_corner_separation_arcsec": 0.0,
+      "pixel_scale_delta_arcsec": 0.0,
+      "pixel_scale_oracle_arcsec": 2.3755587643529967,
+      "pixel_scale_zenear_arcsec": 2.3755587643529967
+    }
+  },
+  {
+    "checksum": "34dbf463981d5e0d5710cdd3aeee1b1e22d31c3a47bba22d7930b30e2333fe87",
+    "counts": {
+      "catalog_stars": 868,
+      "image_stars": 488
+    },
+    "detector": {
+      "background": 1198.0,
+      "bin_factor": 2,
+      "final_image_stars": 257,
+      "global_candidates": 93,
+      "local_candidates": 257,
+      "noise": 84.97436430851685,
+      "retry_selected": 1,
+      "sections_active": 97,
+      "star_level2_candidates": 0,
+      "star_level_candidates": 0
+    },
+    "expected_class": "M31 frozen,S50,binning 2 expected,good hint,oracle_wcs",
+    "expected_success": true,
+    "group": "M31",
+    "label": "zn34_023_Light_M_31_11_30.0s_IRCUT_20250922-230650_runtime",
+    "oracle_available": true,
+    "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230650_runtime.fit",
+    "reason": "M31 frozen strict baseline",
+    "solve": {
+      "dump_label": "zn34_023_Light_M_31_11_30.0s_IRCUT_20250922-230650_runtime",
+      "elapsed_s": 1.4633969940041425,
+      "message": "near solution found",
+      "source_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230650_runtime.fit",
+      "stats": {
+        "inliers": 332,
+        "inliers_raw": 332,
+        "pix_scale_arcsec": 2.3756679882662097,
+        "quality": "GOOD",
+        "reason": "strict_astap_iso_mirror",
+        "rms_px": 0.7069645523802777,
+        "success": true
+      },
+      "success": true,
+      "tile_key": null,
+      "work_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn34_work/zn34_023_Light_M_31_11_30.0s_IRCUT_20250922-230650_runtime_Light_M_31_11_30.0s_IRCUT_20250922-230650_runtime.fit"
+    },
+    "wcs": {
+      "center_separation_arcsec": 0.0,
+      "classification": "WCS_CONFORMANT",
+      "corner_separation_arcsec": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_corner_separation_arcsec": 0.0,
+      "pixel_scale_delta_arcsec": 0.0,
+      "pixel_scale_oracle_arcsec": 2.3756679882661897,
+      "pixel_scale_zenear_arcsec": 2.3756679882661897
+    }
+  },
+  {
+    "checksum": "c0e5157ff26972f85d90ed9f2a3c81c1d8e4fdcc5e915004bd8a89d55e501b6f",
+    "counts": {
+      "catalog_stars": 892,
+      "image_stars": 502
+    },
+    "detector": {
+      "background": 1216.0,
+      "bin_factor": 2,
+      "final_image_stars": 260,
+      "global_candidates": 102,
+      "local_candidates": 260,
+      "noise": 80.11576030357328,
+      "retry_selected": 1,
+      "sections_active": 98,
+      "star_level2_candidates": 0,
+      "star_level_candidates": 0
+    },
+    "expected_class": "M31 frozen,S50,binning 2 expected,good hint,oracle_wcs",
+    "expected_success": true,
+    "group": "M31",
+    "label": "zn34_031_Light_M_31_11_30.0s_IRCUT_20250922-230720_runtime",
+    "oracle_available": true,
+    "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230720_runtime.fit",
+    "reason": "M31 frozen strict baseline",
+    "solve": {
+      "dump_label": "zn34_031_Light_M_31_11_30.0s_IRCUT_20250922-230720_runtime",
+      "elapsed_s": 1.4170942349883262,
+      "message": "near solution found",
+      "source_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230720_runtime.fit",
+      "stats": {
+        "inliers": 343,
+        "inliers_raw": 343,
+        "pix_scale_arcsec": 2.3757216312196774,
+        "quality": "GOOD",
+        "reason": "strict_astap_iso_mirror",
+        "rms_px": 0.6590532815162851,
+        "success": true
+      },
+      "success": true,
+      "tile_key": null,
+      "work_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn34_work/zn34_031_Light_M_31_11_30.0s_IRCUT_20250922-230720_runtime_Light_M_31_11_30.0s_IRCUT_20250922-230720_runtime.fit"
+    },
+    "wcs": {
+      "center_separation_arcsec": 0.0,
+      "classification": "WCS_CONFORMANT",
+      "corner_separation_arcsec": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_corner_separation_arcsec": 0.0,
+      "pixel_scale_delta_arcsec": 0.0,
+      "pixel_scale_oracle_arcsec": 2.375721631219648,
+      "pixel_scale_zenear_arcsec": 2.375721631219648
+    }
+  },
+  {
+    "checksum": "503bc3b18f968217262458d5ddfefce29a91d7c0f4e06787b7f967284f910014",
+    "counts": {
+      "catalog_stars": 930,
+      "image_stars": 523
+    },
+    "detector": {
+      "background": 1220.0,
+      "bin_factor": 2,
+      "final_image_stars": 272,
+      "global_candidates": 142,
+      "local_candidates": 272,
+      "noise": 82.8466539688261,
+      "retry_selected": 1,
+      "sections_active": 97,
+      "star_level2_candidates": 0,
+      "star_level_candidates": 0
+    },
+    "expected_class": "M31 frozen,S50,binning 2 expected,good hint,oracle_wcs",
+    "expected_success": true,
+    "group": "M31",
+    "label": "zn34_039_Light_M_31_11_30.0s_IRCUT_20250922-230853_runtime",
+    "oracle_available": true,
+    "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230853_runtime.fit",
+    "reason": "M31 frozen strict baseline",
+    "solve": {
+      "dump_label": "zn34_039_Light_M_31_11_30.0s_IRCUT_20250922-230853_runtime",
+      "elapsed_s": 1.4649690420046682,
+      "message": "near solution found",
+      "source_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230853_runtime.fit",
+      "stats": {
+        "inliers": 333,
+        "inliers_raw": 333,
+        "pix_scale_arcsec": 2.3756620111166975,
+        "quality": "GOOD",
+        "reason": "strict_astap_iso_mirror",
+        "rms_px": 0.8282889505042587,
+        "success": true
+      },
+      "success": true,
+      "tile_key": null,
+      "work_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn34_work/zn34_039_Light_M_31_11_30.0s_IRCUT_20250922-230853_runtime_Light_M_31_11_30.0s_IRCUT_20250922-230853_runtime.fit"
+    },
+    "wcs": {
+      "center_separation_arcsec": 0.0,
+      "classification": "WCS_CONFORMANT",
+      "corner_separation_arcsec": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_corner_separation_arcsec": 0.0,
+      "pixel_scale_delta_arcsec": 0.0,
+      "pixel_scale_oracle_arcsec": 2.3756620111166855,
+      "pixel_scale_zenear_arcsec": 2.3756620111166855
+    }
+  },
+  {
+    "checksum": "4d81b899de39cbb82b07c5490000983ba87a7bf3d0a04ed5f39c7d1404c02395",
+    "counts": {
+      "catalog_stars": 807,
+      "image_stars": 454
+    },
+    "detector": {
+      "background": 1202.0,
+      "bin_factor": 2,
+      "final_image_stars": 257,
+      "global_candidates": 128,
+      "local_candidates": 257,
+      "noise": 84.56839039464383,
+      "retry_selected": 1,
+      "sections_active": 92,
+      "star_level2_candidates": 0,
+      "star_level_candidates": 0
+    },
+    "expected_class": "M31 frozen,S50,binning 2 expected,good hint,oracle_wcs",
+    "expected_success": true,
+    "group": "M31",
+    "label": "zn34_047_Light_M_31_11_30.0s_IRCUT_20250922-231350_runtime",
+    "oracle_available": true,
+    "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-231350_runtime.fit",
+    "reason": "M31 frozen strict baseline",
+    "solve": {
+      "dump_label": "zn34_047_Light_M_31_11_30.0s_IRCUT_20250922-231350_runtime",
+      "elapsed_s": 1.3726880120084388,
+      "message": "near solution found",
+      "source_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-231350_runtime.fit",
+      "stats": {
+        "inliers": 212,
+        "inliers_raw": 212,
+        "pix_scale_arcsec": 2.376970431593987,
+        "quality": "GOOD",
+        "reason": "strict_astap_iso_mirror",
+        "rms_px": 0.7652860875426205,
+        "success": true
+      },
+      "success": true,
+      "tile_key": null,
+      "work_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn34_work/zn34_047_Light_M_31_11_30.0s_IRCUT_20250922-231350_runtime_Light_M_31_11_30.0s_IRCUT_20250922-231350_runtime.fit"
+    },
+    "wcs": {
+      "center_separation_arcsec": 0.0,
+      "classification": "WCS_CONFORMANT",
+      "corner_separation_arcsec": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_corner_separation_arcsec": 0.0,
+      "pixel_scale_delta_arcsec": 0.0,
+      "pixel_scale_oracle_arcsec": 2.376970431593955,
+      "pixel_scale_zenear_arcsec": 2.376970431593955
+    }
+  },
+  {
+    "checksum": "44d7c8eb6540d6c30f4d4aaa7734faae84ec7aab33112b70f8485b3fc1fd86f3",
+    "counts": {
+      "catalog_stars": 860,
+      "image_stars": 484
+    },
+    "detector": {
+      "background": 1206.0,
+      "bin_factor": 2,
+      "final_image_stars": 276,
+      "global_candidates": 131,
+      "local_candidates": 276,
+      "noise": 81.55433051459373,
+      "retry_selected": 1,
+      "sections_active": 98,
+      "star_level2_candidates": 0,
+      "star_level_candidates": 0
+    },
+    "expected_class": "M31 frozen,S50,binning 2 expected,good hint,oracle_wcs",
+    "expected_success": true,
+    "group": "M31",
+    "label": "zn34_055_Light_M_31_11_30.0s_IRCUT_20250922-231844_runtime",
+    "oracle_available": true,
+    "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-231844_runtime.fit",
+    "reason": "M31 frozen strict baseline",
+    "solve": {
+      "dump_label": "zn34_055_Light_M_31_11_30.0s_IRCUT_20250922-231844_runtime",
+      "elapsed_s": 1.386858932004543,
+      "message": "near solution found",
+      "source_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-231844_runtime.fit",
+      "stats": {
+        "inliers": 326,
+        "inliers_raw": 326,
+        "pix_scale_arcsec": 2.3756401004168506,
+        "quality": "GOOD",
+        "reason": "strict_astap_iso_mirror",
+        "rms_px": 0.6691921855746826,
+        "success": true
+      },
+      "success": true,
+      "tile_key": null,
+      "work_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn34_work/zn34_055_Light_M_31_11_30.0s_IRCUT_20250922-231844_runtime_Light_M_31_11_30.0s_IRCUT_20250922-231844_runtime.fit"
+    },
+    "wcs": {
+      "center_separation_arcsec": 0.0,
+      "classification": "WCS_CONFORMANT",
+      "corner_separation_arcsec": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_corner_separation_arcsec": 0.0,
+      "pixel_scale_delta_arcsec": 0.0,
+      "pixel_scale_oracle_arcsec": 2.3756401004168213,
+      "pixel_scale_zenear_arcsec": 2.3756401004168213
+    }
+  },
+  {
+    "checksum": "4b8ee46f3c1e89c48507b9e00a86842db43ab9afb2e16b240c9bae3de1de1674",
+    "counts": {
+      "catalog_stars": 862,
+      "image_stars": 485
+    },
+    "detector": {
+      "background": 1206.0,
+      "bin_factor": 2,
+      "final_image_stars": 249,
+      "global_candidates": 140,
+      "local_candidates": 249,
+      "noise": 83.31151079419067,
+      "retry_selected": 1,
+      "sections_active": 96,
+      "star_level2_candidates": 0,
+      "star_level_candidates": 0
+    },
+    "expected_class": "M31 frozen,S50,binning 2 expected,good hint,oracle_wcs",
+    "expected_success": true,
+    "group": "M31",
+    "label": "zn34_063_Light_M_31_11_30.0s_IRCUT_20250922-231915_runtime",
+    "oracle_available": true,
+    "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-231915_runtime.fit",
+    "reason": "M31 frozen strict baseline",
+    "solve": {
+      "dump_label": "zn34_063_Light_M_31_11_30.0s_IRCUT_20250922-231915_runtime",
+      "elapsed_s": 1.3811059620056767,
+      "message": "near solution found",
+      "source_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-231915_runtime.fit",
+      "stats": {
+        "inliers": 184,
+        "inliers_raw": 184,
+        "pix_scale_arcsec": 2.3769350187283473,
+        "quality": "GOOD",
+        "reason": "strict_astap_iso_mirror",
+        "rms_px": 2.862892745308878,
+        "success": true
+      },
+      "success": true,
+      "tile_key": null,
+      "work_path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn34_work/zn34_063_Light_M_31_11_30.0s_IRCUT_20250922-231915_runtime_Light_M_31_11_30.0s_IRCUT_20250922-231915_runtime.fit"
+    },
+    "wcs": {
+      "center_separation_arcsec": 0.0,
+      "classification": "WCS_CONFORMANT",
+      "corner_separation_arcsec": [
+        0.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max_corner_separation_arcsec": 0.0,
+      "pixel_scale_delta_arcsec": 0.0,
+      "pixel_scale_oracle_arcsec": 2.3769350187283322,
+      "pixel_scale_zenear_arcsec": 2.3769350187283322
+    }
+  }
+]

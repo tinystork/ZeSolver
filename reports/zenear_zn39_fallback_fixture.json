@@ -1,0 +1,7 @@
+{
+  "controlled_routing_fixture": {
+    "reason": "qualification probe did not mutate hints unless --build-controlled-fixture is added",
+    "status": "NOT_CREATED_IN_THIS_RUN"
+  },
+  "natural_failure_fixture": null
+}

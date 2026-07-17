@@ -1,0 +1,41 @@
+{
+  "230409": {
+    "astap_catalog_final": 448,
+    "catalog_delta_vs_astap": 0,
+    "catalog_final": 448,
+    "hits": {
+      "matches_kept": 50,
+      "matches_raw": 53,
+      "median_ratio": 2.375050353966092,
+      "path_used": "find_fit_using_hash"
+    },
+    "near_success": true,
+    "nrstars_image": 252
+  },
+  "232102": {
+    "astap_catalog_final": 249,
+    "catalog_delta_vs_astap": -1,
+    "catalog_final": 248,
+    "hits": {
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "median_ratio": 2.3716615355284825,
+      "path_used": "find_fit_using_hash"
+    },
+    "near_success": true,
+    "nrstars_image": 58
+  },
+  "233459": {
+    "astap_catalog_final": 248,
+    "catalog_delta_vs_astap": 1,
+    "catalog_final": 249,
+    "hits": {
+      "matches_kept": 26,
+      "matches_raw": 26,
+      "median_ratio": 2.3718651383112643,
+      "path_used": "find_fit"
+    },
+    "near_success": true,
+    "nrstars_image": 54
+  }
+}

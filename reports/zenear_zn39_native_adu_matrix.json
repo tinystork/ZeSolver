@@ -1,0 +1,160 @@
+{
+  "matrix": {
+    "cube_channel_first": {
+      "input_dtype": "float32",
+      "input_shape": [
+        3,
+        5,
+        6
+      ],
+      "native_max": 3.0,
+      "native_min": 3.0,
+      "normalization_0_1_reaches_strict": false,
+      "note": "",
+      "output_dtype": "float32",
+      "output_shape": [
+        5,
+        6
+      ],
+      "source_modified_in_place": false,
+      "status": "SUPPORTED"
+    },
+    "cube_channel_last": {
+      "input_dtype": "float32",
+      "input_shape": [
+        5,
+        6,
+        3
+      ],
+      "native_max": 5.0,
+      "native_min": 1.0,
+      "normalization_0_1_reaches_strict": false,
+      "note": "Current function averages axis 0 for all 3D arrays; channel-last FITS cubes are not safely supported.",
+      "output_dtype": "float32",
+      "output_shape": [
+        6,
+        3
+      ],
+      "source_modified_in_place": false,
+      "status": "UNSUPPORTED_CHANNEL_LAST_SHAPE"
+    },
+    "float32_nan_inf": {
+      "input_dtype": "float32",
+      "input_shape": [
+        2,
+        3
+      ],
+      "native_max": 3.4028234663852886e+38,
+      "native_min": -3.4028234663852886e+38,
+      "normalization_0_1_reaches_strict": false,
+      "note": "",
+      "output_dtype": "float32",
+      "output_shape": [
+        2,
+        3
+      ],
+      "source_modified_in_place": false,
+      "status": "SUPPORTED"
+    },
+    "float64_2d": {
+      "input_dtype": "float64",
+      "input_shape": [
+        10,
+        10
+      ],
+      "native_max": 1.0,
+      "native_min": -1.0,
+      "normalization_0_1_reaches_strict": false,
+      "note": "",
+      "output_dtype": "float32",
+      "output_shape": [
+        10,
+        10
+      ],
+      "source_modified_in_place": false,
+      "status": "SUPPORTED"
+    },
+    "int16_negative": {
+      "input_dtype": "int16",
+      "input_shape": [
+        10,
+        10
+      ],
+      "native_max": 49.0,
+      "native_min": -50.0,
+      "normalization_0_1_reaches_strict": false,
+      "note": "",
+      "output_dtype": "float32",
+      "output_shape": [
+        10,
+        10
+      ],
+      "source_modified_in_place": false,
+      "status": "SUPPORTED"
+    },
+    "uint16_2d": {
+      "input_dtype": "uint16",
+      "input_shape": [
+        10,
+        10
+      ],
+      "native_max": 990.0,
+      "native_min": 0.0,
+      "normalization_0_1_reaches_strict": false,
+      "note": "",
+      "output_dtype": "float32",
+      "output_shape": [
+        10,
+        10
+      ],
+      "source_modified_in_place": false,
+      "status": "SUPPORTED"
+    },
+    "uint32_2d": {
+      "input_dtype": "uint32",
+      "input_shape": [
+        10,
+        10
+      ],
+      "native_max": 99000.0,
+      "native_min": 0.0,
+      "normalization_0_1_reaches_strict": false,
+      "note": "",
+      "output_dtype": "float32",
+      "output_shape": [
+        10,
+        10
+      ],
+      "source_modified_in_place": false,
+      "status": "SUPPORTED"
+    },
+    "uint8_2d": {
+      "input_dtype": "uint8",
+      "input_shape": [
+        10,
+        10
+      ],
+      "native_max": 99.0,
+      "native_min": 0.0,
+      "normalization_0_1_reaches_strict": false,
+      "note": "",
+      "output_dtype": "float32",
+      "output_shape": [
+        10,
+        10
+      ],
+      "source_modified_in_place": false,
+      "status": "SUPPORTED"
+    },
+    "unsupported_1d": {
+      "error": "Unsupported FITS data shape for strict ASTAP-ISO image: (10,)",
+      "input_dtype": "float32",
+      "input_shape": [
+        10
+      ],
+      "source_modified_in_place": false,
+      "status": "EXPLICIT_ERROR"
+    }
+  },
+  "verdict": "D - Regression/limite format image"
+}

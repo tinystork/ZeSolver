@@ -1,0 +1,5 @@
+{
+  "mode": "diagnostic",
+  "reason": "full independent stellar holdout not implemented",
+  "status": "NOT_SEPARABLE_FULLY_IN_THIS_RUN"
+}

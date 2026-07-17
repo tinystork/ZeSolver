@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_report": "reports/zenear_zn310b_gui_manifest.json",
+  "date": "2026-07-17",
+  "profile": "ZeNear strict -> diagnostic gate -> ZeBlind 4D, Astrometry.net disabled for GUI fallback validation",
+  "validation": "P0A regenerated ZN3.10B dataset contract; manual GUI fallback result still pending",
+  "summary": {
+    "selected_sources": 8,
+    "all_pixels_identical": true,
+    "all_sources_covered_4d": true,
+    "control_expected_backend": "NEAR",
+    "nohint_expected_backend": "BLIND4D",
+    "badhint_expected_backend": "BLIND4D",
+    "manual_gui_result": "NOT_RUN"
+  }
+}

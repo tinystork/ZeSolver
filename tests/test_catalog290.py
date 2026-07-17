@@ -29,11 +29,18 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from zewcs290 import CatalogDB
 
 
 DB_ROOT = Path(__file__).resolve().parents[1] / "database"
+pytestmark = pytest.mark.external_catalog
+
+
+def _require_database() -> None:
+    if not DB_ROOT.exists():
+        pytest.skip(f"external ASTAP/HNSKY test database not found: {DB_ROOT}")
 
 
 def _get_tile(db: CatalogDB, tile_code: str) -> int:
@@ -44,6 +51,7 @@ def _get_tile(db: CatalogDB, tile_code: str) -> int:
 
 
 def test_decode_g05_polar_tile():
+    _require_database()
     db = CatalogDB(DB_ROOT, families=["g05"])
     tile = db.tiles[_get_tile(db, "0101")]
     block = db._load_tile(tile)  # pylint: disable=protected-access
@@ -58,6 +66,7 @@ def test_decode_g05_polar_tile():
 
 
 def test_decode_d50_tile_and_cone_query():
+    _require_database()
     db = CatalogDB(DB_ROOT, families=["d50"])
     tile = db.tiles[_get_tile(db, "0501")]
     block = db._load_tile(tile)  # pylint: disable=protected-access

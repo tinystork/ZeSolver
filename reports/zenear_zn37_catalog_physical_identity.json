@@ -1,0 +1,56 @@
+{
+  "230409": {
+    "comparison": {
+      "astap_count": 448,
+      "astap_records_in_near_top_1000": 444,
+      "astap_records_in_near_top_128": 126,
+      "astap_records_in_near_top_192": 189,
+      "astap_records_in_near_top_249": 246,
+      "astap_records_in_near_top_250": 247,
+      "astap_records_in_near_top_260": 256,
+      "astap_records_in_near_top_384": 380,
+      "astap_records_in_near_top_512": 444,
+      "common_frame_projection_delta_arcsec_median": 1.216554015734561e-07,
+      "common_frame_projection_delta_arcsec_p95": 1.8763705476820019e-07,
+      "extra_in_near": 4,
+      "identity_kind": "decoded_coordinate_surrogate",
+      "missing_in_near": 4,
+      "near_count": 448,
+      "near_rank_max_for_astap_records": 448,
+      "near_rank_median_for_astap_records": 225.5,
+      "physical_id_overlap": 444,
+      "physical_id_overlap_fraction": 0.9910714285714286
+    },
+    "near_identity_kind": "decoded_coordinate_surrogate",
+    "reason": "zewcs290 STAR_DTYPE currently exposes decoded coordinates, magnitude and flags but not physical row_index/byte_offset.",
+    "strict_row_index_available_in_near_trace": false
+  },
+  "232102": {
+    "comparison": {
+      "astap_count": 249,
+      "extra_in_near": 0,
+      "identity_kind": "decoded_coordinate_surrogate",
+      "missing_in_near": 249,
+      "near_count": 0,
+      "physical_id_overlap": 0,
+      "physical_id_overlap_fraction": 0.0
+    },
+    "near_identity_kind": "decoded_coordinate_surrogate",
+    "reason": "zewcs290 STAR_DTYPE currently exposes decoded coordinates, magnitude and flags but not physical row_index/byte_offset.",
+    "strict_row_index_available_in_near_trace": false
+  },
+  "233459": {
+    "comparison": {
+      "astap_count": 248,
+      "extra_in_near": 0,
+      "identity_kind": "decoded_coordinate_surrogate",
+      "missing_in_near": 248,
+      "near_count": 0,
+      "physical_id_overlap": 0,
+      "physical_id_overlap_fraction": 0.0
+    },
+    "near_identity_kind": "decoded_coordinate_surrogate",
+    "reason": "zewcs290 STAR_DTYPE currently exposes decoded coordinates, magnitude and flags but not physical row_index/byte_offset.",
+    "strict_row_index_available_in_near_trace": false
+  }
+}
