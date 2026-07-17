@@ -13,6 +13,7 @@ from zesolver.catalog_resources import CatalogResourceResolutionError, SolverCat
 from zesolver.settings import ProductSettings, RuntimeOptions, build_solver_configuration
 from zesolver.zeblindsolver import near_solve
 
+from .blind_port import ProductionBlindSolverPort
 from .models import EngineSolveResult, SolveRequest, SolveResult, SolveStatus
 from .preflight import run_preflight
 from .result_adapter import failure_result, result_from_engine
@@ -116,7 +117,7 @@ class SolverPipeline:
         )
         self.catalog_resources = catalog_resources
         self.near_solver = near_solver or ExistingNearSolverPort()
-        self.blind_solver = blind_solver or UnconfiguredBlindSolverPort()
+        self.blind_solver = blind_solver or ProductionBlindSolverPort()
         self.last_telemetry: dict[str, object] | None = None
 
     @property
@@ -221,6 +222,7 @@ class SolverPipeline:
                 output_path=request.output_path,
                 wcs=engine_result.wcs,
                 overwrite_wcs=request.overwrite_wcs,
+                header_updates=_header_updates_from_engine(engine_result),
             )
             wcs_written = written.wcs_written and written.ok
             output_path = written.path
@@ -283,3 +285,11 @@ class SolverPipeline:
         )
         self.last_telemetry = dict(telemetry.finish(final_status=result.status.value, wcs_written=result.wcs_written))
         return result
+
+
+def _header_updates_from_engine(engine_result: EngineSolveResult) -> dict[str, object] | None:
+    raw = engine_result.raw
+    value = raw.get("header_updates") if isinstance(raw, dict) else None
+    if isinstance(value, dict):
+        return dict(value)
+    return None
