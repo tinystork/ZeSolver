@@ -1,12 +1,25 @@
 # P3A GUI Manual Test Result
 
-Status: not executed in this session.
+Status: P3A-V2 final GUI completion gate passed in a real Wayland session.
 
-Reason: the automated validation ran headless, but a real visual/manual GUI pass
-requires an interactive desktop session. The headless tests validate controller
-routing, lifecycle models, cancellation models, shadow-copy behavior, and the
-ZN3.10B production route through the GUI controller, but they do not replace the
-manual visual/lifecycle checklist.
+The final P3A-V2 replay covered:
 
-Decision impact: P3A can enable the progressive AUTO policy behind rollback, but
-P3B visual simplification should wait for manual GUI validation.
+```text
+Test A FITS pipeline: PASS
+Test B raster AUTO -> legacy: PASS
+Test C Stop then restart: PASS
+```
+
+Each observed run produced exactly one terminal completion, one terminal message,
+one runtime-log copy attempt, one IDLE transition, and zero accepted stale
+callbacks. No matching orphan ZeSolver/ProcessPoolExecutor process and no zombie
+process were reported after Stop/restart.
+
+Details:
+
+```text
+docs/stabilization/p3av2_manual_completion_test.md
+docs/stabilization/p3av2_completion_cleanup_report.md
+```
+
+Decision impact: the P3A manual GUI gate is clear for P3B simplification.

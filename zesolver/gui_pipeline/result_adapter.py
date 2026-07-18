@@ -29,6 +29,8 @@ def gui_result_from_legacy(result: object, *, selected_engine=None) -> GuiFileRe
     status = str(getattr(result, "status", "failed") or "failed").strip().lower()
     if status == "solved":
         public_status = "SOLVED"
+    elif status == "cancelled":
+        public_status = "CANCELLED"
     elif status == "skipped":
         public_status = "SKIPPED"
     elif status == "wcs":
@@ -46,7 +48,7 @@ def gui_result_from_legacy(result: object, *, selected_engine=None) -> GuiFileRe
         rms_px=None,
         pixel_scale_arcsec=getattr(result, "pixel_scale_arcsec", None),
         wcs_written=(status in {"solved", "wcs"}),
-        errors=(() if status in {"solved", "skipped", "wcs"} else (message,)),
+        errors=(() if status in {"solved", "skipped", "wcs", "cancelled"} else (message,)),
         run_info=run_info,
         selected_engine=selected_engine,
     )
