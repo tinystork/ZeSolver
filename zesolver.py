@@ -191,6 +191,13 @@ from zesolver.catalog_resources import (
     SolverCatalogResources,
     resolve_catalog_resources,
 )
+from zesolver.cancellation import (
+    CompositeCancellationToken,
+    ProcessCancellationController,
+    ProcessCancellationToken,
+    ThreadCancellationToken,
+    shutdown_process_executor,
+)
 from zesolver.solver_config import build_blind_solve_config, ensure_loaded_4d_manifest
 from zesolver.gui_profiles import apply_settings_easy_visibility, apply_solver_simple_visibility
 from zesolver.gui_settings_sections import (
@@ -200,6 +207,7 @@ from zesolver.gui_settings_sections import (
 )
 from zesolver.gui_pipeline import GuiEngineSelectionError, GuiSolveController
 from zesolver.gui_pipeline.legacy_runner import LegacyGuiRunner
+from zesolver.gui_pipeline.lifecycle import RunLifecycle
 from zesolver.gui_pipeline.pipeline_runner import PipelineGuiRunner
 from zesolver.gui_pipeline.settings_adapter import build_gui_solve_request_from_legacy_config
 from zeblindsolver.metadata_solver import NearSolveConfig as NearIndexConfig
@@ -389,13 +397,17 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "processing_count": "Traitement de {count} fichier(s).",
         "log_stop_requested": "Arrêt demandé…",
         "log_processing_done": "Traitement terminé.",
+        "log_processing_cancelled": "Traitement annulé.",
+        "log_processing_failed": "Traitement échoué: {error}",
         "runner_start": "Démarrage: {files} fichier(s), {workers} thread(s).",
         "runner_stop_wait": "Arrêt demandé, attente de la fin des tâches…",
+        "status_stopping": "Arrêt en cours…",
         "status_waiting": "en attente",
         "status_wcs": "WCS présent",
         "status_solved": "résolu",
         "status_failed": "échec",
         "status_skipped": "ignoré",
+        "status_cancelled": "annulé",
         "log_result": "{status}: {path} — {message}",
         "log_result_no_details": "{status}: {path}",
         "log_error_prefix": "ERREUR",
@@ -590,13 +602,17 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "processing_count": "Processing {count} file(s).",
         "log_stop_requested": "Stop requested…",
         "log_processing_done": "Processing finished.",
+        "log_processing_cancelled": "Processing cancelled.",
+        "log_processing_failed": "Processing failed: {error}",
         "runner_start": "Starting: {files} file(s), {workers} thread(s).",
         "runner_stop_wait": "Stop requested, waiting for tasks…",
+        "status_stopping": "Stopping…",
         "status_waiting": "waiting",
         "status_wcs": "WCS present",
         "status_solved": "solved",
         "status_failed": "failed",
         "status_skipped": "skipped",
+        "status_cancelled": "cancelled",
         "log_result": "{status}: {path} — {message}",
         "log_result_no_details": "{status}: {path}",
         "log_error_prefix": "ERROR",
@@ -1305,6 +1321,7 @@ class ImageSolveResult:
 
 _PROC_NEAR_SOLVER: Optional["ImageSolver"] = None
 _PROC_NEAR_WORKER_BACKEND: str = "auto"
+_PROC_CANCEL_TOKEN: Optional[ProcessCancellationToken] = None
 
 
 def _result_to_payload(result: ImageSolveResult) -> dict[str, Any]:
@@ -1337,8 +1354,11 @@ def _payload_to_result(payload: Mapping[str, Any]) -> ImageSolveResult:
     )
 
 
-def _near_worker_init(config: SolveConfig) -> None:
-    global _PROC_NEAR_SOLVER, _PROC_NEAR_WORKER_BACKEND
+def _near_worker_init(config: SolveConfig, cancel_token: Optional[ProcessCancellationToken] = None) -> None:
+    global _PROC_NEAR_SOLVER, _PROC_NEAR_WORKER_BACKEND, _PROC_CANCEL_TOKEN
+    _PROC_CANCEL_TOKEN = cancel_token
+    if _PROC_CANCEL_TOKEN is not None:
+        _PROC_CANCEL_TOKEN.set_worker_state("initializing")
     cfg = config
     try:
         backend = str(getattr(config, "near_detect_backend", "auto") or "auto").strip().lower()
@@ -1359,14 +1379,20 @@ def _near_worker_init(config: SolveConfig) -> None:
 
     _PROC_NEAR_SOLVER = ImageSolver(cfg)
     try:
-        _PROC_NEAR_SOLVER.set_cancel_event(None)
+        _PROC_NEAR_SOLVER.set_cancel_event(_PROC_CANCEL_TOKEN)
     except Exception:
         pass
+    if _PROC_CANCEL_TOKEN is not None:
+        _PROC_CANCEL_TOKEN.set_worker_state("idle")
 
 
-def _near_worker_init_with_backend(config: SolveConfig, backend: str) -> None:
+def _near_worker_init_with_backend(
+    config: SolveConfig,
+    backend: str,
+    cancel_token: Optional[ProcessCancellationToken] = None,
+) -> None:
     forced = replace(config, near_detect_backend=str(backend or "cpu").strip().lower())
-    _near_worker_init(forced)
+    _near_worker_init(forced, cancel_token)
 
 
 def _near_worker_solve(path_text: str) -> dict[str, Any]:
@@ -1374,9 +1400,16 @@ def _near_worker_solve(path_text: str) -> dict[str, Any]:
     try:
         if _PROC_NEAR_SOLVER is None:
             raise RuntimeError("near worker not initialized")
+        if _PROC_CANCEL_TOKEN is not None:
+            _PROC_CANCEL_TOKEN.set_worker_state("active")
+            if _PROC_CANCEL_TOKEN.is_cancelled():
+                return _result_to_payload(ImageSolveResult(path=path, status="cancelled", message="cancelled"))
         result = _PROC_NEAR_SOLVER.solve_path(path, allow_blind_fallback=False)
     except Exception as exc:
         result = ImageSolveResult(path=path, status="failed", message=str(exc))
+    finally:
+        if _PROC_CANCEL_TOKEN is not None:
+            _PROC_CANCEL_TOKEN.set_worker_state("idle")
     payload = _result_to_payload(result)
     payload["worker_detect_backend"] = _PROC_NEAR_WORKER_BACKEND
     return payload
@@ -2042,7 +2075,16 @@ class ImageSolver:
         self._cancel_event = event
 
     def _cancelled(self) -> bool:
-        return bool(self._cancel_event and self._cancel_event.is_set())
+        if not self._cancel_event:
+            return False
+        is_cancelled = getattr(self._cancel_event, "is_cancelled", None)
+        if callable(is_cancelled):
+            return bool(is_cancelled())
+        is_set = getattr(self._cancel_event, "is_set", None)
+        return bool(is_set()) if callable(is_set) else bool(self._cancel_event)
+
+    def _cancelled_result(self, path: Path) -> ImageSolveResult:
+        return ImageSolveResult(path=path, status="cancelled", message="cancelled")
 
     def _init_family_candidates(self) -> tuple[str, ...]:
         ordered: list[str] = []
@@ -2375,7 +2417,7 @@ class ImageSolver:
         peaks: Optional[np.ndarray] = None
         try:
             if self._cancelled():
-                return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                return self._cancelled_result(path)
             t0 = time.perf_counter()
             data, metadata = self._load_image(path)
             logging.info(
@@ -2420,7 +2462,7 @@ class ImageSolver:
                 and path.suffix.lower() in FITS_EXTENSIONS
             ):
                 if self._cancelled():
-                    return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                    return self._cancelled_result(path)
                 near_first = self._run_index_near_solver(
                     path,
                     metadata,
@@ -2443,7 +2485,7 @@ class ImageSolver:
                         return bridged
                 raise SolveError("Missing RA/DEC metadata", skip=False)
             if self._cancelled():
-                return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                return self._cancelled_result(path)
             logging.info("[solve] detecting stars in %s", path.name)
             t1 = time.perf_counter()
             peaks = _detect_stars(
@@ -2463,7 +2505,7 @@ class ImageSolver:
             final_error: Optional[SolveError] = None
             for radius_index, radius in enumerate(radius_candidates):
                 if self._cancelled():
-                    return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                    return self._cancelled_result(path)
                 last_error: Optional[SolveError] = None
                 combined_label: Optional[str] = None
                 combined_catalog_family: Optional[str] = None
@@ -2479,7 +2521,7 @@ class ImageSolver:
                         path.name,
                     )
                     if self._cancelled():
-                        return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                        return self._cancelled_result(path)
                     result = self._solve_with_catalog(
                         path=path,
                         metadata=metadata,
@@ -2503,7 +2545,7 @@ class ImageSolver:
                     raise SolveError("No catalogue families available in the database")
                 for idx, family in enumerate(families_to_try):
                     if self._cancelled():
-                        return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                        return self._cancelled_result(path)
                     try:
                         result = self._solve_with_catalog(
                             path=path,
@@ -2556,7 +2598,7 @@ class ImageSolver:
             raise SolveError("No catalogue families available in the database")
         except SolveError as exc:
             if self._cancelled():
-                return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                return self._cancelled_result(path)
             if allow_blind_fallback:
                 blind_result = self._resolve_with_blind_after_failure(
                     path=path,
@@ -2599,7 +2641,7 @@ class ImageSolver:
         metadata: Optional[ImageMetadata] = None
         try:
             if self._cancelled():
-                return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                return self._cancelled_result(path)
             data, metadata = self._load_image(path)
             if metadata.kind == "raster" and self._should_try_blind(path) and self.config.blind_index_path is not None:
                 bridged = self._run_blind_on_raster(raster_path=path, raster_data=data, run_info=run_info)
@@ -2687,28 +2729,38 @@ class ImageSolver:
             target.write_text(json.dumps(payload, indent=2))
 
     def _write_fits_solution(self, path: Path, solution: WCSSolution) -> None:
+        if self._cancelled():
+            raise SolveError("cancelled", skip=True)
+        critical = getattr(self._cancel_event, "critical_section", None) if self._cancel_event is not None else None
+        critical_context = critical("wcs_write") if callable(critical) else None
         with self._io_sema:
-            with fits.open(path, mode="update", memmap=False) as hdul:
-                header = hdul[0].header
-                header["WCSAXES"] = 2
-                header["CRPIX1"] = float(solution.crpix[0])
-                header["CRPIX2"] = float(solution.crpix[1])
-                header["CRVAL1"] = float(solution.crval[0])
-                header["CRVAL2"] = float(solution.crval[1])
-                header["CD1_1"] = float(solution.cd[0, 0])
-                header["CD1_2"] = float(solution.cd[0, 1])
-                header["CD2_1"] = float(solution.cd[1, 0])
-                header["CD2_2"] = float(solution.cd[1, 1])
-                header["CTYPE1"] = "RA---TAN"
-                header["CTYPE2"] = "DEC--TAN"
-                header["CUNIT1"] = "deg"
-                header["CUNIT2"] = "deg"
-                header["RADECSYS"] = "ICRS"
-                header["EQUINOX"] = 2000.0
-                header["ZESOLVER"] = (APP_VERSION, "WCS written by zesolver.py")
-                timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                header.add_history(f"ZeSolver WCS solution at {timestamp}")
-                hdul.flush()
+            if critical_context is not None:
+                critical_context.__enter__()
+            try:
+                with fits.open(path, mode="update", memmap=False) as hdul:
+                    header = hdul[0].header
+                    header["WCSAXES"] = 2
+                    header["CRPIX1"] = float(solution.crpix[0])
+                    header["CRPIX2"] = float(solution.crpix[1])
+                    header["CRVAL1"] = float(solution.crval[0])
+                    header["CRVAL2"] = float(solution.crval[1])
+                    header["CD1_1"] = float(solution.cd[0, 0])
+                    header["CD1_2"] = float(solution.cd[0, 1])
+                    header["CD2_1"] = float(solution.cd[1, 0])
+                    header["CD2_2"] = float(solution.cd[1, 1])
+                    header["CTYPE1"] = "RA---TAN"
+                    header["CTYPE2"] = "DEC--TAN"
+                    header["CUNIT1"] = "deg"
+                    header["CUNIT2"] = "deg"
+                    header["RADECSYS"] = "ICRS"
+                    header["EQUINOX"] = 2000.0
+                    header["ZESOLVER"] = (APP_VERSION, "WCS written by zesolver.py")
+                    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    header.add_history(f"ZeSolver WCS solution at {timestamp}")
+                    hdul.flush()
+            finally:
+                if critical_context is not None:
+                    critical_context.__exit__(None, None, None)
 
     def _load_image(self, path: Path) -> tuple[np.ndarray, ImageMetadata]:
         suffix = path.suffix.lower()
@@ -3990,14 +4042,23 @@ class BatchSolver:
             )
             return
         # Propagate cancellation to the solver for cooperative early exit
+        process_cancel_controller = ProcessCancellationController()
+        thread_cancel_token = ThreadCancellationToken(cancel_event) if cancel_event is not None else None
+        run_cancel_token = (
+            CompositeCancellationToken((thread_cancel_token, process_cancel_controller.token))
+            if thread_cancel_token is not None
+            else process_cancel_controller.token
+        )
+        stop_token_logged = False
         try:
-            self.solver.set_cancel_event(cancel_event)
+            self.solver.set_cancel_event(run_cancel_token)
         except Exception:
             pass
 
         workers_base = max(1, self.config.workers)
         unresolved: dict[Path, ImageSolveResult] = {}
         yield_queue: list[ImageSolveResult] = []
+        emitted_paths: set[Path] = set()
         astrometry_api_key = str(getattr(self.config, "astrometry_api_key", "") or "").strip()
         astrometry_fallback_ready = bool(
             getattr(self.config, "astrometry_fallback_after_blind", True) and astrometry_api_key
@@ -4044,6 +4105,7 @@ class BatchSolver:
             )
 
         def _queue_result(result: ImageSolveResult) -> None:
+            emitted_paths.add(result.path)
             yield_queue.append(result)
             if on_result is not None:
                 try:
@@ -4052,7 +4114,17 @@ class BatchSolver:
                     pass
 
         def _cancel_requested() -> bool:
-            return bool(cancel_event and cancel_event.is_set())
+            nonlocal stop_token_logged
+            cancelled_now = bool(run_cancel_token and run_cancel_token.is_cancelled())
+            if cancelled_now:
+                process_cancel_controller.cancel()
+                if not stop_token_logged:
+                    logging.info("STOP_TOKEN_SET")
+                    stop_token_logged = True
+            return cancelled_now
+
+        def _cancelled_result(path: Path) -> ImageSolveResult:
+            return ImageSolveResult(path=path, status="cancelled", message="cancelled")
 
         def _run_phase(
             phase_paths: Sequence[Path],
@@ -4124,6 +4196,9 @@ class BatchSolver:
 
         # Phase 1: run ZeNear on all files (no per-file blind fallback)
         def _emit_phase1(path: Path, result: ImageSolveResult) -> None:
+            if result.status == "cancelled":
+                _queue_result(result)
+                return
             if result.status == "solved" or (result.status == "skipped" and "WCS already present" in (result.message or "")):
                 _queue_result(result)
                 return
@@ -4143,7 +4218,7 @@ class BatchSolver:
             pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=max(1, int(phase_workers)),
                 initializer=_near_worker_init,
-                initargs=(self.config,),
+                initargs=(self.config, process_cancel_controller.token),
             )
             it = iter(phase_paths)
             inflight: dict[concurrent.futures.Future[dict[str, Any]], Path] = {}
@@ -4178,7 +4253,10 @@ class BatchSolver:
                             payload = future.result()
                             result = _payload_to_result(payload)
                         except Exception as exc:
-                            result = ImageSolveResult(path=path, status="failed", message=str(exc))
+                            if _cancel_requested():
+                                result = _cancelled_result(path)
+                            else:
+                                result = ImageSolveResult(path=path, status="failed", message=str(exc))
                         emit(path, result)
                         if _cancel_requested():
                             cancelled = True
@@ -4192,12 +4270,26 @@ class BatchSolver:
                         break
             finally:
                 if cancelled or _cancel_requested():
-                    for f in list(inflight.keys()):
-                        f.cancel()
-                    try:
-                        pool.shutdown(wait=False, cancel_futures=True)
-                    except TypeError:
-                        pool.shutdown(wait=False)
+                    shutdown_process_executor(
+                        pool,
+                        inflight,
+                        token=process_cancel_controller.token,
+                        grace_period_s=float(os.environ.get("ZE_STOP_GRACE_PERIOD_S", "4") or "4"),
+                        log=logging.info,
+                    )
+                    for future, path in list(inflight.items()):
+                        if not future.done() or future.cancelled():
+                            continue
+                        try:
+                            payload = future.result()
+                            result = _payload_to_result(payload)
+                        except Exception as exc:
+                            if _cancel_requested():
+                                result = _cancelled_result(path)
+                            else:
+                                result = ImageSolveResult(path=path, status="failed", message=str(exc))
+                        emit(path, result)
+                        inflight.pop(future, None)
                 else:
                     pool.shutdown(wait=True)
             return cancelled
@@ -4220,12 +4312,12 @@ class BatchSolver:
             cpu_pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=cpu_w,
                 initializer=_near_worker_init_with_backend,
-                initargs=(self.config, "cpu"),
+                initargs=(self.config, "cpu", process_cancel_controller.token),
             )
             gpu_pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=gpu_w,
                 initializer=_near_worker_init_with_backend,
-                initargs=(self.config, "cuda"),
+                initargs=(self.config, "cuda", process_cancel_controller.token),
             )
             it = iter(phase_paths)
             inflight: dict[concurrent.futures.Future[dict[str, Any]], tuple[Path, str]] = {}
@@ -4272,7 +4364,10 @@ class BatchSolver:
                             payload = future.result()
                             result = _payload_to_result(payload)
                         except Exception as exc:
-                            result = ImageSolveResult(path=path, status="failed", message=str(exc))
+                            if _cancel_requested():
+                                result = _cancelled_result(path)
+                            else:
+                                result = ImageSolveResult(path=path, status="failed", message=str(exc))
                         emit(path, result)
                         if _cancel_requested():
                             cancelled = True
@@ -4286,16 +4381,36 @@ class BatchSolver:
                         break
             finally:
                 if cancelled or _cancel_requested():
-                    for f in list(inflight.keys()):
-                        f.cancel()
-                    try:
-                        cpu_pool.shutdown(wait=False, cancel_futures=True)
-                    except TypeError:
-                        cpu_pool.shutdown(wait=False)
-                    try:
-                        gpu_pool.shutdown(wait=False, cancel_futures=True)
-                    except TypeError:
-                        gpu_pool.shutdown(wait=False)
+                    cpu_inflight = {future: item for future, item in inflight.items() if item[1] == "cpu"}
+                    gpu_inflight = {future: item for future, item in inflight.items() if item[1] == "gpu"}
+                    shutdown_process_executor(
+                        cpu_pool,
+                        cpu_inflight,
+                        token=process_cancel_controller.token,
+                        grace_period_s=float(os.environ.get("ZE_STOP_GRACE_PERIOD_S", "4") or "4"),
+                        log=logging.info,
+                    )
+                    shutdown_process_executor(
+                        gpu_pool,
+                        gpu_inflight,
+                        token=process_cancel_controller.token,
+                        grace_period_s=float(os.environ.get("ZE_STOP_GRACE_PERIOD_S", "4") or "4"),
+                        log=logging.info,
+                    )
+                    for future, item in list(inflight.items()):
+                        path, _pool_name = item
+                        if not future.done() or future.cancelled():
+                            continue
+                        try:
+                            payload = future.result()
+                            result = _payload_to_result(payload)
+                        except Exception as exc:
+                            if _cancel_requested():
+                                result = _cancelled_result(path)
+                            else:
+                                result = ImageSolveResult(path=path, status="failed", message=str(exc))
+                        emit(path, result)
+                        inflight.pop(future, None)
                 else:
                     cpu_pool.shutdown(wait=True)
                     gpu_pool.shutdown(wait=True)
@@ -4479,6 +4594,14 @@ class BatchSolver:
             yield item
         yield_queue.clear()
         if cancelled:
+            for path in self.files:
+                if path not in emitted_paths:
+                    _queue_result(_cancelled_result(path))
+            for item in yield_queue:
+                yield item
+            yield_queue.clear()
+            logging.info("RUN_FINISHED_CANCELLED")
+            process_cancel_controller.shutdown()
             return
 
         # Phase 2: run Zeblind on unresolved files when enabled.
@@ -4500,6 +4623,9 @@ class BatchSolver:
             )
 
             def _emit_phase2(path: Path, result: ImageSolveResult) -> None:
+                if result.status == "cancelled":
+                    _queue_result(result)
+                    return
                 solved = (result.status == "solved") or (
                     result.status == "skipped" and "WCS already present" in (result.message or "")
                 )
@@ -4522,6 +4648,14 @@ class BatchSolver:
                 yield item
             yield_queue.clear()
             if cancelled:
+                for path in self.files:
+                    if path not in emitted_paths:
+                        _queue_result(_cancelled_result(path))
+                for item in yield_queue:
+                    yield item
+                yield_queue.clear()
+                logging.info("RUN_FINISHED_CANCELLED")
+                process_cancel_controller.shutdown()
                 return
             final_unresolved = phase2_unresolved
 
@@ -4571,6 +4705,14 @@ class BatchSolver:
                     yield item
                 yield_queue.clear()
                 if _cancel_requested():
+                    for path in self.files:
+                        if path not in emitted_paths:
+                            _queue_result(_cancelled_result(path))
+                    for item in yield_queue:
+                        yield item
+                    yield_queue.clear()
+                    logging.info("RUN_FINISHED_CANCELLED")
+                    process_cancel_controller.shutdown()
                     return
             except Exception as exc:
                 logging.warning("[FALLBACK] Astrometry fallback unavailable: %s", exc)
@@ -4585,6 +4727,7 @@ class BatchSolver:
             yield_queue.clear()
 
         _log_runtime_memory(stage="run-end", force=True)
+        process_cancel_controller.shutdown()
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
@@ -5040,7 +5183,6 @@ def launch_gui(args: argparse.Namespace) -> int:
     class SolveRunner(QtCore.QThread):
         progress = QtCore.Signal(object)
         started = QtCore.Signal(int)
-        finished = QtCore.Signal()
         info = QtCore.Signal(str)
         error = QtCore.Signal(str)
 
@@ -5057,9 +5199,15 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.catalog_resources = catalog_resources
             self._cancel_event = threading.Event()
             self._translate = translator
+            self._controller: Optional[GuiSolveController] = None
 
         def request_cancel(self) -> None:
+            self.info.emit("STOP_RUNNER_RECEIVED")
             self._cancel_event.set()
+            controller = self._controller
+            if controller is not None:
+                self.info.emit("STOP_CONTROLLER_RECEIVED")
+                controller.cancel()
 
         def run(self) -> None:  # pragma: no cover - GUI thread
             self.started.emit(len(self.files))
@@ -5126,6 +5274,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     ),
                     selection_logger=_selection_log,
                 )
+                self._controller = controller
                 controller.run(gui_request)
                 if self._cancel_event.is_set():
                     self.info.emit(self._translate("runner_stop_wait"))
@@ -5134,7 +5283,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception as exc:
                 self.error.emit(str(exc))
             finally:
-                self.finished.emit()
+                self._controller = None
 
     class FileScanner(QtCore.QThread):
         file_found = QtCore.Signal(str, str, str)
@@ -5607,7 +5756,6 @@ def launch_gui(args: argparse.Namespace) -> int:
     class AstrometryRunner(QtCore.QThread):
         progress = QtCore.Signal(object)
         started = QtCore.Signal(int)
-        finished = QtCore.Signal()
         info = QtCore.Signal(str)
         error = QtCore.Signal(str)
         stage = QtCore.Signal(int, str)
@@ -5662,8 +5810,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                         break
             except Exception as exc:
                 self.error.emit(str(exc))
-            finally:
-                self.finished.emit()
 
     class ZeSolverWindow(QtWidgets.QMainWindow):
         def __init__(self, settings: PersistentSettings) -> None:
@@ -5684,6 +5830,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._results_seen = 0
             self._run_started_ts: Optional[float] = None
             self._last_result_ts: Optional[float] = None
+            self._run_lifecycle = RunLifecycle()
+            self._active_run_failed = False
+            self._active_run_error_message: Optional[str] = None
             self._language_actions: dict[str, QtGui.QAction] = {}
             self._interface_actions: dict[str, QtGui.QAction] = {}
             self._interface_mode = str(getattr(settings, "interface_mode", "easy") or "easy").strip().lower()
@@ -9847,6 +9996,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.progress_bar.setMaximum(target_total * 100)
             self.progress_bar.setValue(0)
             self.status_label.setText(f"0 / {target_total}")
+            run_id = self._run_lifecycle.start()
+            self._active_run_failed = False
+            self._active_run_error_message = None
+            logging.info("GUI_RUN_BEGIN run_id=%s", run_id)
             self._run_started_ts = time.perf_counter()
             self._last_result_ts = self._run_started_ts
             self._progress_timer.start()
@@ -9876,6 +10029,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                         pass
                     self._run_started_ts = None
                     self._last_result_ts = None
+                    self._run_lifecycle.reset()
                     return
                 parallel = int(self.ast_parallel_spin.value()) if hasattr(self, 'ast_parallel_spin') else 2
                 timeout_s = int(self.ast_timeout_spin.value()) if hasattr(self, 'ast_timeout_spin') else 600
@@ -9893,6 +10047,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     index_root=index_root,
                     translator=self._text,
                 )
+                setattr(self._worker, "_gui_run_id", run_id)
                 self._worker.started.connect(self._on_worker_started)
                 self._worker.progress.connect(self._on_worker_progress)
                 self._worker.info.connect(self._log)
@@ -9903,6 +10058,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 return
             # Local backend (default)
             self._worker = SolveRunner(config, self._pending_files, self._text, catalog_resources=catalog_resources)
+            setattr(self._worker, "_gui_run_id", run_id)
             self._worker.started.connect(self._on_worker_started)
             self._worker.progress.connect(self._on_worker_progress)
             self._worker.info.connect(self._log)
@@ -9912,6 +10068,11 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _stop_solving(self) -> None:
             if self._worker:
+                logging.info("STOP_UI_CLICKED")
+                self.status_label.setText(self._text("status_stopping"))
+                self.stop_btn.setEnabled(False)
+                self.stop_btn.setText(self._text("status_stopping"))
+                self.start_btn.setEnabled(False)
                 self._worker.request_cancel()
                 self._log(self._text("log_stop_requested"))
 
@@ -9919,6 +10080,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._gui_run_active = bool(running)
             self.start_btn.setEnabled(not running)
             self.stop_btn.setEnabled(running)
+            self.stop_btn.setText(self._text("stop_button"))
             self.scan_btn.setEnabled(not running)
             self.input_edit.setEnabled(not running)
             if hasattr(self, "blind_check"):
@@ -9987,6 +10149,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 "wcs": QtGui.QColor("#2b8a3e"),
                 "failed": QtGui.QColor("#c92a2a"),
                 "skipped": QtGui.QColor("#5f3dc4"),
+                "cancelled": QtGui.QColor("#5c6770"),
             }
             color = color_map.get(status_key)
             if color:
@@ -10047,11 +10210,43 @@ def launch_gui(args: argparse.Namespace) -> int:
                 )
 
         def _on_worker_error(self, message: str) -> None:
+            self._active_run_failed = True
+            self._active_run_error_message = str(message)
             QtWidgets.QMessageBox.critical(self, "ZeSolver", message)
             self._log(f"{self._text('log_error_prefix')}: {message}")
 
         def _on_worker_finished(self) -> None:
-            self._log(self._text("log_processing_done"))
+            sender = self.sender()
+            worker = sender if sender is not None else self._worker
+            run_id = getattr(worker, "_gui_run_id", None)
+            if run_id is None:
+                run_id = self._run_lifecycle.active_run_id
+            if not self._run_lifecycle.finish_once(
+                run_id,
+                terminal_state=(
+                    "FAILED"
+                    if self._active_run_failed
+                    else ("CANCELLED" if self._worker_cancelled(worker) else "FINISHED")
+                ),
+            ):
+                logging.warning(
+                    "Duplicate or stale GUI completion ignored run_id=%s active_run_id=%s",
+                    run_id,
+                    self._run_lifecycle.active_run_id,
+                )
+                return
+            logging.info("GUI_COMPLETION_TRACE run_id=%s handler=_on_worker_finished call_index=%d", run_id, self._run_lifecycle.run_terminal_count)
+            if self._active_run_failed:
+                self._log(
+                    self._text(
+                        "log_processing_failed",
+                        error=self._active_run_error_message or self._text("log_error_prefix"),
+                    )
+                )
+            elif self._worker_cancelled(worker):
+                self._log(self._text("log_processing_cancelled"))
+            else:
+                self._log(self._text("log_processing_done"))
             self._set_running(False)
             try:
                 self._progress_timer.stop()
@@ -10059,11 +10254,23 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
             self._run_started_ts = None
             self._last_result_ts = None
-            self._copy_runtime_log_to_output()
-            if self._worker:
-                self._worker.deleteLater()
-            self._worker = None
+            self._copy_runtime_log_to_output(run_id=run_id)
+            try:
+                if worker is not None:
+                    worker.finished.disconnect(self._on_worker_finished)
+            except Exception:
+                pass
+            if worker is not None:
+                worker.deleteLater()
+            if self._worker is worker:
+                self._worker = None
             self.status_label.setText(self._text("status_ready"))
+            self._run_lifecycle.transition_idle_once(run_id)
+
+        def _worker_cancelled(self, worker: object | None) -> bool:
+            event = getattr(worker, "_cancel_event", None)
+            is_set = getattr(event, "is_set", None)
+            return bool(is_set()) if callable(is_set) else False
 
         def _on_progress_tick(self) -> None:
             if self._worker is None:
@@ -10090,7 +10297,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             if target > int(self.progress_bar.value()):
                 self.progress_bar.setValue(target)
 
-        def _copy_runtime_log_to_output(self) -> None:
+        def _copy_runtime_log_to_output(self, *, run_id: int | None = None) -> None:
+            if not self._run_lifecycle.mark_log_copy_once(run_id):
+                logging.warning("Duplicate runtime log copy ignored run_id=%s", run_id)
+                return
             try:
                 src = Path(LOG_FILE)
             except Exception:
@@ -10160,8 +10370,15 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
 
         def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # pragma: no cover - GUI hook
-            self._shutdown_thread(self._worker, cancel_method="request_cancel")
-            self._worker = None
+            active_worker = self._worker
+            self._shutdown_thread(active_worker, cancel_method="request_cancel")
+            try:
+                if active_worker is not None and (not active_worker.isRunning()) and self._worker is active_worker:
+                    self._on_worker_finished()
+            except Exception:
+                pass
+            if self._worker is active_worker:
+                self._worker = None
             self._shutdown_thread(self._scanner, cancel_method="cancel")
             self._scanner = None
             self._shutdown_thread(self._index_worker)

@@ -98,7 +98,7 @@ class GuiFileResult:
         if value == "SOLVED":
             return "solved"
         if value == "CANCELLED":
-            return "skipped"
+            return "cancelled"
         if value in {"INVALID_INPUT", "SKIPPED"}:
             return "skipped"
         if value in {"UNSOLVED", "FAILED", "CATALOG_UNAVAILABLE", "REJECTED_FALSE_SOLUTION"}:

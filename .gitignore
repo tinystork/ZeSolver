@@ -18,6 +18,10 @@ astrometry-net-main/
 astrometry-main/
 dist/
 
+# Local transfer archives
+zeblindsolver/zeblindsolver.zip
+zesolver/zesolver.zip
+
 # Local work / benchmark artifacts (not for end users)
 reports/**
 !reports/
