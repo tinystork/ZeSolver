@@ -198,6 +198,10 @@ from zesolver.gui_settings_sections import (
     build_presets_fov_reco_groups,
     wire_settings_tab_callbacks,
 )
+from zesolver.gui_pipeline import GuiEngineSelectionError, GuiSolveController
+from zesolver.gui_pipeline.legacy_runner import LegacyGuiRunner
+from zesolver.gui_pipeline.pipeline_runner import PipelineGuiRunner
+from zesolver.gui_pipeline.settings_adapter import build_gui_solve_request_from_legacy_config
 from zeblindsolver.metadata_solver import NearSolveConfig as NearIndexConfig
 from zeblindsolver.index_manifest_4d import (
     IndexManifestError,
@@ -5045,10 +5049,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             config: SolveConfig,
             files: Sequence[Path],
             translator: Callable[..., str],
+            catalog_resources: SolverCatalogResources | None = None,
         ):
             super().__init__()
             self.config = config
             self.files = [path for path in files]
+            self.catalog_resources = catalog_resources
             self._cancel_event = threading.Event()
             self._translate = translator
 
@@ -5056,47 +5062,75 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._cancel_event.set()
 
         def run(self) -> None:  # pragma: no cover - GUI thread
-            try:
-                batch = BatchSolver(self.config, files=self.files)
-            except Exception as exc:
-                self.error.emit(str(exc))
-                return
-            # Propagate cancel event for cooperative cancellation
-            try:
-                batch.solver.set_cancel_event(self._cancel_event)
-            except Exception:
-                pass
-            self.started.emit(len(batch.files))
+            self.started.emit(len(self.files))
             self.info.emit(
                 self._translate(
                     "runner_start",
-                    files=len(batch.files),
+                    files=len(self.files),
                     workers=self.config.workers,
                 )
             )
             try:
-                import gc as _gc
-                processed = 0
+                gui_request = build_gui_solve_request_from_legacy_config(
+                    self.files,
+                    self.config,
+                    backend="local",
+                    catalog_resources=self.catalog_resources,
+                    cancel_token=self._cancel_event,
+                )
 
-                def _on_result(result: ImageSolveResult) -> None:
-                    nonlocal processed
-                    self.progress.emit(result)
-                    processed += 1
-                    # Optional periodic GC if requested
+                def _selection_log(selection) -> None:
                     try:
-                        interval = int(getattr(self.config, 'gc_interval', 0) or 0)
+                        self.info.emit(
+                            "Engine selection: requested={requested} selected={selected} supported={supported} reason={reason} warnings={warnings}".format(
+                                requested=selection.requested_mode.value,
+                                selected=selection.selected_mode.value,
+                                supported=selection.supported,
+                                reason=selection.reason,
+                                warnings=",".join(selection.warnings) if selection.warnings else "-",
+                            )
+                        )
                     except Exception:
-                        interval = 0
-                    if interval > 0 and processed % interval == 0:
-                        try:
-                            _gc.collect()
-                        except Exception:
-                            pass
+                        pass
 
-                for _ in batch.run(cancel_event=self._cancel_event, on_result=_on_result):
-                    if self._cancel_event.is_set():
-                        self.info.emit(self._translate("runner_stop_wait"))
-                        break
+                def _legacy_results(request, cancel_event):
+                    batch = BatchSolver(self.config, files=request.input_paths)
+                    try:
+                        batch.solver.set_cancel_event(cancel_event)
+                    except Exception:
+                        pass
+                    import gc as _gc
+
+                    processed = 0
+
+                    def _on_result(_result: ImageSolveResult) -> None:
+                        nonlocal processed
+                        processed += 1
+                        try:
+                            interval = int(getattr(self.config, "gc_interval", 0) or 0)
+                        except Exception:
+                            interval = 0
+                        if interval > 0 and processed % interval == 0:
+                            try:
+                                _gc.collect()
+                            except Exception:
+                                pass
+
+                    yield from batch.run(cancel_event=cancel_event, on_result=_on_result)
+
+                controller = GuiSolveController(
+                    pipeline_runner_factory=lambda: PipelineGuiRunner(result_callback=self.progress.emit),
+                    legacy_runner_factory=lambda: LegacyGuiRunner(
+                        run_legacy=_legacy_results,
+                        result_callback=self.progress.emit,
+                    ),
+                    selection_logger=_selection_log,
+                )
+                controller.run(gui_request)
+                if self._cancel_event.is_set():
+                    self.info.emit(self._translate("runner_stop_wait"))
+            except GuiEngineSelectionError as exc:
+                self.error.emit(str(exc))
             except Exception as exc:
                 self.error.emit(str(exc))
             finally:
@@ -9868,7 +9902,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._worker.start()
                 return
             # Local backend (default)
-            self._worker = SolveRunner(config, self._pending_files, self._text)
+            self._worker = SolveRunner(config, self._pending_files, self._text, catalog_resources=catalog_resources)
             self._worker.started.connect(self._on_worker_started)
             self._worker.progress.connect(self._on_worker_progress)
             self._worker.info.connect(self._log)
@@ -9914,7 +9948,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 # Keep textual counter based on files completed
                 self.status_label.setText(f"{self._results_seen} / {len(self._pending_files)}")
                 self._update_item(result)
-            status_text = self._status_label_for(result.status)
+            status_value = str(getattr(result, "legacy_status", result.status) or result.status)
+            status_text = self._status_label_for(status_value)
             if result.message:
                 self._log(
                     self._text(
@@ -9941,7 +9976,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.files_view.addTopLevelItem(item)
                 resolved = self._store_item_path(item, result.path)
                 self._item_by_path[resolved] = item
-            status_key = result.status
+            status_key = str(getattr(result, "legacy_status", result.status) or result.status)
             if status_key == "skipped" and "WCS already present" in (result.message or ""):
                 status_key = "wcs"
             item.setText(1, self._status_label_for(status_key))
