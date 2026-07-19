@@ -3,9 +3,9 @@
 **Projet :** ZeSolver
 **Écosystème :** ZeMosaic / ZeSeestarStacker
 **Auteur principal :** Tinystork — Tristan Nauleau
-**Mise à jour :** 18 juillet 2026
+**Mise à jour :** 19 juillet 2026
 **Phase active :** P1D — Achèvement de la bibliothèque ASTAP unique
-**Statut :** P3B en pause, cœur stabilisé, P1D-2 à préparer
+**Statut :** P3B en pause, cœur stabilisé, P1D-4 à préparer
 
 ---
 
@@ -42,9 +42,14 @@ docs/stabilization/original_stabilization_roadmap_20260716.md
 | P0 — pixels et WCS | Validé pour poursuivre ; audit final avant publication |
 | P1 — `CatalogLibrary` | Cœur et adaptateurs intégrés ; fermeture ASTAP unique active |
 | P1 — couverture ZeBlind 4D | Partielle et explicitement détectée |
-| P1D — bibliothèque ASTAP unique | **Phase active : P1D-2 prochaine** |
+| P1D — bibliothèque ASTAP unique | **Phase active : P1D-4 prochaine** |
 | P1D-1A — provider ZeNear ASTAP-native | Terminé |
 | P1D-1B — basculement produit ZeNear | Terminé |
+| P1D-2A — provenance et plan d'adoption | Terminé |
+| P1D-2B — adoption atomique CatalogLibrary | Terminé |
+| P1D-3A — builder Blind 4D direct ASTAP | Terminé |
+| P1D-3B — validation runtime Blind 4D directe | Terminé |
+| P1D-4 — manifeste 4D possédé par la bibliothèque | Prochaine |
 | P2 — réglages, profils et façade | Stabilisés |
 | P2 — extraction du cœur | Suffisante pour P3B |
 | P3A — GUI/pipeline | Terminé |
@@ -58,7 +63,7 @@ docs/stabilization/original_stabilization_roadmap_20260716.md
 Le projet est :
 
 ```text
-READY_FOR_P1D2_CATALOG_PROVENANCE_AND_ADOPTION
+READY_FOR_P1D4_LIBRARY_OWNED_BLIND4D_MANIFEST
 ```
 
 Il n’est pas encore :
@@ -214,13 +219,15 @@ Ordre de travail :
    - routes PIPELINE et LEGACY partagent la même politique ;
    - rollback `legacy-index` explicite conservé ;
    - aucun fallback silencieux vers legacy en mode natif.
-4. **P1D-2 — Manifest/provenance/réparation** — prochaine phase
+4. **P1D-2 — Manifest/provenance/réparation** — terminé
    - enrichir `catalog.json` pour reconstruction déterministe ;
    - ajouter adoption `REFERENCE_EXISTING` non destructive.
 5. **P1D-3 — Builder Blind 4D depuis ASTAP**
-   - construire des index 4D fonctionnellement équivalents depuis ASTAP ;
-   - comparer au chemin historique `tile_npz`.
-6. **P1D-4 — Manifeste 4D possédé par la bibliothèque**
+   - **P1D-3A terminé** : builder direct ASTAP, coeur partagé, déterminisme
+     et comparaison exacte avec le chemin historique actuel ;
+   - **P1D-3B terminé** : validation runtime baseline produit vs index directs
+     sur M106 all30, mini-corpus intégré, cas difficiles et contrôles négatifs.
+6. **P1D-4 — Manifeste 4D possédé par la bibliothèque** — prochaine
    - générer/valider la vue stricte 4D depuis `catalog.json`.
 7. **P1D-5 — Surface produit**
    - masquer les chemins `db_root`, `index_root`, familles et manifestes 4D du
@@ -444,7 +451,6 @@ Puis :
   tests \
   zesolver.py \
   zewcscleaner.py \
-  zedatabase.py \
   zeindexcheck.py
 
 git diff --check

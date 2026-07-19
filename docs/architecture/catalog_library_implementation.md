@@ -19,6 +19,20 @@ P1B implements the first real `CatalogLibrary` core. It is read-only and is not 
 `zesolver/catalog_library/discovery.py`
 : Non-destructive discovery of existing ASTAP roots, 4D manifests, legacy index roots, and environment variables. It returns an in-memory proposal only.
 
+`zesolver/catalog_library/adoption.py`
+: P1D-2A read-only adoption planner. It inventories explicit existing ASTAP
+roots, validates strict Blind 4D manifests, links indexes to source families and
+tiles, classifies legacy indexes as compatibility resources, returns repair
+prescriptions, and generates an in-memory `catalog.json` preview without
+writing it.
+
+`zesolver/catalog_library/atomic_adoption.py`
+: P1D-2B explicit atomic writer for a prebuilt adoption plan. It writes only the
+plan's `manifest_preview`, uses an exclusive `.catalog-adoption.lock`, writes a
+same-directory temporary file, validates before and after replacement, creates
+byte-identical backups on replacement, supports rollback, and returns a
+structured commit result.
+
 `zesolver/catalog_library/adapters.py`
 : Read-only descriptors for future integration with existing Near and Blind 4D inputs. These adapters do not instantiate or call solvers.
 
@@ -42,6 +56,49 @@ near = library.near_source()
 indexes = library.blind4d_indexes()
 paths = library.blind4d_runtime_paths()
 ```
+
+P1D-2A adoption planning:
+
+```python
+from zesolver.catalog_library import CatalogLibraryAdoptionPlan
+
+plan = CatalogLibraryAdoptionPlan.reference_existing(
+    library_root="/data/ZeSolverCatalog",
+    astap_roots="/opt/astap",
+    blind4d_manifest="/data/blind4d/manifest.json",
+    legacy_index_root="/data/zesolver_index",
+    fingerprint_policy="fast",
+)
+preview = plan.manifest_preview
+```
+
+The preview is serializable and validable by `CatalogLibrary`, but the planner
+does not write it. Atomic writing belongs to P1D-2B.
+
+P1D-2B explicit commit:
+
+```python
+from zesolver.catalog_library import CatalogLibraryAdoptionWriter
+
+result = CatalogLibraryAdoptionWriter.commit(
+    plan,
+    mode="create",
+)
+```
+
+Replacement must be explicit:
+
+```python
+result = CatalogLibraryAdoptionWriter.commit(
+    plan,
+    mode="replace",
+    expected_existing_sha256=current_sha256,
+)
+```
+
+The advanced CLI is `tools/adopt_catalog_library.py`. Its default mode is
+preview-only; writing requires `--write`, and replacing requires
+`--replace-existing` plus `--expected-existing-sha256`.
 
 `CatalogLibrary.open(path)` accepts either a library directory containing `catalog.json` or a direct path to `catalog.json`.
 

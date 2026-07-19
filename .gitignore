@@ -73,6 +73,9 @@ tools/*
 !tools/compare_zenear_catalog_providers.py
 !tools/run_regression_suite.py
 !tools/audit_catalog_library.py
+!tools/adopt_catalog_library.py
+!tools/compare_blind4d_builders.py
+!tools/validate_direct_blind4d_runtime.py
 tests/*
 !tests/
 !tests/conftest.py

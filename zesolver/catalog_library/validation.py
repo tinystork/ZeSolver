@@ -40,7 +40,7 @@ def validate_library(library) -> CatalogValidationReport:
         if source.format not in SUPPORTED_SOURCE_FORMATS:
             issues.append(_issue("SOURCE_FORMAT_UNSUPPORTED", IssueSeverity.ERROR, source.id, source.path.resolved))
             source_ok = False
-        if source.status in {CatalogDataStatus.MISSING, CatalogDataStatus.CORRUPT, CatalogDataStatus.INCOMPATIBLE}:
+        if source.status in {CatalogDataStatus.MISSING, CatalogDataStatus.CORRUPT, CatalogDataStatus.INCOMPATIBLE, CatalogDataStatus.MISMATCH}:
             issues.append(_issue(f"SOURCE_STATUS_{source.status.value}", IssueSeverity.ERROR, source.id, source.path.resolved))
             source_ok = False
         if not source.path.resolved.exists():
@@ -57,6 +57,9 @@ def validate_library(library) -> CatalogValidationReport:
         for integrity_file in source.integrity_files:
             if not _check_integrity_file(integrity_file.resolved_path, integrity_file.sha256, issues, source.id, "SOURCE"):
                 source_ok = False
+        for shard in source.shards:
+            if not _check_integrity_file(shard.resolved_path, shard.sha256, issues, source.id, "SOURCE_SHARD"):
+                source_ok = False
         if source_ok:
             valid_sources.append(source)
 
@@ -67,7 +70,7 @@ def validate_library(library) -> CatalogValidationReport:
         if index.engine not in SUPPORTED_INDEX_ENGINES:
             issues.append(_issue("INDEX_SCHEMA_INCOMPATIBLE", IssueSeverity.ERROR, index.id, index.path.resolved))
             index_ok = False
-        if index.status in {CatalogDataStatus.MISSING, CatalogDataStatus.CORRUPT, CatalogDataStatus.INCOMPATIBLE}:
+        if index.status in {CatalogDataStatus.MISSING, CatalogDataStatus.CORRUPT, CatalogDataStatus.INCOMPATIBLE, CatalogDataStatus.MISMATCH}:
             issues.append(_issue(f"INDEX_STATUS_{index.status.value}", IssueSeverity.ERROR, index.id, index.path.resolved))
             index_ok = False
         if not index.path.resolved.exists():
@@ -127,7 +130,7 @@ def _status_from(
     declared_sources: bool,
     declared_indexes: bool,
 ) -> CatalogStatus:
-    if any(issue.severity in {IssueSeverity.ERROR, IssueSeverity.FATAL} and "SHA256_MISMATCH" in issue.code for issue in issues):
+    if any(issue.severity in {IssueSeverity.ERROR, IssueSeverity.FATAL} and ("SHA256_MISMATCH" in issue.code or "STATUS_MISMATCH" in issue.code) for issue in issues):
         return CatalogStatus.CORRUPT
     if any(issue.severity in {IssueSeverity.ERROR, IssueSeverity.FATAL} and "INCOMPATIBLE" in issue.code for issue in issues):
         return CatalogStatus.INCOMPATIBLE
