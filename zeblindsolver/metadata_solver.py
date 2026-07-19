@@ -51,6 +51,7 @@ from .matcher import SimilarityTransform, estimate_similarity_RANSAC
 from .projections import project_tan
 from .quad_index_builder import load_manifest
 from .astap_db_reader import iter_tiles as iter_astap_tiles, load_tile_stars as load_astap_tile_stars
+from .near_catalog_provider import NearCatalogProvider, NearCatalogProviderError, NearCatalogTile
 from zewcs290.catalog290 import CatalogDB
 from .star_detect import detect_stars
 from .verify import validate_solution
@@ -3218,30 +3219,45 @@ def _near_conformance_check(
 
 def solve_near(
     input_fits: Path | str,
-    index_root: Path | str,
+    index_root: Path | str | None = None,
     *,
     config: NearSolveConfig | None = None,
+    catalog_provider: NearCatalogProvider | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> WcsSolution:
     cfg = config or NearSolveConfig()
     logger.setLevel(cfg.log_level.upper())
     start = time.perf_counter()
     fits_path = Path(input_fits).expanduser().resolve()
-    index_path = Path(index_root).expanduser().resolve()
+    index_path = Path(index_root).expanduser().resolve() if index_root is not None else None
     ransac_seed = int(cfg.ransac_seed) if cfg.ransac_seed is not None else _stable_seed_for_path(fits_path)
     if cancel_check and cancel_check():
         return _failure("cancelled")
-    try:
-        manifest = load_manifest(index_path)
-    except FileNotFoundError as exc:
-        return _failure(f"index manifest missing: {exc}")
-    tiles = manifest.get("tiles") or []
-    # Optional: restrict to a specific catalog family to speed up candidate selection
-    if cfg.family:
-        fam = str(cfg.family).strip().lower()
-        tiles = [entry for entry in tiles if str(entry.get("family", "")).strip().lower() == fam]
-    if not tiles:
-        return _failure("index manifest has no tiles")
+    provider: NearCatalogProvider | None = catalog_provider
+    manifest: dict | None = None
+    if provider is None:
+        if index_path is None:
+            return _failure("near catalog provider absent and index_root not supplied")
+        try:
+            manifest = load_manifest(index_path)
+        except FileNotFoundError as exc:
+            return _failure(f"index manifest missing: {exc}")
+        tiles = manifest.get("tiles") or []
+        # Optional: restrict to a specific catalog family to speed up candidate selection
+        if cfg.family:
+            fam = str(cfg.family).strip().lower()
+            tiles = [entry for entry in tiles if str(entry.get("family", "")).strip().lower() == fam]
+        if not tiles:
+            return _failure("index manifest has no tiles")
+    else:
+        try:
+            families = tuple(str(fam).strip().lower() for fam in provider.families if str(fam).strip())
+        except Exception as exc:
+            return _failure(f"near catalog provider invalid: {exc}")
+        if cfg.family and str(cfg.family).strip().lower() not in set(families):
+            return _failure(f"near catalog provider missing requested family: {cfg.family}")
+        if not families:
+            return _failure("near catalog provider has no families")
     if cancel_check and cancel_check():
         return _failure("cancelled")
     strict_astap_iso = bool(getattr(cfg, "astap_iso_strict", True))
@@ -3314,15 +3330,43 @@ def solve_near(
     )
     if cancel_check and cancel_check():
         return _failure("cancelled")
-    candidates = _select_tiles(manifest, ra0, dec0, radius, cfg.max_tile_candidates)
+    provider_tiles_by_key: dict[str, NearCatalogTile] = {}
+    if provider is None:
+        candidates = _select_tiles(manifest or {}, ra0, dec0, radius, cfg.max_tile_candidates)
+    else:
+        try:
+            selected_tiles = provider.select_tiles(
+                float(ra0),
+                float(dec0),
+                float(radius),
+                int(cfg.max_tile_candidates),
+                families=(str(cfg.family).strip().lower(),) if cfg.family else None,
+            )
+        except NearCatalogProviderError as exc:
+            return _failure(f"near catalog provider selection failed: {exc}")
+        except Exception as exc:
+            return _failure(f"near catalog provider selection failed: {exc}")
+        provider_tiles_by_key = {tile.tile_key: tile for tile in selected_tiles}
+        candidates = [tile.to_manifest_entry() for tile in selected_tiles]
     logger.info("near candidates selected: %d", len(candidates))
+    provider_telemetry = provider.telemetry() if provider is not None else {
+        "near_catalog_provider": "legacy_index",
+        "near_catalog_fallback_used": False,
+    }
+    provider_telemetry["near_catalog_candidate_tiles"] = int(len(candidates))
+    logger.info(
+        "near catalog provider: provider=%s families=%s fallback_used=%s",
+        provider_telemetry.get("near_catalog_provider"),
+        provider_telemetry.get("near_catalog_family", []),
+        str(provider_telemetry.get("near_catalog_fallback_used", False)).lower(),
+    )
     catalog_positions: list[np.ndarray] = []
     catalog_world: list[np.ndarray] = []
     catalog_mags: list[np.ndarray] = []
     missing_tiles: list[str] = []
     # Resolve DB root for optional fallback when tile blobs are empty/missing
     try:
-        db_root_text = str(manifest.get("db_root", "")).strip()
+        db_root_text = str((manifest or {}).get("db_root", "")).strip()
         db_root_path: Path | None = Path(db_root_text).expanduser().resolve() if db_root_text else None
     except Exception:
         db_root_path = None
@@ -3346,7 +3390,24 @@ def solve_near(
             except Exception:
                 raw_tile_lookup = None
 
-    if strict_astap_iso and raw_tile_lookup:
+    if strict_astap_iso and provider is not None:
+        try:
+            search_deg = max(float(radius), float(approx_fov or 1.0)) * 1.6
+            cap = int(cfg.max_tile_candidates) if int(cfg.max_tile_candidates or 0) > 0 else len(candidates)
+            selected_tiles = provider.select_tiles(
+                float(ra0),
+                float(dec0),
+                float(search_deg),
+                max(1, cap),
+                families=(str(cfg.family).strip().lower(),) if cfg.family else None,
+            )
+            provider_tiles_by_key = {tile.tile_key: tile for tile in selected_tiles}
+            candidates = [tile.to_manifest_entry() for tile in selected_tiles]
+            logger.info("near strict candidates selected from provider: %d", len(candidates))
+            provider_telemetry["near_catalog_candidate_tiles"] = int(len(candidates))
+        except Exception as exc:
+            return _failure(f"near catalog provider strict selection failed: {exc}")
+    elif strict_astap_iso and raw_tile_lookup:
         try:
             search_deg = max(float(radius), float(approx_fov or 1.0)) * 1.6
             dec_min_q = max(-90.0, float(dec0) - search_deg)
@@ -3395,6 +3456,7 @@ def solve_near(
                     {
                         "family": fam,
                         "tile_code": str(code),
+                        "tile_key": f"{fam}_{code}" if fam and code else str(code),
                         "center_ra_deg": float(tm.center_ra_deg),
                         "center_dec_deg": float(tm.center_dec_deg),
                         "_sep_deg": sep_deg,
@@ -3405,15 +3467,41 @@ def solve_near(
             cap = int(cfg.max_tile_candidates) if int(cfg.max_tile_candidates or 0) > 0 else len(strict_entries)
             candidates = [{k: v for k, v in e.items() if k != "_sep_deg"} for e in strict_entries[: max(1, cap)]]
             logger.info("near strict candidates selected from ASTAP DB: %d", len(candidates))
+            provider_telemetry["near_catalog_candidate_tiles"] = int(len(candidates))
         except Exception:
             pass
 
     if not candidates:
+        if provider is not None:
+            return _failure("near catalog provider returned no tile intersecting the metadata cone")
         return _failure("manifest present but no tile intersects the metadata cone")
 
     for entry in candidates:
         if cancel_check and cancel_check():
             return _failure("cancelled")
+
+        if provider is not None:
+            try:
+                tile = provider_tiles_by_key.get(str(entry.get("tile_key") or ""))
+                if tile is None:
+                    raise NearCatalogProviderError(f"selected tile not found: {entry.get('tile_key')}")
+                stars_provider = provider.load_stars(tile)
+                if stars_provider.size > 0:
+                    ra_deg = stars_provider.ra_deg.astype(np.float64, copy=False)
+                    dec_deg = stars_provider.dec_deg.astype(np.float64, copy=False)
+                    mags_raw = stars_provider.mag.astype(np.float32, copy=False)
+                    x_deg, y_deg = project_tan(ra_deg, dec_deg, float(ra0), float(dec0))
+                    valid = np.isfinite(x_deg) & np.isfinite(y_deg)
+                    if np.any(valid):
+                        positions = np.column_stack((x_deg[valid], y_deg[valid])).astype(np.float32, copy=False)
+                        world = np.column_stack((ra_deg[valid], dec_deg[valid])).astype(np.float64, copy=False)
+                        mags = mags_raw[valid]
+                        catalog_positions.append(positions)
+                        catalog_world.append(world)
+                        catalog_mags.append(mags)
+                        continue
+            except Exception as exc:
+                return _failure(f"near catalog provider load failed: {exc}")
 
         if strict_astap_iso and db_root_path is not None and raw_tile_lookup is not None:
             try:
@@ -3440,6 +3528,8 @@ def solve_near(
                 pass
 
         try:
+            if index_path is None:
+                raise FileNotFoundError(str(entry.get("tile_key") or "provider_tile"))
             positions, world, mags = _load_tile_catalog(
                 index_path,
                 entry,
@@ -3461,6 +3551,8 @@ def solve_near(
             return _failure(f"tile files missing: {missing_tiles[0]}")
         return _failure("candidate tiles found but none yielded catalog stars")
     cat_positions = np.vstack(catalog_positions)
+    provider_telemetry["near_catalog_loaded_tiles"] = int(len(catalog_positions))
+    provider_telemetry["near_catalog_loaded_stars"] = int(sum(arr.shape[0] for arr in catalog_positions))
     logger.info("near catalog stacks: tiles=%d stars=%d", len(catalog_positions), int(sum(arr.shape[0] for arr in catalog_positions)))
     cat_world = np.vstack(catalog_world)
     cat_mags = np.concatenate(catalog_mags)
@@ -5596,6 +5688,7 @@ def solve_near(
         "diag": near_diag,
         "astap_iso_diag": astap_iso_diag,
         "tile_id": candidates[0].get("tile_key") if candidates else None,
+        "near_catalog_provider": provider_telemetry.get("near_catalog_provider"),
     }
     _emit_near_debug_record(debug_record)
 
@@ -5620,6 +5713,16 @@ def solve_near(
             final_stats["seed_parity"] = int(getattr(used_transform, "parity", 1))
     except Exception:
         pass
+    if provider is not None:
+        try:
+            refreshed = provider.telemetry()
+            refreshed["near_catalog_candidate_tiles"] = provider_telemetry.get("near_catalog_candidate_tiles", 0)
+            refreshed["near_catalog_loaded_tiles"] = provider_telemetry.get("near_catalog_loaded_tiles", 0)
+            refreshed["near_catalog_loaded_stars"] = provider_telemetry.get("near_catalog_loaded_stars", 0)
+            provider_telemetry = refreshed
+        except Exception:
+            pass
+    final_stats.update(provider_telemetry)
     if pix_scale_arcsec is None:
         pix_scale_arcsec = _pix_scale_arcsec(final_wcs)
     if pix_scale_arcsec is not None:

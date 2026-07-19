@@ -70,6 +70,7 @@ tools/*
 !tools/astap_*.py
 !tools/build_zn310b_gui_dataset.py
 !tools/diagnose_*.py
+!tools/compare_zenear_catalog_providers.py
 !tools/run_regression_suite.py
 !tools/audit_catalog_library.py
 tests/*

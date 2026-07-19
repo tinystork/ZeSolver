@@ -49,7 +49,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence
 
 import numpy as np
 from astropy.coordinates import Angle
@@ -188,8 +188,12 @@ from zesolver.settings_store import (
 from zesolver.blind4d_runtime import resolve_default_4d_manifest_path
 from zesolver.catalog_resources import (
     CatalogResourceResolutionError,
+    NearCatalogMode,
+    NearCatalogRuntime,
+    NearCatalogRuntimeError,
     SolverCatalogResources,
     resolve_catalog_resources,
+    resolve_near_catalog_runtime,
 )
 from zesolver.cancellation import (
     CompositeCancellationToken,
@@ -399,6 +403,8 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_processing_done": "Traitement terminé.",
         "log_processing_cancelled": "Traitement annulé.",
         "log_processing_failed": "Traitement échoué: {error}",
+        "progress_status": "{done} / {total} — {remaining} restant(s)",
+        "progress_status_cancelled": "Arrêté : {done} traité(s), {remaining} restant(s)",
         "runner_start": "Démarrage: {files} fichier(s), {workers} thread(s).",
         "runner_stop_wait": "Arrêt demandé, attente de la fin des tâches…",
         "status_stopping": "Arrêt en cours…",
@@ -604,6 +610,8 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_processing_done": "Processing finished.",
         "log_processing_cancelled": "Processing cancelled.",
         "log_processing_failed": "Processing failed: {error}",
+        "progress_status": "{done} / {total} — {remaining} remaining",
+        "progress_status_cancelled": "Stopped: {done} processed, {remaining} remaining",
         "runner_start": "Starting: {files} file(s), {workers} thread(s).",
         "runner_stop_wait": "Stop requested, waiting for tasks…",
         "status_stopping": "Stopping…",
@@ -1164,6 +1172,7 @@ class SolveConfig:
     # triggering immediate blind fallback inside near_solve.
     near_defer_blind_fallback: bool = False
     near_allow_second_rescue: bool = False
+    near_catalog_mode: str = "auto"
     # Blind solver (Python) tunables (mirrors settings panel). These were
     # previously only used by the settings tester; we surface them here so the
     # batch run uses and logs the same values as the GUI:
@@ -1242,6 +1251,8 @@ class SolveConfig:
         object.__setattr__(self, "dev_detect_min_area", detect_area)
         # Legacy non-strict mode is retired.
         object.__setattr__(self, "near_astap_iso_strict", True)
+        mode = NearCatalogMode.normalize(getattr(self, "near_catalog_mode", "auto"))
+        object.__setattr__(self, "near_catalog_mode", mode.value)
         api_url = str(getattr(self, "astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api").strip()
         if not api_url:
             api_url = "https://nova.astrometry.net/api"
@@ -1650,6 +1661,71 @@ def _header_has_wcs(header: fits.Header) -> bool:
     return False
 
 
+@dataclass(frozen=True, slots=True)
+class EffectiveWcsState:
+    status: str
+    detail: str = ""
+    primary_has_wcs: bool = False
+    other_hdus_have_wcs: bool = False
+
+
+def inspect_effective_wcs_state(path: Path) -> EffectiveWcsState:
+    """Inspect the WCS state that the main GUI solver flow actually uses."""
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix in FITS_EXTENSIONS:
+        try:
+            with fits.open(path, mode="readonly", memmap=False) as hdul:
+                primary_has_wcs = False
+                other_hdus_have_wcs = False
+                for index, hdu in enumerate(hdul):
+                    try:
+                        has_wcs = _header_has_wcs(hdu.header)
+                    except Exception:
+                        has_wcs = False
+                    if index == 0:
+                        primary_has_wcs = bool(has_wcs)
+                    elif has_wcs:
+                        other_hdus_have_wcs = True
+                try:
+                    h0 = hdul[0].header
+                    solved_without_wcs = bool(h0.get("SOLVED", False)) and not primary_has_wcs
+                except Exception:
+                    solved_without_wcs = False
+        except Exception as exc:
+            return EffectiveWcsState("failed", f"scan error: {exc}")
+        if primary_has_wcs:
+            return EffectiveWcsState("wcs", "", primary_has_wcs=True, other_hdus_have_wcs=other_hdus_have_wcs)
+        if solved_without_wcs:
+            return EffectiveWcsState(
+                "failed",
+                "SOLVED present but PRIMARY WCS cards missing",
+                primary_has_wcs=False,
+                other_hdus_have_wcs=other_hdus_have_wcs,
+            )
+        if other_hdus_have_wcs:
+            return EffectiveWcsState(
+                "waiting",
+                "PRIMARY WCS absent; extension WCS present",
+                primary_has_wcs=False,
+                other_hdus_have_wcs=True,
+            )
+        return EffectiveWcsState("waiting", "")
+
+    if suffix in RASTER_EXTENSIONS:
+        sidecar = path.with_suffix(path.suffix + SIDE_CAR_SUFFIX)
+        if sidecar.is_file():
+            try:
+                payload = json.loads(sidecar.read_text(errors="ignore"))
+                if isinstance(payload, dict) and all(k in payload for k in ("crpix", "crval", "cd")):
+                    return EffectiveWcsState("wcs", "")
+            except Exception:
+                pass
+        return EffectiveWcsState("waiting", "")
+
+    return EffectiveWcsState("waiting", "")
+
+
 def _fits_requires_memmap_off(header: fits.Header) -> bool:
     """Astropy cannot memmap scaled data (BZERO/BSCALE/BLANK)."""
     return any(key in header for key in FITS_MEMMAP_FORBIDDEN_KEYS)
@@ -1657,39 +1733,8 @@ def _fits_requires_memmap_off(header: fits.Header) -> bool:
 
 def _quick_scan_initial_status(path: Path) -> tuple[str, str]:
     """Best-effort pre-scan status for the file list (WCS present vs waiting)."""
-    suffix = path.suffix.lower()
-    if suffix in FITS_EXTENSIONS:
-        try:
-            with fits.open(path, mode="readonly", memmap=False) as hdul:
-                for hdu in hdul:
-                    try:
-                        if _header_has_wcs(hdu.header):
-                            return "wcs", ""
-                    except Exception:
-                        continue
-                # Diagnostic hint: file stamped solved but no usable WCS cards.
-                try:
-                    h0 = hdul[0].header
-                    if bool(h0.get("SOLVED", False)) and not _header_has_wcs(h0):
-                        return "failed", "SOLVED present but WCS cards missing"
-                except Exception:
-                    pass
-        except Exception as exc:
-            return "failed", f"scan error: {exc}"
-        return "waiting", ""
-
-    if suffix in RASTER_EXTENSIONS:
-        sidecar = path.with_suffix(path.suffix + SIDE_CAR_SUFFIX)
-        if sidecar.is_file():
-            try:
-                payload = json.loads(sidecar.read_text(errors='ignore'))
-                if isinstance(payload, dict) and all(k in payload for k in ("crpix", "crval", "cd")):
-                    return "wcs", ""
-            except Exception:
-                pass
-        return "waiting", ""
-
-    return "waiting", ""
+    state = inspect_effective_wcs_state(path)
+    return state.status, state.detail
 
 
 def _sexagesimal_to_deg(value: str, is_ra: bool) -> Optional[float]:
@@ -1881,6 +1926,7 @@ def _cuda_runtime_summary() -> tuple[int, list[str], Optional[str]]:
 class ImageSolver:
     def __init__(self, config: SolveConfig) -> None:
         self.config, self.catalog_resources = apply_catalog_resources_to_config(config)
+        self.near_catalog_runtime = self._resolve_near_catalog_runtime()
         self.db = None if bool(getattr(self.config, "blind_only", False)) else CatalogDB(self.config.db_root, families=self.config.families, cache_size=self.config.cache_size)
         self._db_lock = threading.Lock()
         self._family_candidates = () if self.db is None else self._init_family_candidates()
@@ -1888,6 +1934,7 @@ class ImageSolver:
         # Sequential near-solver warm start: (scale_deg_per_px, rotation_rad, parity)
         self._near_seed: Optional[tuple[float, float, int]] = None
         self._near_warmstart_parallel_notified: bool = False
+        self._last_near_failure_message: Optional[str] = None
         # Recent solved sky positions used to sanity-check/replace bad header hints.
         self._blind_hint_lock = threading.Lock()
         self._recent_sky_hints: list[dict[str, Any]] = []
@@ -2010,6 +2057,7 @@ class ImageSolver:
                     "fast_mode": bool(getattr(self.config, "blind_fast_mode", True)),
                 },
                 "catalog": self.catalog_resources.telemetry(include_paths=False),
+                "near_catalog_runtime": self.near_catalog_runtime.telemetry(include_paths=False),
             }
             logging.info("Run configuration: %s", json.dumps(run_cfg, ensure_ascii=False))
             try:
@@ -2032,6 +2080,37 @@ class ImageSolver:
         except Exception:
             # Never fail construction because of logging
             pass
+
+    def _resolve_near_catalog_runtime(self) -> NearCatalogRuntime:
+        try:
+            return resolve_near_catalog_runtime(
+                self.catalog_resources,
+                mode=getattr(self.config, "near_catalog_mode", "auto"),
+                legacy_index_root=self.config.blind_index_path,
+                blind_only=bool(getattr(self.config, "blind_only", False)),
+                legacy_cache_size=int(getattr(self.config, "near_tile_cache_size", 128) or 128),
+            )
+        except NearCatalogRuntimeError as exc:
+            try:
+                requested = NearCatalogMode.normalize(getattr(self.config, "near_catalog_mode", "auto"))
+            except Exception:
+                requested = NearCatalogMode.AUTO
+            effective = None
+            if requested is NearCatalogMode.ASTAP_NATIVE or str(exc.code).startswith("ASTAP_") or exc.code == "NEAR_CATALOG_FAMILY_UNAVAILABLE":
+                effective = NearCatalogMode.ASTAP_NATIVE
+            elif requested is NearCatalogMode.LEGACY_INDEX or str(exc.code).startswith("LEGACY_"):
+                effective = NearCatalogMode.LEGACY_INDEX
+            logging.info("[ZENEAR] near catalog runtime unavailable: %s", exc)
+            return NearCatalogRuntime(
+                requested_mode=requested,
+                effective_mode=effective,
+                provider=None,
+                provider_kind=None,
+                source=self.catalog_resources.source,
+                legacy_index_root=self.config.blind_index_path,
+                error_code=exc.code,
+                error_message=str(exc),
+            )
 
     @staticmethod
     def _autotune_io_limit(base_dir: Path, workers: int) -> int:
@@ -2455,14 +2534,16 @@ class ImageSolver:
                     duration_s=time.perf_counter() - start,
                     run_info=list(run_info),
                 )
-            # Prefer the internal index-powered near solver when an index root is configured.
-            # This uses Python-only metadata-assisted solving without quads.
+            # Prefer the provider-backed ZeNear solver when a runtime provider is
+            # configured. Legacy index mode keeps historical behavior; ASTAP-native
+            # mode does not fall back to another Near provider.
             if (
-                self.config.blind_index_path
+                (self.near_catalog_runtime.available or self.near_catalog_runtime.error_code)
                 and path.suffix.lower() in FITS_EXTENSIONS
             ):
                 if self._cancelled():
                     return self._cancelled_result(path)
+                self._last_near_failure_message = None
                 near_first = self._run_index_near_solver(
                     path,
                     metadata,
@@ -2472,6 +2553,8 @@ class ImageSolver:
                     near_first.duration_s = time.perf_counter() - start
                     near_first.run_info.extend(run_info)
                     return near_first
+                if self.near_catalog_runtime.effective_mode is NearCatalogMode.ASTAP_NATIVE:
+                    raise SolveError(self._last_near_failure_message or "ZeNear ASTAP-native failed")
             if metadata.ra_deg is None or metadata.dec_deg is None:
                 # For rasters without metadata: attempt blind via temp FITS bridge
                 if (
@@ -3702,9 +3785,29 @@ class ImageSolver:
         Returns an ImageSolveResult on success, or None on failure.
         """
         try:
-            index_root = self.config.blind_index_path
-            if not index_root:
+            runtime = getattr(self, "near_catalog_runtime", None)
+            direct_legacy_runtime = runtime is None
+            if direct_legacy_runtime:
+                legacy_index = self.config.blind_index_path
+                if not legacy_index:
+                    return None
+                runtime = NearCatalogRuntime(
+                    requested_mode=NearCatalogMode.AUTO,
+                    effective_mode=NearCatalogMode.LEGACY_INDEX,
+                    provider=None,
+                    provider_kind="legacy_index",
+                    source="legacy",
+                    legacy_index_root=legacy_index,
+                )
+                self.near_catalog_runtime = runtime
+            if runtime.error_code is not None and runtime.provider is None:
+                message = runtime.error_message or runtime.error_code
+                logging.info("[ZENEAR] near catalog runtime error for %s: %s", path.name, message)
+                self._last_near_failure_message = message
                 return None
+            if runtime.provider is None and not direct_legacy_runtime:
+                return None
+            index_root = runtime.legacy_index_root if runtime.effective_mode is NearCatalogMode.LEGACY_INDEX else None
             # Use GUI FOV value as override for near solver when > 0
             fov_override = self.config.fov_deg if self.config.fov_deg and self.config.fov_deg > 0 else None
             family: Optional[str] = None
@@ -3793,6 +3896,10 @@ class ImageSolver:
                     "astap_iso_strict": near_cfg.astap_iso_strict,
                     "strict_acceptance_mode": getattr(near_cfg, "strict_acceptance_mode", "diagnostic"),
                     "allow_second_rescue": bool(getattr(self.config, "near_allow_second_rescue", False)),
+                    "near_catalog_mode_requested": runtime.requested_mode.value,
+                    "near_catalog_mode_effective": runtime.effective_mode.value if runtime.effective_mode else None,
+                    "near_catalog_provider": runtime.provider_kind,
+                    "near_catalog_source": runtime.source,
                 }
                 logging.info("[ZENEAR] config: %s", json.dumps(log_near, ensure_ascii=False))
                 logging.info("Strict acceptance mode: %s", getattr(near_cfg, "strict_acceptance_mode", "diagnostic"))
@@ -3800,7 +3907,8 @@ class ImageSolver:
                 pass
             result = near_solve(
                 fits_path=str(path),
-                index_root=str(index_root),
+                index_root=(str(index_root) if index_root is not None else None),
+                catalog_provider=runtime.provider,
                 config=near_cfg,
                 log=logging.info,
                 skip_if_valid=False,
@@ -3808,6 +3916,7 @@ class ImageSolver:
                 fallback_to_blind=False,
                 cancel_check=(self._cancelled if self._cancel_event else None),
             )
+            self._attach_near_runtime_telemetry(result)
             if not result["success"] and not (self._cancelled() if self._cancel_event else False):
                 base_margin = float(near_cfg.search_margin)
                 base_tiles = int(near_cfg.max_tile_candidates)
@@ -3864,7 +3973,8 @@ class ImageSolver:
                     )
                     result = near_solve(
                         fits_path=str(path),
-                        index_root=str(index_root),
+                        index_root=(str(index_root) if index_root is not None else None),
+                        catalog_provider=runtime.provider,
                         config=near_cfg,
                         log=logging.info,
                         skip_if_valid=False,
@@ -3872,6 +3982,7 @@ class ImageSolver:
                         fallback_to_blind=False,
                         cancel_check=(self._cancelled if self._cancel_event else None),
                     )
+                    self._attach_near_runtime_telemetry(result)
                     if result["success"]:
                         logging.info(
                             "[ZENEAR] near_rescue_attempt=%d succeeded for %s",
@@ -3887,7 +3998,7 @@ class ImageSolver:
                     defer_blind = (not allow_blind_fallback) or bool(
                         getattr(self.config, "near_defer_blind_fallback", False)
                     ) or str(getattr(self.config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower() == ZEBLIND_4D_EXPERIMENTAL_PROFILE
-                    if defer_blind:
+                    if defer_blind or runtime.effective_mode is NearCatalogMode.ASTAP_NATIVE:
                         logging.info(
                             "[ZENEAR] near attempts exhausted for %s; deferring blind fallback to batch blind phase",
                             path.name,
@@ -3899,15 +4010,18 @@ class ImageSolver:
                         )
                         result = near_solve(
                             fits_path=str(path),
-                            index_root=str(index_root),
+                            index_root=(str(index_root) if index_root is not None else None),
+                            catalog_provider=runtime.provider,
                             config=near_cfg,
                             log=logging.info,
                             skip_if_valid=False,
                             fallback_to_blind=True,
                             cancel_check=(self._cancelled if self._cancel_event else None),
                         )
+                        self._attach_near_runtime_telemetry(result)
         except BlindSolverRuntimeError as exc:
             logging.info("Near solver (index) failed for %s: %s", path.name, exc)
+            self._last_near_failure_message = str(exc)
             return None
         try:
             stats = result.get("stats", {}) if isinstance(result, Mapping) else {}
@@ -3927,6 +4041,11 @@ class ImageSolver:
                         "near_gate_decision": str(strict_acceptance.get("decision", "")),
                         "near_gate_reason": str(strict_acceptance.get("reason", "")),
                         "near_wcs_written": bool(result.get("success")),
+                        "near_catalog_mode_requested": runtime.requested_mode.value,
+                        "near_catalog_mode_effective": runtime.effective_mode.value if runtime.effective_mode else None,
+                        "near_catalog_provider": runtime.provider_kind,
+                        "near_catalog_source": runtime.source,
+                        "near_catalog_fallback_used": bool(stats.get("near_catalog_fallback_used", False)) if isinstance(stats, Mapping) else False,
                         "historical_blind_called": False,
                         "astrometry_web_called": False,
                     },
@@ -3981,7 +4100,19 @@ class ImageSolver:
                 pixel_scale_arcsec=None,
                 metadata_source="near-index",
             )
+        self._last_near_failure_message = str(result.get("message") or "ZeNear failed")
         return None
+
+    def _attach_near_runtime_telemetry(self, result: MutableMapping[str, Any]) -> None:
+        try:
+            stats = result.setdefault("stats", {})
+            if not isinstance(stats, MutableMapping):
+                stats = {}
+                result["stats"] = stats
+            for key, value in self.near_catalog_runtime.telemetry(include_paths=False).items():
+                stats[key] = value
+        except Exception:
+            pass
 
 
     def _resolve_with_blind_after_failure(
@@ -4911,6 +5042,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Experimental: skip near/catalog solving and run the configured blind profile directly",
     )
+    parser.add_argument(
+        "--near-catalog-mode",
+        choices=[mode.value for mode in NearCatalogMode],
+        default="auto",
+        help="Advanced ZeNear catalog provider mode: auto, astap-native, or legacy-index",
+    )
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     parser.add_argument(
         "--dev-bucket-limit",
@@ -5107,6 +5244,7 @@ def run_cli(args: argparse.Namespace) -> int:
         near_warm_start=(True if args.near_warm_start is None else bool(args.near_warm_start)),
         near_defer_blind_fallback=bool(getattr(args, "near_defer_blind_fallback", False)),
         near_allow_second_rescue=bool(getattr(args, "near_allow_second_rescue", False)),
+        near_catalog_mode=str(getattr(args, "near_catalog_mode", "auto") or "auto"),
         near_ransac_seed=(int(args.near_ransac_seed) if args.near_ransac_seed is not None else None),
         hint_ra_deg=args.ra_hint,
         hint_dec_deg=args.dec_hint,
@@ -5241,7 +5379,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     except Exception:
                         pass
 
-                def _legacy_results(request, cancel_event):
+                def _legacy_results(request, cancel_event, live_result_callback=None):
                     batch = BatchSolver(self.config, files=request.input_paths)
                     try:
                         batch.solver.set_cancel_event(cancel_event)
@@ -5261,6 +5399,11 @@ def launch_gui(args: argparse.Namespace) -> int:
                         if interval > 0 and processed % interval == 0:
                             try:
                                 _gc.collect()
+                            except Exception:
+                                pass
+                        if live_result_callback is not None:
+                            try:
+                                live_result_callback(_result)
                             except Exception:
                                 pass
 
@@ -5828,6 +5971,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._pending_hash_level: Optional[str] = None
             self._current_input_dir: Optional[Path] = None
             self._results_seen = 0
+            self._progress_total = 0
+            self._progress_completed = 0
+            self._progress_seen_paths: set[Path] = set()
+            self._progress_run_id: Optional[int] = None
             self._run_started_ts: Optional[float] = None
             self._last_result_ts: Optional[float] = None
             self._run_lifecycle = RunLifecycle()
@@ -8288,6 +8435,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_detect_max_labels=int(self.fast_detect_max_labels_spin.value()) if hasattr(self, 'fast_detect_max_labels_spin') else 1200,
                 io_concurrency=int(self.perf_io_spin.value()) if hasattr(self, 'perf_io_spin') else 0,
                 near_warm_start=bool(self.perf_near_warm_check.isChecked()) if hasattr(self, 'perf_near_warm_check') else True,
+                near_catalog_mode=str(getattr(self._settings, "near_catalog_mode", "auto") or "auto"),
                 # Near (fast solver) thresholds and tuning
                 near_quality_inliers=int(self.fast_quality_inliers_spin.value()) if hasattr(self, 'fast_quality_inliers_spin') else 60,
                 near_quality_rms=float(self.fast_quality_rms_spin.value()) if hasattr(self, 'fast_quality_rms_spin') else 1.0,
@@ -9556,21 +9704,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.files_view.setUpdatesEnabled(False)
             try:
                 entries: list[tuple[Path, QtWidgets.QTreeWidgetItem]] = []
-                color_map = {
-                    "wcs": QtGui.QColor("#2b8a3e"),
-                    "failed": QtGui.QColor("#c92a2a"),
-                    "waiting": QtGui.QColor("#ffffff"),
-                }
                 for path, status, detail in self._scan_buffer:
                     status_key = status if status in {"waiting", "wcs", "failed", "solved", "skipped"} else "waiting"
                     item = QtWidgets.QTreeWidgetItem(
-                        [self._format_path(path), self._status_label_for(status_key), detail or ""]
+                        [self._format_path(path), "", ""]
                     )
-                    item.setData(1, QtCore.Qt.UserRole, status_key)
-                    color = color_map.get(status_key)
-                    if color is not None:
-                        for idx in range(3):
-                            item.setForeground(idx, color)
+                    self._apply_item_status(item, status_key, detail or "")
                     entries.append((path, item))
                 if entries:
                     self.files_view.addTopLevelItems([item for _, item in entries])
@@ -9769,6 +9908,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_try_parity_flip=bool(self._settings.near_try_parity_flip),
                 near_defer_blind_fallback=bool(getattr(self._settings, 'near_defer_blind_fallback', False)),
                 near_allow_second_rescue=bool(getattr(self._settings, 'near_allow_second_rescue', False)),
+                near_catalog_mode=str(getattr(self._settings, 'near_catalog_mode', 'auto') or 'auto'),
                 near_search_margin=float(self._settings.near_search_margin or 1.2),
                 # Blind solver tunables from the Settings panel
                 blind_max_stars=int(self._settings.blind_max_stars or 500),
@@ -9904,6 +10044,8 @@ def launch_gui(args: argparse.Namespace) -> int:
 
             total_cards = 0
             changed_files = 0
+            refreshed = 0
+            self.files_view.setUpdatesEnabled(False)
             for path in targets:
                 try:
                     deleted, edited_hdus = process_fits(
@@ -9916,13 +10058,30 @@ def launch_gui(args: argparse.Namespace) -> int:
                     total_cards += int(deleted)
                     if int(edited_hdus) > 0:
                         changed_files += 1
+                        state = inspect_effective_wcs_state(path)
+                        detail = "WCS nettoyé"
+                        if state.other_hdus_have_wcs and not state.primary_has_wcs:
+                            detail = "WCS nettoyé du PRIMARY ; WCS secondaire présent"
+                        elif state.detail:
+                            detail = state.detail
+                        key = self._normalize_progress_path(path)
+                        item = self._item_by_path.get(key)
+                        if item is not None:
+                            self._apply_item_status(item, state.status, detail)
+                            refreshed += 1
+                        if refreshed and refreshed % 250 == 0:
+                            self.files_view.setUpdatesEnabled(True)
+                            QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
+                            self.files_view.setUpdatesEnabled(False)
                 except Exception as exc:
+                    self.files_view.setUpdatesEnabled(True)
                     QtWidgets.QMessageBox.warning(
                         self,
                         self._text("simple_wizard_title"),
                         self._text("simple_clean_failed", error=f"{path.name}: {exc}"),
                     )
                     return False
+            self.files_view.setUpdatesEnabled(True)
 
             self._log(self._text("simple_clean_done", files=changed_files, cards=total_cards))
             return True
@@ -9995,8 +10154,20 @@ def launch_gui(args: argparse.Namespace) -> int:
             target_total = max(1, target_total)
             self.progress_bar.setMaximum(target_total * 100)
             self.progress_bar.setValue(0)
-            self.status_label.setText(f"0 / {target_total}")
+            self._progress_total = target_total
+            self._progress_completed = 0
+            self._progress_seen_paths = set()
+            self._progress_run_id = None
+            self.status_label.setText(
+                self._text(
+                    "progress_status",
+                    done=0,
+                    total=target_total,
+                    remaining=target_total,
+                )
+            )
             run_id = self._run_lifecycle.start()
+            self._progress_run_id = run_id
             self._active_run_failed = False
             self._active_run_error_message = None
             logging.info("GUI_RUN_BEGIN run_id=%s", run_id)
@@ -10092,23 +10263,87 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.progress_bar.setMaximum(1)
             self._log(self._text("processing_count", count=total))
 
+        def _normalize_progress_path(self, path: Path) -> Path:
+            try:
+                return Path(path).resolve()
+            except Exception:
+                return Path(path)
+
+        def _set_progress_status(self, *, cancelled: bool = False) -> None:
+            total = max(0, int(self._progress_total or len(self._pending_files) or 0))
+            done = max(0, min(total, int(self._progress_completed or 0)))
+            remaining = max(0, total - done)
+            key = "progress_status_cancelled" if cancelled else "progress_status"
+            self.status_label.setText(
+                self._text(
+                    key,
+                    done=done,
+                    total=total,
+                    remaining=remaining,
+                )
+            )
+
+        def _apply_item_status(self, item: QtWidgets.QTreeWidgetItem, status_key: str, detail: str = "") -> None:
+            status_key = str(status_key or "waiting").strip().lower()
+            if status_key not in {"waiting", "wcs", "solved", "failed", "skipped", "cancelled"}:
+                status_key = "waiting"
+            item.setText(1, self._status_label_for(status_key))
+            item.setData(1, QtCore.Qt.UserRole, status_key)
+            item.setText(2, detail or "")
+            color_map = {
+                "solved": QtGui.QColor("#2b8a3e"),
+                "wcs": QtGui.QColor("#2b8a3e"),
+                "failed": QtGui.QColor("#c92a2a"),
+                "skipped": QtGui.QColor("#5f3dc4"),
+                "cancelled": QtGui.QColor("#5c6770"),
+            }
+            color = color_map.get(status_key)
+            if color:
+                for idx in range(3):
+                    item.setForeground(idx, color)
+            else:
+                for idx in range(3):
+                    item.setForeground(idx, QtGui.QBrush())
+
         def _on_worker_progress(self, result: ImageSolveResult) -> None:
-            if result.run_info:
-                for key, payload in result.run_info:
+            app = QtWidgets.QApplication.instance()
+            if app is not None and QtCore.QThread.currentThread() is not app.thread():
+                logging.warning("GUI progress slot executed outside Qt main thread")
+                return
+            sender = self.sender()
+            callback_run_id = getattr(sender, "_gui_run_id", self._progress_run_id)
+            if callback_run_id != self._run_lifecycle.active_run_id or callback_run_id != self._progress_run_id:
+                logging.info(
+                    "GUI_PROGRESS_STALE_IGNORED run_id=%s active_run_id=%s path=%s",
+                    callback_run_id,
+                    self._run_lifecycle.active_run_id,
+                    getattr(result, "path", ""),
+                )
+                return
+            run_info = tuple(getattr(result, "run_info", ()) or ())
+            if run_info:
+                for key, payload in run_info:
                     self._log(self._text(key, **payload))
             if not result.path.is_dir():
-                self._results_seen += 1
+                key = self._normalize_progress_path(result.path)
+                if key in self._progress_seen_paths:
+                    logging.info("GUI_PROGRESS_DUPLICATE_IGNORED run_id=%s path=%s", callback_run_id, key)
+                    return
+                self._progress_seen_paths.add(key)
+                total_limit = max(1, int(self._progress_total or len(self._pending_files) or 1))
+                self._progress_completed = min(total_limit, self._progress_completed + 1)
+                self._results_seen = self._progress_completed
                 self._last_result_ts = time.perf_counter()
                 # If we are in fine-grained mode (100 per file), advance to end of current file bucket
                 try:
                     maxv = int(self.progress_bar.maximum())
-                    total_files = max(1, len(self._pending_files))
+                    total_files = max(1, self._progress_total or len(self._pending_files))
                     unit = max(1, maxv // total_files)
-                    self.progress_bar.setValue(min(self._results_seen * unit, maxv))
+                    self.progress_bar.setValue(min(self._progress_completed * unit, maxv))
                 except Exception:
-                    self.progress_bar.setValue(min(self._results_seen, self.progress_bar.maximum()))
+                    self.progress_bar.setValue(min(self._progress_completed, self.progress_bar.maximum()))
                 # Keep textual counter based on files completed
-                self.status_label.setText(f"{self._results_seen} / {len(self._pending_files)}")
+                self._set_progress_status()
                 self._update_item(result)
             status_value = str(getattr(result, "legacy_status", result.status) or result.status)
             status_text = self._status_label_for(status_value)
@@ -10139,26 +10374,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 resolved = self._store_item_path(item, result.path)
                 self._item_by_path[resolved] = item
             status_key = str(getattr(result, "legacy_status", result.status) or result.status)
+            status_key = status_key.strip().lower()
             if status_key == "skipped" and "WCS already present" in (result.message or ""):
                 status_key = "wcs"
-            item.setText(1, self._status_label_for(status_key))
-            item.setData(1, QtCore.Qt.UserRole, status_key)
-            item.setText(2, result.message or "")
-            color_map = {
-                "solved": QtGui.QColor("#2b8a3e"),
-                "wcs": QtGui.QColor("#2b8a3e"),
-                "failed": QtGui.QColor("#c92a2a"),
-                "skipped": QtGui.QColor("#5f3dc4"),
-                "cancelled": QtGui.QColor("#5c6770"),
-            }
-            color = color_map.get(status_key)
-            if color:
-                for idx in range(3):
-                    item.setForeground(idx, color)
-            else:
-                # Reset to default palette for statuses without explicit colors
-                for idx in range(3):
-                    item.setForeground(idx, QtGui.QBrush())
+            self._apply_item_status(item, status_key, result.message or "")
 
         def _store_item_path(self, item: QtWidgets.QTreeWidgetItem, path: Path) -> Path:
             try:
@@ -10221,12 +10440,13 @@ def launch_gui(args: argparse.Namespace) -> int:
             run_id = getattr(worker, "_gui_run_id", None)
             if run_id is None:
                 run_id = self._run_lifecycle.active_run_id
+            terminal_cancelled = self._worker_cancelled(worker)
             if not self._run_lifecycle.finish_once(
                 run_id,
                 terminal_state=(
                     "FAILED"
                     if self._active_run_failed
-                    else ("CANCELLED" if self._worker_cancelled(worker) else "FINISHED")
+                    else ("CANCELLED" if terminal_cancelled else "FINISHED")
                 ),
             ):
                 logging.warning(
@@ -10243,7 +10463,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                         error=self._active_run_error_message or self._text("log_error_prefix"),
                     )
                 )
-            elif self._worker_cancelled(worker):
+            elif terminal_cancelled:
                 self._log(self._text("log_processing_cancelled"))
             else:
                 self._log(self._text("log_processing_done"))
@@ -10264,7 +10484,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 worker.deleteLater()
             if self._worker is worker:
                 self._worker = None
-            self.status_label.setText(self._text("status_ready"))
+            if terminal_cancelled:
+                self._set_progress_status(cancelled=True)
+            else:
+                self.status_label.setText(self._text("status_ready"))
             self._run_lifecycle.transition_idle_once(run_id)
 
         def _worker_cancelled(self, worker: object | None) -> bool:
@@ -10275,8 +10498,8 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _on_progress_tick(self) -> None:
             if self._worker is None:
                 return
-            total_files = max(1, len(self._pending_files))
-            if self._results_seen >= total_files:
+            total_files = max(1, int(self._progress_total or len(self._pending_files) or 1))
+            if self._progress_completed >= total_files:
                 return
             maxv = max(1, int(self.progress_bar.maximum()))
             if maxv <= total_files:
@@ -10285,14 +10508,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             run_start = self._run_started_ts or now
             last_result = self._last_result_ts or run_start
             elapsed = max(0.0, now - run_start)
-            if self._results_seen > 0:
-                avg_per_file = max(0.001, elapsed / float(self._results_seen))
+            if self._progress_completed > 0:
+                avg_per_file = max(0.001, elapsed / float(self._progress_completed))
                 since_last = max(0.0, now - last_result)
                 extra_pct = int(min(95.0, 100.0 * min(0.95, since_last / avg_per_file)))
             else:
                 warm = max(0.0, now - run_start)
                 extra_pct = int(min(15.0, warm * 3.0))
-            base = int(self._results_seen * 100)
+            base = int(self._progress_completed * 100)
             target = min(maxv - 1, base + max(0, extra_pct))
             if target > int(self.progress_bar.value()):
                 self.progress_bar.setValue(target)

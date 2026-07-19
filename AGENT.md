@@ -1,862 +1,684 @@
-# AGENT.md — Mission de stabilisation et de publication de ZeSolver
+# AGENT.md — Mission active de ZeSolver
 
-**Projet :** ZeSolver  
-**Écosystème :** ZeMosaic / ZeSeestarStacker  
-**Auteur principal :** Tinystork — Tristan Nauleau  
-**Document de mission :** 16 juillet 2026  
-**Statut du projet :** solveur fonctionnel, phase de stabilisation avant publication
-
----
-
-## 1. Portée de ce document
-
-Ce fichier s'applique à l'ensemble du dépôt ZeSolver, sauf instruction plus spécifique placée dans un sous-répertoire.
-
-Il définit la mission des agents de développement intervenant sur le projet, l'ordre obligatoire des priorités et les règles destinées à préserver les résultats astrométriques déjà obtenus.
-
-Le projet a franchi la phase de preuve de concept : les moteurs ZeNear et ZeBlind 4D produisent maintenant des solutions exploitables. La mission n'est donc plus de multiplier les expérimentations, mais de transformer ce résultat en un logiciel fiable, compréhensible, installable et publiable.
+**Projet :** ZeSolver
+**Écosystème :** ZeMosaic / ZeSeestarStacker
+**Auteur principal :** Tinystork — Tristan Nauleau
+**Mise à jour :** 18 juillet 2026
+**Phase active :** P1D — Achèvement de la bibliothèque ASTAP unique
+**Statut :** P3B en pause, cœur stabilisé, P1D-2 à préparer
 
 ---
 
-## 2. Constat de départ
+## 1. Portée
 
-ZeSolver est fonctionnel, mais son code conserve les traces normales d'une longue phase de recherche et de développement :
+Ce fichier s’applique à tout le dépôt, sauf instruction plus spécifique dans un
+sous-répertoire.
 
-- plusieurs modules sont devenus très volumineux et concentrent trop de responsabilités ;
-- la logique métier, l'orchestration, l'interface graphique, les réglages expérimentaux et les outils de diagnostic sont encore fortement liés ;
-- de nombreux paramètres internes du solveur sont exposés ou persistés alors qu'ils ne devraient pas être manipulés par un utilisateur normal ;
-- l'interface contient encore des éléments utiles au développement, au benchmark et à la construction des index ;
-- la couverture du ciel par les index ZeBlind 4D doit être complétée ou clairement bornée ;
-- les résultats actuels doivent être transformés en tests automatisés avant toute refactorisation importante ;
-- l'écriture des solutions WCS dans les fichiers FITS doit être rendue explicitement sûre ;
-- la gestion des catalogues doit être unifiée autour d'une bibliothèque ASTAP unique du point de vue de l'utilisateur ;
-- le packaging et l'installation sur une machine vierge ne sont pas encore au niveau d'une version publique stable.
+Il contient uniquement :
 
-La réussite actuelle doit être considérée comme une **baseline fonctionnelle à protéger**.
+- l’état actuel ;
+- les invariants à préserver ;
+- la mission active ;
+- les validations obligatoires ;
+- les travaux encore ouverts.
 
----
+Les étapes déjà accomplies sont documentées dans `docs/stabilization/` et
+`docs/architecture/`. Elles ne doivent pas être recommencées sans régression
+reproduite ou demande explicite.
 
-## 3. Mission générale
-
-Transformer ZeSolver en un produit publiable sans dégrader les capacités de résolution acquises.
-
-L'ordre de travail imposé est :
-
-1. figer et mesurer le comportement actuel ;
-2. protéger les fichiers et empêcher les faux WCS ;
-3. unifier l'architecture des catalogues ;
-4. stabiliser les API internes ;
-5. découper progressivement les monolithes ;
-6. reconstruire une interface utilisateur simple ;
-7. fiabiliser le packaging et l'installation ;
-8. seulement ensuite poursuivre les optimisations avancées.
-
-Une refactorisation élégante qui réduit le taux de résolution, augmente les faux positifs ou rend les résultats moins reproductibles est une régression et doit être refusée.
-
----
-
-## 4. Ordre final des priorités
-
-| Priorité | Chantier | Bloquant pour publication |
-|---|---|---:|
-| **P0** | Baseline, corpus et non-régression | Oui |
-| **P0** | Protection des FITS et absence de faux WCS | Oui |
-| **P1** | Bibliothèque ASTAP unique et gestion automatique | Oui |
-| **P1** | Couverture 4D complète ou clairement limitée | Oui |
-| **P2** | Façade stable et réduction des configurations | Oui |
-| **P2** | Découpage progressif des monolithes | Oui |
-| **P3** | Nouvelle interface utilisateur | Oui |
-| **P4** | Packaging, documentation et tests sur machine vierge | Oui |
-| **P5** | Optimisations GPU et fonctionnalités avancées | Non |
-
-### Règle de séquencement
-
-- Les travaux P0 précèdent toute refactorisation structurelle importante.
-- La conception P1 doit être arrêtée avant l'implémentation finale de la nouvelle interface P3.
-- P2 peut commencer par de petites extractions uniquement lorsque les tests P0 protègent le comportement concerné.
-- P5 ne doit jamais retarder ou fragiliser P0 à P4.
-
----
-
-# MISSION P0 — Baseline, corpus et non-régression
-
-## 5. Objectif
-
-Créer une référence mesurable et immuable du comportement actuel de ZeSolver afin que chaque modification ultérieure puisse être comparée objectivement.
-
-## 5.1 Baseline fonctionnelle
-
-Créer et documenter une référence de type :
+L’ancienne mission générale du 16 juillet 2026 est archivée dans :
 
 ```text
-v0.9.0-functional-baseline
+docs/stabilization/original_stabilization_roadmap_20260716.md
 ```
 
-Cette baseline doit identifier au minimum :
-
-- le commit exact ;
-- la version Python ;
-- les versions des dépendances principales ;
-- les paramètres et profils de solve utilisés ;
-- le ou les manifestes ZeBlind 4D ;
-- les index et catalogues utilisés, avec version ou empreinte ;
-- le corpus de test ;
-- les rapports de réussite, d'échec, de temps d'exécution et de qualité.
-
-Ne jamais modifier rétroactivement une baseline publiée. Toute évolution crée une nouvelle baseline.
-
-## 5.2 Corpus de référence
-
-Le corpus doit couvrir progressivement :
-
-- champs larges, moyens et étroits ;
-- régions stellaires denses et pauvres ;
-- images avec et sans métadonnées fiables ;
-- métadonnées volontairement erronées ;
-- images bruitées, sous-exposées, saturées ou légèrement filées ;
-- différents capteurs, focales, binning et échantillonnages ;
-- FITS avec WCS valide, invalide, partiel ou absent ;
-- cas historiquement difficiles et cas déjà résolus durant le développement 4D ;
-- cas négatifs qui doivent échouer proprement.
-
-Le dépôt ne doit pas nécessairement contenir toutes les images lourdes. Un manifeste de corpus peut référencer leur emplacement, leur empreinte SHA-256 et les résultats attendus.
-
-## 5.3 Oracle de résultat
-
-Pour chaque image de référence, enregistrer lorsque pertinent :
-
-- succès, échec ou résultat attendu ;
-- backend attendu ou autorisé ;
-- centre RA/Dec ;
-- échelle en secondes d'arc par pixel ;
-- rotation et parité ;
-- nombre d'inliers ;
-- RMS en pixels et/ou secondes d'arc ;
-- durée indicative ;
-- index ou famille utilisée ;
-- tolérances d'acceptation ;
-- raison attendue en cas d'échec.
-
-Les tests ne doivent pas imposer une égalité flottante exacte. Utiliser des tolérances astronomiquement justifiées.
-
-## 5.4 Niveaux de tests attendus
-
-Mettre en place :
-
-1. **tests unitaires** des fonctions mathématiques, catalogues, parsing et validation ;
-2. **tests de caractérisation** protégeant le comportement actuel ;
-3. **tests d'intégration** ZeNear, ZeBlind 4D et chaîne complète ;
-4. **tests négatifs** contre les faux positifs ;
-5. **tests batch** incluant annulation, erreurs partielles et reprise ;
-6. **tests de performance** informatifs avec comparaison à la baseline.
-
-## 5.5 Critères de sortie P0 — baseline
-
-P0-baseline est terminé lorsque :
-
-- une commande unique lance la suite de non-régression ;
-- les cas de référence sont décrits par un manifeste versionné ;
-- les seuils de succès sont explicites ;
-- les faux positifs sont testés ;
-- les rapports sont lisibles par un humain et exploitables en CI ;
-- une modification qui dégrade les résultats bloque automatiquement l'intégration.
-
 ---
 
-# MISSION P0 — Protection des FITS et absence de faux WCS
+## 2. État actuel
 
-## 6. Principe de sûreté
+| Chantier | État |
+|---|---|
+| P0 — baseline et non-régression | Terminé, à préserver |
+| P0 — pixels et WCS | Validé pour poursuivre ; audit final avant publication |
+| P1 — `CatalogLibrary` | Cœur et adaptateurs intégrés ; fermeture ASTAP unique active |
+| P1 — couverture ZeBlind 4D | Partielle et explicitement détectée |
+| P1D — bibliothèque ASTAP unique | **Phase active : P1D-2 prochaine** |
+| P1D-1A — provider ZeNear ASTAP-native | Terminé |
+| P1D-1B — basculement produit ZeNear | Terminé |
+| P2 — réglages, profils et façade | Stabilisés |
+| P2 — extraction du cœur | Suffisante pour P3B |
+| P3A — GUI/pipeline | Terminé |
+| P3A-V1 — Stop et relance | Terminé |
+| P3A-V2 — fin exactement une fois | Terminé |
+| P3A-V3 — progression et état WCS temps réel | Terminé |
+| P3B — GUI simplifié | En pause, non abandonné |
+| P4 — packaging et publication | Ouvert |
+| P5 — optimisations avancées | Différé |
 
-Un échec propre est préférable à une solution WCS fausse.
-
-Le solveur ne doit jamais déclarer une image résolue sur le seul fait qu'une transformation mathématique a pu être calculée. Toute solution doit être validée par des critères indépendants suffisants.
-
-## 6.1 Validation obligatoire d'une solution
-
-Une solution acceptée doit notamment vérifier, selon le backend :
-
-- un nombre minimum d'inliers ;
-- un RMS sous le seuil du profil ;
-- une distribution spatiale raisonnable des correspondances ;
-- une échelle et une transformation physiquement cohérentes ;
-- une projection WCS valide sur l'image ;
-- l'absence de valeurs non finies ;
-- une cohérence avec les indices utilisateur lorsqu'ils sont explicitement contraignants ;
-- une validation finale utilisant la liste d'étoiles suffisante, et pas uniquement le quad candidat.
-
-Les seuils appartiennent aux profils internes versionnés. Ils ne doivent pas être dispersés dans le GUI.
-
-## 6.2 Règles d'écriture FITS
-
-Par défaut :
-
-- ne jamais modifier les données pixel ;
-- privilégier une copie de sortie ou une sauvegarde vérifiable ;
-- ne pas écraser silencieusement un WCS existant ;
-- écrire le WCS de manière atomique ou avec stratégie de restauration ;
-- relire et valider le fichier après écriture ;
-- conserver les métadonnées non WCS sauf raison documentée ;
-- signaler clairement toute modification partielle ;
-- garantir qu'une interruption ne laisse pas un fichier annoncé comme résolu avec un en-tête incomplet.
-
-Tout test d'écriture doit comparer avant/après :
-
-- empreinte ou égalité des pixels ;
-- structure des HDU ;
-- cartes d'en-tête attendues ;
-- ouverture du fichier par Astropy ;
-- construction et utilisation du WCS final.
-
-## 6.3 Critères de sortie P0 — FITS
-
-Ce chantier est terminé lorsque :
-
-- les pixels sont garantis inchangés par tests automatisés ;
-- les écritures interrompues ou invalides sont récupérables ;
-- les faux WCS du corpus négatif sont rejetés ;
-- toute solution écrite est relue et revalidée ;
-- les modes écrasement, copie et sauvegarde sont documentés et testés.
-
----
-
-# MISSION P1 — Bibliothèque ASTAP unique
-
-## 7. Décision d'architecture
-
-ASTAP/HNSKY devient la source locale de données stellaires de référence pour ZeSolver.
-
-Cela signifie une source de vérité unique du point de vue du produit, mais pas nécessairement un fichier physique unique.
-
-- ZeNear lit les tuiles stellaires ASTAP nécessaires à ses requêtes.
-- ZeBlind 4D utilise des index de quads dérivés de ces mêmes tuiles.
-- Les index sont des artefacts générés, versionnés et vérifiables ; ils ne constituent pas une seconde source astronomique indépendante.
-- Astrometry.net peut rester un fallback web facultatif, clairement distinct du fonctionnement local.
-
-## 7.1 Architecture cible indicative
+Le projet est :
 
 ```text
-ZeSolverCatalog/
-├── catalog.json
-├── astap/
-│   └── raw/
-│       ├── d50_....1476
-│       ├── d80_....1476
-│       └── ...
-└── indexes/
-    └── blind4d/
-        ├── manifest.json
-        ├── index_....npz
-        └── ...
+READY_FOR_P1D2_CATALOG_PROVENANCE_AND_ADOPTION
 ```
 
-Le nom et le format exacts pourront évoluer, mais l'utilisateur doit sélectionner ou installer une seule **Bibliothèque de catalogue ZeSolver**.
+Il n’est pas encore :
 
-## 7.2 Composant `CatalogLibrary`
-
-Créer une façade interne unique responsable de :
-
-- découvrir ou ouvrir la bibliothèque ;
-- lire son manifeste ;
-- vérifier les versions et empreintes ;
-- exposer les tuiles ASTAP à ZeNear ;
-- exposer les index compatibles à ZeBlind 4D ;
-- indiquer la couverture céleste et les échelles disponibles ;
-- détecter les éléments manquants ou incompatibles ;
-- proposer une réparation ou reconstruction explicite ;
-- fournir un état simple au GUI : prêt, incomplet, incompatible ou absent.
-
-Le GUI ne doit pas manipuler directement les chemins de tuiles, familles, hashes ou manifestes 4D.
-
-## 7.3 Choix des familles
-
-Ne pas imposer arbitrairement D50 seul avant validation sur le corpus.
-
-D50 est le candidat principal, mais la sélection finale doit être fondée sur :
-
-- le taux de réussite ;
-- les très grands et très petits champs ;
-- les régions stellaires pauvres et denses ;
-- la profondeur des images ;
-- la taille totale de la bibliothèque ;
-- les temps de requête et de génération des index.
-
-Plusieurs familles ASTAP peuvent être utilisées tout en restant une bibliothèque unique pour l'utilisateur.
-
-## 7.4 Critères de sortie P1 — bibliothèque
-
-Ce chantier est terminé lorsque :
-
-- ZeNear et ZeBlind 4D consomment la même bibliothèque via une API commune ;
-- les données brutes et les index dérivés sont reliés par des empreintes et versions ;
-- l'utilisateur ne choisit plus séparément une base et un manifeste 4D ;
-- les erreurs d'installation ou de compatibilité sont explicites ;
-- le fonctionnement avec bibliothèque partielle est défini et testé.
+```text
+READY_FOR_PUBLIC_RELEASE
+```
 
 ---
 
-# MISSION P1 — Couverture ZeBlind 4D
+## 3. Invariants absolus
 
-## 8. Objectif
+### 3.1 Résolution
 
-Garantir une couverture 4D adaptée à la promesse publique du logiciel.
+Pendant P1D et lors de la reprise P3B, ne pas modifier sans mission dédiée :
 
-Deux formes de publication sont acceptables :
+- ZeNear ;
+- ZeBlind 4D ;
+- les seuils ;
+- les profils ;
+- les catalogues ;
+- les index ;
+- les règles d’acceptation WCS ;
+- l’ordre Near → Blind 4D → Astrometry.net ;
+- les formats de résultats.
 
-1. couverture complète et validée pour les plages de champ annoncées ;
-2. version beta à couverture limitée, avec limites détectables et clairement documentées.
+Toute modification simultanée des algorithmes, seuils, profils ou règles
+d’acceptation est interdite pendant P1D. Une refonte GUI qui modifie un
+résultat astrométrique est une régression.
 
-Une couverture limitée ne doit jamais être présentée comme générale.
+### 3.2 Fichiers et WCS
 
-## 8.1 Travaux attendus
+- Ne jamais modifier les pixels.
+- Ne pas écraser silencieusement un WCS existant.
+- Préserver les HDU et les métadonnées non concernées.
+- Les rasters utilisent un sidecar WCS ; le raster source reste inchangé.
+- Pour un FITS, le statut principal reflète le WCS du HDU `PRIMARY`.
+- Une interruption ne doit pas laisser un fichier annoncé comme résolu avec un
+  en-tête incomplet.
+- Toute modification du chemin d’écriture impose une comparaison avant/après et
+  une relecture WCS.
 
-- inventorier les index installés et leur couverture ;
-- définir les zones célestes, densités, échelles et familles couvertes ;
-- générer les index manquants avec processus reproductible ;
-- valider chaque nouvel index sur le corpus correspondant ;
-- tester l'ordre et l'union des index ;
-- mesurer consommation mémoire, taille disque et temps de chargement ;
-- détecter automatiquement lorsqu'une requête sort de la couverture ;
-- produire une erreur claire ou déclencher le fallback autorisé.
+### 3.3 Routage
 
-## 8.2 Critères de sortie P1 — couverture
+Le routage `AUTO / PIPELINE / LEGACY` reste explicite :
 
-- manifeste de couverture versionné ;
-- aucun index incompatible chargé silencieusement ;
-- couverture complète ou limites publiques explicites ;
-- tests de bord et de zones non couvertes ;
-- procédure reproductible de génération et de vérification.
+- FITS compatible → pipeline autorisé ;
+- raster → legacy ;
+- fallback Astrometry.net incompatible avec pipeline → legacy ;
+- moteur forcé incompatible → erreur claire ;
+- aucun fallback silencieux ;
+- route legacy conservée jusqu’à validation finale du nouveau GUI.
+
+### 3.4 Cycle de vie GUI
+
+Pour chaque `run_id` :
+
+```text
+1 événement terminal
+1 message terminal
+1 tentative de copie du log
+1 transition finale vers IDLE
+```
+
+Pour chaque fichier et chaque run :
+
+```text
+au maximum 1 résultat terminal GUI
+```
+
+Conserver :
+
+- progression en temps réel ;
+- compteur traité / total / restant ;
+- mise à jour des lignes au fil du run ;
+- rafraîchissement après nettoyage WCS ;
+- Stop réactif ;
+- relance après Stop ;
+- fermeture propre ;
+- rejet des callbacks tardifs ;
+- widgets modifiés uniquement dans le thread Qt principal ;
+- aucune fausse progression à 100 % après annulation.
+
+### 3.5 Architecture
+
+Le cœur ne doit importer aucun module GUI.
+
+La chaîne cible est :
+
+```text
+GUI
+→ ProductSettings / SolveRequest
+→ GuiSolveController
+→ PIPELINE ou LEGACY
+→ cœur
+→ résultat adapté
+→ GUI
+```
+
+Le nouveau GUI ne doit pas appeler directement `solve_near()` ou
+`solve_blind()`.
 
 ---
 
-# MISSION P2 — Façade stable et configurations réduites
+## 4. Mission active — P1D
 
-## 9. Objectif
+### 4.1 Objectif
 
-Séparer l'API produit des détails expérimentaux du solveur.
+Fermer l’architecture de bibliothèque ASTAP unique avant de reprendre la
+simplification GUI.
 
-## 9.1 API cible
-
-Le GUI, le CLI et les traitements batch doivent converger vers une façade comparable à :
-
-```python
-result = SolverPipeline.solve(request)
-```
-
-Objets publics recommandés :
+Objectif produit :
 
 ```text
-SolveRequest
-SolveResult
-CatalogLibrary
-SolverPipeline
-ProductSettings
+une Bibliothèque ZeSolver sélectionnée par l’utilisateur
+→ ZeNear lit ASTAP/HNSKY depuis cette bibliothèque
+→ ZeBlind 4D utilise des index dérivés de ces mêmes sources
+→ provenance, versions, paramètres et empreintes reliés
+→ plus de choix normal séparé db_root / index_root / familles / manifeste 4D
 ```
 
-Les noms définitifs peuvent changer, mais les responsabilités doivent rester simples et stables.
+Astrometry.net reste un fallback web facultatif et distinct.
 
-## 9.2 Séparer deux catégories de réglages
+### 4.2 Invariants P1D
 
-### Paramètres utilisateur
+Pendant P1D :
 
-Exemples :
+- ne pas modifier les algorithmes Near ;
+- ne pas modifier les algorithmes Blind ;
+- ne pas modifier les seuils ;
+- ne pas modifier les profils ;
+- ne pas modifier les catalogues ou index existants ;
+- ne pas modifier les FITS ou les pixels ;
+- ne pas modifier le comportement GUI hors branchement strictement nécessaire ;
+- conserver les invariants P0, P2 et P3A ;
+- conserver un rollback legacy explicite ;
+- ne jamais masquer la couverture partielle Blind 4D.
 
-- fichiers ou dossier d'entrée ;
-- dossier de sortie ;
-- bibliothèque de catalogue ;
-- conserver ou écraser un WCS existant ;
-- nombre de tâches ou mode Auto ;
-- fallback web autorisé ou non ;
-- indices instrumentaux facultatifs.
+### 4.3 Séquence P1D retenue
 
-### Profils internes versionnés
+Ordre de travail :
 
-Exemples :
+1. **P1D-0 — Audit de fermeture**
+   - cartographier les dépendances historiques restantes ;
+   - recommander la stratégie ;
+   - aucune modification de solveur.
+2. **P1D-1A — Provider ZeNear ASTAP-native** — terminé
+   - fournisseur de tuiles ASTAP natif ajouté ;
+   - provider historique conservé comme rollback/oracle ;
+   - parité provider démontrée.
+3. **P1D-1B — Basculement produit ZeNear** — terminé
+   - `CatalogLibrary` valide sélectionne ASTAP-native par défaut ;
+   - routes PIPELINE et LEGACY partagent la même politique ;
+   - rollback `legacy-index` explicite conservé ;
+   - aucun fallback silencieux vers legacy en mode natif.
+4. **P1D-2 — Manifest/provenance/réparation** — prochaine phase
+   - enrichir `catalog.json` pour reconstruction déterministe ;
+   - ajouter adoption `REFERENCE_EXISTING` non destructive.
+5. **P1D-3 — Builder Blind 4D depuis ASTAP**
+   - construire des index 4D fonctionnellement équivalents depuis ASTAP ;
+   - comparer au chemin historique `tile_npz`.
+6. **P1D-4 — Manifeste 4D possédé par la bibliothèque**
+   - générer/valider la vue stricte 4D depuis `catalog.json`.
+7. **P1D-5 — Surface produit**
+   - masquer les chemins `db_root`, `index_root`, familles et manifestes 4D du
+     mode normal ;
+   - conserver les overrides en outils avancés/diagnostic.
+
+### 4.4 Gate P1D-0
+
+P1D-0 est fermé lorsque :
+
+- le flux actuel ZeNear est documenté ;
+- le flux actuel ZeBlind 4D est documenté ;
+- les dépendances historiques restantes sont inventoriées ;
+- les stratégies compatibilité et ASTAP-native sont comparées ;
+- une prochaine étape unique est choisie ;
+- `AGENT.md` marque P3B comme en pause et P1D comme phase active ;
+- seuls les documents sont modifiés.
+
+Gate attendu :
 
 ```text
-zenear-v1
-zeblind4d-v1
+READY_FOR_P1D1_ASTAP_RUNTIME_UNIFICATION
 ```
-
-Ils contiennent :
-
-- seuils de détection ;
-- limites de candidats ;
-- nombre de quads ;
-- stratégies de profondeur ;
-- tolérances de validation ;
-- règles de fallback ;
-- caps de buckets ;
-- options expérimentales validées.
-
-Ces détails ne doivent pas être exposés dans l'interface normale ni multipliés dans plusieurs structures de configuration.
-
-## 9.3 Compatibilité
-
-Lors de l'introduction de la façade :
-
-- préserver temporairement les anciennes entrées si nécessaire ;
-- ajouter des adaptateurs explicites ;
-- émettre des avertissements de dépréciation ;
-- ne supprimer les anciens chemins qu'après migration des tests, du GUI et du CLI.
-
-## 9.4 Critères de sortie P2 — façade
-
-- GUI et CLI utilisent la même orchestration ;
-- une seule source de valeurs par défaut produit existe ;
-- les profils internes sont versionnés ;
-- le nombre de paramètres exposés à l'utilisateur est fortement réduit ;
-- les anciens réglages inutiles sont migrés ou ignorés explicitement ;
-- tous les tests P0 restent conformes.
 
 ---
 
-# MISSION P2 — Découpage progressif des monolithes
+## 5. Mission en pause — P3B
 
-## 10. Principe
+P3B est mise en pause, pas abandonnée. Elle reprend après fermeture suffisante
+de P1D pour éviter de simplifier le GUI autour de surfaces catalogue encore
+historiques.
 
-Ne jamais réécrire les grands solveurs en une seule opération.
+### 5.1 Objectif P3B
 
-Le découpage doit être progressif, couvert par les tests et sans changement fonctionnel involontaire.
-
-## 10.1 Architecture cible indicative
-
-```text
-zesolver/
-├── core/
-│   ├── models.py
-│   ├── pipeline.py
-│   └── errors.py
-├── catalog/
-│   ├── library.py
-│   ├── astap.py
-│   └── integrity.py
-├── solver/
-│   ├── near.py
-│   ├── blind4d.py
-│   ├── validation.py
-│   └── profiles.py
-├── io/
-│   ├── images.py
-│   ├── fits.py
-│   └── wcs.py
-├── runtime/
-│   ├── batch.py
-│   ├── workers.py
-│   └── resources.py
-├── gui/
-└── cli/
-```
-
-Cette arborescence est une direction, pas une obligation de renommage immédiat.
-
-## 10.2 Ordre d'extraction conseillé
-
-1. modèles et types de résultats ;
-2. erreurs métier typées ;
-3. lecture d'images et métadonnées ;
-4. écriture et validation WCS ;
-5. accès catalogue ;
-6. fonctions mathématiques pures ;
-7. validation des candidats ;
-8. télémétrie et rapports ;
-9. orchestration Near/Blind ;
-10. interface et batch.
-
-Après chaque extraction :
-
-- lancer les tests ciblés ;
-- lancer la non-régression complète ;
-- comparer taux de réussite, RMS et temps ;
-- documenter tout changement de comportement volontaire.
-
-## 10.3 Exceptions et erreurs silencieuses
-
-Tout `except Exception` doit être classé :
-
-- protection légitime d'une fonction optionnelle ;
-- erreur journalisée en debug ;
-- erreur métier convertie en type explicite ;
-- défaut à corriger ;
-- bloc à supprimer.
-
-Aucune erreur affectant le catalogue, le calcul WCS, l'écriture FITS ou la validation d'une solution ne doit être ignorée silencieusement.
-
-## 10.4 Critères de sortie P2 — découpage
-
-- modules à responsabilité identifiable ;
-- dépendances orientées du produit vers le cœur, pas l'inverse ;
-- fonctions critiques testables sans GUI ;
-- aucune importation du GUI par le cœur ;
-- aucun changement de résultat non documenté ;
-- taille et complexité des fonctions critiques réduites progressivement.
-
----
-
-# MISSION P3 — Nouvelle interface utilisateur
-
-## 11. Objectif
-
-Permettre à un utilisateur ne connaissant ni ASTAP, ni les quads, ni les manifestes de résoudre ses images sans comprendre l'architecture interne.
-
-## 11.1 Parcours principal cible
+Créer une interface principale simple permettant à un utilisateur non expert de :
 
 ```text
-1. Choisir les images
-2. Vérifier la bibliothèque
-3. Résoudre
-4. Consulter les résultats
+1. choisir les images
+2. vérifier la bibliothèque
+3. choisir la politique WCS
+4. résoudre
+5. suivre la progression
+6. consulter les résultats
 ```
 
-L'écran principal doit montrer au maximum :
+L’utilisateur normal ne doit pas avoir besoin de comprendre les familles ASTAP,
+les manifestes 4D, les quads, les buckets ou les seuils internes.
 
-- fichiers ou dossier sélectionnés ;
-- nombre d'images ;
-- état de la bibliothèque ;
-- dossier de sortie ;
+### 5.2 Écran principal attendu
+
+L’écran principal doit montrer au maximum :
+
+- dossier ou fichiers d’entrée ;
+- nombre et état initial des images ;
+- état de la bibliothèque ZeSolver ;
+- dossier de sortie ou politique d’écriture ;
 - règle concernant les WCS existants ;
-- bouton Résoudre ;
-- progression ;
-- statut par fichier ;
-- résumé final et accès au journal.
-
-## 11.2 Réglages normaux
-
-Limiter les réglages normaux à :
-
-- bibliothèque de catalogue ;
-- dossier de sortie ;
-- traitement parallèle Auto ou manuel ;
-- copie, sauvegarde ou écrasement ;
 - fallback web facultatif ;
-- langue ;
-- niveau de journal.
+- bouton **Résoudre** ;
+- bouton **Stop** ;
+- barre de progression ;
+- compteur traité / total / restant ;
+- statut par fichier ;
+- résumé final ;
+- accès au journal.
 
-## 11.3 Outils avancés séparés
+### 5.3 Outils avancés
 
 Sortir du parcours principal :
 
-- construction ou réparation d'index ;
 - benchmark ;
+- construction ou réparation d’index ;
 - reconstruction des hashes ;
 - index checker ;
-- WCS cleaner ;
-- téléchargement manuel des familles ;
-- paramètres de quads et de validation ;
+- explorateur de catalogues ;
+- WCS Cleaner autonome ;
+- téléchargements manuels ;
+- paramètres Near/Blind ;
+- paramètres de quads ;
 - profils expérimentaux ;
 - diagnostics développeur.
 
-Ces fonctions peuvent vivre dans un menu **Outils avancés**, une application distincte ou le CLI.
+Ces fonctions peuvent rester dans :
 
-## 11.4 Règles d'architecture GUI
+- un menu **Outils avancés** ;
+- des fenêtres distinctes ;
+- des utilitaires séparés ;
+- le CLI.
 
-- le GUI appelle uniquement la façade produit ;
-- aucune logique astrométrique critique dans les callbacks ;
-- aucun paramètre expérimental directement lié à un widget du mode normal ;
-- tâches longues hors du thread d'interface ;
-- annulation propre et testée ;
-- messages d'erreur orientés action ;
-- état de l'application déterministe et reproductible.
+Ne supprimer aucune capacité utile uniquement pour alléger l’écran principal.
 
-## 11.5 Critères de sortie P3
+### 5.4 `CatalogLibrary`
 
-Un nouvel utilisateur doit pouvoir :
-
-1. installer ou sélectionner la bibliothèque ;
-2. choisir des images ;
-3. lancer la résolution ;
-4. comprendre les succès et les échecs ;
-5. retrouver les fichiers produits ;
-
-sans ouvrir la documentation technique des index.
-
----
-
-# MISSION P4 — Packaging, documentation et machine vierge
-
-## 12. Objectif
-
-Produire une installation reproductible et cohérente avec le nom du produit ZeSolver.
-
-## 12.1 Packaging Python
-
-À traiter :
-
-- nom de distribution et version cohérents ;
-- section `[build-system]` explicite ;
-- découverte correcte des packages ;
-- inclusion des ressources, layouts, traductions et icônes ;
-- points d'entrée GUI et CLI ;
-- extras séparés : `gui`, `gpu`, `dev` ;
-- licence au format SPDX moderne ;
-- exclusion des logs, caches, catalogues locaux et corpus lourds ;
-- construction wheel et source distribution ;
-- installation editable et installation wheel testées.
-
-## 12.2 Installation sur machine vierge
-
-Tester au minimum :
-
-- environnement Python propre ;
-- absence du dépôt dans `PYTHONPATH` ;
-- premier lancement sans réglages existants ;
-- bibliothèque absente, partielle puis complète ;
-- chemins contenant espaces et caractères non ASCII ;
-- lancement GUI et CLI ;
-- traitement d'un petit corpus ;
-- désinstallation ou mise à jour.
-
-Tester les plateformes effectivement annoncées. Ne pas promettre une plateforme non validée.
-
-## 12.3 Documentation minimale de publication
-
-- README orienté utilisateur ;
-- guide d'installation ;
-- guide de bibliothèque/catalogue ;
-- guide rapide de résolution ;
-- description des limites connues ;
-- politique de sauvegarde FITS ;
-- FAQ de diagnostic ;
-- guide contributeur ;
-- crédits et licences des projets et données amont ;
-- changelog ;
-- notes de version.
-
-## 12.4 Version de publication
-
-Tant que la couverture générale, l'installation et les tests multi-machines ne sont pas démontrés, préférer une version beta telle que :
+Le mode normal doit présenter un seul concept :
 
 ```text
-0.9.0b1
+Bibliothèque ZeSolver
 ```
 
-Ne déclarer une version `1.0.0` qu'après satisfaction des critères P0 à P4.
+Il ne doit plus demander séparément :
 
-## 12.5 Critères de sortie P4
+- la base ASTAP ;
+- le dossier d’index ;
+- le manifeste 4D ;
+- les familles.
 
-- installation réussie depuis un artefact publié sur machine vierge ;
-- premier lancement guidé ;
-- catalogue installable et vérifiable ;
-- corpus minimal résolu ;
-- documentation suffisante pour un utilisateur externe ;
-- licences et crédits vérifiés ;
-- aucun fichier de développement local embarqué par erreur.
+Les chemins historiques peuvent rester dans une zone de compatibilité pendant la
+migration.
 
----
+La couverture partielle doit rester visible. Ne jamais la présenter comme
+all-sky.
 
-# MISSION P5 — Optimisations GPU et fonctions avancées
+### 5.5 Non-objectifs
 
-## 13. Statut
+P3B ne traite pas :
 
-P5 n'est pas bloquant pour la première publication.
-
-Exemples de travaux P5 :
-
-- optimisation GPU supplémentaire ;
-- parallélisme avancé ;
-- nouveaux profils d'instruments ;
-- amélioration automatique des paramètres de détection ;
-- nouvelles projections ou modèles de distorsion ;
-- optimisation de taille et chargement des index ;
-- nouvelles fonctions de benchmark ou d'analyse.
-
-## 13.1 Conditions d'acceptation
-
-Une optimisation doit :
-
-- conserver les résultats P0 ;
-- disposer d'un chemin CPU fonctionnel ;
-- démontrer son gain sur benchmark reproductible ;
-- ne pas augmenter les faux positifs ;
-- ne pas rendre l'installation normale dépendante du GPU ;
-- rester désactivable ou revenir proprement au CPU.
+- la génération de nouveaux index ;
+- l’extension de couverture 4D ;
+- l’optimisation GPU ;
+- le packaging ;
+- les installateurs ;
+- la publication ;
+- les nouvelles fonctions astrométriques.
 
 ---
 
-## 14. Règles générales de développement
+## 6. Stratégie de migration P3B
 
-### 14.1 Avant toute modification
+Ne pas remplacer le GUI en une seule opération.
 
-L'agent doit :
+Ordre recommandé :
+
+1. figer une baseline locale P3A-V3 ;
+2. spécifier le parcours, les états et les erreurs ;
+3. créer une coque GUI importable et testable ;
+4. brancher entrées et scan ;
+5. brancher `CatalogLibrary` ;
+6. brancher politique WCS et réglages produit ;
+7. brancher `GuiSolveController` ;
+8. brancher progression, Stop, résultats et journal ;
+9. déplacer les outils avancés ;
+10. comparer ancien et nouveau GUI ;
+11. retirer l’ancien GUI uniquement après parité.
+
+Pendant la migration :
+
+- conserver un rollback clair ;
+- séparer refactorisation et changement fonctionnel ;
+- préférer de petits commits locaux ;
+- ne pas déplacer les solveurs pour des raisons purement visuelles ;
+- ne pas multiplier les nouvelles abstractions sans usage réel.
+
+---
+
+## 7. Méthode de travail
+
+Avant toute modification :
 
 1. lire ce fichier ;
-2. identifier la priorité concernée ;
-3. inspecter les modules et tests existants ;
-4. décrire le comportement actuel ;
-5. définir les critères mesurables de réussite ;
-6. vérifier qu'une baseline protège la zone modifiée.
+2. identifier la sous-phase active P1D ou P3B ;
+3. lire seulement les rapports pertinents ;
+4. inspecter le code et les tests ;
+5. reproduire le comportement actuel ;
+6. définir des critères mesurables ;
+7. vérifier `git status` ;
+8. ne pas toucher aux changements utilisateur sans demande.
 
-### 14.2 Taille des changements
+Aucune erreur affectant le routage, le catalogue, le WCS, l’écriture, Stop, la
+progression ou la terminaison ne doit être ignorée silencieusement.
 
-Préférer :
-
-- petites modifications cohérentes ;
-- commits séparant refactorisation et changement fonctionnel ;
-- extraction sans modification de comportement ;
-- migration progressive avec compatibilité temporaire.
-
-Éviter :
-
-- réécriture complète d'un solveur ;
-- renommage massif mêlé à une évolution algorithmique ;
-- suppression de paramètres avant migration ;
-- changement de seuil sans preuve sur le corpus ;
-- optimisation fondée sur un seul fichier test.
-
-### 14.3 Tests obligatoires
-
-Pour chaque changement :
-
-- exécuter les tests ciblés ;
-- exécuter la compilation ou analyse syntaxique ;
-- exécuter la non-régression pertinente ;
-- comparer les métriques avant/après ;
-- signaler précisément les tests non exécutés et pourquoi.
-
-Ne jamais annoncer qu'un changement est fiable sans indiquer les validations réellement effectuées.
-
-### 14.4 Gestion des performances
-
-Les performances sont importantes, mais viennent après la justesse.
-
-Mesurer séparément :
-
-- chargement et détection ;
-- recherche de candidats ;
-- validation ;
-- écriture ;
-- mémoire maximale ;
-- temps médian et percentile 95 ;
-- taux de succès et de faux positifs.
-
-Une accélération qui réduit la robustesse ne doit pas devenir le comportement par défaut.
-
-### 14.5 Compatibilité et dépendances
-
-- éviter les dépendances lourdes sans bénéfice démontré ;
-- conserver un fonctionnement CPU ;
-- isoler les dépendances GUI et GPU dans des extras ;
-- documenter toute nouvelle dépendance ;
-- ne pas utiliser d'API privée d'une bibliothèque sans test et justification ;
-- vérifier la compatibilité avec les versions Python annoncées.
-
-### 14.6 Données et fichiers volumineux
-
-Ne pas ajouter au dépôt sans décision explicite :
-
-- catalogues stellaires complets ;
-- index 4D volumineux ;
-- logs ;
-- environnements virtuels ;
-- caches Python ;
-- résultats de benchmark temporaires ;
-- corpus lourd non filtré.
-
-Utiliser des manifestes, checksums, scripts de téléchargement ou artefacts de release.
+Les erreurs utilisateur doivent indiquer une action possible.
 
 ---
 
-## 15. Format attendu pour chaque mission confiée à un agent
+## 8. Validation obligatoire
 
-Chaque intervention importante doit produire un compte rendu comprenant :
+### 8.1 Tests ciblés
 
-### Objectif
+Exécuter les tests directement liés aux fichiers modifiés.
 
-Ce qui devait être obtenu.
+Pour le GUI, couvrir au minimum :
 
-### État initial
+- sélection moteur ;
+- pipeline ;
+- legacy ;
+- progression temps réel ;
+- absence de doublons ;
+- nettoyage WCS ;
+- Stop ;
+- relance ;
+- callback tardif ;
+- terminaison exactement une fois ;
+- copie du log ;
+- fermeture.
 
-Comportement observé, fichiers concernés et risques.
+Commande indicative :
 
-### Modifications
+```bash
+QT_QPA_PLATFORM=offscreen \
+.venv/bin/python -m pytest tests/test_gui_* -q
+```
 
-Liste concise des changements réalisés.
+### 8.2 Barrières générales
 
-### Validation
+Après une étape P1D ou P3B significative :
 
-Commandes exécutées, corpus utilisé et métriques obtenues.
+```bash
+.venv/bin/python tools/check_core_boundaries.py
+.venv/bin/python tools/run_regression_suite.py --hermetic
+.venv/bin/python -m pytest -q
+```
 
-### Comparaison baseline
+Puis :
 
-Succès, RMS, performances et éventuelles différences.
+```bash
+.venv/bin/python -m compileall -q \
+  zeblindsolver \
+  zewcs290 \
+  zesolver \
+  tools \
+  tests \
+  zesolver.py \
+  zewcscleaner.py \
+  zedatabase.py \
+  zeindexcheck.py
 
-### Limites ou risques restants
+git diff --check
+git status --short --branch
+```
 
-Ce qui n'est pas démontré ou doit encore être fait.
+Tout skip externe doit être explicite et mentionné dans le rapport.
 
-### Prochaine étape recommandée
+Aucune nouvelle catégorie de warning sans justification.
 
-Une seule étape prioritaire, rattachée à P0–P5.
+### 8.3 Validation graphique réelle
 
----
+Avant de fermer une sous-phase GUI, tester dans une session graphique réelle :
 
-## 16. Première séquence de travail recommandée
+1. FITS forcé en pipeline ;
+2. AUTO avec route réellement sélectionnée ;
+3. raster et sidecar ;
+4. nettoyage WCS intégré ;
+5. progression en temps réel ;
+6. Stop puis relance ;
+7. fermeture pendant un run ;
+8. journal et résumé ;
+9. langue, si la zone est traduite.
 
-### Étape A — Geler la baseline
+Ne jamais présenter un test offscreen comme un test graphique réel.
 
-- créer le tag ou commit de référence ;
-- archiver les paramètres et manifestes ;
-- établir un premier manifeste de corpus ;
-- enregistrer les métriques actuelles.
-
-### Étape B — Construire le harnais de non-régression
-
-- automatiser l'exécution du corpus ;
-- produire JSON et résumé lisible ;
-- définir les tolérances ;
-- intégrer les cas négatifs.
-
-### Étape C — Sécuriser les FITS
-
-- vérifier l'intégrité des pixels ;
-- ajouter les stratégies copie/sauvegarde ;
-- relire et valider tout WCS écrit ;
-- tester les interruptions et fichiers invalides.
-
-### Étape D — Spécifier `CatalogLibrary`
-
-- documenter le format de bibliothèque ;
-- définir le manifeste commun ;
-- définir les API ZeNear et ZeBlind ;
-- inventorier la couverture 4D actuelle.
-
-### Étape E — Introduire la façade produit
-
-- créer les modèles de requête et résultat ;
-- adapter le CLI puis le GUI ;
-- migrer progressivement les réglages ;
-- conserver les anciens chemins jusqu'à validation.
-
-La refonte visuelle complète ne commence qu'après stabilisation des étapes A à E.
-
----
-
-## 17. Définition de « prêt à publier »
-
-ZeSolver est prêt pour une publication publique lorsque :
-
-- la baseline et le corpus sont versionnés ;
-- la non-régression est automatisée ;
-- les faux WCS sont activement testés ;
-- les FITS sont protégés ;
-- la bibliothèque ASTAP est unifiée et vérifiable ;
-- la couverture 4D est complète ou honnêtement limitée ;
-- le GUI et le CLI passent par une façade commune ;
-- l'interface principale ne présente plus les outils de développement ;
-- l'installation fonctionne depuis un artefact sur machine vierge ;
-- la documentation et les licences sont prêtes ;
-- les limites connues sont publiées ;
-- aucun blocage P0 à P4 ne reste ouvert.
+Toute modification d’écriture impose aussi un contrôle d’intégrité des pixels.
 
 ---
 
-## 18. Principe final
+## 9. Travaux restant après P1D/P3B
 
-La priorité absolue de ZeSolver est la confiance :
+### 9.1 Couverture 4D
 
-- confiance dans la solution WCS ;
-- confiance dans l'intégrité du fichier ;
+Avant une promesse générale :
+
+- compléter la couverture ;
+- ou publier une bêta explicitement limitée ;
+- versionner le manifeste de couverture ;
+- tester les zones hors couverture ;
+- documenter le fallback.
+
+### 9.2 P4 — Packaging
+
+P4 doit traiter :
+
+- nom de distribution cohérent avec ZeSolver ;
+- version de publication cohérente ;
+- section `[build-system]` ;
+- wheel et sdist ;
+- points d’entrée GUI et CLI ;
+- ressources embarquées ;
+- extras `gui`, `gpu` et `dev` ;
+- dépendances GPU réellement facultatives ;
+- fonctionnement CPU sans CUDA ;
+- installation editable et depuis wheel ;
+- machine vierge ;
+- premier lancement ;
+- chemins avec espaces et caractères non ASCII ;
+- mise à jour et désinstallation.
+
+La version inscrite dans `pyproject.toml` ne constitue pas une preuve de maturité.
+
+### 9.3 Documentation
+
+Avant publication :
+
+- README utilisateur ;
+- guide d’installation ;
+- guide de bibliothèque ;
+- guide rapide ;
+- limites connues ;
+- politique WCS et sauvegardes ;
+- FAQ ;
+- guide contributeur ;
+- changelog ;
+- crédits et licences.
+
+### 9.4 P5
+
+Les optimisations GPU, nouvelles projections et nouveaux profils restent différés
+jusqu’à la fermeture de P4.
+
+---
+
+## 10. Dépendances
+
+- Conserver un chemin CPU fonctionnel.
+- PySide6 reste une dépendance GUI isolable.
+- Les dépendances GPU doivent être facultatives.
+- Ne pas imposer CUDA à un utilisateur CPU.
+- Documenter toute nouvelle dépendance.
+- Éviter les API privées non testées.
+- Ne pas annoncer une plateforme non validée.
+- Ne pas ajouter une dépendance lourde pour un simple effet visuel.
+
+---
+
+## 11. Git et fichiers volumineux
+
+Avant et après chaque mission :
+
+```bash
+git status --short --branch
+git diff --check
+```
+
+Règles :
+
+- aucun push sans autorisation explicite ;
+- ne pas restaurer un changement utilisateur sans demande ;
+- commits locaux seulement lorsque la mission le prévoit ;
+- rollback clair pendant P1D/P3B ;
+- ZIP de transmission non suivis par Git ;
+- ne pas ajouter catalogues, index, corpus, logs, venv ou caches ;
+- utiliser manifestes, checksums, téléchargements ou artefacts de release.
+
+---
+
+## 12. Rapport attendu
+
+Chaque mission importante doit produire :
+
+1. objectif ;
+2. état initial observé ;
+3. fichiers modifiés ;
+4. comportement avant/après ;
+5. tests ciblés ;
+6. non-régression ;
+7. tests manuels réels ;
+8. warnings ;
+9. tests non exécutés et raison ;
+10. état Git ;
+11. limites ;
+12. une seule prochaine étape ;
+13. décision de gate.
+
+Ne jamais prétendre qu’un test a été exécuté s’il ne l’a pas été.
+
+---
+
+## 13. Gates
+
+### Sortie P1D-0
+
+Conclure :
+
+```text
+READY_FOR_P1D1_ASTAP_RUNTIME_UNIFICATION
+```
+
+uniquement si l’audit localise les dépendances historiques, compare les
+stratégies A/B, choisit une seule prochaine étape et ne modifie que la
+documentation.
+
+Sinon :
+
+```text
+NOT_READY_FOR_P1D1_ASTAP_RUNTIME_UNIFICATION
+```
+
+### Sortie P1D-1B
+
+Conclure :
+
+```text
+READY_FOR_P1D2_CATALOG_PROVENANCE_AND_ADOPTION
+```
+
+uniquement si :
+
+- une `CatalogLibrary` valide suffit à lancer ZeNear sans ancien index ;
+- ASTAP-native est le provider effectif avec une bibliothèque ;
+- PIPELINE et LEGACY utilisent la même politique centrale ;
+- aucun manifeste historique ou `tiles/*.npz` n'est consulté en mode natif ;
+- aucun fallback silencieux vers le provider legacy n'existe ;
+- le rollback `legacy-index` explicite fonctionne ;
+- la télémétrie annonce le provider réel et les fallbacks réels ;
+- la comparaison externe ne montre aucune régression inexpliquée ;
+- l'intégrité FITS et catalogue est préservée ;
+- les barrières automatisées sont vertes.
+
+Sinon :
+
+```text
+NOT_READY_FOR_P1D2_CATALOG_PROVENANCE_AND_ADOPTION
+```
+
+### Sortie P3B
+
+Conclure :
+
+```text
+READY_FOR_P4_PACKAGING
+```
+
+uniquement si :
+
+- le parcours principal est simple ;
+- `CatalogLibrary` est la ressource produit visible ;
+- les outils avancés sont séparés ;
+- FITS et rasters fonctionnent ;
+- progression, Stop, relance et fermeture fonctionnent ;
+- l’ancien GUI peut être retiré sans perte essentielle ;
+- les tests automatisés sont verts ;
+- la validation graphique réelle est positive ;
+- les limites de couverture sont visibles.
+
+Sinon :
+
+```text
+NOT_READY_FOR_P4_PACKAGING
+```
+
+### Publication
+
+ZeSolver ne peut être déclaré publiable qu’après P4 :
+
+```text
+READY_FOR_PUBLIC_BETA
+```
+
+---
+
+## 14. Principe final
+
+La priorité de ZeSolver est la confiance :
+
+- confiance dans le WCS ;
+- confiance dans les fichiers ;
+- confiance dans le cycle GUI ;
 - confiance dans la reproductibilité ;
-- confiance dans l'installation ;
-- confiance dans les limites annoncées.
+- confiance dans les limites annoncées ;
+- confiance dans l’installation.
 
-**Mesurer avant de modifier. Protéger avant de simplifier. Simplifier avant de publier. Optimiser après avoir fiabilisé.**
+**Protéger les résultats acquis. Simplifier le produit. Publier seulement ce qui
+est démontré.**

@@ -45,7 +45,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 9
+SETTINGS_SCHEMA_VERSION = 10
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -109,6 +109,7 @@ class PersistentSettings:
     # Optional batch behavior: when True, failed ZeNear files are held for phase-2 blind
     near_defer_blind_fallback: bool = False
     near_allow_second_rescue: bool = False
+    near_catalog_mode: str = "auto"
     dev_bucket_limit_override: int = 0
     dev_vote_percentile: int = 40
     dev_detect_k_sigma: float = 3.0
@@ -279,6 +280,7 @@ def load_persistent_settings() -> PersistentSettings:
         near_astap_iso_strict=bool(payload.get("near_astap_iso_strict", True)),
         near_defer_blind_fallback=bool(payload.get("near_defer_blind_fallback", False)),
         near_allow_second_rescue=bool(payload.get("near_allow_second_rescue", False)),
+        near_catalog_mode=str(payload.get("near_catalog_mode", "auto") or "auto"),
         dev_bucket_limit_override=int(payload.get("dev_bucket_limit_override", 0)),
         dev_vote_percentile=int(payload.get("dev_vote_percentile", 40)),
         dev_detect_k_sigma=float(payload.get("dev_detect_k_sigma", 3.0)),
@@ -387,6 +389,14 @@ def _migrate_settings_if_needed(settings: PersistentSettings) -> tuple[Persisten
     # v8: retire legacy non-strict Near mode.
     if settings.near_astap_iso_strict is not True:
         settings.near_astap_iso_strict = True
+        changed = True
+
+    near_catalog_mode = str(getattr(settings, "near_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-")
+    if near_catalog_mode not in {"auto", "astap-native", "legacy-index"}:
+        near_catalog_mode = "auto"
+        changed = True
+    if getattr(settings, "near_catalog_mode", "auto") != near_catalog_mode:
+        settings.near_catalog_mode = near_catalog_mode
         changed = True
 
     profile = str(getattr(settings, "blind_backend_profile", "zeblind_4d_experimental") or "zeblind_4d_experimental").strip().lower()

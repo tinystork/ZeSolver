@@ -30,6 +30,7 @@ def build_product_settings(state: GuiSettingsState) -> ProductSettings:
         input_formats=tuple(state.formats),
         blind_enabled=state.use_blind,
         blind_only=False,
+        near_catalog_mode=str(getattr(state.legacy_config, "near_catalog_mode", "auto") or "auto"),
         downsample=state.downsample,
         fov_deg=state.fov_deg,
         hint_ra_deg=state.hint_ra_deg,
