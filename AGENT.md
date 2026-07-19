@@ -4,8 +4,8 @@
 **Écosystème :** ZeMosaic / ZeSeestarStacker
 **Auteur principal :** Tinystork — Tristan Nauleau
 **Mise à jour :** 19 juillet 2026
-**Phase active :** P1D — Achèvement de la bibliothèque ASTAP unique
-**Statut :** P3B en pause, cœur stabilisé, P1D-4 à préparer
+**Phase active :** P3B — GUI simplifié
+**Statut :** P1D fermé, P3B prochaine phase active
 
 ---
 
@@ -42,28 +42,31 @@ docs/stabilization/original_stabilization_roadmap_20260716.md
 | P0 — pixels et WCS | Validé pour poursuivre ; audit final avant publication |
 | P1 — `CatalogLibrary` | Cœur et adaptateurs intégrés ; fermeture ASTAP unique active |
 | P1 — couverture ZeBlind 4D | Partielle et explicitement détectée |
-| P1D — bibliothèque ASTAP unique | **Phase active : P1D-4 prochaine** |
+| P1D — bibliothèque ASTAP unique | **Terminé et fermé** |
 | P1D-1A — provider ZeNear ASTAP-native | Terminé |
 | P1D-1B — basculement produit ZeNear | Terminé |
 | P1D-2A — provenance et plan d'adoption | Terminé |
 | P1D-2B — adoption atomique CatalogLibrary | Terminé |
 | P1D-3A — builder Blind 4D direct ASTAP | Terminé |
 | P1D-3B — validation runtime Blind 4D directe | Terminé |
-| P1D-4 — manifeste 4D possédé par la bibliothèque | Prochaine |
+| P1D-4A — vue stricte 4D générée par la bibliothèque | Terminé |
+| P1D-4B — basculement produit Blind 4D | Terminé |
+| P1D-5A — sélection CatalogLibrary dans le GUI | Terminé |
+| P1D-5B — surface compatibilité avancée | Terminé |
 | P2 — réglages, profils et façade | Stabilisés |
 | P2 — extraction du cœur | Suffisante pour P3B |
 | P3A — GUI/pipeline | Terminé |
 | P3A-V1 — Stop et relance | Terminé |
 | P3A-V2 — fin exactement une fois | Terminé |
 | P3A-V3 — progression et état WCS temps réel | Terminé |
-| P3B — GUI simplifié | En pause, non abandonné |
+| P3B — GUI simplifié | Prochaine phase active, non commencée ici |
 | P4 — packaging et publication | Ouvert |
 | P5 — optimisations avancées | Différé |
 
 Le projet est :
 
 ```text
-READY_FOR_P1D4_LIBRARY_OWNED_BLIND4D_MANIFEST
+READY_TO_RESUME_P3B_GUI_SIMPLIFICATION
 ```
 
 Il n’est pas encore :
@@ -168,12 +171,12 @@ Le nouveau GUI ne doit pas appeler directement `solve_near()` ou
 
 ---
 
-## 4. Mission active — P1D
+## 4. Mission fermée — P1D
 
 ### 4.1 Objectif
 
-Fermer l’architecture de bibliothèque ASTAP unique avant de reprendre la
-simplification GUI.
+L’architecture de bibliothèque ASTAP unique est fermée. La prochaine phase
+active est la simplification GUI P3B.
 
 Objectif produit :
 
@@ -227,12 +230,24 @@ Ordre de travail :
      et comparaison exacte avec le chemin historique actuel ;
    - **P1D-3B terminé** : validation runtime baseline produit vs index directs
      sur M106 all30, mini-corpus intégré, cas difficiles et contrôles négatifs.
-6. **P1D-4 — Manifeste 4D possédé par la bibliothèque** — prochaine
-   - générer/valider la vue stricte 4D depuis `catalog.json`.
+6. **P1D-4 — Manifeste 4D possédé par la bibliothèque**
+   - **P1D-4A terminé** : génération déterministe, validation, ordre runtime,
+     matérialisation facultative et parité runtime de la vue stricte depuis
+     `CatalogLibrary` ;
+  - **P1D-4B terminé** : basculement produit Blind 4D sur la vue
+     `CatalogLibrary`, avec rollback manifeste externe explicite et sans
+     fallback silencieux.
 7. **P1D-5 — Surface produit**
-   - masquer les chemins `db_root`, `index_root`, familles et manifestes 4D du
-     mode normal ;
-   - conserver les overrides en outils avancés/diagnostic.
+   - **P1D-5A terminé** : sélection, validation, persistance et activation GUI
+     de `CatalogLibrary`, avec Near `astap_native`, Blind 4D
+     `catalog_library_view`, rollback explicite et validation graphique réelle ;
+   - **P1D-5B terminé** : parcours normal limité à la Bibliothèque ZeSolver,
+     chemins historiques déplacés en compatibilité/diagnostic, messages ciblés
+     pour les confusions, rollback explicite conservé, validation graphique
+     réelle et barrières vertes.
+
+P1D est fermé. Ne pas reprendre une sous-phase P1D sans régression reproduite
+ou demande explicite.
 
 ### 4.4 Gate P1D-0
 
@@ -243,7 +258,7 @@ P1D-0 est fermé lorsque :
 - les dépendances historiques restantes sont inventoriées ;
 - les stratégies compatibilité et ASTAP-native sont comparées ;
 - une prochaine étape unique est choisie ;
-- `AGENT.md` marque P3B comme en pause et P1D comme phase active ;
+- `AGENT.md` marque P1D comme phase active ;
 - seuls les documents sont modifiés.
 
 Gate attendu :
@@ -254,11 +269,10 @@ READY_FOR_P1D1_ASTAP_RUNTIME_UNIFICATION
 
 ---
 
-## 5. Mission en pause — P3B
+## 5. Mission active suivante — P3B
 
-P3B est mise en pause, pas abandonnée. Elle reprend après fermeture suffisante
-de P1D pour éviter de simplifier le GUI autour de surfaces catalogue encore
-historiques.
+P3B est la prochaine phase active après fermeture de P1D. Elle ne doit pas
+être commencée sans demande explicite, mais c'est désormais le cap de reprise.
 
 ### 5.1 Objectif P3B
 

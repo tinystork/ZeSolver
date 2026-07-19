@@ -8,8 +8,8 @@ import pytest
 from astropy.io import fits
 from astropy.wcs import WCS
 
-from zeblindsolver.index_manifest_4d import IndexManifestError
 from zeblindsolver.wcs_header import apply_wcs_solution_to_header
+from zesolver.catalog_resources import Blind4DRuntimeError
 from zesolver.core.blind_models import BlindSolveRequest
 from zesolver.core.blind_port import ProductionBlindSolverPort
 from zesolver.core.models import SolveRequest, SolveStatus
@@ -25,6 +25,20 @@ class FakeManifest:
         self.enabled_index_paths = tuple(entry.path for entry in self.entries)
         self.tile_keys = tuple(f"d50_{idx}" for idx in range(count))
         self.schema = "zeblind.astrometry_4d_index_manifest.v1"
+
+
+class FakeRuntime:
+    def __init__(self, manifest: FakeManifest) -> None:
+        self.available = True
+        self.loaded_manifest = manifest
+
+    def telemetry(self, *, include_paths: bool = False) -> dict[str, object]:
+        return {
+            "blind4d_catalog_mode_requested": "auto",
+            "blind4d_catalog_mode_effective": "external-manifest",
+            "blind4d_catalog_source": "external_manifest",
+            "blind4d_external_fallback_used": False,
+        }
 
 
 def _frame(path: Path) -> Path:
@@ -62,10 +76,6 @@ def test_production_blind_port_solves_on_copy_and_preserves_source(monkeypatch: 
     manifest = FakeManifest(tmp_path)
     calls: list[Path] = []
 
-    def fake_load(path):
-        assert Path(path) == manifest.manifest_path
-        return manifest
-
     def fake_blind_solve(*, fits_path, index_root, config, log, skip_if_valid, cancel_check, prep_cache):
         temp = Path(fits_path)
         calls.append(temp)
@@ -94,7 +104,7 @@ def test_production_blind_port_solves_on_copy_and_preserves_source(monkeypatch: 
             },
         }
 
-    monkeypatch.setattr("zesolver.core.blind_port.load_4d_index_manifest", fake_load)
+    monkeypatch.setattr("zesolver.core.blind_port.resolve_blind4d_runtime", lambda *args, **kwargs: FakeRuntime(manifest))
     monkeypatch.setattr("zesolver.core.blind_port.blind_solve", fake_blind_solve)
     monkeypatch.setattr(ProductionBlindSolverPort, "build_config", lambda *args, **kwargs: object())
 
@@ -120,9 +130,9 @@ def test_production_blind_port_solves_on_copy_and_preserves_source(monkeypatch: 
 @pytest.mark.parametrize(
     ("message", "expected_status", "expected_error"),
     [
-        ("manifest_absent: missing.json", SolveStatus.CATALOG_UNAVAILABLE, "BLIND4D_MANIFEST_INVALID"),
-        ("manifest_sha256_mismatch: d50_2822", SolveStatus.CATALOG_UNAVAILABLE, "BLIND4D_MANIFEST_INVALID"),
-        ("manifest_index_incompatible: d50_2822", SolveStatus.CATALOG_UNAVAILABLE, "BLIND4D_MANIFEST_INVALID"),
+        ("manifest_absent: missing.json", SolveStatus.CATALOG_UNAVAILABLE, "BLIND4D_EXTERNAL_MANIFEST_INVALID"),
+        ("manifest_sha256_mismatch: d50_2822", SolveStatus.CATALOG_UNAVAILABLE, "BLIND4D_EXTERNAL_MANIFEST_INVALID"),
+        ("manifest_index_incompatible: d50_2822", SolveStatus.CATALOG_UNAVAILABLE, "BLIND4D_EXTERNAL_MANIFEST_INVALID"),
     ],
 )
 def test_production_blind_port_normalizes_manifest_failures(
@@ -134,10 +144,10 @@ def test_production_blind_port_normalizes_manifest_failures(
 ) -> None:
     source = _frame(tmp_path / "input.fit")
 
-    def fake_load(path):
-        raise IndexManifestError(message)
+    def fake_resolve(*args, **kwargs):
+        raise Blind4DRuntimeError("BLIND4D_EXTERNAL_MANIFEST_INVALID", f"BLIND4D_EXTERNAL_MANIFEST_INVALID: {message}")
 
-    monkeypatch.setattr("zesolver.core.blind_port.load_4d_index_manifest", fake_load)
+    monkeypatch.setattr("zesolver.core.blind_port.resolve_blind4d_runtime", fake_resolve)
 
     result = ProductionBlindSolverPort().solve(
         SolveRequest(input_path=source, output_path=None, overwrite_wcs=True),

@@ -195,6 +195,7 @@ class CatalogManifest:
     coverage: CatalogCoverage
     integrity: dict[str, Any] = field(default_factory=dict)
     provenance: dict[str, Any] = field(default_factory=dict)
+    runtime_order: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)

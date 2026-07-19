@@ -101,6 +101,16 @@ derived_files
 source_file_refs
 ```
 
+The manifest may also declare top-level runtime order:
+
+```text
+runtime_order.blind4d = ordered derived index ids
+```
+
+This order is additive in schema version 1 and is required when generating the
+strict Blind 4D runtime view.  It prevents `first_accept` and budget-sensitive
+runtime behavior from depending on accidental JSON object or filename ordering.
+
 Build parameters may include:
 
 ```text
@@ -214,8 +224,9 @@ telemetry
 
 The planner is read-only.  It inspects explicit paths, inventories source
 shards, loads the strict Blind 4D manifest with the existing strict loader,
-links indexes to source families and tiles, preserves partial coverage, and
-returns a deterministic in-memory manifest preview.
+links indexes to source families and tiles, captures the strict manifest entry
+order into `runtime_order.blind4d`, preserves partial coverage, and returns a
+deterministic in-memory manifest preview.
 
 ## Repair Actions
 

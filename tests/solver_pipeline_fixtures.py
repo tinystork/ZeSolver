@@ -4,6 +4,7 @@ from pathlib import Path
 
 from astropy.wcs import WCS
 
+from catalog_resource_helpers import strict_entry, write_fake_4d_index, write_strict_manifest
 from zesolver.catalog_library import Blind4DIndexDescriptor, CatalogCoverage, CoverageStatus, NearCatalogDescriptor
 from zesolver.catalog_resources import SolverCatalogResources
 
@@ -41,18 +42,28 @@ def near_resources(tmp_path: Path, *, blind_count: int = 0) -> SolverCatalogReso
         fraction=(blind_count / 1476.0) if blind_count else None,
         provenance="test",
     )
-    blind = tuple(
-        Blind4DIndexDescriptor(
-            id=f"d50_{idx}",
-            path=tmp_path / f"index-{idx}.npz",
-            family="d50",
-            tile_keys=(f"d50_{idx}",),
-            sha256=None,
-            coverage=coverage,
-            schema="astrometry_ab_code_4d_v1",
-        )
-        for idx in range(blind_count)
-    )
+    blind_items: list[Blind4DIndexDescriptor] = []
+    manifest_path = None
+    if blind_count:
+        entries: list[dict[str, object]] = []
+        for idx in range(blind_count):
+            tile_key = f"d50_{idx}"
+            index_path = write_fake_4d_index(tmp_path / f"{tile_key}_S_q.npz", tile_key)
+            index_id = f"d50_{idx}"
+            entries.append(strict_entry(index_id, index_path, tile_key))
+            blind_items.append(
+                Blind4DIndexDescriptor(
+                    id=index_id,
+                    path=index_path,
+                    family="d50",
+                    tile_keys=(tile_key,),
+                    sha256=entries[-1]["sha256"],
+                    coverage=coverage,
+                    schema="astrometry_ab_code_4d_v1",
+                )
+            )
+        manifest_path = write_strict_manifest(tmp_path / "manifest.json", entries)
+    blind = tuple(blind_items)
     return SolverCatalogResources(
         library_path=None,
         library_status=None,
@@ -65,7 +76,7 @@ def near_resources(tmp_path: Path, *, blind_count: int = 0) -> SolverCatalogReso
         ),
         blind4d_indexes=blind,
         blind4d_runtime_paths=tuple(item.path for item in blind),
-        blind4d_manifest_path=tmp_path / "manifest.json" if blind else None,
+        blind4d_manifest_path=manifest_path,
         legacy_index_root=tmp_path,
         source="legacy",
         warnings=("blind4d_coverage_not_all_sky",) if blind else (),

@@ -187,13 +187,23 @@ from zesolver.settings_store import (
 )
 from zesolver.blind4d_runtime import resolve_default_4d_manifest_path
 from zesolver.catalog_resources import (
+    Blind4DCatalogMode,
+    Blind4DRuntimeError,
+    Blind4DRuntimeSelection,
     CatalogResourceResolutionError,
     NearCatalogMode,
     NearCatalogRuntime,
     NearCatalogRuntimeError,
     SolverCatalogResources,
     resolve_catalog_resources,
+    resolve_blind4d_runtime,
     resolve_near_catalog_runtime,
+)
+from zesolver.catalog_library import (
+    CatalogLibrary,
+    CatalogLibraryError,
+    CatalogStatus,
+    IssueSeverity,
 )
 from zesolver.cancellation import (
     CompositeCancellationToken,
@@ -202,8 +212,15 @@ from zesolver.cancellation import (
     ThreadCancellationToken,
     shutdown_process_executor,
 )
-from zesolver.solver_config import build_blind_solve_config, ensure_loaded_4d_manifest
+from zesolver.solver_config import build_blind_solve_config
 from zesolver.gui_profiles import apply_settings_easy_visibility, apply_solver_simple_visibility
+from zesolver.gui_catalog_validation import (
+    GuiCatalogPathValidation,
+    validate_astap_root,
+    validate_blind4d_manifest_file,
+    validate_catalog_library_root,
+    validate_legacy_near_index_root,
+)
 from zesolver.gui_settings_sections import (
     build_blind_group,
     build_presets_fov_reco_groups,
@@ -809,7 +826,7 @@ _GUI_ZEBLIND_4D_I18N = {
         "blind_4d_profile_label": "Profil ZeBlind",
         "blind_4d_profile_historical": "Legacy diagnostic backend",
         "blind_4d_profile_experimental": "ZeBlind 4D",
-        "blind_4d_manifest_label": "Manifest 4D",
+        "blind_4d_manifest_label": "Manifeste Blind 4D externe",
         "blind_4d_browse": "Parcourir…",
         "blind_4d_verify": "Vérifier",
         "blind_4d_not_verified": "Non vérifié",
@@ -834,7 +851,7 @@ _GUI_ZEBLIND_4D_I18N = {
         "blind_4d_profile_label": "ZeBlind profile",
         "blind_4d_profile_historical": "Legacy diagnostic backend",
         "blind_4d_profile_experimental": "ZeBlind 4D",
-        "blind_4d_manifest_label": "4D manifest",
+        "blind_4d_manifest_label": "External Blind 4D manifest",
         "blind_4d_browse": "Browse…",
         "blind_4d_verify": "Verify",
         "blind_4d_not_verified": "Not verified",
@@ -856,6 +873,152 @@ _GUI_ZEBLIND_4D_I18N = {
     },
 }
 for _lang, _mapping in _GUI_ZEBLIND_4D_I18N.items():
+    base = GUI_TRANSLATIONS.setdefault(_lang, {})
+    for _k, _v in _mapping.items():
+        if _k not in base:
+            base[_k] = _v
+
+_GUI_CATALOG_LIBRARY_I18N = {
+    "fr": {
+        "settings_catalog_library_label": "Bibliothèque ZeSolver",
+        "settings_catalog_library_browse": "Parcourir…",
+        "settings_catalog_library_validate": "Vérifier",
+        "settings_catalog_library_clear": "Effacer",
+        "settings_catalog_library_tooltip": "Choisir la racine de bibliothèque contenant catalog.json.",
+        "settings_catalog_library_help": "Sélectionnez le dossier contenant catalog.json.",
+        "settings_catalog_library_none": "AUCUNE_BIBLIOTHEQUE — aucune bibliothèque sélectionnée.",
+        "settings_catalog_library_unverified": "INVALID — bibliothèque non vérifiée. Cliquez sur Vérifier avant de lancer un run.",
+        "settings_catalog_library_validating": "VALIDATION_EN_COURS — vérification de la bibliothèque…",
+        "settings_catalog_library_missing": "MISSING — catalog.json introuvable ou racine absente.",
+        "settings_catalog_library_invalid": "INVALID — {error}",
+        "settings_catalog_library_ready_partial": "READY_PARTIAL — Bibliothèque prête avec couverture partielle\nNear ASTAP : {near}\nBlind 4D : {blind}\nCouverture globale Blind 4D : {all_sky}\nWarnings : {warnings}\nErrors : {errors}",
+        "settings_catalog_library_ready_full": "READY_FULL — Bibliothèque prête\nNear ASTAP : {near}\nBlind 4D : {blind}\nCouverture globale Blind 4D : {all_sky}\nWarnings : {warnings}\nErrors : {errors}",
+        "settings_catalog_library_near_only": "NEAR_ONLY — Bibliothèque Near uniquement\nNear ASTAP : {near}\nBlind 4D : indisponible\nWarnings : {warnings}\nErrors : {errors}",
+        "settings_catalog_library_blind_only": "BLIND4D_ONLY — Bibliothèque Blind 4D uniquement\nNear ASTAP : indisponible\nBlind 4D : {blind}\nCouverture globale Blind 4D : {all_sky}\nWarnings : {warnings}\nErrors : {errors}",
+        "settings_catalog_library_source_available": "disponible — {families}, {tiles} tuiles",
+        "settings_catalog_library_source_unavailable": "indisponible",
+        "settings_catalog_library_blind_available": "disponible — {indexes} index / {total} tuiles",
+        "settings_catalog_library_blind_unavailable": "indisponible",
+        "settings_catalog_library_all_sky_yes": "oui",
+        "settings_catalog_library_all_sky_no": "non",
+        "settings_catalog_library_cleared": "Bibliothèque désactivée. Les fichiers de la bibliothèque ne seront pas supprimés.",
+        "simple_wizard_library_ready": "Bibliothèque ZeSolver valide détectée. L’assistant est prêt.",
+        "simple_wizard_missing_library": "Aucune bibliothèque ZeSolver sélectionnée. Choisissez une bibliothèque ou utilisez la compatibilité historique.",
+        "simple_wizard_invalid_library": "La bibliothèque sélectionnée est invalide. Vérifiez-la ou choisissez une autre racine.",
+        "simple_wizard_legacy_compat": "Configuration historique valide utilisée en compatibilité.",
+        "catalog_compat_group_title": "Compatibilité historique et diagnostic",
+        "catalog_compat_warning": "Ces réglages servent au rollback, au diagnostic et aux anciennes installations. Ils ne sont pas nécessaires lorsque la Bibliothèque ZeSolver est valide.",
+        "catalog_compat_tools_title": "Outils avancés et maintenance des catalogues",
+        "catalog_compat_tools_warning": "Ces actions peuvent construire ou vérifier des artefacts historiques. Elles ne sont pas utilisées par le parcours normal Bibliothèque ZeSolver.",
+        "settings_legacy_astap_label": "Base ASTAP historique",
+        "settings_legacy_astap_tooltip": "Dossier contenant des fichiers *.1476 ou *.290.",
+        "settings_legacy_index_label": "Index Near historique",
+        "settings_legacy_index_tooltip": "Dossier contenant manifest.json et les artefacts Near historiques.",
+        "settings_blind4d_external_label": "Manifeste Blind 4D externe",
+        "settings_blind4d_external_tooltip": "Fichier JSON strict utilisé uniquement en rollback external-manifest.",
+        "settings_near_mode_label": "Near",
+        "settings_blind4d_mode_label": "Blind 4D",
+        "settings_mode_auto": "auto",
+        "settings_mode_astap_native": "astap-native",
+        "settings_mode_legacy_index": "legacy-index",
+        "settings_mode_library_view": "library-view",
+        "settings_mode_external_manifest": "external-manifest",
+        "settings_restore_auto_modes": "Rétablir le mode automatique recommandé",
+        "settings_rollback_inactive": "Mode produit normal : auto utilise la Bibliothèque ZeSolver quand elle est valide.",
+        "settings_rollback_active": "ROLLBACK HISTORIQUE ACTIF — Near : {near}; Blind 4D : {blind}",
+        "catalog_path_error": "{code}: {message}\nChamp attendu : {field}\nAction : {action}",
+        "field_catalog_library": "Bibliothèque ZeSolver",
+        "field_legacy_astap": "Base ASTAP historique",
+        "field_legacy_index": "Index Near historique",
+        "field_blind4d_manifest": "Manifeste Blind 4D externe",
+        "msg_catalog_library_used_as_legacy_near_index": "Ce dossier est une Bibliothèque ZeSolver, pas un index Near historique.",
+        "msg_legacy_near_index_used_as_catalog_library": "Ce dossier ressemble à un index Near historique. Une Bibliothèque ZeSolver doit contenir catalog.json.",
+        "msg_astap_source_used_as_catalog_library": "Ce dossier ressemble à une base ASTAP/HNSKY. Une Bibliothèque ZeSolver doit contenir catalog.json.",
+        "msg_blind4d_manifest_file_required": "Le champ Manifeste Blind 4D externe attend un fichier JSON strict, pas un dossier.",
+        "action_use_catalog_library_field": "Utilisez ce dossier dans le champ « Bibliothèque ZeSolver ».",
+        "action_use_legacy_index_field": "Utilisez ce dossier dans « Index Near historique » ou choisissez une Bibliothèque ZeSolver contenant catalog.json.",
+        "action_use_legacy_astap_field": "Utilisez ce dossier dans « Base ASTAP historique » ou adoptez une Bibliothèque ZeSolver.",
+        "action_choose_catalog_library": "Choisir une bibliothèque contenant catalog.json.",
+        "action_choose_legacy_index": "Choisir un index Near historique contenant manifest.json.",
+        "action_choose_blind4d_manifest": "Choisir un fichier JSON Blind 4D strict.",
+        "action_fix_or_choose_other": "Corriger le chemin ou choisir une autre ressource.",
+        "LEGACY_ROLLBACK_ACTIVE": "Mode de compatibilité explicite actif.",
+        "LEGACY_ROLLBACK_NOT_ENABLED": "Le rollback historique n'est pas activé.",
+        "catalog_preflight_timings": "Catalog preflight timings: {payload}",
+        "catalog_library_selected_log": "CatalogLibrary selected: {library_id}",
+        "catalog_library_status_log": "CatalogLibrary status: {status}",
+    },
+    "en": {
+        "settings_catalog_library_label": "ZeSolver library",
+        "settings_catalog_library_browse": "Browse…",
+        "settings_catalog_library_validate": "Verify",
+        "settings_catalog_library_clear": "Clear",
+        "settings_catalog_library_tooltip": "Choose the library root containing catalog.json.",
+        "settings_catalog_library_help": "Select the folder containing catalog.json.",
+        "settings_catalog_library_none": "AUCUNE_BIBLIOTHEQUE — no library selected.",
+        "settings_catalog_library_unverified": "INVALID — library not verified. Click Verify before starting a run.",
+        "settings_catalog_library_validating": "VALIDATION_EN_COURS — verifying library…",
+        "settings_catalog_library_missing": "MISSING — catalog.json not found or root missing.",
+        "settings_catalog_library_invalid": "INVALID — {error}",
+        "settings_catalog_library_ready_partial": "READY_PARTIAL — Library ready with partial coverage\nNear ASTAP: {near}\nBlind 4D: {blind}\nGlobal Blind 4D coverage: {all_sky}\nWarnings: {warnings}\nErrors: {errors}",
+        "settings_catalog_library_ready_full": "READY_FULL — Library ready\nNear ASTAP: {near}\nBlind 4D: {blind}\nGlobal Blind 4D coverage: {all_sky}\nWarnings: {warnings}\nErrors: {errors}",
+        "settings_catalog_library_near_only": "NEAR_ONLY — Near-only library\nNear ASTAP: {near}\nBlind 4D: unavailable\nWarnings: {warnings}\nErrors: {errors}",
+        "settings_catalog_library_blind_only": "BLIND4D_ONLY — Blind 4D-only library\nNear ASTAP: unavailable\nBlind 4D: {blind}\nGlobal Blind 4D coverage: {all_sky}\nWarnings: {warnings}\nErrors: {errors}",
+        "settings_catalog_library_source_available": "available — {families}, {tiles} tiles",
+        "settings_catalog_library_source_unavailable": "unavailable",
+        "settings_catalog_library_blind_available": "available — {indexes} indexes / {total} tiles",
+        "settings_catalog_library_blind_unavailable": "unavailable",
+        "settings_catalog_library_all_sky_yes": "yes",
+        "settings_catalog_library_all_sky_no": "no",
+        "settings_catalog_library_cleared": "Library disabled. Library files will not be deleted.",
+        "simple_wizard_library_ready": "Valid ZeSolver library detected. The assistant is ready.",
+        "simple_wizard_missing_library": "No ZeSolver library is selected. Choose a library or use legacy compatibility.",
+        "simple_wizard_invalid_library": "The selected library is invalid. Verify it or choose another root.",
+        "simple_wizard_legacy_compat": "Valid legacy configuration is being used for compatibility.",
+        "catalog_compat_group_title": "Legacy compatibility and diagnostics",
+        "catalog_compat_warning": "These settings are for rollback, diagnostics, and older installations. They are not needed when the ZeSolver library is valid.",
+        "catalog_compat_tools_title": "Advanced tools and catalog maintenance",
+        "catalog_compat_tools_warning": "These actions can build or verify historical artifacts. They are not used by the normal ZeSolver library path.",
+        "settings_legacy_astap_label": "Historical ASTAP source",
+        "settings_legacy_astap_tooltip": "Folder containing *.1476 or *.290 files.",
+        "settings_legacy_index_label": "Historical Near index",
+        "settings_legacy_index_tooltip": "Folder containing manifest.json and historical Near artifacts.",
+        "settings_blind4d_external_label": "External Blind 4D manifest",
+        "settings_blind4d_external_tooltip": "Strict JSON file used only for explicit external-manifest rollback.",
+        "settings_near_mode_label": "Near",
+        "settings_blind4d_mode_label": "Blind 4D",
+        "settings_mode_auto": "auto",
+        "settings_mode_astap_native": "astap-native",
+        "settings_mode_legacy_index": "legacy-index",
+        "settings_mode_library_view": "library-view",
+        "settings_mode_external_manifest": "external-manifest",
+        "settings_restore_auto_modes": "Restore recommended automatic mode",
+        "settings_rollback_inactive": "Normal product mode: auto uses the ZeSolver library when it is valid.",
+        "settings_rollback_active": "HISTORICAL ROLLBACK ACTIVE — Near: {near}; Blind 4D: {blind}",
+        "catalog_path_error": "{code}: {message}\nExpected field: {field}\nAction: {action}",
+        "field_catalog_library": "ZeSolver library",
+        "field_legacy_astap": "Historical ASTAP source",
+        "field_legacy_index": "Historical Near index",
+        "field_blind4d_manifest": "External Blind 4D manifest",
+        "msg_catalog_library_used_as_legacy_near_index": "This folder is a ZeSolver library, not a historical Near index.",
+        "msg_legacy_near_index_used_as_catalog_library": "This folder looks like a historical Near index. A ZeSolver library must contain catalog.json.",
+        "msg_astap_source_used_as_catalog_library": "This folder looks like an ASTAP/HNSKY source. A ZeSolver library must contain catalog.json.",
+        "msg_blind4d_manifest_file_required": "The external Blind 4D manifest field expects a strict JSON file, not a folder.",
+        "action_use_catalog_library_field": "Use this folder in the ZeSolver library field.",
+        "action_use_legacy_index_field": "Use this folder in Historical Near index, or choose a ZeSolver library containing catalog.json.",
+        "action_use_legacy_astap_field": "Use this folder in Historical ASTAP source, or adopt a ZeSolver library.",
+        "action_choose_catalog_library": "Choose a library containing catalog.json.",
+        "action_choose_legacy_index": "Choose a historical Near index containing manifest.json.",
+        "action_choose_blind4d_manifest": "Choose a strict Blind 4D JSON file.",
+        "action_fix_or_choose_other": "Fix the path or choose another resource.",
+        "LEGACY_ROLLBACK_ACTIVE": "Explicit compatibility mode is active.",
+        "LEGACY_ROLLBACK_NOT_ENABLED": "Historical rollback is not enabled.",
+        "catalog_preflight_timings": "Catalog preflight timings: {payload}",
+        "catalog_library_selected_log": "CatalogLibrary selected: {library_id}",
+        "catalog_library_status_log": "CatalogLibrary status: {status}",
+    },
+}
+for _lang, _mapping in _GUI_CATALOG_LIBRARY_I18N.items():
     base = GUI_TRANSLATIONS.setdefault(_lang, {})
     for _k, _v in _mapping.items():
         if _k not in base:
@@ -1173,6 +1336,7 @@ class SolveConfig:
     near_defer_blind_fallback: bool = False
     near_allow_second_rescue: bool = False
     near_catalog_mode: str = "auto"
+    blind4d_catalog_mode: str = "auto"
     # Blind solver (Python) tunables (mirrors settings panel). These were
     # previously only used by the settings tester; we surface them here so the
     # batch run uses and logs the same values as the GUI:
@@ -1222,6 +1386,11 @@ class SolveConfig:
             object.__setattr__(self, "blind_4d_manifest_path", Path(self.blind_4d_manifest_path).expanduser())
         if self.catalog_library_path:
             object.__setattr__(self, "catalog_library_path", Path(self.catalog_library_path).expanduser())
+        object.__setattr__(
+            self,
+            "blind4d_catalog_mode",
+            str(getattr(self, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-"),
+        )
         if self.search_radius_scale < 1.0:
             raise ValueError("search_radius_scale must be >= 1.0")
         if self.search_radius_attempts < 1:
@@ -1282,13 +1451,18 @@ def apply_catalog_resources_to_config(config: SolveConfig) -> tuple[SolveConfig,
     if resources.source in {"library", "environment"} and resources.near is not None:
         updates["db_root"] = resources.near.root
         updates["families"] = resources.near.families or None
-    if (
-        resources.source in {"library", "environment"}
-        and resources.blind4d_manifest_path is not None
-        and config.blind_backend_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE
-    ):
-        updates["blind_4d_manifest_path"] = resources.blind4d_manifest_path
-        updates["blind_4d_loaded_manifest"] = None
+    if config.blind_backend_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+        try:
+            blind4d_runtime = resolve_blind4d_runtime(
+                resources,
+                mode=getattr(config, "blind4d_catalog_mode", "auto"),
+                external_manifest_path=config.blind_4d_manifest_path,
+            )
+        except Blind4DRuntimeError:
+            blind4d_runtime = None
+        if blind4d_runtime is not None and blind4d_runtime.available and blind4d_runtime.loaded_manifest is not None:
+            updates["blind_4d_manifest_path"] = blind4d_runtime.loaded_manifest.manifest_path
+            updates["blind_4d_loaded_manifest"] = blind4d_runtime.loaded_manifest
     resolved = replace(config, **updates) if updates else config
     return resolved, resources
 
@@ -1927,6 +2101,13 @@ class ImageSolver:
     def __init__(self, config: SolveConfig) -> None:
         self.config, self.catalog_resources = apply_catalog_resources_to_config(config)
         self.near_catalog_runtime = self._resolve_near_catalog_runtime()
+        self.blind4d_runtime = self._resolve_blind4d_runtime()
+        if self.blind4d_runtime.available and self.blind4d_runtime.loaded_manifest is not None:
+            self.config = replace(
+                self.config,
+                blind_4d_manifest_path=self.blind4d_runtime.loaded_manifest.manifest_path,
+                blind_4d_loaded_manifest=self.blind4d_runtime.loaded_manifest,
+            )
         self.db = None if bool(getattr(self.config, "blind_only", False)) else CatalogDB(self.config.db_root, families=self.config.families, cache_size=self.config.cache_size)
         self._db_lock = threading.Lock()
         self._family_candidates = () if self.db is None else self._init_family_candidates()
@@ -2058,6 +2239,7 @@ class ImageSolver:
                 },
                 "catalog": self.catalog_resources.telemetry(include_paths=False),
                 "near_catalog_runtime": self.near_catalog_runtime.telemetry(include_paths=False),
+                "blind4d_catalog_runtime": self.blind4d_runtime.telemetry(include_paths=False),
             }
             logging.info("Run configuration: %s", json.dumps(run_cfg, ensure_ascii=False))
             try:
@@ -2108,6 +2290,37 @@ class ImageSolver:
                 provider_kind=None,
                 source=self.catalog_resources.source,
                 legacy_index_root=self.config.blind_index_path,
+                error_code=exc.code,
+                error_message=str(exc),
+            )
+
+    def _resolve_blind4d_runtime(self) -> Blind4DRuntimeSelection:
+        profile = str(getattr(self.config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower()
+        if profile != ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+            return Blind4DRuntimeSelection(
+                mode_requested=Blind4DCatalogMode.AUTO,
+                mode_effective=None,
+                source="unavailable",
+                warnings=("blind4d_profile_not_selected",),
+            )
+        try:
+            return resolve_blind4d_runtime(
+                self.catalog_resources,
+                mode=getattr(self.config, "blind4d_catalog_mode", "auto"),
+                external_manifest_path=self.config.blind_4d_manifest_path,
+            )
+        except Blind4DRuntimeError as exc:
+            try:
+                requested = Blind4DCatalogMode.normalize(getattr(self.config, "blind4d_catalog_mode", "auto"))
+            except Exception:
+                requested = Blind4DCatalogMode.AUTO
+            logging.info("[ZEBLIND] Blind 4D runtime unavailable: %s", exc)
+            return Blind4DRuntimeSelection(
+                mode_requested=requested,
+                mode_effective=None,
+                source="unavailable",
+                coverage=self.catalog_resources.coverage,
+                library_id=self.catalog_resources.catalog_library_id,
                 error_code=exc.code,
                 error_message=str(exc),
             )
@@ -3098,29 +3311,32 @@ class ImageSolver:
         blind_profile = str(getattr(self.config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower()
         loaded_manifest: Loaded4DManifest | None = None
         if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
-            try:
-                loaded_manifest = ensure_loaded_4d_manifest(self.config)
-            except IndexManifestError as exc:
-                logging.error("Blind 4D manifest rejected for %s: %s", path.name, exc)
-                run_info.append(("run_info_blind_failed", {"message": f"4D manifest error: {exc}", "status": "BLIND4D_MANIFEST_INVALID"}))
+            if not self.blind4d_runtime.available or self.blind4d_runtime.loaded_manifest is None:
+                reason = self.blind4d_runtime.error_code or "BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE"
+                message = self.blind4d_runtime.error_message or reason
+                logging.error("Blind 4D runtime unavailable for %s: %s", path.name, message)
+                run_info.append(("run_info_blind_failed", {"message": f"4D runtime error: {message}", "status": reason}))
+                stats = {
+                    "blind_backend_profile": blind_profile,
+                    "blind4d_preflight_ok": False,
+                    "blind4d_called": False,
+                    "blind4d_failure_reason": reason,
+                    "historical_blind_called": False,
+                    "final_status": reason,
+                }
+                stats.update(self.blind4d_runtime.telemetry(include_paths=False))
                 return BlindSolveResult(
                     success=False,
-                    message=f"BLIND4D_MANIFEST_INVALID: {exc}",
+                    message=f"{reason}: {message}",
                     elapsed_sec=0.0,
                     tried_dbs=[],
                     used_db=None,
                     wrote_wcs=False,
                     updated_keywords={},
                     output_path=str(path),
-                    stats={
-                        "blind_backend_profile": blind_profile,
-                        "blind4d_preflight_ok": False,
-                        "blind4d_called": False,
-                        "blind4d_failure_reason": "BLIND4D_MANIFEST_INVALID",
-                        "historical_blind_called": False,
-                        "final_status": "BLIND4D_MANIFEST_INVALID",
-                    },
+                    stats=stats,
                 )
+            loaded_manifest = self.blind4d_runtime.loaded_manifest
             index_root = loaded_manifest.manifest_path.parent
         else:
             message = (
@@ -3337,6 +3553,7 @@ class ImageSolver:
                     "scale_max": blind_cfg.pixel_scale_max_arcsec,
                     "downsample": blind_cfg.downsample,
                 }
+                log_cfg.update(self.blind4d_runtime.telemetry(include_paths=False))
                 logging.info("Blind config: %s", json.dumps(log_cfg, ensure_ascii=False))
             except Exception:
                 pass
@@ -3615,27 +3832,29 @@ class ImageSolver:
             stats = result.get("stats") or {}
             if not isinstance(stats, Mapping):
                 stats = {}
+            event_payload = {
+                "event": "blind4d_result",
+                "case_filename": path.name,
+                "blind4d_preflight_ok": bool(blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE and loaded_manifest is not None),
+                "blind4d_called": bool(blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE),
+                "blind4d_call_count": 1 if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE else 0,
+                "blind4d_profile": blind_profile,
+                "blind4d_source_policy": str(getattr(blind_cfg, "blind_astrometry_4d_source_policy", "")),
+                "blind4d_indexes_considered": [str(p) for p in getattr(blind_cfg, "blind_astrometry_4d_index_paths", ())],
+                "blind4d_selected_index": str(stats.get("astrometry_4d_selected_origin_tile_key") or result.get("used_db") or ""),
+                "blind4d_success": bool(result.get("success")),
+                "blind4d_wcs_written": bool(result.get("success")),
+                "historical_blind_called": False,
+                "astrometry_web_called": False,
+                "final_backend": "BLIND4D" if result.get("success") and blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE else "NONE",
+                "final_status": "SOLVED" if result.get("success") else str(stats.get("final_status") or result.get("message") or "FAILED"),
+                "elapsed_s": float(result.get("elapsed_sec", 0.0) or 0.0),
+            }
+            event_payload.update(self.blind4d_runtime.telemetry(include_paths=False))
             logging.info(
                 "ZN310B_EVENT %s",
                 json.dumps(
-                    {
-                        "event": "blind4d_result",
-                        "case_filename": path.name,
-                        "blind4d_preflight_ok": bool(blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE and loaded_manifest is not None),
-                        "blind4d_called": bool(blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE),
-                        "blind4d_call_count": 1 if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE else 0,
-                        "blind4d_profile": blind_profile,
-                        "blind4d_source_policy": str(getattr(blind_cfg, "blind_astrometry_4d_source_policy", "")),
-                        "blind4d_indexes_considered": [str(p) for p in getattr(blind_cfg, "blind_astrometry_4d_index_paths", ())],
-                        "blind4d_selected_index": str(stats.get("astrometry_4d_selected_origin_tile_key") or result.get("used_db") or ""),
-                        "blind4d_success": bool(result.get("success")),
-                        "blind4d_wcs_written": bool(result.get("success")),
-                        "historical_blind_called": False,
-                        "astrometry_web_called": False,
-                        "final_backend": "BLIND4D" if result.get("success") and blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE else "NONE",
-                        "final_status": "SOLVED" if result.get("success") else str(stats.get("final_status") or result.get("message") or "FAILED"),
-                        "elapsed_s": float(result.get("elapsed_sec", 0.0) or 0.0),
-                    },
+                    event_payload,
                     ensure_ascii=False,
                     sort_keys=True,
                     default=str,
@@ -5048,6 +5267,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="auto",
         help="Advanced ZeNear catalog provider mode: auto, astap-native, or legacy-index",
     )
+    parser.add_argument(
+        "--blind4d-catalog-mode",
+        choices=[mode.value for mode in Blind4DCatalogMode],
+        default="auto",
+        help="Advanced Blind 4D runtime source mode: auto, library-view, or external-manifest",
+    )
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     parser.add_argument(
         "--dev-bucket-limit",
@@ -5230,6 +5455,7 @@ def run_cli(args: argparse.Namespace) -> int:
         blind_backend_profile=blind_profile,
         blind_4d_manifest_path=args.blind_4d_manifest,
         blind_4d_loaded_manifest=loaded_4d_manifest,
+        blind4d_catalog_mode=str(getattr(args, "blind4d_catalog_mode", "auto") or "auto"),
         catalog_library_path=args.catalog_library,
         near_max_tile_candidates=max(1, int(args.near_max_tile_candidates or 48)),
         near_tile_cache_size=max(1, int(args.near_tile_cache_size or 128)),
@@ -5990,6 +6216,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._syncing_blind_profile_gui = False
             self._blind_4d_verified_manifest: Loaded4DManifest | None = None
             self._blind_4d_manifest_state = "not_verified"
+            self._catalog_library_state = "AUCUNE_BIBLIOTHEQUE"
+            self._catalog_library_validated_path: Optional[str] = None
+            self._catalog_library_validated_resources: SolverCatalogResources | None = None
+            self._catalog_library_validation_error: Optional[str] = None
             self._current_log_level = str(getattr(settings, "log_level", "INFO") or "INFO").upper()
             self._index_worker: Optional[IndexBuilder] = None
             self._blind_worker: Optional[BlindRunner] = None
@@ -6164,7 +6394,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             if hasattr(self, "solver_scroll"):
                 self._set_tab_visible(self.solver_scroll, True)
             if hasattr(self, "database_scroll"):
-                self._set_tab_visible(self.database_scroll, True)
+                self._set_tab_visible(self.database_scroll, expert)
             if hasattr(self, "settings_scroll"):
                 self._set_tab_visible(self.settings_scroll, True)
             # Advanced tabs hidden in easy mode
@@ -6175,7 +6405,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             if not expert and hasattr(self, "solver_scroll"):
                 try:
                     current = self.tabs.currentWidget()
-                    hidden_tabs = [getattr(self, n, None) for n in ("dev_scroll", "performance_scroll", "benchmark_scroll", "fast_scroll", "astrometry_scroll")]
+                    hidden_tabs = [getattr(self, n, None) for n in ("database_scroll", "dev_scroll", "performance_scroll", "benchmark_scroll", "fast_scroll", "astrometry_scroll")]
                     if current in hidden_tabs:
                         self._activate_tab(self.solver_scroll)
                 except Exception:
@@ -6208,11 +6438,22 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _manifest_text_or_default(self) -> str:
             text = ""
+            if hasattr(self, "settings_blind_4d_manifest_edit"):
+                text = self.settings_blind_4d_manifest_edit.text().strip()
             if hasattr(self, "blind_4d_manifest_edit"):
-                text = self.blind_4d_manifest_edit.text().strip()
+                text = text or self.blind_4d_manifest_edit.text().strip()
             if not text:
                 text = str(getattr(self._settings, "blind_4d_manifest_path", "") or "").strip()
             return str(resolve_default_4d_manifest_path(text or None))
+
+        def _sync_compat_4d_manifest_text(self, text: str) -> None:
+            if hasattr(self, "blind_4d_manifest_edit") and self.blind_4d_manifest_edit.text().strip() != str(text or "").strip():
+                try:
+                    self.blind_4d_manifest_edit.blockSignals(True)
+                    self.blind_4d_manifest_edit.setText(str(text or ""))
+                finally:
+                    self.blind_4d_manifest_edit.blockSignals(False)
+            self._set_manifest_status("not_verified")
 
         def _set_manifest_status(self, key: str, *, manifest: Loaded4DManifest | None = None, error: Exception | str | None = None) -> None:
             self._blind_4d_manifest_state = key
@@ -6324,7 +6565,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._text("blind_4d_manifest_filter"),
             )
             if path:
-                self.blind_4d_manifest_edit.setText(path)
+                if hasattr(self, "blind_4d_manifest_edit"):
+                    self.blind_4d_manifest_edit.setText(path)
+                if hasattr(self, "settings_blind_4d_manifest_edit"):
+                    self.settings_blind_4d_manifest_edit.setText(path)
                 self._settings.blind_4d_manifest_path = path
                 self._blind_4d_verified_manifest = None
                 self._set_manifest_status("not_verified")
@@ -6333,6 +6577,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             path_text = self._manifest_text_or_default()
             if hasattr(self, "blind_4d_manifest_edit"):
                 self.blind_4d_manifest_edit.setText(path_text)
+            if hasattr(self, "settings_blind_4d_manifest_edit"):
+                self.settings_blind_4d_manifest_edit.setText(path_text)
             self._set_manifest_status("verifying")
             try:
                 loaded = load_4d_index_manifest(path_text)
@@ -6716,7 +6962,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.btn_pause_all.clicked.connect(_pause_all_clicked)
             self.btn_verify_hashes.clicked.connect(_verify_hashes_clicked)
 
-            column.addLayout(form)
             self.db_tab_browse.clicked.connect(lambda: self._pick_settings_directory(self.db_tab_edit))
             # Keep Settings tab DB field in sync
             def _sync_db_text(text: str) -> None:
@@ -7584,44 +7829,127 @@ def launch_gui(args: argparse.Namespace) -> int:
             column = QtWidgets.QVBoxLayout(widget)
             form = QtWidgets.QFormLayout()
 
+            self.settings_catalog_library_label = QtWidgets.QLabel()
+            self.settings_catalog_library_edit = QtWidgets.QLineEdit(str(getattr(self._settings, "catalog_library_path", "") or ""))
+            self.settings_catalog_library_edit.setToolTip(self._text("settings_catalog_library_tooltip"))
+            self.settings_catalog_library_edit.textChanged.connect(self._on_catalog_library_text_changed)
+            self.settings_catalog_library_browse = QtWidgets.QPushButton()
+            self.settings_catalog_library_browse.clicked.connect(self._pick_catalog_library_directory)
+            self.settings_catalog_library_validate_btn = QtWidgets.QPushButton()
+            self.settings_catalog_library_validate_btn.clicked.connect(lambda: self._validate_catalog_library_from_gui(show_error=True))
+            self.settings_catalog_library_clear_btn = QtWidgets.QPushButton()
+            self.settings_catalog_library_clear_btn.clicked.connect(self._clear_catalog_library_selection)
+            catalog_row = QtWidgets.QWidget()
+            catalog_layout = QtWidgets.QHBoxLayout(catalog_row)
+            catalog_layout.setContentsMargins(0, 0, 0, 0)
+            catalog_layout.addWidget(self.settings_catalog_library_edit, 1)
+            catalog_layout.addWidget(self.settings_catalog_library_browse)
+            catalog_layout.addWidget(self.settings_catalog_library_validate_btn)
+            catalog_layout.addWidget(self.settings_catalog_library_clear_btn)
+            form.addRow(self.settings_catalog_library_label, catalog_row)
+            self.settings_catalog_library_status_label = QtWidgets.QLabel()
+            self.settings_catalog_library_status_label.setWordWrap(True)
+            form.addRow(self.settings_catalog_library_status_label)
+            self.settings_catalog_library_help_label = QtWidgets.QLabel(self._text("settings_catalog_library_help"))
+            self.settings_catalog_library_help_label.setWordWrap(True)
+            self.settings_catalog_library_help_label.setStyleSheet("color: #6c757d;")
+            form.addRow(self.settings_catalog_library_help_label)
+            column.addLayout(form)
+
+            self.catalog_compat_group = QtWidgets.QGroupBox(self._text("catalog_compat_group_title"))
+            self.catalog_compat_group.setCheckable(True)
+            self.catalog_compat_group.setChecked(False)
+            compat_layout = QtWidgets.QVBoxLayout(self.catalog_compat_group)
+            self.catalog_compat_body = QtWidgets.QWidget()
+            compat_body_layout = QtWidgets.QVBoxLayout(self.catalog_compat_body)
+            compat_body_layout.setContentsMargins(0, 0, 0, 0)
+            self.catalog_compat_warning_label = QtWidgets.QLabel(self._text("catalog_compat_warning"))
+            self.catalog_compat_warning_label.setWordWrap(True)
+            self.catalog_compat_warning_label.setStyleSheet("color: #8a6d3b;")
+            compat_body_layout.addWidget(self.catalog_compat_warning_label)
+            self.catalog_rollback_status_label = QtWidgets.QLabel()
+            self.catalog_rollback_status_label.setWordWrap(True)
+            compat_body_layout.addWidget(self.catalog_rollback_status_label)
+            legacy_form = QtWidgets.QFormLayout()
+            compat_body_layout.addLayout(legacy_form)
+
             self.settings_db_label = QtWidgets.QLabel()
             self.settings_db_edit = QtWidgets.QLineEdit(self._settings.db_root or "")
+            self.settings_db_edit.setToolTip(self._text("settings_legacy_astap_tooltip"))
             self.settings_db_browse = QtWidgets.QPushButton()
             db_row = QtWidgets.QWidget()
             db_layout = QtWidgets.QHBoxLayout(db_row)
             db_layout.setContentsMargins(0, 0, 0, 0)
             db_layout.addWidget(self.settings_db_edit)
             db_layout.addWidget(self.settings_db_browse)
-            form.addRow(self.settings_db_label, db_row)
+            legacy_form.addRow(self.settings_db_label, db_row)
 
             self.settings_index_label = QtWidgets.QLabel()
             self.settings_index_edit = QtWidgets.QLineEdit(self._settings.index_root or "")
+            self.settings_index_edit.setToolTip(self._text("settings_legacy_index_tooltip"))
+            self.settings_index_edit.textChanged.connect(lambda _text: self._validate_inactive_legacy_index_hint())
             self.settings_index_browse = QtWidgets.QPushButton()
             index_row = QtWidgets.QWidget()
             index_layout = QtWidgets.QHBoxLayout(index_row)
             index_layout.setContentsMargins(0, 0, 0, 0)
             index_layout.addWidget(self.settings_index_edit)
             index_layout.addWidget(self.settings_index_browse)
-            form.addRow(self.settings_index_label, index_row)
+            legacy_form.addRow(self.settings_index_label, index_row)
+
+            self.near_catalog_mode_label = QtWidgets.QLabel()
+            self.near_catalog_mode_combo = QtWidgets.QComboBox()
+            self.near_catalog_mode_combo.addItem(self._text("settings_mode_auto"), "auto")
+            self.near_catalog_mode_combo.addItem(self._text("settings_mode_astap_native"), "astap-native")
+            self.near_catalog_mode_combo.addItem(self._text("settings_mode_legacy_index"), "legacy-index")
+            self.near_catalog_mode_combo.currentIndexChanged.connect(lambda _idx: self._on_catalog_mode_combo_changed())
+            legacy_form.addRow(self.near_catalog_mode_label, self.near_catalog_mode_combo)
+
+            self.blind4d_catalog_mode_label = QtWidgets.QLabel()
+            self.blind4d_catalog_mode_combo = QtWidgets.QComboBox()
+            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_auto"), "auto")
+            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_library_view"), "library-view")
+            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_external_manifest"), "external-manifest")
+            self.blind4d_catalog_mode_combo.currentIndexChanged.connect(lambda _idx: self._on_catalog_mode_combo_changed())
+            legacy_form.addRow(self.blind4d_catalog_mode_label, self.blind4d_catalog_mode_combo)
+
+            self.settings_blind_4d_manifest_label = QtWidgets.QLabel()
+            self.settings_blind_4d_manifest_edit = QtWidgets.QLineEdit(str(resolve_default_4d_manifest_path(getattr(self._settings, "blind_4d_manifest_path", None))))
+            self.settings_blind_4d_manifest_edit.setToolTip(self._text("settings_blind4d_external_tooltip"))
+            self.settings_blind_4d_manifest_edit.textChanged.connect(lambda text: self._sync_compat_4d_manifest_text(text))
+            self.settings_blind_4d_manifest_browse_btn = QtWidgets.QPushButton()
+            self.settings_blind_4d_manifest_browse_btn.clicked.connect(self._pick_4d_manifest_file)
+            self.settings_blind_4d_manifest_verify_btn = QtWidgets.QPushButton()
+            self.settings_blind_4d_manifest_verify_btn.clicked.connect(lambda: self._verify_4d_manifest_from_gui(show_error=True, rollback_on_failure=False))
+            compat_manifest_row = QtWidgets.QWidget()
+            compat_manifest_layout = QtWidgets.QHBoxLayout(compat_manifest_row)
+            compat_manifest_layout.setContentsMargins(0, 0, 0, 0)
+            compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_edit, 1)
+            compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_browse_btn)
+            compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_verify_btn)
+            legacy_form.addRow(self.settings_blind_4d_manifest_label, compat_manifest_row)
+
+            self.settings_restore_auto_modes_btn = QtWidgets.QPushButton(self._text("settings_restore_auto_modes"))
+            self.settings_restore_auto_modes_btn.clicked.connect(self._restore_catalog_auto_modes)
+            legacy_form.addRow(self.settings_restore_auto_modes_btn)
 
             self.settings_mag_label = QtWidgets.QLabel()
             self.settings_mag_spin = QtWidgets.QDoubleSpinBox()
             self.settings_mag_spin.setRange(0.0, 20.0)
             self.settings_mag_spin.setDecimals(2)
             self.settings_mag_spin.setValue(self._settings.mag_cap)
-            form.addRow(self.settings_mag_label, self.settings_mag_spin)
+            legacy_form.addRow(self.settings_mag_label, self.settings_mag_spin)
 
             self.settings_max_stars_label = QtWidgets.QLabel()
             self.settings_max_stars_spin = QtWidgets.QSpinBox()
             self.settings_max_stars_spin.setRange(100, 10000)
             self.settings_max_stars_spin.setValue(self._settings.max_stars)
-            form.addRow(self.settings_max_stars_label, self.settings_max_stars_spin)
+            legacy_form.addRow(self.settings_max_stars_label, self.settings_max_stars_spin)
 
             self.settings_max_quads_label = QtWidgets.QLabel()
             self.settings_max_quads_spin = QtWidgets.QSpinBox()
             self.settings_max_quads_spin.setRange(100, 100000)
             self.settings_max_quads_spin.setValue(self._settings.max_quads_per_tile)
-            form.addRow(self.settings_max_quads_label, self.settings_max_quads_spin)
+            legacy_form.addRow(self.settings_max_quads_label, self.settings_max_quads_spin)
 
             self.settings_quad_storage_label = QtWidgets.QLabel()
             self.settings_quad_storage_combo = QtWidgets.QComboBox()
@@ -7636,7 +7964,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 (self._settings.quad_storage or QUAD_STORAGE_CHOICES[0]).lower(),
                 QUAD_STORAGE_CHOICES[0],
             )
-            form.addRow(self.settings_quad_storage_label, self.settings_quad_storage_combo)
+            legacy_form.addRow(self.settings_quad_storage_label, self.settings_quad_storage_combo)
 
             self.settings_tile_compression_label = QtWidgets.QLabel()
             self.settings_tile_compression_combo = QtWidgets.QComboBox()
@@ -7651,7 +7979,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 (self._settings.tile_compression or TILE_COMPRESSION_CHOICES[0]).lower(),
                 TILE_COMPRESSION_CHOICES[0],
             )
-            form.addRow(self.settings_tile_compression_label, self.settings_tile_compression_combo)
+            legacy_form.addRow(self.settings_tile_compression_label, self.settings_tile_compression_combo)
 
             self.settings_sample_label = QtWidgets.QLabel()
             self.settings_sample_edit = QtWidgets.QLineEdit(self._settings.sample_fits or "")
@@ -7661,23 +7989,33 @@ def launch_gui(args: argparse.Namespace) -> int:
             sample_layout.setContentsMargins(0, 0, 0, 0)
             sample_layout.addWidget(self.settings_sample_edit)
             sample_layout.addWidget(self.settings_sample_browse)
-            form.addRow(self.settings_sample_label, sample_row)
+            legacy_form.addRow(self.settings_sample_label, sample_row)
+            compat_layout.addWidget(self.catalog_compat_body)
+            self.catalog_compat_group.toggled.connect(self.catalog_compat_body.setVisible)
+            self.catalog_compat_body.setVisible(False)
+            column.addWidget(self.catalog_compat_group)
 
             # Presets/FOV/Reco groups
             build_presets_fov_reco_groups(self, QtWidgets, preset_utils, column, form)
 
             # Blind solver tuning group
             self.blind_group = build_blind_group(self, QtWidgets)
+            self.catalog_maintenance_group = QtWidgets.QGroupBox(self._text("catalog_compat_tools_title"))
+            maintenance_layout = QtWidgets.QVBoxLayout(self.catalog_maintenance_group)
+            self.catalog_maintenance_warning_label = QtWidgets.QLabel(self._text("catalog_compat_tools_warning"))
+            self.catalog_maintenance_warning_label.setWordWrap(True)
+            self.catalog_maintenance_warning_label.setStyleSheet("color: #8a6d3b;")
+            maintenance_layout.addWidget(self.catalog_maintenance_warning_label)
 
             button_row = QtWidgets.QHBoxLayout()
             self.settings_save_btn = QtWidgets.QPushButton()
             self.settings_build_btn = QtWidgets.QPushButton()
             self.settings_run_blind_btn = QtWidgets.QPushButton()
             self.settings_run_near_btn = QtWidgets.QPushButton()
-            button_row.addWidget(self.settings_save_btn)
             button_row.addWidget(self.settings_build_btn)
             button_row.addWidget(self.settings_run_blind_btn)
             button_row.addWidget(self.settings_run_near_btn)
+            maintenance_layout.addLayout(button_row)
 
             self.settings_log_view = QtWidgets.QPlainTextEdit()
             self.settings_log_view.setReadOnly(True)
@@ -7687,7 +8025,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception:
                 pass
             column.addWidget(self.blind_group)
-            column.addLayout(button_row)
+            column.addWidget(self.catalog_maintenance_group)
+            save_row = QtWidgets.QHBoxLayout()
+            save_row.addStretch(1)
+            save_row.addWidget(self.settings_save_btn)
+            column.addLayout(save_row)
             self.settings_log_label = QtWidgets.QLabel()
             column.addWidget(self.settings_log_label)
             # Progress bar for index/quads build
@@ -8123,6 +8465,247 @@ def launch_gui(args: argparse.Namespace) -> int:
             if directory:
                 target.setText(directory)
 
+        def _catalog_library_path_from_ui(self) -> str | None:
+            if hasattr(self, "settings_catalog_library_edit"):
+                text = self.settings_catalog_library_edit.text().strip()
+            else:
+                text = str(getattr(self._settings, "catalog_library_path", "") or "").strip()
+            if not text:
+                return None
+            return str(Path(text).expanduser())
+
+        def _on_catalog_library_text_changed(self, text: str) -> None:
+            self._catalog_library_validated_path = None
+            self._catalog_library_validated_resources = None
+            self._catalog_library_validation_error = None
+            if str(text or "").strip():
+                self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
+            else:
+                self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
+
+        def _pick_catalog_library_directory(self) -> None:
+            if not hasattr(self, "settings_catalog_library_edit"):
+                return
+            self._pick_settings_directory(self.settings_catalog_library_edit)
+
+        def _clear_catalog_library_selection(self) -> None:
+            if hasattr(self, "settings_catalog_library_edit"):
+                self.settings_catalog_library_edit.setText("")
+            self._settings.catalog_library_path = None
+            self._catalog_library_validated_path = None
+            self._catalog_library_validated_resources = None
+            self._catalog_library_validation_error = None
+            self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
+            self._log_settings(self._text("settings_catalog_library_cleared"))
+
+        def _current_near_catalog_mode_from_ui(self) -> str:
+            combo = getattr(self, "near_catalog_mode_combo", None)
+            if combo is not None:
+                value = combo.currentData()
+                if isinstance(value, str) and value.strip():
+                    return value.strip().lower()
+            return str(getattr(self._settings, "near_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-")
+
+        def _current_blind4d_catalog_mode_from_ui(self) -> str:
+            combo = getattr(self, "blind4d_catalog_mode_combo", None)
+            if combo is not None:
+                value = combo.currentData()
+                if isinstance(value, str) and value.strip():
+                    return value.strip().lower()
+            return str(getattr(self._settings, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-")
+
+        def _on_catalog_mode_combo_changed(self) -> None:
+            self._settings.near_catalog_mode = self._current_near_catalog_mode_from_ui()
+            self._settings.blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
+            self._update_catalog_rollback_status()
+
+        def _restore_catalog_auto_modes(self) -> None:
+            if hasattr(self, "near_catalog_mode_combo"):
+                self._set_combo_current_data(self.near_catalog_mode_combo, "auto", "auto")
+            if hasattr(self, "blind4d_catalog_mode_combo"):
+                self._set_combo_current_data(self.blind4d_catalog_mode_combo, "auto", "auto")
+            self._settings.near_catalog_mode = "auto"
+            self._settings.blind4d_catalog_mode = "auto"
+            self._update_catalog_rollback_status()
+            self._log_settings(self._text("settings_restore_auto_modes"))
+
+        def _update_catalog_rollback_status(self) -> None:
+            label = getattr(self, "catalog_rollback_status_label", None)
+            if label is None:
+                return
+            near_mode = self._current_near_catalog_mode_from_ui()
+            blind_mode = self._current_blind4d_catalog_mode_from_ui()
+            rollback = near_mode == "legacy-index" or blind_mode == "external-manifest"
+            if rollback:
+                label.setText(self._text("settings_rollback_active", near=near_mode, blind=blind_mode))
+                label.setStyleSheet("color: #c92a2a; font-weight: 600;")
+            else:
+                label.setText(self._text("settings_rollback_inactive"))
+                label.setStyleSheet("color: #6c757d;")
+
+        def _format_catalog_path_error(
+            self,
+            validation: GuiCatalogPathValidation,
+            *,
+            field_key: str,
+            action_key: str | None = None,
+        ) -> str:
+            action = self._text(action_key or self._action_for_catalog_path_error(validation.code))
+            return self._text(
+                "catalog_path_error",
+                code=validation.code,
+                message=self._catalog_path_error_message(validation),
+                field=self._text(field_key),
+                action=action,
+            )
+
+        def _catalog_path_error_message(self, validation: GuiCatalogPathValidation) -> str:
+            key_by_code = {
+                "CATALOG_LIBRARY_USED_AS_LEGACY_NEAR_INDEX": "msg_catalog_library_used_as_legacy_near_index",
+                "LEGACY_NEAR_INDEX_USED_AS_CATALOG_LIBRARY": "msg_legacy_near_index_used_as_catalog_library",
+                "ASTAP_SOURCE_USED_AS_CATALOG_LIBRARY": "msg_astap_source_used_as_catalog_library",
+                "BLIND4D_MANIFEST_FILE_REQUIRED": "msg_blind4d_manifest_file_required",
+            }
+            key = key_by_code.get(validation.code)
+            if key:
+                return self._text(key)
+            return validation.message
+
+        def _action_for_catalog_path_error(self, code: str) -> str:
+            if code == "CATALOG_LIBRARY_USED_AS_LEGACY_NEAR_INDEX":
+                return "action_use_catalog_library_field"
+            if code == "LEGACY_NEAR_INDEX_USED_AS_CATALOG_LIBRARY":
+                return "action_use_legacy_index_field"
+            if code == "ASTAP_SOURCE_USED_AS_CATALOG_LIBRARY":
+                return "action_use_legacy_astap_field"
+            if code.startswith("BLIND4D_"):
+                return "action_choose_blind4d_manifest"
+            if code.startswith("LEGACY_NEAR"):
+                return "action_choose_legacy_index"
+            if code.startswith("CATALOG_LIBRARY"):
+                return "action_choose_catalog_library"
+            return "action_fix_or_choose_other"
+
+        def _validate_inactive_legacy_index_hint(self) -> None:
+            text = self.settings_index_edit.text().strip() if hasattr(self, "settings_index_edit") else ""
+            if not text:
+                return
+            validation = validate_legacy_near_index_root(text)
+            if validation.code == "CATALOG_LIBRARY_USED_AS_LEGACY_NEAR_INDEX":
+                self._log_settings(
+                    self._format_catalog_path_error(
+                        validation,
+                        field_key="field_legacy_index",
+                        action_key="action_use_catalog_library_field",
+                    )
+                )
+
+        def _set_catalog_library_status(
+            self,
+            state: str,
+            *,
+            message: str | None = None,
+            resources: SolverCatalogResources | None = None,
+            error: Exception | str | None = None,
+        ) -> None:
+            self._catalog_library_state = state
+            label = getattr(self, "settings_catalog_library_status_label", None)
+            if label is None:
+                return
+            if message is None:
+                if state == "AUCUNE_BIBLIOTHEQUE":
+                    message = self._text("settings_catalog_library_none")
+                elif state == "VALIDATION_EN_COURS":
+                    message = self._text("settings_catalog_library_validating")
+                elif state == "MISSING":
+                    message = self._text("settings_catalog_library_missing")
+                elif state == "INVALID":
+                    message = self._text("settings_catalog_library_invalid", error=str(error or "CATALOG_LIBRARY_INVALID"))
+                elif resources is not None:
+                    message = self._catalog_library_status_summary(resources)
+                else:
+                    message = state
+            label.setText(message)
+            if state in {"READY_FULL", "READY_PARTIAL", "NEAR_ONLY", "BLIND4D_ONLY"}:
+                label.setStyleSheet("color: #2b8a3e;")
+            elif state == "VALIDATION_EN_COURS":
+                label.setStyleSheet("color: #5c7cfa;")
+            elif state == "AUCUNE_BIBLIOTHEQUE":
+                label.setStyleSheet("color: #6c757d;")
+            else:
+                label.setStyleSheet("color: #c92a2a;")
+
+        def _catalog_library_status_summary(self, resources: SolverCatalogResources) -> str:
+            status = resources.library_status or CatalogStatus.MISSING
+            near = self._text("settings_catalog_library_source_unavailable")
+            if resources.near is not None:
+                near = self._text(
+                    "settings_catalog_library_source_available",
+                    families=", ".join(resources.near.families or ("-",)),
+                    tiles=resources.near.coverage.covered_tiles or resources.near.coverage.total_tiles or 0,
+                )
+            blind = self._text("settings_catalog_library_blind_unavailable")
+            coverage = resources.coverage
+            total = coverage.total_tiles if coverage and coverage.total_tiles is not None else 0
+            if resources.blind4d_available:
+                blind = self._text(
+                    "settings_catalog_library_blind_available",
+                    indexes=resources.blind4d_index_count,
+                    total=total,
+                )
+            all_sky = self._text("settings_catalog_library_all_sky_yes" if resources.all_sky_blind4d else "settings_catalog_library_all_sky_no")
+            warnings = ", ".join(resources.warnings) if resources.warnings else "-"
+            errors = "-"
+            key = "settings_catalog_library_ready_partial"
+            if status is CatalogStatus.READY_FULL:
+                key = "settings_catalog_library_ready_full"
+            elif status in {CatalogStatus.NEAR_ONLY, CatalogStatus.SOURCE_ONLY}:
+                key = "settings_catalog_library_near_only"
+            elif status is CatalogStatus.BLIND4D_ONLY:
+                key = "settings_catalog_library_blind_only"
+            return self._text(key, near=near, blind=blind, all_sky=all_sky, warnings=warnings, errors=errors)
+
+        def _validate_catalog_library_from_gui(self, *, show_error: bool = True) -> SolverCatalogResources | None:
+            path_text = self._catalog_library_path_from_ui()
+            if not path_text:
+                self._settings.catalog_library_path = None
+                self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
+                return None
+            if hasattr(self, "settings_catalog_library_edit"):
+                self.settings_catalog_library_edit.setText(path_text)
+            self._set_catalog_library_status("VALIDATION_EN_COURS")
+            path = Path(path_text).expanduser()
+            try:
+                path_check = validate_catalog_library_root(path)
+                if not path_check.ok:
+                    message = self._format_catalog_path_error(path_check, field_key="field_catalog_library")
+                    if path_check.code == "CATALOG_LIBRARY_MANIFEST_MISSING":
+                        raise FileNotFoundError(message)
+                    raise CatalogLibraryError(message)
+                library = CatalogLibrary.open(path)
+                report = library.validate()
+                hard = [issue for issue in report.issues if issue.severity in {IssueSeverity.ERROR, IssueSeverity.FATAL}]
+                if hard or report.status in {CatalogStatus.CORRUPT, CatalogStatus.INCOMPATIBLE, CatalogStatus.MISSING}:
+                    codes = ", ".join(issue.code for issue in hard) or report.status.value
+                    raise CatalogLibraryError(f"CATALOG_LIBRARY_INVALID: {codes}")
+                resources = resolve_catalog_resources(catalog_library=library)
+            except Exception as exc:
+                self._catalog_library_validated_path = None
+                self._catalog_library_validated_resources = None
+                self._catalog_library_validation_error = str(exc)
+                state = "MISSING" if isinstance(exc, FileNotFoundError) else "INVALID"
+                self._set_catalog_library_status(state, error=exc)
+                if show_error:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                return None
+            self._settings.catalog_library_path = path_text
+            self._catalog_library_validated_path = path_text
+            self._catalog_library_validated_resources = resources
+            self._catalog_library_validation_error = None
+            state = resources.library_status.value if resources.library_status else "INVALID"
+            self._set_catalog_library_status(state, resources=resources)
+            return resources
+
         def _pick_settings_sample(self) -> None:
             path, _ = QtWidgets.QFileDialog.getOpenFileName(
                 self,
@@ -8134,8 +8717,31 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _populate_settings_ui(self) -> None:
             settings = self._settings
+            if hasattr(self, "settings_catalog_library_edit"):
+                try:
+                    self.settings_catalog_library_edit.blockSignals(True)
+                    self.settings_catalog_library_edit.setText(settings.catalog_library_path or "")
+                finally:
+                    self.settings_catalog_library_edit.blockSignals(False)
+                if settings.catalog_library_path:
+                    self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
+                else:
+                    self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
             self.settings_db_edit.setText(settings.db_root or "")
             self.settings_index_edit.setText(settings.index_root or "")
+            if hasattr(self, "near_catalog_mode_combo"):
+                self._set_combo_current_data(
+                    self.near_catalog_mode_combo,
+                    str(getattr(settings, "near_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-"),
+                    "auto",
+                )
+            if hasattr(self, "blind4d_catalog_mode_combo"):
+                self._set_combo_current_data(
+                    self.blind4d_catalog_mode_combo,
+                    str(getattr(settings, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-"),
+                    "auto",
+                )
+            self._update_catalog_rollback_status()
             self.settings_mag_spin.setValue(settings.mag_cap)
             self.settings_max_stars_spin.setValue(settings.max_stars)
             self.settings_max_quads_spin.setValue(settings.max_quads_per_tile)
@@ -8177,9 +8783,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
             try:
                 if hasattr(self, "blind_4d_manifest_edit"):
-                    self.blind_4d_manifest_edit.setText(
-                        str(resolve_default_4d_manifest_path(getattr(settings, "blind_4d_manifest_path", None)))
-                    )
+                    manifest_text = str(resolve_default_4d_manifest_path(getattr(settings, "blind_4d_manifest_path", None)))
+                    self.blind_4d_manifest_edit.setText(manifest_text)
+                    if hasattr(self, "settings_blind_4d_manifest_edit"):
+                        self.settings_blind_4d_manifest_edit.setText(manifest_text)
                 self._set_manifest_status("not_verified")
                 self._sync_blind_profile_controls()
             except Exception:
@@ -8361,25 +8968,51 @@ def launch_gui(args: argparse.Namespace) -> int:
                     )
 
         def _read_settings_from_ui(self) -> PersistentSettings:
+            catalog_library_path = self._catalog_library_path_from_ui()
+            catalog_resources_for_save = None
+            if catalog_library_path:
+                catalog_resources_for_save = self._validate_catalog_library_from_gui(show_error=False)
+                if catalog_resources_for_save is None:
+                    raise ValueError(self._catalog_library_validation_error or "CATALOG_LIBRARY_INVALID")
+            near_catalog_mode = self._current_near_catalog_mode_from_ui()
+            blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
             db_root = self.settings_db_edit.text().strip()
-            if not db_root:
+            if not db_root and catalog_resources_for_save is None:
                 raise ValueError(self._text("error_database_required"))
             index_root = self.settings_index_edit.text().strip()
-            if not index_root:
+            if not index_root and catalog_resources_for_save is None:
                 raise ValueError(self._text("settings_index_missing"))
+            if db_root and (catalog_resources_for_save is None or near_catalog_mode == "legacy-index"):
+                validation = validate_astap_root(db_root)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_astap"))
+            if index_root and (catalog_resources_for_save is None or near_catalog_mode == "legacy-index"):
+                validation = validate_legacy_near_index_root(index_root)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_index"))
+            manifest_text_for_save = (
+                self._manifest_text_or_default()
+                if hasattr(self, "blind_4d_manifest_edit") or hasattr(self, "settings_blind_4d_manifest_edit")
+                else (getattr(self._settings, "blind_4d_manifest_path", None) or None)
+            )
+            if blind4d_catalog_mode == "external-manifest":
+                validation = validate_blind4d_manifest_file(manifest_text_for_save)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_blind4d_manifest"))
             # Enforce separation between database/ and index/
-            try:
-                dbp = Path(db_root).expanduser().resolve()
-                idxp = Path(index_root).expanduser().resolve()
-                same = (idxp == dbp)
-                inside = str(idxp).startswith(str(dbp) + os.sep)
-                if same or inside:
-                    raise ValueError(self._text("warn_sep_dirs"))
-            except Exception as _exc:
-                # Convert any path-related issue into a user-facing message
-                if not isinstance(_exc, ValueError):
-                    raise ValueError(self._text("warn_sep_dirs"))
-                raise
+            if db_root and index_root:
+                try:
+                    dbp = Path(db_root).expanduser().resolve()
+                    idxp = Path(index_root).expanduser().resolve()
+                    same = (idxp == dbp)
+                    inside = str(idxp).startswith(str(dbp) + os.sep)
+                    if same or inside:
+                        raise ValueError(self._text("warn_sep_dirs"))
+                except Exception as _exc:
+                    # Convert any path-related issue into a user-facing message
+                    if not isinstance(_exc, ValueError):
+                        raise ValueError(self._text("warn_sep_dirs"))
+                    raise
             # Read detection device from Performance tab
             try:
                 sel = self.perf_detect_combo.currentData()
@@ -8402,9 +9035,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                     tile_compression_value = data.strip().lower()
 
             return PersistentSettings(
-                catalog_library_path=getattr(self._settings, "catalog_library_path", None),
-                db_root=db_root,
-                index_root=index_root,
+                catalog_library_path=catalog_library_path,
+                db_root=db_root or None,
+                index_root=index_root or None,
                 mag_cap=float(self.settings_mag_spin.value()),
                 max_stars=int(self.settings_max_stars_spin.value()),
                 max_quads_per_tile=int(self.settings_max_quads_spin.value()),
@@ -8435,7 +9068,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_detect_max_labels=int(self.fast_detect_max_labels_spin.value()) if hasattr(self, 'fast_detect_max_labels_spin') else 1200,
                 io_concurrency=int(self.perf_io_spin.value()) if hasattr(self, 'perf_io_spin') else 0,
                 near_warm_start=bool(self.perf_near_warm_check.isChecked()) if hasattr(self, 'perf_near_warm_check') else True,
-                near_catalog_mode=str(getattr(self._settings, "near_catalog_mode", "auto") or "auto"),
+                near_catalog_mode=near_catalog_mode,
+                blind4d_catalog_mode=blind4d_catalog_mode,
                 # Near (fast solver) thresholds and tuning
                 near_quality_inliers=int(self.fast_quality_inliers_spin.value()) if hasattr(self, 'fast_quality_inliers_spin') else 60,
                 near_quality_rms=float(self.fast_quality_rms_spin.value()) if hasattr(self, 'fast_quality_rms_spin') else 1.0,
@@ -8453,11 +9087,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 solver_backend=(self.backend_combo.currentData() if hasattr(self, 'backend_combo') else "local"),
                 interface_mode=str(getattr(self, "_interface_mode", "easy") or "easy"),
                 blind_backend_profile=self._current_blind_profile(),
-                blind_4d_manifest_path=(
-                    self.blind_4d_manifest_edit.text().strip()
-                    if hasattr(self, "blind_4d_manifest_edit") and self.blind_4d_manifest_edit.text().strip()
-                    else (getattr(self._settings, "blind_4d_manifest_path", None) or None)
-                ),
+                blind_4d_manifest_path=manifest_text_for_save,
                 astrometry_api_url=(self.ast_api_url_edit.text().strip() if hasattr(self, 'ast_api_url_edit') else "https://nova.astrometry.net/api"),
                 astrometry_api_key=(self.ast_api_key_edit.text().strip() if hasattr(self, 'ast_api_key_edit') and self.ast_api_key_edit.text().strip() else (os.environ.get("ASTROMETRY_API_KEY") or None)),
                 astrometry_parallel_jobs=int(self.ast_parallel_spin.value()) if hasattr(self, 'ast_parallel_spin') else 2,
@@ -9133,12 +9763,79 @@ def launch_gui(args: argparse.Namespace) -> int:
                 except Exception:
                     pass
             browse_label = self._text("browse_button")
+            if hasattr(self, "settings_catalog_library_label"):
+                self.settings_catalog_library_label.setText(self._text("settings_catalog_library_label"))
+            if hasattr(self, "settings_catalog_library_browse"):
+                self.settings_catalog_library_browse.setText(self._text("settings_catalog_library_browse"))
+            if hasattr(self, "settings_catalog_library_validate_btn"):
+                self.settings_catalog_library_validate_btn.setText(self._text("settings_catalog_library_validate"))
+            if hasattr(self, "settings_catalog_library_clear_btn"):
+                self.settings_catalog_library_clear_btn.setText(self._text("settings_catalog_library_clear"))
+            if hasattr(self, "settings_catalog_library_edit"):
+                self.settings_catalog_library_edit.setToolTip(self._text("settings_catalog_library_tooltip"))
+            if hasattr(self, "settings_catalog_library_help_label"):
+                self.settings_catalog_library_help_label.setText(self._text("settings_catalog_library_help"))
+            if hasattr(self, "settings_catalog_library_status_label"):
+                if self._catalog_library_validated_resources is not None:
+                    self._set_catalog_library_status(
+                        self._catalog_library_validated_resources.library_status.value
+                        if self._catalog_library_validated_resources.library_status
+                        else "INVALID",
+                        resources=self._catalog_library_validated_resources,
+                    )
+                elif self.settings_catalog_library_edit.text().strip():
+                    self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
+                else:
+                    self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
             if hasattr(self, "settings_db_label"):
-                self.settings_db_label.setText(self._text("settings_db_label"))
+                self.settings_db_label.setText(self._text("settings_legacy_astap_label"))
+                self.settings_db_edit.setToolTip(self._text("settings_legacy_astap_tooltip"))
                 self.settings_db_browse.setText(browse_label)
             if hasattr(self, "settings_index_label"):
-                self.settings_index_label.setText(self._text("settings_index_label"))
+                self.settings_index_label.setText(self._text("settings_legacy_index_label"))
+                self.settings_index_edit.setToolTip(self._text("settings_legacy_index_tooltip"))
                 self.settings_index_browse.setText(browse_label)
+            if hasattr(self, "catalog_compat_group"):
+                self.catalog_compat_group.setTitle(self._text("catalog_compat_group_title"))
+            if hasattr(self, "catalog_compat_warning_label"):
+                self.catalog_compat_warning_label.setText(self._text("catalog_compat_warning"))
+            if hasattr(self, "catalog_maintenance_group"):
+                self.catalog_maintenance_group.setTitle(self._text("catalog_compat_tools_title"))
+            if hasattr(self, "catalog_maintenance_warning_label"):
+                self.catalog_maintenance_warning_label.setText(self._text("catalog_compat_tools_warning"))
+            if hasattr(self, "near_catalog_mode_label"):
+                self.near_catalog_mode_label.setText(self._text("settings_near_mode_label"))
+            if hasattr(self, "blind4d_catalog_mode_label"):
+                self.blind4d_catalog_mode_label.setText(self._text("settings_blind4d_mode_label"))
+            if hasattr(self, "settings_blind_4d_manifest_label"):
+                self.settings_blind_4d_manifest_label.setText(self._text("settings_blind4d_external_label"))
+            if hasattr(self, "settings_blind_4d_manifest_edit"):
+                self.settings_blind_4d_manifest_edit.setToolTip(self._text("settings_blind4d_external_tooltip"))
+            if hasattr(self, "settings_blind_4d_manifest_browse_btn"):
+                self.settings_blind_4d_manifest_browse_btn.setText(self._text("blind_4d_browse"))
+            if hasattr(self, "settings_blind_4d_manifest_verify_btn"):
+                self.settings_blind_4d_manifest_verify_btn.setText(self._text("blind_4d_verify"))
+            if hasattr(self, "near_catalog_mode_combo"):
+                for value, key in (
+                    ("auto", "settings_mode_auto"),
+                    ("astap-native", "settings_mode_astap_native"),
+                    ("legacy-index", "settings_mode_legacy_index"),
+                ):
+                    idx = self.near_catalog_mode_combo.findData(value)
+                    if idx >= 0:
+                        self.near_catalog_mode_combo.setItemText(idx, self._text(key))
+            if hasattr(self, "blind4d_catalog_mode_combo"):
+                for value, key in (
+                    ("auto", "settings_mode_auto"),
+                    ("library-view", "settings_mode_library_view"),
+                    ("external-manifest", "settings_mode_external_manifest"),
+                ):
+                    idx = self.blind4d_catalog_mode_combo.findData(value)
+                    if idx >= 0:
+                        self.blind4d_catalog_mode_combo.setItemText(idx, self._text(key))
+            if hasattr(self, "settings_restore_auto_modes_btn"):
+                self.settings_restore_auto_modes_btn.setText(self._text("settings_restore_auto_modes"))
+            self._update_catalog_rollback_status()
             # Database tab labels
             if hasattr(self, "db_tab_label"):
                 self.db_tab_label.setText(self._text("select_db_root"))
@@ -9400,6 +10097,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             return value
 
         def _prefill_from_args(self, cli_args: argparse.Namespace) -> None:
+            if getattr(cli_args, "catalog_library", None):
+                catalog_library = str(cli_args.catalog_library)
+                self._settings.catalog_library_path = catalog_library
+                if hasattr(self, "settings_catalog_library_edit"):
+                    self.settings_catalog_library_edit.setText(catalog_library)
             if cli_args.db_root:
                 db_root = str(cli_args.db_root)
                 self._settings.db_root = db_root
@@ -9737,12 +10439,29 @@ def launch_gui(args: argparse.Namespace) -> int:
             return path.name
 
         def _build_config(self) -> SolveConfig:
+            catalog_library_path = self._catalog_library_path_from_ui()
+            catalog_resources_for_config: SolverCatalogResources | None = None
+            if catalog_library_path:
+                catalog_resources_for_config = self._validate_catalog_library_from_gui(show_error=False)
+                if catalog_resources_for_config is None:
+                    raise ValueError(self._catalog_library_validation_error or "CATALOG_LIBRARY_INVALID")
+            near_catalog_mode = self._current_near_catalog_mode_from_ui()
+            blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
             db_root_text = self._settings.db_root
-            if not db_root_text:
+            if hasattr(self, "settings_db_edit"):
+                db_root_text = self.settings_db_edit.text().strip() or db_root_text
+            if not db_root_text and catalog_resources_for_config is None:
                 raise ValueError(self._text("error_database_required"))
-            db_root = Path(db_root_text).expanduser()
-            if not db_root.is_dir():
+            if catalog_resources_for_config is not None and catalog_resources_for_config.near is not None:
+                db_root = catalog_resources_for_config.near.root
+            else:
+                db_root = Path(db_root_text).expanduser() if db_root_text else Path(catalog_library_path or ".").expanduser()
+            if catalog_resources_for_config is None and not db_root.is_dir():
                 raise ValueError(self._text("error_database_missing", path=db_root))
+            if db_root_text and (catalog_resources_for_config is None or near_catalog_mode == "legacy-index"):
+                validation = validate_astap_root(db_root_text)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_astap"))
             if not self._current_input_dir:
                 raise ValueError(self._text("error_no_input_dir"))
             # Family selection via dropdown ('Auto' → no restriction)
@@ -9756,11 +10475,26 @@ def launch_gui(args: argparse.Namespace) -> int:
             max_radius_value = self.max_radius_spin.value()
             max_radius = max_radius_value if max_radius_value > 0 else None
             index_root_text = self._settings.index_root
-            if not index_root_text:
+            if hasattr(self, "settings_index_edit"):
+                index_root_text = self.settings_index_edit.text().strip() or index_root_text
+            if not index_root_text and catalog_resources_for_config is None:
                 raise ValueError(self._text("settings_index_missing"))
-            index_root = Path(index_root_text).expanduser()
-            if not index_root.is_dir():
+            index_root = Path(index_root_text).expanduser() if index_root_text else None
+            if catalog_resources_for_config is None and (index_root is None or not index_root.is_dir()):
                 raise ValueError(self._text("settings_index_missing"))
+            if index_root_text and (catalog_resources_for_config is None or near_catalog_mode == "legacy-index"):
+                validation = validate_legacy_near_index_root(index_root_text)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_index"))
+            manifest_text_for_run = (
+                self._manifest_text_or_default()
+                if hasattr(self, "blind_4d_manifest_edit") or hasattr(self, "settings_blind_4d_manifest_edit")
+                else (getattr(self._settings, "blind_4d_manifest_path", None) or None)
+            )
+            if blind4d_catalog_mode == "external-manifest":
+                validation = validate_blind4d_manifest_file(manifest_text_for_run)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_blind4d_manifest"))
             # Persist solver panel + performance settings for next runs
             try:
                 self._settings.solver_fov_deg = float(self.fov_spin.value())
@@ -9776,13 +10510,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._settings.solver_family = str(sel_fam).strip().lower() or None
                 self._settings.solver_blind_enabled = bool(self.blind_check.isChecked())
                 self._settings.solver_overwrite = bool(self.overwrite_check.isChecked())
+                self._settings.catalog_library_path = catalog_library_path
+                self._settings.db_root = db_root_text or None
+                self._settings.index_root = index_root_text or None
+                self._settings.near_catalog_mode = near_catalog_mode
+                self._settings.blind4d_catalog_mode = blind4d_catalog_mode
                 self._settings.interface_mode = str(getattr(self, "_interface_mode", "easy") or "easy")
                 self._settings.blind_backend_profile = self._current_blind_profile()
-                self._settings.blind_4d_manifest_path = (
-                    self.blind_4d_manifest_edit.text().strip()
-                    if hasattr(self, "blind_4d_manifest_edit") and self.blind_4d_manifest_edit.text().strip()
-                    else (getattr(self._settings, "blind_4d_manifest_path", None) or None)
-                )
+                self._settings.blind_4d_manifest_path = manifest_text_for_run
                 self._settings.solver_hint_ra_deg = (
                     None if self.ra_hint_spin.value() <= -0.5 else float(self.ra_hint_spin.value())
                 )
@@ -9871,12 +10606,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 blind_enabled=self.blind_check.isChecked(),
                 blind_index_path=index_root,
                 blind_backend_profile=self._current_blind_profile(),
-                blind_4d_manifest_path=(
-                    self.blind_4d_manifest_edit.text().strip()
-                    if hasattr(self, "blind_4d_manifest_edit") and self.blind_4d_manifest_edit.text().strip()
-                    else (getattr(self._settings, "blind_4d_manifest_path", None) or None)
-                ),
-                catalog_library_path=getattr(self._settings, "catalog_library_path", None),
+                blind_4d_manifest_path=manifest_text_for_run,
+                blind4d_catalog_mode=blind4d_catalog_mode,
+                catalog_library_path=catalog_library_path,
                 hint_ra_deg=ra_hint,
                 hint_dec_deg=dec_hint,
                 hint_radius_deg=radius_hint,
@@ -9908,7 +10640,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_try_parity_flip=bool(self._settings.near_try_parity_flip),
                 near_defer_blind_fallback=bool(getattr(self._settings, 'near_defer_blind_fallback', False)),
                 near_allow_second_rescue=bool(getattr(self._settings, 'near_allow_second_rescue', False)),
-                near_catalog_mode=str(getattr(self._settings, 'near_catalog_mode', 'auto') or 'auto'),
+                near_catalog_mode=near_catalog_mode,
                 near_search_margin=float(self._settings.near_search_margin or 1.2),
                 # Blind solver tunables from the Settings panel
                 blind_max_stars=int(self._settings.blind_max_stars or 500),
@@ -9946,52 +10678,43 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
 
         def _run_simple_startup_wizard(self) -> bool:
+            library_text = self._catalog_library_path_from_ui()
+            if library_text:
+                resources = self._validate_catalog_library_from_gui(show_error=False)
+                if resources is not None:
+                    self._log_settings(self._text("simple_wizard_library_ready"))
+                    return True
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    self._text("simple_wizard_title"),
+                    self._text("simple_wizard_invalid_library"),
+                )
+                if hasattr(self, "settings_scroll"):
+                    self._activate_tab(self.settings_scroll)
+                return False
             db_text = (self.settings_db_edit.text().strip() if hasattr(self, "settings_db_edit") else "")
             if not db_text and hasattr(self, "db_tab_edit"):
                 db_text = self.db_tab_edit.text().strip()
             db_path = Path(db_text).expanduser() if db_text else None
 
-            if (not db_path) or (not db_path.is_dir()):
-                answer = QtWidgets.QMessageBox.question(
-                    self,
-                    self._text("simple_wizard_title"),
-                    self._text("simple_wizard_missing_db"),
-                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                    QtWidgets.QMessageBox.Yes,
-                )
-                if answer != QtWidgets.QMessageBox.Yes:
-                    return False
-                if hasattr(self, "database_scroll"):
-                    self._activate_tab(self.database_scroll)
-                if hasattr(self, "settings_db_edit"):
-                    self._pick_settings_directory(self.settings_db_edit)
-                    db_text = self.settings_db_edit.text().strip()
-                    if hasattr(self, "db_tab_edit") and self.db_tab_edit.text().strip() != db_text:
-                        self.db_tab_edit.setText(db_text)
-                db_path = Path(db_text).expanduser() if db_text else None
-                if (not db_path) or (not db_path.is_dir()):
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        self._text("simple_wizard_title"),
-                        self._text("simple_wizard_missing_db_invalid"),
-                    )
-                    return False
-
             index_text = self.settings_index_edit.text().strip() if hasattr(self, "settings_index_edit") else ""
             index_path = Path(index_text).expanduser() if index_text else None
-            if (not index_path) or (not index_path.is_dir()):
-                QtWidgets.QMessageBox.information(
-                    self,
-                    self._text("simple_wizard_title"),
-                    self._text("simple_wizard_missing_index"),
-                )
-                if hasattr(self, "settings_scroll"):
-                    self._activate_tab(self.settings_scroll)
-                return False
+            if db_path and db_path.is_dir() and index_path and index_path.is_dir():
+                self._settings.db_root = str(db_path)
+                self._settings.index_root = str(index_path)
+                self._log_settings(self._text("simple_wizard_legacy_compat"))
+                return True
 
-            self._settings.db_root = str(db_path)
-            self._settings.index_root = str(index_path)
-            return True
+            QtWidgets.QMessageBox.information(
+                self,
+                self._text("simple_wizard_title"),
+                self._text("simple_wizard_missing_library"),
+            )
+            if hasattr(self, "settings_scroll"):
+                self._activate_tab(self.settings_scroll)
+            if hasattr(self, "catalog_compat_group"):
+                self.catalog_compat_group.setChecked(False)
+            return False
 
         def _run_simple_mode_assistant(self, file_count: int) -> bool:
             if not hasattr(self, "simple_mode_check") or not self.simple_mode_check.isChecked():
@@ -10102,10 +10825,30 @@ def launch_gui(args: argparse.Namespace) -> int:
                 return
             if not self._run_simple_mode_wcs_cleaning(self._pending_files):
                 return
+            preflight_started = time.perf_counter()
+            preflight_timings: dict[str, float] = {}
+            near_runtime: NearCatalogRuntime | None = None
             try:
+                t0 = time.perf_counter()
                 config = self._build_config()
+                preflight_timings["catalog_library_open_s"] = time.perf_counter() - t0
+                t0 = time.perf_counter()
                 config, catalog_resources = apply_catalog_resources_to_config(config)
+                preflight_timings["catalog_resource_resolution_s"] = time.perf_counter() - t0
                 self._log("Catalog resources: " + json.dumps(catalog_resources.telemetry(include_paths=False), ensure_ascii=False))
+                if catalog_resources.source == "library":
+                    self._log(self._text("catalog_library_selected_log", library_id=catalog_resources.catalog_library_id or "-"))
+                    self._log(self._text("catalog_library_status_log", status=catalog_resources.library_status.value if catalog_resources.library_status else "-"))
+                t0 = time.perf_counter()
+                near_runtime = resolve_near_catalog_runtime(
+                    catalog_resources,
+                    mode=getattr(config, "near_catalog_mode", "auto"),
+                    legacy_index_root=config.blind_index_path,
+                    blind_only=bool(getattr(config, "blind_only", False)),
+                    legacy_cache_size=int(getattr(config, "near_tile_cache_size", 128) or 128),
+                )
+                preflight_timings["near_runtime_resolution_s"] = time.perf_counter() - t0
+                self._log("Near catalog preflight: " + json.dumps(near_runtime.telemetry(include_paths=False), ensure_ascii=False))
             except (ValueError, CatalogResourceResolutionError) as exc:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
@@ -10115,13 +10858,39 @@ def launch_gui(args: argparse.Namespace) -> int:
                 == ZEBLIND_4D_EXPERIMENTAL_PROFILE
             ):
                 try:
-                    loaded_manifest = self._preflight_4d_manifest_for_run(config)
-                    config = replace(
-                        config,
-                        blind_4d_manifest_path=loaded_manifest.manifest_path,
-                        blind_4d_loaded_manifest=loaded_manifest,
+                    t0 = time.perf_counter()
+                    requested_mode = Blind4DCatalogMode.normalize(getattr(config, "blind4d_catalog_mode", "auto"))
+                    external_manifest = config.blind_4d_manifest_path
+                    if catalog_resources.source != "library" and external_manifest is None:
+                        external_manifest = self._manifest_text_or_default()
+                    blind4d_runtime = resolve_blind4d_runtime(
+                        catalog_resources,
+                        mode=requested_mode,
+                        external_manifest_path=external_manifest,
                     )
-                except IndexManifestError as exc:
+                    preflight_timings["blind4d_runtime_resolution_s"] = time.perf_counter() - t0
+                    if blind4d_runtime.available and blind4d_runtime.loaded_manifest is not None:
+                        loaded_manifest = blind4d_runtime.loaded_manifest
+                        config = replace(
+                            config,
+                            blind_4d_manifest_path=loaded_manifest.manifest_path,
+                            blind_4d_loaded_manifest=loaded_manifest,
+                        )
+                        self._log(
+                            "ZeBlind 4D preflight: "
+                            + json.dumps(blind4d_runtime.telemetry(include_paths=False), ensure_ascii=False)
+                        )
+                    elif requested_mode is not Blind4DCatalogMode.AUTO:
+                        raise Blind4DRuntimeError(
+                            blind4d_runtime.error_code or "BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE",
+                            blind4d_runtime.error_message or "Blind 4D runtime unavailable",
+                        )
+                    else:
+                        self._log(
+                            "ZeBlind 4D unavailable: "
+                            + json.dumps(blind4d_runtime.telemetry(include_paths=False), ensure_ascii=False)
+                        )
+                except (Blind4DRuntimeError, IndexManifestError) as exc:
                     message = self._text("blind_4d_preflight_failed", error=str(exc))
                     self._log(message)
                     QtWidgets.QMessageBox.warning(
@@ -10129,11 +10898,18 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self._text("blind_4d_enable_failed_title"),
                         self._text(
                             "blind_4d_enable_failed_body",
-                            manifest=(config.blind_4d_manifest_path or self._manifest_text_or_default()),
+                            manifest=(config.blind_4d_manifest_path or "CatalogLibrary"),
                             error=str(exc),
                         ),
                     )
                     return
+            preflight_timings["catalog_preflight_total_s"] = time.perf_counter() - preflight_started
+            self._log(
+                self._text(
+                    "catalog_preflight_timings",
+                    payload=json.dumps({key: round(value, 4) for key, value in preflight_timings.items()}, ensure_ascii=False),
+                )
+            )
             self._results_seen = 0
             try:
                 self._log(

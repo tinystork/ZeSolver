@@ -29,6 +29,7 @@ class ProductSettings:
     blind_enabled: bool = True
     blind_only: bool = False
     near_catalog_mode: str = "auto"
+    blind4d_catalog_mode: str = "auto"
     downsample: int = 1
     fov_deg: float = 1.5
     hint_ra_deg: float | None = None
@@ -62,6 +63,7 @@ class ProductSettings:
                 "blind_enabled": self.blind_enabled,
                 "blind_only": self.blind_only,
                 "near_catalog_mode": self.near_catalog_mode,
+                "blind4d_catalog_mode": self.blind4d_catalog_mode,
                 "downsample": self.downsample,
                 "fov_deg": self.fov_deg,
             },

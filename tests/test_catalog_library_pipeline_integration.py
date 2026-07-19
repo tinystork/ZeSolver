@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -24,6 +25,14 @@ def _load_entrypoint():
     return module
 
 
+def _with_runtime_order(root: Path, order: list[str]) -> Path:
+    path = root / "catalog.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload["runtime_order"] = {"blind4d": order}
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return root
+
+
 def test_pipeline_config_uses_library_near_and_blind4d_before_legacy(tmp_path: Path) -> None:
     zs = _load_entrypoint()
     idx_lib = write_fake_4d_index(tmp_path / "d50_LIB_S_q.npz", "d50_LIB")
@@ -41,6 +50,7 @@ def test_pipeline_config_uses_library_near_and_blind4d_before_legacy(tmp_path: P
         index_paths=[idx_lib],
         strict_manifest_path=library_manifest,
     )
+    _with_runtime_order(library_root, ["blind4d-0"])
     config = zs.SolveConfig(
         db_root=tmp_path / "legacy-db",
         input_dir=tmp_path,
@@ -56,7 +66,9 @@ def test_pipeline_config_uses_library_near_and_blind4d_before_legacy(tmp_path: P
     assert resources.source == "library"
     assert resolved.db_root == (library_root / "sources" / "astap" / "d50").resolve()
     assert resolved.families == ("d50",)
-    assert resolved.blind_4d_manifest_path == library_manifest.resolve()
+    assert resolved.blind_4d_manifest_path == (library_root / "catalog.json").resolve()
+    assert resolved.blind_4d_loaded_manifest is not None
+    assert resolved.blind_4d_loaded_manifest.index_ids == ("blind4d-0",)
     assert tuple(Path(p) for p in blind_cfg.blind_astrometry_4d_index_paths) == (idx_lib.resolve(),)
 
 

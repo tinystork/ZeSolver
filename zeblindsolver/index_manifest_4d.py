@@ -99,14 +99,19 @@ def _read_json(path: Path) -> dict[str, Any]:
     return payload
 
 
-def _resolve_manifest_path(path_value: object, *, manifest_path: Path, index_root: Path | None) -> Path:
+def _resolve_manifest_path(path_value: object, *, manifest_path: Path | None, index_root: Path | None) -> Path:
     raw_text = str(path_value or "").strip()
     if not raw_text:
         raise IndexManifestSchemaError("manifest_entry_path_missing")
     raw = Path(raw_text).expanduser()
     if raw.is_absolute():
         return raw.resolve()
-    base = index_root.expanduser().resolve() if index_root is not None else manifest_path.parent
+    if index_root is not None:
+        base = index_root.expanduser().resolve()
+    elif manifest_path is not None:
+        base = manifest_path.parent
+    else:
+        raise IndexManifestSchemaError("manifest_relative_path_without_root")
     return (base / raw).resolve()
 
 
@@ -126,10 +131,19 @@ def _as_tile_tuple(value: object, *, entry_id: str) -> tuple[str, ...]:
     return tiles
 
 
-def load_4d_index_manifest(path: Path | str, *, index_root: Path | str | None = None) -> Loaded4DManifest:
-    manifest_path = Path(path).expanduser().resolve()
+def load_4d_index_manifest_payload(
+    payload: dict[str, Any],
+    *,
+    manifest_path: Path | str | None = None,
+    index_root: Path | str | None = None,
+) -> Loaded4DManifest:
+    """Validate a strict 4D manifest payload without requiring JSON materialization."""
+
+    if not isinstance(payload, dict):
+        raise IndexManifestSchemaError("manifest_json_invalid: expected object")
+    resolved_manifest_path = Path(manifest_path).expanduser().resolve() if manifest_path is not None else Path("<memory>")
+    path_for_relative = resolved_manifest_path if manifest_path is not None else None
     root = Path(index_root).expanduser().resolve() if index_root is not None else None
-    payload = _read_json(manifest_path)
     schema = str(payload.get("schema") or "")
     if schema != MANIFEST_SCHEMA:
         raise IndexManifestSchemaError(f"manifest_schema_invalid: {schema!r}")
@@ -156,7 +170,7 @@ def load_4d_index_manifest(path: Path | str, *, index_root: Path | str | None = 
         if not bool(raw_entry.get("enabled", True)):
             continue
 
-        index_path = _resolve_manifest_path(raw_entry.get("path"), manifest_path=manifest_path, index_root=root)
+        index_path = _resolve_manifest_path(raw_entry.get("path"), manifest_path=path_for_relative, index_root=root)
         if index_path in seen_paths:
             raise IndexManifestIntegrityError(f"manifest_duplicate_path: {index_path}")
         seen_paths.add(index_path)
@@ -228,11 +242,17 @@ def load_4d_index_manifest(path: Path | str, *, index_root: Path | str | None = 
         )
 
     return Loaded4DManifest(
-        manifest_path=manifest_path,
+        manifest_path=resolved_manifest_path,
         schema=schema,
         manifest_version=version,
         entries=tuple(entries),
     )
+
+
+def load_4d_index_manifest(path: Path | str, *, index_root: Path | str | None = None) -> Loaded4DManifest:
+    manifest_path = Path(path).expanduser().resolve()
+    payload = _read_json(manifest_path)
+    return load_4d_index_manifest_payload(payload, manifest_path=manifest_path, index_root=index_root)
 
 
 __all__ = [
@@ -245,5 +265,6 @@ __all__ = [
     "Loaded4DIndexEntry",
     "Loaded4DManifest",
     "load_4d_index_manifest",
+    "load_4d_index_manifest_payload",
     "sha256_file",
 ]

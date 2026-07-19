@@ -147,7 +147,6 @@ def build_presets_fov_reco_groups(owner: Any, QtWidgets: Any, preset_utils: Any,
     reco_form.addRow(owner.reco_quads_label, owner.reco_quads_value)
     reco_form.addRow(owner.reco_notes_label)
 
-    column.addLayout(form)
     column.addWidget(owner.presets_group)
     column.addWidget(owner.fov_group)
     column.addWidget(owner.reco_group)

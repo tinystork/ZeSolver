@@ -10,11 +10,16 @@ from astropy.wcs import WCS
 from zeblindsolver.metadata_solver import NearSolveConfig
 
 from zesolver.catalog_resources import (
+    BLIND4D_LIBRARY_NO_INDEXES,
+    Blind4DCatalogMode,
+    Blind4DRuntimeError,
+    Blind4DRuntimeSelection,
     CatalogResourceResolutionError,
     NearCatalogMode,
     NearCatalogRuntimeError,
     SolverCatalogResources,
     resolve_catalog_resources,
+    resolve_blind4d_runtime,
     resolve_near_catalog_runtime,
 )
 from zesolver.settings import ProductSettings, RuntimeOptions, build_solver_configuration
@@ -141,6 +146,8 @@ class SolverPipeline:
         self.near_solver = near_solver or ExistingNearSolverPort()
         self.blind_solver = blind_solver or ProductionBlindSolverPort()
         self.last_telemetry: dict[str, object] | None = None
+        self._blind4d_runtime_cache_key: tuple[object, ...] | None = None
+        self._blind4d_runtime_cache_value: Blind4DRuntimeSelection | None = None
 
     @property
     def profile_ids(self) -> dict[str, str]:
@@ -163,6 +170,9 @@ class SolverPipeline:
         telemetry.catalog_coverage_fraction = resources.blind4d_coverage_fraction
         telemetry.warnings.extend(resources.warnings)
         catalog_status = telemetry.catalog_status
+        blind4d_runtime = self._blind4d_runtime(resources)
+        telemetry.blind4d_runtime.update(blind4d_runtime.telemetry(include_paths=False))
+        telemetry.warnings.extend(blind4d_runtime.warnings)
 
         if self._cancelled():
             return self._finish_failure(request, telemetry, SolveStatus.CANCELLED, catalog_status, "cancelled_before_near")
@@ -203,7 +213,13 @@ class SolverPipeline:
         if self._cancelled():
             return self._finish_failure(request, telemetry, SolveStatus.CANCELLED, catalog_status, "cancelled_between_near_and_blind")
 
-        if self.configuration.product_settings.blind_enabled and resources.blind4d_available:
+        requested_blind4d_mode = blind4d_runtime.mode_requested
+        should_attempt_blind = bool(self.configuration.product_settings.blind_enabled) and (
+            blind4d_runtime.available
+            or requested_blind4d_mode is not Blind4DCatalogMode.AUTO
+            or (resources.source == "library" and blind4d_runtime.error_code != BLIND4D_LIBRARY_NO_INDEXES)
+        )
+        if should_attempt_blind:
             telemetry.blind_attempted = True
             try:
                 blind_result = self.blind_solver.solve(request, resources=resources, configuration=self.configuration)
@@ -215,7 +231,7 @@ class SolverPipeline:
                 self.last_telemetry = dict(telemetry.finish(final_status=final.status.value, wcs_written=final.wcs_written))
                 return final
 
-        status = SolveStatus.UNSOLVED if (should_attempt_near or resources.blind4d_available) else SolveStatus.CATALOG_UNAVAILABLE
+        status = SolveStatus.UNSOLVED if (should_attempt_near or should_attempt_blind) else SolveStatus.CATALOG_UNAVAILABLE
         return self._finish_failure(request, telemetry, status, catalog_status, "no_solver_produced_solution")
 
     def _resources(self) -> SolverCatalogResources:
@@ -226,6 +242,44 @@ class SolverPipeline:
             return resolve_catalog_resources(catalog_library=product.catalog_library_path, enable_environment_discovery=True)
         except CatalogResourceResolutionError:
             raise
+
+    def _blind4d_runtime(self, resources: SolverCatalogResources) -> Blind4DRuntimeSelection:
+        mode = getattr(self.configuration.product_settings, "blind4d_catalog_mode", "auto")
+        external = resources.blind4d_manifest_path
+        key = (
+            id(resources),
+            str(mode),
+            str(external) if external is not None else None,
+            resources.catalog_library_id,
+            resources.catalog_manifest_fingerprint,
+            tuple(index.id for index in resources.blind4d_indexes),
+            tuple(index.sha256 for index in resources.blind4d_indexes),
+        )
+        if key == self._blind4d_runtime_cache_key and self._blind4d_runtime_cache_value is not None:
+            return self._blind4d_runtime_cache_value
+        try:
+            selection = resolve_blind4d_runtime(
+                resources,
+                mode=mode,
+                external_manifest_path=external,
+            )
+        except Blind4DRuntimeError as exc:
+            try:
+                requested = Blind4DCatalogMode.normalize(mode)
+            except Exception:
+                requested = Blind4DCatalogMode.AUTO
+            selection = Blind4DRuntimeSelection(
+                mode_requested=requested,
+                mode_effective=None,
+                source="unavailable",
+                coverage=resources.coverage,
+                library_id=resources.catalog_library_id,
+                error_code=exc.code,
+                error_message=str(exc),
+            )
+        self._blind4d_runtime_cache_key = key
+        self._blind4d_runtime_cache_value = selection
+        return selection
 
     def _cancelled(self) -> bool:
         token = self.configuration.runtime_options.cancel_token
