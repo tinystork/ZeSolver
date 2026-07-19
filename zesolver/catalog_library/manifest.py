@@ -17,10 +17,13 @@ from .models import (
     CatalogSource,
     CatalogStatus,
     CatalogValidationReport,
+    FingerprintPolicy,
     IntegrityFile,
     IssueSeverity,
+    ParameterCompleteness,
     PathKind,
     PathReference,
+    SourceShard,
     SUPPORTED_INDEX_ENGINES,
     SUPPORTED_MANIFEST_SCHEMA_VERSION,
     SUPPORTED_SOURCE_FAMILIES,
@@ -165,10 +168,14 @@ def resolve_path_reference(payload: object, *, root: Path, field: str) -> PathRe
         raise CatalogManifestError(f"PATH_VALUE_MISSING: {field}")
     if "$" in value:
         raise CatalogManifestError(f"PATH_ENV_EXPANSION_NOT_ALLOWED: {field}")
-    raw = Path(value)
+    normalized = _normalize_manifest_path_text(value) if kind is PathKind.RELATIVE else value
+    raw = Path(normalized)
     if kind is PathKind.RELATIVE:
-        if raw.is_absolute() or "~" in raw.parts:
+        parts = _portable_parts(value)
+        if _looks_absolute_any_platform(value) or "~" in parts:
             raise CatalogManifestError(f"PATH_RELATIVE_INVALID: {field}: {value}")
+        if any(part == ".." for part in parts):
+            raise CatalogManifestError(f"PATH_ESCAPES_LIBRARY: {field}: {value}")
         resolved = (root / raw).resolve()
         try:
             resolved.relative_to(root.resolve())
@@ -200,6 +207,13 @@ def _source_from_payload(payload: object, *, root: Path) -> CatalogSource:
         integrity_files=_integrity_files(payload.get("integrity"), root=root),
         provenance=dict(payload.get("provenance") or {}),
         status=status,
+        families=_families_from_payload(payload, family),
+        mode=str(payload.get("mode") or ("external-reference" if payload.get("path", {}).get("kind") == "external_reference" else "managed")),
+        path_policy=str(payload.get("path_policy") or payload.get("path", {}).get("kind") or "relative"),
+        shards=_source_shards(payload.get("shards"), root=root, base_ref=resolve_path_reference(payload.get("path"), root=root, field=f"source[{family}].path")),
+        layout_fingerprint=_optional_str(payload.get("layout_fingerprint")),
+        reader_version=_optional_str(payload.get("reader_version")),
+        fingerprint_policy=_fingerprint_policy(payload.get("fingerprint_policy")),
     )
 
 
@@ -228,6 +242,14 @@ def _index_from_payload(payload: object, *, root: Path) -> CatalogIndex:
         parameters=dict(payload.get("parameters") or {}),
         scale_range_arcsec=scale_tuple,
         compatibility=dict(payload.get("compatibility") or {}),
+        category=str(payload.get("category") or ("compatibility" if str(payload.get("engine") or "") == "historical" else "product")),
+        families=tuple(str(v).lower() for v in (payload.get("families") or ()) if str(v)),
+        derived_files=_integrity_files({"files": payload.get("derived_files") or []}, root=root),
+        source_file_refs=tuple(str(v) for v in (payload.get("source_file_refs") or ()) if str(v)),
+        build_parameters=dict(payload.get("build_parameters") or {}),
+        parameter_status=_parameter_status(payload.get("parameter_status")),
+        provenance_fingerprint=_optional_str(payload.get("provenance_fingerprint")),
+        reconstruction_status=str(payload.get("reconstruction_status") or "UNKNOWN"),
     )
 
 
@@ -242,10 +264,14 @@ def _integrity_files(payload: object, *, root: Path) -> tuple[IntegrityFile, ...
         if not isinstance(item, dict):
             raise CatalogManifestError("INTEGRITY_FILE_INVALID")
         rel = _as_nonempty_str(item.get("path"), "integrity.file.path")
-        if Path(rel).is_absolute():
+        normalized = _normalize_manifest_path_text(rel)
+        if _looks_absolute_any_platform(rel):
             resolved = Path(rel).expanduser().resolve()
         else:
-            resolved = (root / rel).resolve()
+            parts = _portable_parts(rel)
+            if any(part == ".." for part in parts):
+                raise CatalogManifestError(f"PATH_ESCAPES_LIBRARY: integrity.file.path: {rel}")
+            resolved = (root / normalized).resolve()
             try:
                 resolved.relative_to(root.resolve())
             except ValueError as exc:
@@ -256,9 +282,45 @@ def _integrity_files(payload: object, *, root: Path) -> tuple[IntegrityFile, ...
                 sha256=_optional_str(item.get("sha256")),
                 size_bytes=_as_optional_int(item.get("size_bytes"), "integrity.file.size_bytes"),
                 resolved_path=resolved,
+                mtime_ns=_as_optional_int(item.get("mtime_ns"), "integrity.file.mtime_ns"),
             )
         )
     return tuple(result)
+
+
+def _source_shards(payload: object, *, root: Path, base_ref: PathReference) -> tuple[SourceShard, ...]:
+    if payload is None:
+        return ()
+    if not isinstance(payload, list):
+        raise CatalogManifestError("SOURCE_SHARDS_INVALID")
+    shards: list[SourceShard] = []
+    for item in payload:
+        if not isinstance(item, dict):
+            raise CatalogManifestError("SOURCE_SHARD_INVALID")
+        rel = _as_nonempty_str(item.get("path"), "source.shard.path")
+        normalized = _normalize_manifest_path_text(rel)
+        if _looks_absolute_any_platform(rel):
+            raise CatalogManifestError(f"PATH_ABSOLUTE_NOT_ALLOWED: source.shard.path: {rel}")
+        if any(part == ".." for part in _portable_parts(rel)):
+            raise CatalogManifestError(f"PATH_ESCAPES_LIBRARY: source.shard.path: {rel}")
+        resolved = (base_ref.resolved / normalized).resolve()
+        try:
+            resolved.relative_to(base_ref.resolved)
+        except ValueError as exc:
+            raise CatalogManifestError(f"PATH_ESCAPES_LIBRARY: source.shard.path: {rel}") from exc
+        shards.append(
+            SourceShard(
+                path=rel,
+                family=str(item.get("family") or "").lower(),
+                tile_code=_optional_str(item.get("tile_code")),
+                size_bytes=_as_optional_int(item.get("size_bytes"), "source.shard.size_bytes"),
+                sha256=_optional_str(item.get("sha256")),
+                mtime_ns=_as_optional_int(item.get("mtime_ns"), "source.shard.mtime_ns"),
+                status=_data_status(str(item.get("status") or "UNVERIFIED")),
+                resolved_path=resolved,
+            )
+        )
+    return tuple(shards)
 
 
 def _as_nonempty_str(value: object, field: str) -> str:
@@ -314,6 +376,50 @@ def _data_status(value: str) -> CatalogDataStatus:
         return CatalogDataStatus(value)
     except ValueError as exc:
         raise CatalogManifestError(f"DATA_STATUS_INVALID: {value}") from exc
+
+
+def _fingerprint_policy(value: object) -> FingerprintPolicy | None:
+    if value is None:
+        return None
+    try:
+        return FingerprintPolicy(str(value).strip().lower())
+    except ValueError as exc:
+        raise CatalogManifestError(f"FINGERPRINT_POLICY_INVALID: {value}") from exc
+
+
+def _parameter_status(value: object) -> ParameterCompleteness:
+    if value is None:
+        return ParameterCompleteness.UNKNOWN
+    try:
+        return ParameterCompleteness(str(value))
+    except ValueError as exc:
+        raise CatalogManifestError(f"PARAMETER_STATUS_INVALID: {value}") from exc
+
+
+def _families_from_payload(payload: dict[str, Any], family: str) -> tuple[str, ...]:
+    raw = payload.get("families")
+    if isinstance(raw, list):
+        families = tuple(str(v).lower() for v in raw if str(v))
+        return families or (family,)
+    return (family,)
+
+
+def _normalize_manifest_path_text(value: str) -> str:
+    return value.replace("\\", "/")
+
+
+def _portable_parts(value: str) -> tuple[str, ...]:
+    return tuple(part for part in _normalize_manifest_path_text(value).split("/") if part not in {"", "."})
+
+
+def _looks_absolute_any_platform(value: str) -> bool:
+    text = value.strip()
+    if Path(text).expanduser().is_absolute():
+        return True
+    normalized = text.replace("\\", "/")
+    if normalized.startswith("//"):
+        return True
+    return len(normalized) >= 3 and normalized[1] == ":" and normalized[2] == "/"
 
 
 def assert_supported_manifest_values(manifest: CatalogManifest) -> None:

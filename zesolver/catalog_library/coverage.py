@@ -27,7 +27,9 @@ def coverage_from_payload(payload: object, *, provenance: str | None = None) -> 
         dec_min_deg=_float_or_none(payload.get("dec_min_deg")),
         dec_max_deg=_float_or_none(payload.get("dec_max_deg")),
         ra_segments_deg=ra_segments,
-        covered_tiles=len(set(tile_keys)),
+        covered_tiles=int(payload.get("covered_tiles") or len(set(tile_keys))),
+        total_tiles=_int_or_none(payload.get("total_tiles")),
+        fraction=_float_or_none(payload.get("fraction")),
         provenance=provenance,
         notes=str(payload.get("notes") or ""),
     )
@@ -117,6 +119,15 @@ def _coverage_status(value: str) -> CoverageStatus:
 
 def _float_or_none(value: object) -> float | None:
     if value is None:
+        return None
+
+
+def _int_or_none(value: object) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except Exception:
         return None
     try:
         return float(value)

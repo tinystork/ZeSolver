@@ -54,6 +54,8 @@ class NearCatalogMode(str, Enum):
 
     @classmethod
     def normalize(cls, value: object) -> "NearCatalogMode":
+        if isinstance(value, cls):
+            return value
         raw = str(value or cls.AUTO.value).strip().lower().replace("_", "-")
         aliases = {
             "astap": cls.ASTAP_NATIVE.value,

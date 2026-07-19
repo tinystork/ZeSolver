@@ -80,6 +80,12 @@
           "type": "string"
         }
       }
+    },
+    "compatibility_resources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/compatibility_resource"
+      }
     }
   },
   "$defs": {
@@ -107,6 +113,10 @@
         "MISSING",
         "INCOMPATIBLE",
         "CORRUPT",
+        "UNVERIFIED",
+        "FAST_VERIFIED",
+        "FULL_VERIFIED",
+        "MISMATCH",
         "EXTERNAL_REFERENCE"
       ]
     },
@@ -136,9 +146,24 @@
           "type": "string",
           "enum": ["d05", "d20", "d50", "d80", "v50", "g05"]
         },
+        "families": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["d05", "d20", "d50", "d80", "v50", "g05"]
+          }
+        },
         "format": {
           "type": "string",
           "enum": ["1476-5", "1476-6", "290-5"]
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["managed", "external-reference"]
+        },
+        "path_policy": {
+          "type": "string",
+          "enum": ["relative", "external_reference"]
         },
         "path": {
           "$ref": "#/$defs/path_ref"
@@ -150,8 +175,24 @@
         "layout": {
           "type": ["string", "null"]
         },
+        "layout_fingerprint": {
+          "type": ["string", "null"]
+        },
+        "reader_version": {
+          "type": ["string", "null"]
+        },
+        "fingerprint_policy": {
+          "type": ["string", "null"],
+          "enum": ["fast", "full", null]
+        },
         "coverage": {
           "$ref": "#/$defs/coverage"
+        },
+        "shards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source_shard"
+          }
         },
         "integrity": {
           "$ref": "#/$defs/integrity_set"
@@ -187,6 +228,10 @@
           "type": "string",
           "enum": ["blind4d", "historical"]
         },
+        "category": {
+          "type": "string",
+          "enum": ["product", "compatibility"]
+        },
         "schema": {
           "type": "string"
         },
@@ -211,9 +256,30 @@
             "type": "string"
           }
         },
+        "families": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "parameters": {
           "type": "object",
           "additionalProperties": true
+        },
+        "build_parameters": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "parameter_status": {
+          "type": "string",
+          "enum": ["KNOWN", "PARTIAL", "UNKNOWN"]
+        },
+        "provenance_fingerprint": {
+          "type": ["string", "null"]
+        },
+        "reconstruction_status": {
+          "type": "string",
+          "enum": ["KNOWN", "PARTIAL", "UNKNOWN"]
         },
         "scale_range_arcsec": {
           "type": ["object", "null"],
@@ -233,6 +299,18 @@
         },
         "integrity": {
           "$ref": "#/$defs/integrity_set"
+        },
+        "derived_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/integrity_file"
+          }
+        },
+        "source_file_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
         },
         "compatibility": {
           "type": "object",
@@ -285,6 +363,19 @@
             "maxItems": 2
           }
         },
+        "covered_tiles": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "total_tiles": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "fraction": {
+          "type": ["number", "null"],
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
         "notes": {
           "type": "string"
         }
@@ -301,22 +392,59 @@
         "files": {
           "type": "array",
           "items": {
-            "type": "object",
-            "required": ["path", "sha256"],
-            "additionalProperties": false,
-            "properties": {
-              "path": {
-                "type": "string"
-              },
-              "sha256": {
-                "type": ["string", "null"]
-              },
-              "size_bytes": {
-                "type": ["integer", "null"],
-                "minimum": 0
-              }
-            }
+            "$ref": "#/$defs/integrity_file"
           }
+        }
+      }
+    },
+    "integrity_file": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": ["string", "null"]
+        },
+        "size_bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "mtime_ns": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      }
+    },
+    "source_shard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "family", "status"],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "family": {
+          "type": "string"
+        },
+        "tile_code": {
+          "type": ["string", "null"]
+        },
+        "size_bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "sha256": {
+          "type": ["string", "null"]
+        },
+        "mtime_ns": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "status": {
+          "$ref": "#/$defs/data_status"
         }
       }
     },
@@ -339,6 +467,38 @@
         { "$ref": "#/$defs/path_ref" },
         { "type": "null" }
       ]
+    },
+    "compatibility_resource": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "category", "path", "status"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string",
+          "const": "compatibility"
+        },
+        "path": {
+          "$ref": "#/$defs/path_ref"
+        },
+        "manifest_path": {
+          "$ref": "#/$defs/optional_path_ref"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/integrity_file"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/data_status"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
     }
   }
 }
