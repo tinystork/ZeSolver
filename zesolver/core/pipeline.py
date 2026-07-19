@@ -9,7 +9,14 @@ from astropy.wcs import WCS
 
 from zeblindsolver.metadata_solver import NearSolveConfig
 
-from zesolver.catalog_resources import CatalogResourceResolutionError, SolverCatalogResources, resolve_catalog_resources
+from zesolver.catalog_resources import (
+    CatalogResourceResolutionError,
+    NearCatalogMode,
+    NearCatalogRuntimeError,
+    SolverCatalogResources,
+    resolve_catalog_resources,
+    resolve_near_catalog_runtime,
+)
 from zesolver.settings import ProductSettings, RuntimeOptions, build_solver_configuration
 from zesolver.zeblindsolver import near_solve
 
@@ -35,14 +42,25 @@ class ExistingNearSolverPort:
     """Thin adapter over the existing Near wrapper."""
 
     def solve(self, request: SolveRequest, *, resources: SolverCatalogResources, configuration) -> EngineSolveResult:
-        index_root = resources.legacy_index_root or (resources.near.root if resources.near else None)
-        if index_root is None:
-            return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="NEAR", error="near_index_root_unavailable")
+        values = configuration.legacy_solve_config_values
+        try:
+            runtime = resolve_near_catalog_runtime(
+                resources,
+                mode=str(values.get("near_catalog_mode", "auto") or "auto"),
+                legacy_index_root=resources.legacy_index_root,
+                blind_only=bool(configuration.product_settings.blind_only),
+                legacy_cache_size=int(values.get("near_tile_cache_size", 128) or 128),
+            )
+        except NearCatalogRuntimeError as exc:
+            return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="NEAR", error=f"{exc.code}: {exc}")
+        if runtime.provider is None:
+            error = runtime.error_message or runtime.error_code or "near_catalog_provider_unavailable"
+            return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="NEAR", error=str(error))
+        index_root = runtime.legacy_index_root if runtime.effective_mode is NearCatalogMode.LEGACY_INDEX else None
         target = request.output_path or request.input_path
         if target != request.input_path:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(request.input_path, target)
-        values = configuration.legacy_solve_config_values
         near_cfg = NearSolveConfig(
             family=(resources.near.families[0] if resources.near and resources.near.families else "d50"),
             max_tile_candidates=int(values.get("near_max_tile_candidates", 48) or 48),
@@ -63,13 +81,17 @@ class ExistingNearSolverPort:
         )
         result = near_solve(
             str(target),
-            str(index_root),
+            str(index_root) if index_root is not None else None,
+            catalog_provider=runtime.provider,
             config=near_cfg,
             skip_if_valid=False,
             fallback_to_blind=False,
         )
         stats = result.get("stats") if isinstance(result, dict) else {}
         stats = stats if isinstance(stats, dict) else {}
+        stats.update(runtime.telemetry(include_paths=False))
+        if isinstance(result, dict):
+            result["stats"] = stats
         wcs_obj = None
         if result.get("success"):
             with fits.open(target, memmap=False) as hdul:
@@ -156,7 +178,17 @@ class SolverPipeline:
                 preflight.error,
             )
 
-        if resources.near_available and not self.configuration.product_settings.blind_only:
+        near_mode = str(getattr(self.configuration.product_settings, "near_catalog_mode", "auto") or "auto").strip().lower()
+        should_attempt_near = (
+            not self.configuration.product_settings.blind_only
+            and (
+                resources.near_available
+                or resources.legacy_index_root is not None
+                or resources.source == "library"
+                or near_mode != "auto"
+            )
+        )
+        if should_attempt_near:
             telemetry.near_attempted = True
             try:
                 near_result = self.near_solver.solve(request, resources=resources, configuration=self.configuration)
@@ -183,7 +215,7 @@ class SolverPipeline:
                 self.last_telemetry = dict(telemetry.finish(final_status=final.status.value, wcs_written=final.wcs_written))
                 return final
 
-        status = SolveStatus.UNSOLVED if (resources.near_available or resources.blind4d_available) else SolveStatus.CATALOG_UNAVAILABLE
+        status = SolveStatus.UNSOLVED if (should_attempt_near or resources.blind4d_available) else SolveStatus.CATALOG_UNAVAILABLE
         return self._finish_failure(request, telemetry, status, catalog_status, "no_solver_produced_solution")
 
     def _resources(self) -> SolverCatalogResources:

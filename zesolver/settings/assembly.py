@@ -46,6 +46,7 @@ def build_solver_configuration(
             "formats": product_settings.input_formats,
             "blind_enabled": product_settings.blind_enabled,
             "blind_only": product_settings.blind_only,
+            "near_catalog_mode": product_settings.near_catalog_mode,
             "blind_backend_profile": blind.values["blind_backend_profile"],
             "astrometry_api_url": product_settings.astrometry_api_url,
             "astrometry_api_key": product_settings.astrometry_api_key,

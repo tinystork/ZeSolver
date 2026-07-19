@@ -36,6 +36,7 @@ class PipelineGuiRunner:
     def run(self, request: GuiSolveRequest) -> GuiRunSummary:
         self._running = True
         emitted: list[GuiFileResult] = []
+        emitted_paths: set[Path] = set()
         try:
             solve_requests = tuple(
                 SolveRequest(
@@ -61,7 +62,12 @@ class PipelineGuiRunner:
             def on_progress(result: SolveResult, progress) -> None:
                 gui_result = gui_result_from_solve_result(result, selected_engine=request.engine_mode)
                 emitted.append(gui_result)
-                if self._result_callback is not None:
+                try:
+                    key = Path(gui_result.path).resolve()
+                except Exception:
+                    key = Path(gui_result.path)
+                if self._result_callback is not None and key not in emitted_paths:
+                    emitted_paths.add(key)
                     self._result_callback(gui_result)
                 if self._progress_callback is not None:
                     self._progress_callback(gui_progress_from_batch(result, progress))
@@ -76,9 +82,14 @@ class PipelineGuiRunner:
                 )
             )
             final = tuple(gui_result_from_solve_result(item, selected_engine=request.engine_mode) for item in batch_result.results)
-            if len(emitted) != len(final):
+            if len(emitted_paths) != len(final):
                 for item in final:
-                    if self._result_callback is not None:
+                    try:
+                        key = Path(item.path).resolve()
+                    except Exception:
+                        key = Path(item.path)
+                    if self._result_callback is not None and key not in emitted_paths:
+                        emitted_paths.add(key)
                         self._result_callback(item)
             return GuiRunSummary(
                 selected_engine=request.engine_mode,

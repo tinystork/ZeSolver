@@ -43,6 +43,7 @@ from zeblindsolver.fits_utils import (
     to_luminance_for_solve as _core_to_luminance_for_solve,
 )
 from zeblindsolver.metadata_solver import NearSolveConfig as InternalNearConfig, solve_near as _internal_solve_near
+from zeblindsolver.near_catalog_provider import NearCatalogProvider
 from zeblindsolver.zeblindsolver import SolveConfig as InternalBlindConfig, solve_blind as _internal_solve_blind
 
 
@@ -326,9 +327,10 @@ def blind_solve(
 
 def near_solve(
     fits_path: str,
-    index_root: str,
+    index_root: str | None,
     *,
     config: Optional[InternalNearConfig] = None,
+    catalog_provider: NearCatalogProvider | None = None,
     log: Optional[Callable[[str], None]] = None,
     skip_if_valid: bool = True,
     fallback_to_blind: bool = True,
@@ -337,9 +339,15 @@ def near_solve(
     logger = log or _default_log
     start = time.perf_counter()
     fits_path = str(Path(fits_path).expanduser())
-    index_root = str(Path(index_root).expanduser())
+    index_root_text = str(Path(index_root).expanduser()) if index_root is not None else ""
     strict_flag = bool(getattr(config, "astap_iso_strict", True)) if config is not None else True
-    logger(f"[ZENEAR] starting (index_root={index_root}, astap_iso_strict={str(strict_flag).lower()})")
+    provider_kind = getattr(catalog_provider, "kind", "legacy_index")
+    logger(
+        "[ZENEAR] starting "
+        f"(index_root={index_root_text or '<provider>'}, "
+        f"astap_iso_strict={str(strict_flag).lower()}, "
+        f"near_catalog_provider={provider_kind})"
+    )
     if skip_if_valid:
         try:
             with fits.open(fits_path, mode="readonly", memmap=False) as hdul:
@@ -351,7 +359,7 @@ def near_solve(
                         success=True,
                         message=message,
                         elapsed_sec=elapsed,
-                        tried_dbs=[index_root],
+                        tried_dbs=[index_root_text] if index_root_text else [provider_kind],
                         used_db=None,
                         wrote_wcs=False,
                         updated_keywords={},
@@ -363,7 +371,13 @@ def near_solve(
     try:
         if cancel_check and cancel_check():
             raise BlindSolverRuntimeError("cancelled")
-        solution = _internal_solve_near(fits_path, index_root, config=config, cancel_check=cancel_check)
+        solution = _internal_solve_near(
+            fits_path,
+            index_root_text or None,
+            config=config,
+            catalog_provider=catalog_provider,
+            cancel_check=cancel_check,
+        )
     except InvalidInputError:
         raise
     except Exception as exc:
@@ -380,7 +394,7 @@ def near_solve(
         success=solution.success,
         message=solution.message,
         elapsed_sec=elapsed,
-        tried_dbs=[index_root],
+        tried_dbs=[index_root_text] if index_root_text else [provider_kind],
         used_db=solution.tile_key,
         wrote_wcs=solution.success,
         updated_keywords=solution.header_updates,
@@ -399,7 +413,7 @@ def near_solve(
             success=False,
             message="cancelled",
             elapsed_sec=elapsed,
-            tried_dbs=[index_root],
+            tried_dbs=[index_root_text] if index_root_text else [provider_kind],
             used_db=None,
             wrote_wcs=False,
             updated_keywords={},
@@ -412,7 +426,7 @@ def near_solve(
         success=False,
         message=f"near failed: {solution.message}; BLIND4D_CONFIGURATION_REQUIRED",
         elapsed_sec=elapsed,
-        tried_dbs=[index_root],
+        tried_dbs=[index_root_text] if index_root_text else [provider_kind],
         used_db=None,
         wrote_wcs=False,
         updated_keywords={},

@@ -7,10 +7,12 @@ own solver thresholds, candidate limits, quad parameters or GUI options.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Mapping
 
 from zeblindsolver.index_manifest_4d import IndexManifestError, load_4d_index_manifest
+from zeblindsolver.near_catalog_provider import AstapNearCatalogProvider, LegacyIndexNearCatalogProvider, NearCatalogProvider, NearCatalogProviderError
 
 from .catalog_library import (
     Blind4DIndexDescriptor,
@@ -35,6 +37,198 @@ ENVIRONMENT_CATALOG_KEYS = (
 
 class CatalogResourceResolutionError(RuntimeError):
     """Raised when explicitly requested catalogue resources cannot be used."""
+
+
+class NearCatalogRuntimeError(CatalogResourceResolutionError):
+    """Raised when the requested ZeNear catalog runtime cannot be assembled."""
+
+    def __init__(self, code: str, message: str | None = None) -> None:
+        self.code = code
+        super().__init__(message or code)
+
+
+class NearCatalogMode(str, Enum):
+    AUTO = "auto"
+    ASTAP_NATIVE = "astap-native"
+    LEGACY_INDEX = "legacy-index"
+
+    @classmethod
+    def normalize(cls, value: object) -> "NearCatalogMode":
+        raw = str(value or cls.AUTO.value).strip().lower().replace("_", "-")
+        aliases = {
+            "astap": cls.ASTAP_NATIVE.value,
+            "astap-native": cls.ASTAP_NATIVE.value,
+            "native": cls.ASTAP_NATIVE.value,
+            "legacy": cls.LEGACY_INDEX.value,
+            "legacy-index": cls.LEGACY_INDEX.value,
+            "legacy_index": cls.LEGACY_INDEX.value,
+        }
+        raw = aliases.get(raw, raw)
+        for mode in cls:
+            if raw == mode.value:
+                return mode
+        raise NearCatalogRuntimeError("NEAR_CATALOG_MODE_INVALID", f"NEAR_CATALOG_MODE_INVALID: {value}")
+
+
+ASTAP_NEAR_RESOURCE_REQUIRED = "ASTAP_NEAR_RESOURCE_REQUIRED"
+ASTAP_NEAR_PROVIDER_INVALID = "ASTAP_NEAR_PROVIDER_INVALID"
+LEGACY_NEAR_INDEX_REQUIRED = "LEGACY_NEAR_INDEX_REQUIRED"
+LEGACY_NEAR_INDEX_INVALID = "LEGACY_NEAR_INDEX_INVALID"
+NEAR_CATALOG_MODE_INVALID = "NEAR_CATALOG_MODE_INVALID"
+NEAR_CATALOG_FAMILY_UNAVAILABLE = "NEAR_CATALOG_FAMILY_UNAVAILABLE"
+
+
+@dataclass(frozen=True, slots=True)
+class NearCatalogRuntime:
+    requested_mode: NearCatalogMode
+    effective_mode: NearCatalogMode | None
+    provider: NearCatalogProvider | None
+    provider_kind: str | None
+    source: str
+    legacy_index_root: Path | None = None
+    warnings: tuple[str, ...] = ()
+    error_code: str | None = None
+    error_message: str | None = None
+
+    @property
+    def available(self) -> bool:
+        return self.provider is not None
+
+    def telemetry(self, *, include_paths: bool = False) -> dict[str, object]:
+        data: dict[str, object] = {
+            "near_catalog_mode_requested": self.requested_mode.value,
+            "near_catalog_mode_effective": self.effective_mode.value if self.effective_mode else None,
+            "near_catalog_provider": self.provider_kind,
+            "near_catalog_source": self.source,
+            "near_catalog_fallback_used": False,
+            "near_catalog_runtime_error": self.error_code,
+            "near_catalog_warnings": list(self.warnings),
+        }
+        if self.provider is not None:
+            try:
+                data.update(self.provider.telemetry())
+            except Exception:
+                data["near_catalog_provider"] = self.provider_kind
+        data["near_catalog_mode_requested"] = self.requested_mode.value
+        data["near_catalog_mode_effective"] = self.effective_mode.value if self.effective_mode else None
+        data["near_catalog_source"] = self.source
+        data["near_catalog_runtime_error"] = self.error_code
+        data["near_catalog_warnings"] = list(self.warnings)
+        if include_paths:
+            data["legacy_index_root"] = str(self.legacy_index_root) if self.legacy_index_root else None
+        return data
+
+
+def build_near_catalog_provider(resources: "SolverCatalogResources") -> AstapNearCatalogProvider:
+    """Build an explicit ASTAP-native ZeNear provider from resolved resources.
+
+    This adapter is intentionally not called by the product default path in
+    P1D-1A.  It exists so P1D-1B can switch deliberately without letting the
+    `zeblindsolver` engine import `zesolver` or `CatalogLibrary`.
+    """
+
+    if resources.near is None:
+        raise CatalogResourceResolutionError("near_catalog_provider_unavailable")
+    return AstapNearCatalogProvider(resources.near.root, families=resources.near.families)
+
+
+def resolve_near_catalog_runtime(
+    resources: "SolverCatalogResources",
+    *,
+    mode: NearCatalogMode | str = NearCatalogMode.AUTO,
+    legacy_index_root: str | Path | None = None,
+    blind_only: bool = False,
+    legacy_cache_size: int = 128,
+) -> NearCatalogRuntime:
+    requested = NearCatalogMode.normalize(mode)
+    legacy_root = Path(legacy_index_root).expanduser() if legacy_index_root is not None else resources.legacy_index_root
+    if blind_only:
+        return NearCatalogRuntime(
+            requested_mode=requested,
+            effective_mode=None,
+            provider=None,
+            provider_kind=None,
+            source="blind_only",
+            legacy_index_root=legacy_root,
+        )
+    has_explicit_library = resources.source == "library"
+
+    if requested is NearCatalogMode.AUTO:
+        if has_explicit_library:
+            if resources.near is None:
+                return NearCatalogRuntime(
+                    requested_mode=requested,
+                    effective_mode=NearCatalogMode.ASTAP_NATIVE,
+                    provider=None,
+                    provider_kind=None,
+                    source="library",
+                    legacy_index_root=None,
+                    error_code=ASTAP_NEAR_RESOURCE_REQUIRED,
+                    error_message=ASTAP_NEAR_RESOURCE_REQUIRED,
+                )
+            return _astap_runtime(resources, requested)
+        if legacy_root is not None:
+            return _legacy_runtime(requested, legacy_root, cache_size=legacy_cache_size)
+        return NearCatalogRuntime(
+            requested_mode=requested,
+            effective_mode=None,
+            provider=None,
+            provider_kind=None,
+            source=resources.source,
+            legacy_index_root=None,
+            warnings=("near_catalog_unavailable",),
+        )
+
+    if requested is NearCatalogMode.ASTAP_NATIVE:
+        if resources.near is None:
+            raise NearCatalogRuntimeError(ASTAP_NEAR_RESOURCE_REQUIRED)
+        return _astap_runtime(resources, requested)
+
+    if requested is NearCatalogMode.LEGACY_INDEX:
+        if legacy_root is None:
+            raise NearCatalogRuntimeError(LEGACY_NEAR_INDEX_REQUIRED)
+        return _legacy_runtime(requested, legacy_root, cache_size=legacy_cache_size)
+
+    raise NearCatalogRuntimeError(NEAR_CATALOG_MODE_INVALID, f"{NEAR_CATALOG_MODE_INVALID}: {requested}")
+
+
+def _astap_runtime(resources: "SolverCatalogResources", requested: NearCatalogMode) -> NearCatalogRuntime:
+    try:
+        provider = build_near_catalog_provider(resources)
+    except NearCatalogProviderError as exc:
+        text = str(exc)
+        if "missing requested family" in text.lower() or "no usable near tiles" in text.lower():
+            code = NEAR_CATALOG_FAMILY_UNAVAILABLE
+        else:
+            code = ASTAP_NEAR_PROVIDER_INVALID
+        raise NearCatalogRuntimeError(code, f"{code}: {exc}") from exc
+    except Exception as exc:
+        raise NearCatalogRuntimeError(ASTAP_NEAR_PROVIDER_INVALID, f"{ASTAP_NEAR_PROVIDER_INVALID}: {exc}") from exc
+    return NearCatalogRuntime(
+        requested_mode=requested,
+        effective_mode=NearCatalogMode.ASTAP_NATIVE,
+        provider=provider,
+        provider_kind=provider.kind,
+        source=resources.source,
+        legacy_index_root=None,
+    )
+
+
+def _legacy_runtime(requested: NearCatalogMode, legacy_root: Path, *, cache_size: int) -> NearCatalogRuntime:
+    try:
+        provider = LegacyIndexNearCatalogProvider(legacy_root, cache_size=cache_size)
+    except Exception as exc:
+        raise NearCatalogRuntimeError(LEGACY_NEAR_INDEX_INVALID, f"{LEGACY_NEAR_INDEX_INVALID}: {exc}") from exc
+    warnings = ("legacy_near_catalog_runtime_selected",) if requested is NearCatalogMode.LEGACY_INDEX else ()
+    return NearCatalogRuntime(
+        requested_mode=requested,
+        effective_mode=NearCatalogMode.LEGACY_INDEX,
+        provider=provider,
+        provider_kind=provider.kind,
+        source="legacy",
+        legacy_index_root=legacy_root,
+        warnings=warnings,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -382,7 +576,18 @@ def _with_warning(resources: SolverCatalogResources, warning: str) -> SolverCata
 
 
 __all__ = [
+    "ASTAP_NEAR_PROVIDER_INVALID",
+    "ASTAP_NEAR_RESOURCE_REQUIRED",
     "CatalogResourceResolutionError",
+    "LEGACY_NEAR_INDEX_INVALID",
+    "LEGACY_NEAR_INDEX_REQUIRED",
+    "NEAR_CATALOG_FAMILY_UNAVAILABLE",
+    "NEAR_CATALOG_MODE_INVALID",
+    "NearCatalogMode",
+    "NearCatalogRuntime",
+    "NearCatalogRuntimeError",
     "SolverCatalogResources",
+    "build_near_catalog_provider",
+    "resolve_near_catalog_runtime",
     "resolve_catalog_resources",
 ]
