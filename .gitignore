@@ -86,3 +86,5 @@ tests/*
 # Local astrometry.net index files
 astrometry-indexes/
 indexes/astrometry_4d/*.npz
+astrometry-net-main.zip
+ASTAP-main.zip
