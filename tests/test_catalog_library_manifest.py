@@ -91,3 +91,14 @@ def test_catalog_library_rejects_env_expansion_in_manifest_path(tmp_path: Path) 
 
     with pytest.raises(CatalogManifestError, match="PATH_ENV_EXPANSION_NOT_ALLOWED"):
         CatalogLibrary.open(tmp_path)
+
+
+def test_catalog_library_loads_additive_runtime_order(tmp_path: Path) -> None:
+    make_catalog_library(tmp_path)
+    payload = json.loads((tmp_path / "catalog.json").read_text(encoding="utf-8"))
+    payload["runtime_order"] = {"blind4d": ["blind4d-d50-2823"]}
+    (tmp_path / "catalog.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    library = CatalogLibrary.open(tmp_path)
+
+    assert library.manifest.runtime_order == {"blind4d": ("blind4d-d50-2823",)}

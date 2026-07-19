@@ -17,6 +17,7 @@ def test_profile_v1_assembly_exposes_baseline_values() -> None:
     assert values["near_quality_inliers"] == 60
     assert values["near_quality_rms"] == 1.0
     assert values["blind_backend_profile"] == "zeblind_4d_experimental"
+    assert values["blind4d_catalog_mode"] == "auto"
     assert values["blind_quality_inliers"] == 40
     assert values["blind_quality_rms"] == 1.2
 

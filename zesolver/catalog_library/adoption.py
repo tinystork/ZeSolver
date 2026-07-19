@@ -488,7 +488,14 @@ def _manifest_preview(
         "minimum_zesolver_version": None,
         "status": status.value,
         "sources": [_source_payload(source) for source in sorted(sources, key=lambda item: item.id)],
-        "derived_indexes": [_index_payload(index) for index in sorted(indexes, key=lambda item: item.id)],
+        "derived_indexes": [_index_payload(index) for index in indexes],
+        "runtime_order": {
+            "blind4d": [
+                index.id
+                for index in indexes
+                if index.engine == "blind4d" and index.category != "compatibility"
+            ]
+        },
         "coverage": _coverage_payload(coverage),
         "integrity": {"manifest_sha256": None, "checksum_algorithm": "sha256"},
         "provenance": {

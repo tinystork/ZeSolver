@@ -191,6 +191,11 @@
       "status": "READY_PARTIAL"
     }
   ],
+  "runtime_order": {
+    "blind4d": [
+      "zeblind4d-current-six-d50"
+    ]
+  },
   "coverage": {
     "status": "PARTIAL",
     "all_sky": false,

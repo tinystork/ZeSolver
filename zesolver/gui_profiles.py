@@ -47,6 +47,8 @@ _SETTINGS_EXPERT_GROUPS: tuple[str, ...] = (
     "fov_group",
     "reco_group",
     "blind_group",
+    "catalog_compat_group",
+    "catalog_maintenance_group",
 )
 
 # Buttons meant for diagnostics/manual expert runs only.

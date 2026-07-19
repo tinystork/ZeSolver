@@ -6,12 +6,18 @@ own solver thresholds, candidate limits, quad parameters or GUI options.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Mapping
 
-from zeblindsolver.index_manifest_4d import IndexManifestError, load_4d_index_manifest
+from zeblindsolver.index_manifest_4d import (
+    IndexManifestError,
+    Loaded4DManifest,
+    load_4d_index_manifest,
+    load_4d_index_manifest_payload,
+)
 from zeblindsolver.near_catalog_provider import AstapNearCatalogProvider, LegacyIndexNearCatalogProvider, NearCatalogProvider, NearCatalogProviderError
 
 from .catalog_library import (
@@ -22,6 +28,7 @@ from .catalog_library import (
     CoverageStatus,
     IssueSeverity,
     NearCatalogDescriptor,
+    build_blind4d_manifest_view,
     discover_existing,
 )
 from .catalog_library.models import CatalogCoverage
@@ -72,12 +79,54 @@ class NearCatalogMode(str, Enum):
         raise NearCatalogRuntimeError("NEAR_CATALOG_MODE_INVALID", f"NEAR_CATALOG_MODE_INVALID: {value}")
 
 
+class Blind4DCatalogMode(str, Enum):
+    AUTO = "auto"
+    LIBRARY_VIEW = "library-view"
+    EXTERNAL_MANIFEST = "external-manifest"
+
+    @classmethod
+    def normalize(cls, value: object) -> "Blind4DCatalogMode":
+        if isinstance(value, cls):
+            return value
+        raw = str(value or cls.AUTO.value).strip().lower().replace("_", "-")
+        aliases = {
+            "library": cls.LIBRARY_VIEW.value,
+            "library-view": cls.LIBRARY_VIEW.value,
+            "catalog-library": cls.LIBRARY_VIEW.value,
+            "catalog": cls.LIBRARY_VIEW.value,
+            "external": cls.EXTERNAL_MANIFEST.value,
+            "manifest": cls.EXTERNAL_MANIFEST.value,
+            "external-manifest": cls.EXTERNAL_MANIFEST.value,
+        }
+        raw = aliases.get(raw, raw)
+        for mode in cls:
+            if raw == mode.value:
+                return mode
+        raise Blind4DRuntimeError("BLIND4D_CATALOG_MODE_INVALID", f"BLIND4D_CATALOG_MODE_INVALID: {value}")
+
+
 ASTAP_NEAR_RESOURCE_REQUIRED = "ASTAP_NEAR_RESOURCE_REQUIRED"
 ASTAP_NEAR_PROVIDER_INVALID = "ASTAP_NEAR_PROVIDER_INVALID"
 LEGACY_NEAR_INDEX_REQUIRED = "LEGACY_NEAR_INDEX_REQUIRED"
 LEGACY_NEAR_INDEX_INVALID = "LEGACY_NEAR_INDEX_INVALID"
 NEAR_CATALOG_MODE_INVALID = "NEAR_CATALOG_MODE_INVALID"
 NEAR_CATALOG_FAMILY_UNAVAILABLE = "NEAR_CATALOG_FAMILY_UNAVAILABLE"
+BLIND4D_LIBRARY_REQUIRED = "BLIND4D_LIBRARY_REQUIRED"
+BLIND4D_LIBRARY_VIEW_INVALID = "BLIND4D_LIBRARY_VIEW_INVALID"
+BLIND4D_LIBRARY_NO_INDEXES = "BLIND4D_LIBRARY_NO_INDEXES"
+BLIND4D_EXTERNAL_MANIFEST_REQUIRED = "BLIND4D_EXTERNAL_MANIFEST_REQUIRED"
+BLIND4D_EXTERNAL_MANIFEST_INVALID = "BLIND4D_EXTERNAL_MANIFEST_INVALID"
+BLIND4D_CATALOG_MODE_INVALID = "BLIND4D_CATALOG_MODE_INVALID"
+BLIND4D_RUNTIME_ORDER_INVALID = "BLIND4D_RUNTIME_ORDER_INVALID"
+BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE = "BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE"
+
+
+class Blind4DRuntimeError(CatalogResourceResolutionError):
+    """Raised when the requested Blind 4D runtime source cannot be assembled."""
+
+    def __init__(self, code: str, message: str | None = None) -> None:
+        self.code = code
+        super().__init__(message or code)
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +167,52 @@ class NearCatalogRuntime:
         data["near_catalog_warnings"] = list(self.warnings)
         if include_paths:
             data["legacy_index_root"] = str(self.legacy_index_root) if self.legacy_index_root else None
+        return data
+
+
+@dataclass(frozen=True, slots=True)
+class Blind4DRuntimeSelection:
+    mode_requested: Blind4DCatalogMode
+    mode_effective: Blind4DCatalogMode | None
+    source: str
+    loaded_manifest: Loaded4DManifest | None = None
+    library_view: object | None = None
+    external_manifest_path: Path | None = None
+    index_ids: tuple[str, ...] = ()
+    index_paths: tuple[Path, ...] = ()
+    runtime_order: tuple[str, ...] = ()
+    coverage: CatalogCoverage | None = None
+    view_fingerprint: str | None = None
+    library_id: str | None = None
+    warnings: tuple[str, ...] = ()
+    error_code: str | None = None
+    error_message: str | None = None
+
+    @property
+    def available(self) -> bool:
+        return self.loaded_manifest is not None
+
+    def telemetry(self, *, include_paths: bool = False) -> dict[str, object]:
+        coverage = self.coverage
+        data: dict[str, object] = {
+            "blind4d_catalog_mode_requested": self.mode_requested.value,
+            "blind4d_catalog_mode_effective": self.mode_effective.value if self.mode_effective else None,
+            "blind4d_catalog_source": self.source,
+            "blind4d_view_fingerprint": self.view_fingerprint,
+            "blind4d_library_id": self.library_id,
+            "blind4d_runtime_order": list(self.runtime_order),
+            "blind4d_index_ids": list(self.index_ids),
+            "blind4d_index_count": len(self.index_ids),
+            "blind4d_covered_tiles": coverage.covered_tiles if coverage else 0,
+            "blind4d_total_tiles": coverage.total_tiles if coverage else None,
+            "blind4d_all_sky": bool(coverage.all_sky) if coverage else False,
+            "blind4d_external_fallback_used": False,
+            "blind4d_runtime_error": self.error_code,
+            "blind4d_warnings": list(self.warnings),
+        }
+        if include_paths:
+            data["blind4d_external_manifest_path"] = str(self.external_manifest_path) if self.external_manifest_path else None
+            data["blind4d_index_paths"] = [str(path) for path in self.index_paths]
         return data
 
 
@@ -233,6 +328,168 @@ def _legacy_runtime(requested: NearCatalogMode, legacy_root: Path, *, cache_size
     )
 
 
+def resolve_blind4d_runtime(
+    resources: "SolverCatalogResources",
+    *,
+    mode: Blind4DCatalogMode | str = Blind4DCatalogMode.AUTO,
+    external_manifest_path: str | Path | None = None,
+) -> Blind4DRuntimeSelection:
+    requested = Blind4DCatalogMode.normalize(mode)
+    external_path = Path(external_manifest_path).expanduser() if external_manifest_path is not None else resources.blind4d_manifest_path
+    has_explicit_library = resources.source == "library"
+
+    if requested is Blind4DCatalogMode.AUTO:
+        if has_explicit_library:
+            return _blind4d_library_selection(resources, requested=requested, raise_on_error=False)
+        if external_path is not None:
+            return _blind4d_external_selection(requested=requested, manifest_path=external_path)
+        return Blind4DRuntimeSelection(
+            mode_requested=requested,
+            mode_effective=None,
+            source="unavailable",
+            warnings=("blind4d_runtime_unavailable",),
+            error_code=BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE,
+            error_message=BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE,
+        )
+
+    if requested is Blind4DCatalogMode.LIBRARY_VIEW:
+        return _blind4d_library_selection(resources, requested=requested, raise_on_error=True)
+
+    if requested is Blind4DCatalogMode.EXTERNAL_MANIFEST:
+        if external_path is None:
+            raise Blind4DRuntimeError(BLIND4D_EXTERNAL_MANIFEST_REQUIRED)
+        return _blind4d_external_selection(requested=requested, manifest_path=external_path, raise_on_error=True)
+
+    raise Blind4DRuntimeError(BLIND4D_CATALOG_MODE_INVALID, f"{BLIND4D_CATALOG_MODE_INVALID}: {requested}")
+
+
+def _blind4d_library_selection(
+    resources: "SolverCatalogResources",
+    *,
+    requested: Blind4DCatalogMode,
+    raise_on_error: bool,
+) -> Blind4DRuntimeSelection:
+    if resources.source != "library" or resources.catalog_library is None:
+        return _blind4d_library_failure(
+            requested,
+            BLIND4D_LIBRARY_REQUIRED,
+            BLIND4D_LIBRARY_REQUIRED,
+            raise_on_error=raise_on_error,
+            resources=resources,
+        )
+    if not resources.blind4d_indexes:
+        return _blind4d_library_failure(
+            requested,
+            BLIND4D_LIBRARY_NO_INDEXES,
+            BLIND4D_LIBRARY_NO_INDEXES,
+            raise_on_error=raise_on_error,
+            resources=resources,
+        )
+    view = build_blind4d_manifest_view(resources.catalog_library)
+    if view.errors:
+        codes = ",".join(issue.code for issue in view.errors)
+        code = BLIND4D_RUNTIME_ORDER_INVALID if "BLIND4D_VIEW_RUNTIME_ORDER" in codes else BLIND4D_LIBRARY_VIEW_INVALID
+        return _blind4d_library_failure(
+            requested,
+            code,
+            f"{code}: {codes}",
+            raise_on_error=raise_on_error,
+            resources=resources,
+            warnings=tuple(issue.code for issue in view.warnings),
+        )
+    try:
+        manifest_path = (resources.library_path / "catalog.json") if resources.library_path is not None else None
+        loaded = load_4d_index_manifest_payload(view.payload, manifest_path=manifest_path)
+    except IndexManifestError as exc:
+        return _blind4d_library_failure(
+            requested,
+            BLIND4D_LIBRARY_VIEW_INVALID,
+            f"{BLIND4D_LIBRARY_VIEW_INVALID}: {exc}",
+            raise_on_error=raise_on_error,
+            resources=resources,
+            warnings=tuple(issue.code for issue in view.warnings),
+        )
+    return Blind4DRuntimeSelection(
+        mode_requested=requested,
+        mode_effective=Blind4DCatalogMode.LIBRARY_VIEW,
+        source="catalog_library_view",
+        loaded_manifest=loaded,
+        library_view=view,
+        external_manifest_path=None,
+        index_ids=loaded.index_ids,
+        index_paths=loaded.enabled_index_paths,
+        runtime_order=loaded.index_ids,
+        coverage=view.coverage,
+        view_fingerprint=view.fingerprint,
+        library_id=resources.catalog_library_id,
+        warnings=tuple(dict.fromkeys((*resources.warnings, *(issue.code for issue in view.warnings)))),
+    )
+
+
+def _blind4d_library_failure(
+    requested: Blind4DCatalogMode,
+    code: str,
+    message: str,
+    *,
+    raise_on_error: bool,
+    resources: "SolverCatalogResources",
+    warnings: tuple[str, ...] = (),
+) -> Blind4DRuntimeSelection:
+    if raise_on_error:
+        raise Blind4DRuntimeError(code, message)
+    return Blind4DRuntimeSelection(
+        mode_requested=requested,
+        mode_effective=Blind4DCatalogMode.LIBRARY_VIEW,
+        source="unavailable",
+        coverage=resources.coverage,
+        library_id=resources.catalog_library_id,
+        warnings=tuple(dict.fromkeys((*resources.warnings, *warnings))),
+        error_code=code,
+        error_message=message,
+    )
+
+
+def _blind4d_external_selection(
+    *,
+    requested: Blind4DCatalogMode,
+    manifest_path: Path,
+    raise_on_error: bool = True,
+) -> Blind4DRuntimeSelection:
+    try:
+        loaded = load_4d_index_manifest(manifest_path)
+    except IndexManifestError as exc:
+        if raise_on_error:
+            raise Blind4DRuntimeError(BLIND4D_EXTERNAL_MANIFEST_INVALID, f"{BLIND4D_EXTERNAL_MANIFEST_INVALID}: {exc}") from exc
+        return Blind4DRuntimeSelection(
+            mode_requested=requested,
+            mode_effective=Blind4DCatalogMode.EXTERNAL_MANIFEST,
+            source="unavailable",
+            external_manifest_path=manifest_path,
+            error_code=BLIND4D_EXTERNAL_MANIFEST_INVALID,
+            error_message=f"{BLIND4D_EXTERNAL_MANIFEST_INVALID}: {exc}",
+        )
+    coverage = CatalogCoverage(
+        status=CoverageStatus.PARTIAL,
+        all_sky=False,
+        families=tuple(dict.fromkeys(filter(None, (_family_from_tiles(entry.tile_keys) for entry in loaded.entries)))),
+        tile_keys=loaded.tile_keys,
+        covered_tiles=len(tuple(dict.fromkeys(loaded.tile_keys))),
+        provenance="external-manifest",
+    )
+    return Blind4DRuntimeSelection(
+        mode_requested=requested,
+        mode_effective=Blind4DCatalogMode.EXTERNAL_MANIFEST,
+        source="external_manifest",
+        loaded_manifest=loaded,
+        external_manifest_path=loaded.manifest_path,
+        index_ids=loaded.index_ids,
+        index_paths=loaded.enabled_index_paths,
+        runtime_order=loaded.index_ids,
+        coverage=coverage,
+        warnings=("legacy_blind4d_manifest_used",) if requested is Blind4DCatalogMode.AUTO else (),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class SolverCatalogResources:
     library_path: Path | None
@@ -245,8 +502,10 @@ class SolverCatalogResources:
     source: str
     warnings: tuple[str, ...]
     catalog_library_id: str | None = None
+    catalog_manifest_fingerprint: str | None = None
     coverage: CatalogCoverage | None = None
     all_sky_blind4d: bool = False
+    catalog_library: CatalogLibrary | None = None
 
     @property
     def near_available(self) -> bool:
@@ -378,8 +637,10 @@ def _resources_from_library(library: CatalogLibrary) -> SolverCatalogResources:
         source="library",
         warnings=tuple(dict.fromkeys(warnings)),
         catalog_library_id=library.manifest.library_id,
+        catalog_manifest_fingerprint=_catalog_manifest_fingerprint(library),
         coverage=report.coverage,
         all_sky_blind4d=bool(report.capabilities.all_sky_blind4d),
+        catalog_library=library,
     )
 
 
@@ -572,24 +833,46 @@ def _with_warning(resources: SolverCatalogResources, warning: str) -> SolverCata
         source=resources.source,
         warnings=tuple(dict.fromkeys((*resources.warnings, warning))),
         catalog_library_id=resources.catalog_library_id,
+        catalog_manifest_fingerprint=resources.catalog_manifest_fingerprint,
         coverage=resources.coverage,
         all_sky_blind4d=resources.all_sky_blind4d,
+        catalog_library=resources.catalog_library,
     )
+
+
+def _catalog_manifest_fingerprint(library: CatalogLibrary) -> str | None:
+    path = library.root / "catalog.json"
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
 
 
 __all__ = [
     "ASTAP_NEAR_PROVIDER_INVALID",
     "ASTAP_NEAR_RESOURCE_REQUIRED",
     "CatalogResourceResolutionError",
+    "BLIND4D_CATALOG_MODE_INVALID",
+    "BLIND4D_EXTERNAL_MANIFEST_INVALID",
+    "BLIND4D_EXTERNAL_MANIFEST_REQUIRED",
+    "BLIND4D_LIBRARY_NO_INDEXES",
+    "BLIND4D_LIBRARY_REQUIRED",
+    "BLIND4D_LIBRARY_VIEW_INVALID",
+    "BLIND4D_RUNTIME_ORDER_INVALID",
+    "BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE",
     "LEGACY_NEAR_INDEX_INVALID",
     "LEGACY_NEAR_INDEX_REQUIRED",
     "NEAR_CATALOG_FAMILY_UNAVAILABLE",
     "NEAR_CATALOG_MODE_INVALID",
+    "Blind4DCatalogMode",
+    "Blind4DRuntimeError",
+    "Blind4DRuntimeSelection",
     "NearCatalogMode",
     "NearCatalogRuntime",
     "NearCatalogRuntimeError",
     "SolverCatalogResources",
     "build_near_catalog_provider",
     "resolve_near_catalog_runtime",
+    "resolve_blind4d_runtime",
     "resolve_catalog_resources",
 ]

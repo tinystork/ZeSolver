@@ -18,6 +18,7 @@ def test_product_settings_v2_payload_references_profiles_only() -> None:
     payload = ProductSettings().to_v2_payload()
 
     assert payload["settings_schema_version"] == 2
+    assert payload["product"]["blind4d_catalog_mode"] == "auto"
     assert payload["profiles"] == {
         "near": "zenear-v1",
         "blind": "zeblind4d-v1",

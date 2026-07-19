@@ -89,6 +89,37 @@ def test_adoption_plan_astap_blind4d_preview_is_valid_catalog_manifest(tmp_path:
     assert report.capabilities.all_sky_blind4d is False
     assert plan.indexes[0].source_ids == ("astap-d50",)
     assert plan.indexes[0].source_tiles == ("d50_2823",)
+    assert plan.manifest_preview["runtime_order"]["blind4d"] == ["d50_2823"]
+
+
+def test_adoption_plan_preserves_strict_blind4d_runtime_order(tmp_path: Path) -> None:
+    astap = _astap_root(tmp_path / "astap", tiles=("2823", "2822"))
+    idx_2822 = write_fake_4d_index(tmp_path / "d50_2822_S_q40000.npz", "d50_2822")
+    idx_2823 = write_fake_4d_index(tmp_path / "d50_2823_S_q40000.npz", "d50_2823")
+    strict_manifest = write_strict_manifest(
+        tmp_path / "manifest.json",
+        [
+            strict_entry("d50_2823_S_q40000", idx_2823, "d50_2823"),
+            strict_entry("d50_2822_S_q40000", idx_2822, "d50_2822"),
+        ],
+    )
+
+    plan = CatalogLibraryAdoptionPlan.reference_existing(
+        library_root=tmp_path / "library",
+        astap_roots=astap,
+        blind4d_manifest=strict_manifest,
+        fingerprint_policy="fast",
+    )
+
+    assert [index.id for index in plan.indexes] == ["d50_2823_S_q40000", "d50_2822_S_q40000"]
+    assert [item["id"] for item in plan.manifest_preview["derived_indexes"]] == [
+        "d50_2823_S_q40000",
+        "d50_2822_S_q40000",
+    ]
+    assert plan.manifest_preview["runtime_order"]["blind4d"] == [
+        "d50_2823_S_q40000",
+        "d50_2822_S_q40000",
+    ]
 
 
 def test_adoption_plan_keeps_legacy_index_as_compatibility_only(tmp_path: Path) -> None:

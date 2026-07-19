@@ -152,6 +152,7 @@ def manifest_from_payload(payload: dict[str, Any], *, root: Path, manifest_path:
         coverage=coverage,
         integrity=dict(payload.get("integrity") or {}),
         provenance=dict(payload.get("provenance") or {}),
+        runtime_order=_runtime_order_from_payload(payload.get("runtime_order")),
     )
 
 
@@ -402,6 +403,19 @@ def _families_from_payload(payload: dict[str, Any], family: str) -> tuple[str, .
         families = tuple(str(v).lower() for v in raw if str(v))
         return families or (family,)
     return (family,)
+
+
+def _runtime_order_from_payload(payload: object) -> dict[str, tuple[str, ...]]:
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise CatalogManifestError("RUNTIME_ORDER_INVALID")
+    result: dict[str, tuple[str, ...]] = {}
+    for key, value in payload.items():
+        if not isinstance(value, list):
+            raise CatalogManifestError(f"RUNTIME_ORDER_INVALID: {key}")
+        result[str(key)] = tuple(str(item) for item in value if str(item))
+    return result
 
 
 def _normalize_manifest_path_text(value: str) -> str:

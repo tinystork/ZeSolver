@@ -50,6 +50,19 @@
         "$ref": "#/$defs/derived_index"
       }
     },
+    "runtime_order": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "blind4d": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Explicit Blind 4D runtime search order by derived index id."
+        }
+      }
+    },
     "coverage": {
       "$ref": "#/$defs/coverage"
     },

@@ -5,9 +5,9 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from zeblindsolver.index_manifest_4d import IndexManifestError, Loaded4DManifest, load_4d_index_manifest
+from zeblindsolver.index_manifest_4d import IndexManifestError, Loaded4DManifest
 
-from zesolver.catalog_resources import SolverCatalogResources
+from zesolver.catalog_resources import Blind4DRuntimeError, Blind4DRuntimeSelection, SolverCatalogResources, resolve_blind4d_runtime
 from zesolver.solver_config import build_blind_config_inputs, build_blind_solve_config
 from zesolver.zeblindsolver import BlindSolverRuntimeError, blind_solve
 
@@ -23,6 +23,10 @@ class ProductionBlindSolverPort:
     output ownership in ``wcs_io.py``, this port solves a temporary copy and
     returns the produced WCS as an engine result.
     """
+
+    def __init__(self) -> None:
+        self._runtime_cache_key: tuple[object, ...] | None = None
+        self._runtime_cache_value: Blind4DRuntimeSelection | None = None
 
     def solve(self, request: SolveRequest, *, resources: SolverCatalogResources, configuration) -> EngineSolveResult:
         blind_request = BlindSolveRequest.from_solve_request(request, configuration=configuration)
@@ -41,12 +45,19 @@ class ProductionBlindSolverPort:
                 backend="BLIND4D",
                 error=f"unknown_or_unsupported_blind_profile: {configuration.blind_profile.profile_id}",
             )
-        if resources.blind4d_manifest_path is None:
-            return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="BLIND4D", error="blind4d_manifest_unavailable")
         try:
-            loaded_manifest = load_4d_index_manifest(resources.blind4d_manifest_path)
-        except IndexManifestError as exc:
-            return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="BLIND4D", error=f"BLIND4D_MANIFEST_INVALID: {exc}")
+            runtime = self._runtime_selection(resources, configuration)
+        except Blind4DRuntimeError as exc:
+            return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="BLIND4D", error=f"{exc.code}: {exc}", raw={"blind4d_runtime_error": exc.code})
+        if not runtime.available or runtime.loaded_manifest is None:
+            error = runtime.error_message or runtime.error_code or "BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE"
+            return EngineSolveResult(
+                status=SolveStatus.CATALOG_UNAVAILABLE,
+                backend="BLIND4D",
+                error=str(error),
+                raw=runtime.telemetry(include_paths=False),
+            )
+        loaded_manifest = runtime.loaded_manifest
 
         try:
             blind_cfg = self.build_config(request, resources=resources, configuration=configuration, loaded_manifest=loaded_manifest)
@@ -70,7 +81,7 @@ class ProductionBlindSolverPort:
                 engine = engine_result_from_blind_result(result, solved_path=temp_path)
                 if engine.raw:
                     raw = dict(engine.raw)
-                    raw["manifest_path"] = str(loaded_manifest.manifest_path)
+                    raw.update(runtime.telemetry(include_paths=False))
                     raw["blind4d_index_count"] = len(loaded_manifest.entries)
                     engine = EngineSolveResult(
                         status=engine.status,
@@ -104,9 +115,10 @@ class ProductionBlindSolverPort:
     ):
         manifest = loaded_manifest
         if manifest is None:
-            if resources.blind4d_manifest_path is None:
-                raise IndexManifestError("blind_4d_manifest_required")
-            manifest = load_4d_index_manifest(resources.blind4d_manifest_path)
+            runtime = self._runtime_selection(resources, configuration)
+            if runtime.loaded_manifest is None:
+                raise IndexManifestError(runtime.error_message or runtime.error_code or "blind_4d_manifest_required")
+            manifest = runtime.loaded_manifest
         inputs = build_blind_config_inputs(request, resources=resources, configuration=configuration, loaded_manifest=manifest)
         # The validated 4D product profile clears RA/Dec hints in the profile
         # application itself; pass them through here so config parity stays owned
@@ -117,6 +129,23 @@ class ProductionBlindSolverPort:
             dec_hint=request.dec_hint_deg,
             loaded_manifest=manifest,
         )
+
+    def _runtime_selection(self, resources: SolverCatalogResources, configuration) -> Blind4DRuntimeSelection:
+        mode = str(getattr(configuration.product_settings, "blind4d_catalog_mode", "auto") or "auto")
+        external = resources.blind4d_manifest_path
+        key = (
+            id(resources),
+            mode,
+            str(external) if external is not None else None,
+            resources.catalog_library_id,
+            tuple(index.sha256 for index in resources.blind4d_indexes),
+        )
+        if key == self._runtime_cache_key and self._runtime_cache_value is not None:
+            return self._runtime_cache_value
+        selection = resolve_blind4d_runtime(resources, mode=mode, external_manifest_path=external)
+        self._runtime_cache_key = key
+        self._runtime_cache_value = selection
+        return selection
 
 
 def _cancel_check(configuration):

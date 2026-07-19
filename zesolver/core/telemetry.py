@@ -19,6 +19,7 @@ class PipelineTelemetry:
     near_result: str | None = None
     blind_attempted: bool = False
     blind_result: str | None = None
+    blind4d_runtime: dict[str, Any] = field(default_factory=dict)
     final_status: str | None = None
     wcs_written: bool = False
     warnings: list[str] = field(default_factory=list)
@@ -29,7 +30,7 @@ class PipelineTelemetry:
         return self.to_dict()
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "request_id": self.request_id,
             "pipeline_profile": self.pipeline_profile,
             "near_profile": self.near_profile,
@@ -46,3 +47,5 @@ class PipelineTelemetry:
             "duration_s": round(time.perf_counter() - self.started_at, 6),
             "warnings": tuple(dict.fromkeys(self.warnings)),
         }
+        data.update(self.blind4d_runtime)
+        return data

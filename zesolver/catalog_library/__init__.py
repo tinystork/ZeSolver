@@ -3,6 +3,11 @@
 from .adoption import CatalogLibraryAdoptionPlan, canonical_provenance_fingerprint
 from .atomic_adoption import CatalogLibraryAdoptionError, CatalogLibraryAdoptionWriter
 from .adapters import blind4d_index_descriptors, near_source_descriptor
+from .blind4d_view import (
+    CatalogBlind4DManifestView,
+    CatalogBlind4DManifestViewError,
+    build_blind4d_manifest_view,
+)
 from .discovery import discover_existing
 from .manifest import (
     CatalogCompatibilityError,
@@ -50,6 +55,8 @@ __all__ = [
     "CatalogDiscoveryResult",
     "CatalogAdoptionCommitStatus",
     "CatalogAdoptionWriteMode",
+    "CatalogBlind4DManifestView",
+    "CatalogBlind4DManifestViewError",
     "CatalogIncompleteError",
     "CatalogIndex",
     "CatalogIssue",
@@ -75,6 +82,7 @@ __all__ = [
     "LegacyIndexDescriptor",
     "NearCatalogDescriptor",
     "blind4d_index_descriptors",
+    "build_blind4d_manifest_view",
     "canonical_provenance_fingerprint",
     "discover_existing",
     "load_manifest",
