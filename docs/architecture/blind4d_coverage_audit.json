@@ -1,0 +1,365 @@
+{
+  "astap": {
+    "families": {},
+    "issues": [],
+    "root": null,
+    "status": "NOT_CONFIGURED"
+  },
+  "blind4d": {
+    "coverage": {
+      "all_sky": false,
+      "dec_max_deg": 51.42857143,
+      "dec_min_deg": 36.0,
+      "enabled_index_count": 6,
+      "enabled_tile_count": 6,
+      "families": {
+        "d50": {
+          "coverage_fraction_by_tile_count": 0.0040650406504065045,
+          "layout_tile_count": 1476,
+          "tile_count": 6,
+          "tiles": [
+            "d50_2602",
+            "d50_2644",
+            "d50_2645",
+            "d50_2702",
+            "d50_2822",
+            "d50_2823"
+          ]
+        }
+      },
+      "present_index_count": 6,
+      "status": "PARTIAL"
+    },
+    "indexes": [
+      {
+        "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+        "coverage": [
+          {
+            "dec_max_deg": 51.42857143,
+            "dec_min_deg": 46.28571429,
+            "family": "d50",
+            "ra_max_deg": 192.55813953488374,
+            "ra_min_deg": 184.18604651162792,
+            "ring": 28,
+            "ring_ra_cells": 43,
+            "tile": 23,
+            "tile_code": "2823"
+          }
+        ],
+        "enabled": true,
+        "exists": true,
+        "id": "d50_2823_S_q40000",
+        "index_version": 1,
+        "level": "S",
+        "metadata": {
+          "code_tol_recommended": 0.015,
+          "dtype": "float32",
+          "entry_count": 40000,
+          "generated_at": "2026-07-09T09:58:22Z",
+          "level": "S",
+          "max_quads_per_tile": 40000,
+          "max_stars_per_tile": 2000,
+          "sampler_tag": "catalog_ring_coverage",
+          "schema": "astrometry_ab_code_4d_v1",
+          "source_catalog": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+          "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/s3_focused_index_20260701_p16_multicase_v3/index",
+          "star_count": 2000,
+          "tile_keys": [
+            "d50_2823"
+          ],
+          "version": 1
+        },
+        "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/indexes/astrometry_4d/d50_2823_S_q40000.npz",
+        "quad_count": 40000,
+        "quad_schema": "astrometry_ab_code_4d_v1",
+        "sampler_tag": "catalog_ring_coverage",
+        "sha256_actual": "63ede21d82d4bb885ad10b73ececff2750e49bd914c2625f321ed16a3a1529e5",
+        "sha256_expected": "63ede21d82d4bb885ad10b73ececff2750e49bd914c2625f321ed16a3a1529e5",
+        "sha256_ok": true,
+        "size_bytes": 1057701,
+        "star_count": 2000,
+        "status": "PRESENT",
+        "tile_keys": [
+          "d50_2823"
+        ]
+      },
+      {
+        "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+        "coverage": [
+          {
+            "dec_max_deg": 51.42857143,
+            "dec_min_deg": 46.28571429,
+            "family": "d50",
+            "ra_max_deg": 184.18604651162792,
+            "ra_min_deg": 175.8139534883721,
+            "ring": 28,
+            "ring_ra_cells": 43,
+            "tile": 22,
+            "tile_code": "2822"
+          }
+        ],
+        "enabled": true,
+        "exists": true,
+        "id": "d50_2822_S_q40000",
+        "index_version": 1,
+        "level": "S",
+        "metadata": {
+          "code_tol_recommended": 0.015,
+          "dtype": "float32",
+          "entry_count": 40000,
+          "generated_at": "2026-07-09T09:04:39Z",
+          "level": "S",
+          "max_quads_per_tile": 40000,
+          "max_stars_per_tile": 2000,
+          "sampler_tag": "catalog_ring_coverage",
+          "schema": "astrometry_ab_code_4d_v1",
+          "source_catalog": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+          "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/s3_focused_index_20260701_p16_multicase_v3/index",
+          "star_count": 2000,
+          "tile_keys": [
+            "d50_2822"
+          ],
+          "version": 1
+        },
+        "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/indexes/astrometry_4d/d50_2822_S_q40000.npz",
+        "quad_count": 40000,
+        "quad_schema": "astrometry_ab_code_4d_v1",
+        "sampler_tag": "catalog_ring_coverage",
+        "sha256_actual": "04ecc3ea867307e64cbc8a8bf00cdca847b590b822289edce991e96aa9db1967",
+        "sha256_expected": "04ecc3ea867307e64cbc8a8bf00cdca847b590b822289edce991e96aa9db1967",
+        "sha256_ok": true,
+        "size_bytes": 1057322,
+        "star_count": 2000,
+        "status": "PRESENT",
+        "tile_keys": [
+          "d50_2822"
+        ]
+      },
+      {
+        "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+        "coverage": [
+          {
+            "dec_max_deg": 41.14285714,
+            "dec_min_deg": 36.0,
+            "family": "d50",
+            "ra_max_deg": 304.61538461538464,
+            "ra_min_deg": 297.6923076923077,
+            "ring": 26,
+            "ring_ra_cells": 52,
+            "tile": 44,
+            "tile_code": "2644"
+          }
+        ],
+        "enabled": true,
+        "exists": true,
+        "id": "d50_2644_S_q40000",
+        "index_version": 1,
+        "level": "S",
+        "metadata": {
+          "code_tol_recommended": 0.015,
+          "dtype": "float32",
+          "entry_count": 40000,
+          "generated_at": "2026-07-12T22:32:14Z",
+          "level": "S",
+          "max_quads_per_tile": 40000,
+          "max_stars_per_tile": 2000,
+          "sampler_tag": "catalog_ring_coverage",
+          "schema": "astrometry_ab_code_4d_v1",
+          "source_catalog": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+          "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/r47i_s8_p30_multifield10_focused_v4_index_q4000_20260704/index",
+          "star_count": 2000,
+          "tile_keys": [
+            "d50_2644"
+          ],
+          "version": 1
+        },
+        "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/indexes/astrometry_4d/d50_2644_S_q40000.npz",
+        "quad_count": 40000,
+        "quad_schema": "astrometry_ab_code_4d_v1",
+        "sampler_tag": "catalog_ring_coverage",
+        "sha256_actual": "577bb69cbe23063a718f177d58a8e1b1367f4ccc19a0c2dab09bfbad26c7c9e7",
+        "sha256_expected": "577bb69cbe23063a718f177d58a8e1b1367f4ccc19a0c2dab09bfbad26c7c9e7",
+        "sha256_ok": true,
+        "size_bytes": 1057306,
+        "star_count": 2000,
+        "status": "PRESENT",
+        "tile_keys": [
+          "d50_2644"
+        ]
+      },
+      {
+        "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+        "coverage": [
+          {
+            "dec_max_deg": 41.14285714,
+            "dec_min_deg": 36.0,
+            "family": "d50",
+            "ra_max_deg": 311.53846153846155,
+            "ra_min_deg": 304.61538461538464,
+            "ring": 26,
+            "ring_ra_cells": 52,
+            "tile": 45,
+            "tile_code": "2645"
+          }
+        ],
+        "enabled": true,
+        "exists": true,
+        "id": "d50_2645_S_q40000",
+        "index_version": 1,
+        "level": "S",
+        "metadata": {
+          "code_tol_recommended": 0.015,
+          "dtype": "float32",
+          "entry_count": 40000,
+          "generated_at": "2026-07-12T22:32:49Z",
+          "level": "S",
+          "max_quads_per_tile": 40000,
+          "max_stars_per_tile": 2000,
+          "sampler_tag": "catalog_ring_coverage",
+          "schema": "astrometry_ab_code_4d_v1",
+          "source_catalog": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+          "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/r47i_s8_p30_multifield10_focused_v4_index_q4000_20260704/index",
+          "star_count": 2000,
+          "tile_keys": [
+            "d50_2645"
+          ],
+          "version": 1
+        },
+        "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/indexes/astrometry_4d/d50_2645_S_q40000.npz",
+        "quad_count": 40000,
+        "quad_schema": "astrometry_ab_code_4d_v1",
+        "sampler_tag": "catalog_ring_coverage",
+        "sha256_actual": "b963ebe462c98556b98520584e515b77b5ab87bd08de70de52ec9d871c91b2df",
+        "sha256_expected": "b963ebe462c98556b98520584e515b77b5ab87bd08de70de52ec9d871c91b2df",
+        "sha256_ok": true,
+        "size_bytes": 1057767,
+        "star_count": 2000,
+        "status": "PRESENT",
+        "tile_keys": [
+          "d50_2645"
+        ]
+      },
+      {
+        "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+        "coverage": [
+          {
+            "dec_max_deg": 41.14285714,
+            "dec_min_deg": 36.0,
+            "family": "d50",
+            "ra_max_deg": 13.846153846153847,
+            "ra_min_deg": 6.923076923076923,
+            "ring": 26,
+            "ring_ra_cells": 52,
+            "tile": 2,
+            "tile_code": "2602"
+          }
+        ],
+        "enabled": true,
+        "exists": true,
+        "id": "d50_2602_S_q40000",
+        "index_version": 1,
+        "level": "S",
+        "metadata": {
+          "code_tol_recommended": 0.015,
+          "dtype": "float32",
+          "entry_count": 40000,
+          "generated_at": "2026-07-13T17:03:04Z",
+          "level": "S",
+          "max_quads_per_tile": 40000,
+          "max_stars_per_tile": 2000,
+          "sampler_tag": "catalog_ring_coverage",
+          "schema": "astrometry_ab_code_4d_v1",
+          "source_catalog": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+          "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/r47i_s8_p30_multifield10_focused_v4_index_q4000_20260704/index",
+          "star_count": 2000,
+          "tile_keys": [
+            "d50_2602"
+          ],
+          "version": 1
+        },
+        "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/indexes/astrometry_4d/d50_2602_S_q40000.npz",
+        "quad_count": 40000,
+        "quad_schema": "astrometry_ab_code_4d_v1",
+        "sampler_tag": "catalog_ring_coverage",
+        "sha256_actual": "3ab3a747d2005ac6523a5dc62ef82fc19374fc31df27c8757307b36ade556693",
+        "sha256_expected": "3ab3a747d2005ac6523a5dc62ef82fc19374fc31df27c8757307b36ade556693",
+        "sha256_ok": true,
+        "size_bytes": 1057143,
+        "star_count": 2000,
+        "status": "PRESENT",
+        "tile_keys": [
+          "d50_2602"
+        ]
+      },
+      {
+        "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+        "coverage": [
+          {
+            "dec_max_deg": 46.28571429,
+            "dec_min_deg": 41.14285714,
+            "family": "d50",
+            "ra_max_deg": 15.0,
+            "ra_min_deg": 7.5,
+            "ring": 27,
+            "ring_ra_cells": 48,
+            "tile": 2,
+            "tile_code": "2702"
+          }
+        ],
+        "enabled": true,
+        "exists": true,
+        "id": "d50_2702_S_q40000",
+        "index_version": 1,
+        "level": "S",
+        "metadata": {
+          "code_tol_recommended": 0.015,
+          "dtype": "float32",
+          "entry_count": 40000,
+          "generated_at": "2026-07-13T17:04:03Z",
+          "level": "S",
+          "max_quads_per_tile": 40000,
+          "max_stars_per_tile": 2000,
+          "sampler_tag": "catalog_ring_coverage",
+          "schema": "astrometry_ab_code_4d_v1",
+          "source_catalog": "tile_npz:x_deg/y_deg/ra_deg/dec_deg",
+          "source_index_root": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/r47i_s8_p30_multifield10_focused_v4_index_q4000_20260704/index",
+          "star_count": 2000,
+          "tile_keys": [
+            "d50_2702"
+          ],
+          "version": 1
+        },
+        "path": "/home/tristan/.openclaw/workspace/projects/ZeSolver/indexes/astrometry_4d/d50_2702_S_q40000.npz",
+        "quad_count": 40000,
+        "quad_schema": "astrometry_ab_code_4d_v1",
+        "sampler_tag": "catalog_ring_coverage",
+        "sha256_actual": "15d82411ab1213505660be448a9290b9129e2bc3243cff960dfa79b6475d0fd6",
+        "sha256_expected": "15d82411ab1213505660be448a9290b9129e2bc3243cff960dfa79b6475d0fd6",
+        "sha256_ok": true,
+        "size_bytes": 1058508,
+        "star_count": 2000,
+        "status": "PRESENT",
+        "tile_keys": [
+          "d50_2702"
+        ]
+      }
+    ],
+    "issues": [],
+    "manifest_path": "config/zeblind_4d_experimental_manifest.json",
+    "manifest_version": 1,
+    "schema": "zeblind.astrometry_4d_index_manifest.v1",
+    "status": "READY_PARTIAL"
+  },
+  "generated_at": "2026-07-17T01:10:07.734577+00:00",
+  "inputs": {
+    "astap_root": null,
+    "blind4d_manifest": "config/zeblind_4d_experimental_manifest.json",
+    "legacy_index_root": null
+  },
+  "legacy_index": {
+    "issues": [],
+    "root": null,
+    "status": "NOT_CONFIGURED"
+  },
+  "schema_version": 1
+}

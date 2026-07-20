@@ -7,7 +7,7 @@
 # ║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
 # ║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
 # ║                                                                                   ║
-# ║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+# ║ Licence du dépôt : GPL V3 (voir pyproject.toml / repository metadata)               ║
 # ║                                                                                   ║
 # ║ Remerciements amont :                                                             ║
 # ║ - ASTAP, par Han Kleijn                                                           ║
@@ -23,6 +23,20 @@
 # ║ imagery outputs. Please credit both project authors and upstream references when  ║
 # ║ reusing this work.                                                                ║
 # ╚═══════════════════════════════════════════════════════════════════════════════════╝
+# This file is part of ZeSolver.
+
+# ZeSolver is free software: you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+
+# ZeSolver is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+
+# You should have received a copy of the GNU General Public License
+# along with ZeSolver. If not, see <https://www.gnu.org/licenses/>.
 # """
 
 """
@@ -49,7 +63,7 @@ import threading
 import time
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, Callable, Iterable, Iterator, List, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence
 
 import numpy as np
 from astropy.coordinates import Angle
@@ -185,13 +199,63 @@ from zesolver.settings_store import (
     load_persistent_settings,
     save_persistent_settings,
 )
+from zesolver.blind4d_runtime import resolve_default_4d_manifest_path
+from zesolver.catalog_resources import (
+    Blind4DCatalogMode,
+    Blind4DRuntimeError,
+    Blind4DRuntimeSelection,
+    CatalogResourceResolutionError,
+    NearCatalogMode,
+    NearCatalogRuntime,
+    NearCatalogRuntimeError,
+    SolverCatalogResources,
+    resolve_catalog_resources,
+    resolve_blind4d_runtime,
+    resolve_near_catalog_runtime,
+)
+from zesolver.catalog_library import (
+    CatalogLibrary,
+    CatalogLibraryError,
+    CatalogStatus,
+    IssueSeverity,
+)
+from zesolver.cancellation import (
+    CompositeCancellationToken,
+    ProcessCancellationController,
+    ProcessCancellationToken,
+    ThreadCancellationToken,
+    shutdown_process_executor,
+)
+from zesolver.solver_config import build_blind_solve_config
 from zesolver.gui_profiles import apply_settings_easy_visibility, apply_solver_simple_visibility
+from zesolver.gui_catalog_validation import (
+    GuiCatalogPathValidation,
+    validate_astap_root,
+    validate_blind4d_manifest_file,
+    validate_catalog_library_root,
+    validate_legacy_near_index_root,
+)
 from zesolver.gui_settings_sections import (
     build_blind_group,
     build_presets_fov_reco_groups,
     wire_settings_tab_callbacks,
 )
+from zesolver.gui_pipeline import GuiEngineSelectionError, GuiSolveController
+from zesolver.gui_pipeline.legacy_runner import LegacyGuiRunner
+from zesolver.gui_pipeline.lifecycle import RunLifecycle
+from zesolver.gui_pipeline.pipeline_runner import PipelineGuiRunner
+from zesolver.gui_pipeline.settings_adapter import build_gui_solve_request_from_legacy_config
 from zeblindsolver.metadata_solver import NearSolveConfig as NearIndexConfig
+from zeblindsolver.index_manifest_4d import (
+    IndexManifestError,
+    Loaded4DManifest,
+    load_4d_index_manifest,
+)
+from zeblindsolver.profiles import (
+    HISTORICAL_PROFILE,
+    ZEBLIND_4D_EXPERIMENTAL_PROFILE,
+    get_solver_profile,
+)
 from zeblindsolver.db_convert import (
     DEFAULT_MAG_CAP,
     DEFAULT_MAX_QUADS_PER_TILE,
@@ -368,13 +432,19 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "processing_count": "Traitement de {count} fichier(s).",
         "log_stop_requested": "Arrêt demandé…",
         "log_processing_done": "Traitement terminé.",
+        "log_processing_cancelled": "Traitement annulé.",
+        "log_processing_failed": "Traitement échoué: {error}",
+        "progress_status": "{done} / {total} — {remaining} restant(s)",
+        "progress_status_cancelled": "Arrêté : {done} traité(s), {remaining} restant(s)",
         "runner_start": "Démarrage: {files} fichier(s), {workers} thread(s).",
         "runner_stop_wait": "Arrêt demandé, attente de la fin des tâches…",
+        "status_stopping": "Arrêt en cours…",
         "status_waiting": "en attente",
         "status_wcs": "WCS présent",
         "status_solved": "résolu",
         "status_failed": "échec",
         "status_skipped": "ignoré",
+        "status_cancelled": "annulé",
         "log_result": "{status}: {path} — {message}",
         "log_result_no_details": "{status}: {path}",
         "log_error_prefix": "ERREUR",
@@ -569,13 +639,19 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "processing_count": "Processing {count} file(s).",
         "log_stop_requested": "Stop requested…",
         "log_processing_done": "Processing finished.",
+        "log_processing_cancelled": "Processing cancelled.",
+        "log_processing_failed": "Processing failed: {error}",
+        "progress_status": "{done} / {total} — {remaining} remaining",
+        "progress_status_cancelled": "Stopped: {done} processed, {remaining} remaining",
         "runner_start": "Starting: {files} file(s), {workers} thread(s).",
         "runner_stop_wait": "Stop requested, waiting for tasks…",
+        "status_stopping": "Stopping…",
         "status_waiting": "waiting",
         "status_wcs": "WCS present",
         "status_solved": "solved",
         "status_failed": "failed",
         "status_skipped": "skipped",
+        "status_cancelled": "cancelled",
         "log_result": "{status}: {path} — {message}",
         "log_result_no_details": "{status}: {path}",
         "log_error_prefix": "ERROR",
@@ -711,9 +787,9 @@ for _lang, _mapping in _GUI_DOWNLOADS_I18N.items():
 _GUI_ASTROMETRY_I18N = {
     "fr": {
         "solver.backend.label": "Solveur",
-        "solver.backend.local": "Local (ZeNear → ZeBlind → Astrometry*)",
+        "solver.backend.local": "Local (ZeNear → ZeBlind 4D → Astrometry*)",
         "solver.backend.astrometry": "Astrometry.net (web)",
-        "solver.backend.note": "Par défaut: ZeNear, puis ZeBlind, puis Astrometry si clé API renseignée.",
+        "solver.backend.note": "Chaîne locale : ZeNear → ZeBlind 4D. Astrometry.net est un fallback web optionnel si configuré.",
         "solver.status.blind_disabled": "Mode ZeNear seul (blind solver désactivé).",
         "solver.status.using_backend": "Solveur utilisé : {backend}",
         "astrometry.tab.title": "Astrometry.net",
@@ -732,9 +808,9 @@ _GUI_ASTROMETRY_I18N = {
     },
     "en": {
         "solver.backend.label": "Solver backend",
-        "solver.backend.local": "Local (ZeNear → ZeBlind → Astrometry*)",
+        "solver.backend.local": "Local (ZeNear → ZeBlind 4D → Astrometry*)",
         "solver.backend.astrometry": "Astrometry.net (web)",
-        "solver.backend.note": "Default: ZeNear, then ZeBlind, then Astrometry if an API key is configured.",
+        "solver.backend.note": "Local chain: ZeNear → ZeBlind 4D. Astrometry.net is an optional web fallback when configured.",
         "solver.status.blind_disabled": "ZeNear-only mode (blind solver disabled).",
         "solver.status.using_backend": "Using backend: {backend}",
         "astrometry.tab.title": "Astrometry.net",
@@ -753,6 +829,210 @@ _GUI_ASTROMETRY_I18N = {
     },
 }
 for _lang, _mapping in _GUI_ASTROMETRY_I18N.items():
+    base = GUI_TRANSLATIONS.setdefault(_lang, {})
+    for _k, _v in _mapping.items():
+        if _k not in base:
+            base[_k] = _v
+
+_GUI_ZEBLIND_4D_I18N = {
+    "fr": {
+        "blind_4d_easy_label": "Utiliser ZeBlind 4D",
+        "blind_4d_profile_label": "Profil ZeBlind",
+        "blind_4d_profile_historical": "Legacy diagnostic backend",
+        "blind_4d_profile_experimental": "ZeBlind 4D",
+        "blind_4d_manifest_label": "Manifeste Blind 4D externe",
+        "blind_4d_browse": "Parcourir…",
+        "blind_4d_verify": "Vérifier",
+        "blind_4d_not_verified": "Non vérifié",
+        "blind_4d_verifying": "Vérification en cours…",
+        "blind_4d_manifest_valid": "Manifest valide",
+        "blind_4d_manifest_invalid": "Manifest invalide",
+        "blind_4d_indexes_verified": "{count} index 4D vérifiés — tuiles {tiles}",
+        "blind_4d_limited_note": "Couverture limitée aux index 4D installés. Chaîne locale : ZeNear → ZeBlind 4D.",
+        "blind_4d_enable_failed_title": "Impossible d’activer ZeBlind 4D",
+        "blind_4d_enable_failed_body": "Manifest :\n{manifest}\n\nErreur :\n{error}",
+        "blind_4d_ready": "ZeBlind 4D prêt",
+        "blind_4d_unavailable": "ZeBlind 4D indisponible — manifest invalide",
+        "blind_4d_preflight_failed": "Preflight ZeBlind 4D impossible : {error}",
+        "blind_4d_manifest_filter": "Manifest JSON (*.json);;Tous les fichiers (*)",
+        "blind_4d_tooltip": "Active ZeBlind 4D. Couverture limitée aux six index 4D installés.",
+        "blind_4d_manifest_tooltip": "Manifest JSON 4D strict ; aucun dossier n’est scanné automatiquement.",
+        "solver.chain.historical": "Chaîne effective : ZeNear → ZeBlind 4D requis → Astrometry*",
+        "solver.chain.4d": "Chaîne effective : ZeNear → ZeBlind 4D → Astrometry.net optionnel",
+    },
+    "en": {
+        "blind_4d_easy_label": "Use ZeBlind 4D",
+        "blind_4d_profile_label": "ZeBlind profile",
+        "blind_4d_profile_historical": "Legacy diagnostic backend",
+        "blind_4d_profile_experimental": "ZeBlind 4D",
+        "blind_4d_manifest_label": "External Blind 4D manifest",
+        "blind_4d_browse": "Browse…",
+        "blind_4d_verify": "Verify",
+        "blind_4d_not_verified": "Not verified",
+        "blind_4d_verifying": "Verification in progress…",
+        "blind_4d_manifest_valid": "Manifest valid",
+        "blind_4d_manifest_invalid": "Manifest invalid",
+        "blind_4d_indexes_verified": "{count} 4D indexes verified — tiles {tiles}",
+        "blind_4d_limited_note": "Coverage is limited to installed 4D indexes. Local chain: ZeNear → ZeBlind 4D.",
+        "blind_4d_enable_failed_title": "Unable to enable ZeBlind 4D",
+        "blind_4d_enable_failed_body": "Manifest:\n{manifest}\n\nError:\n{error}",
+        "blind_4d_ready": "ZeBlind 4D ready",
+        "blind_4d_unavailable": "ZeBlind 4D unavailable — manifest invalid",
+        "blind_4d_preflight_failed": "ZeBlind 4D preflight failed: {error}",
+        "blind_4d_manifest_filter": "JSON manifest (*.json);;All files (*)",
+        "blind_4d_tooltip": "Enables ZeBlind 4D. Coverage is limited to the six installed 4D indexes.",
+        "blind_4d_manifest_tooltip": "Strict 4D JSON manifest; no directory is scanned automatically.",
+        "solver.chain.historical": "Effective chain: ZeNear → ZeBlind 4D required → Astrometry*",
+        "solver.chain.4d": "Effective chain: ZeNear → ZeBlind 4D → optional Astrometry.net",
+    },
+}
+for _lang, _mapping in _GUI_ZEBLIND_4D_I18N.items():
+    base = GUI_TRANSLATIONS.setdefault(_lang, {})
+    for _k, _v in _mapping.items():
+        if _k not in base:
+            base[_k] = _v
+
+_GUI_CATALOG_LIBRARY_I18N = {
+    "fr": {
+        "settings_catalog_library_label": "Bibliothèque ZeSolver",
+        "settings_catalog_library_browse": "Parcourir…",
+        "settings_catalog_library_validate": "Vérifier",
+        "settings_catalog_library_clear": "Effacer",
+        "settings_catalog_library_tooltip": "Choisir la racine de bibliothèque contenant catalog.json.",
+        "settings_catalog_library_help": "Sélectionnez le dossier contenant catalog.json.",
+        "settings_catalog_library_none": "AUCUNE_BIBLIOTHEQUE — aucune bibliothèque sélectionnée.",
+        "settings_catalog_library_unverified": "INVALID — bibliothèque non vérifiée. Cliquez sur Vérifier avant de lancer un run.",
+        "settings_catalog_library_validating": "VALIDATION_EN_COURS — vérification de la bibliothèque…",
+        "settings_catalog_library_missing": "MISSING — catalog.json introuvable ou racine absente.",
+        "settings_catalog_library_invalid": "INVALID — {error}",
+        "settings_catalog_library_ready_partial": "READY_PARTIAL — Bibliothèque prête avec couverture partielle\nNear ASTAP : {near}\nBlind 4D : {blind}\nCouverture globale Blind 4D : {all_sky}\nWarnings : {warnings}\nErrors : {errors}",
+        "settings_catalog_library_ready_full": "READY_FULL — Bibliothèque prête\nNear ASTAP : {near}\nBlind 4D : {blind}\nCouverture globale Blind 4D : {all_sky}\nWarnings : {warnings}\nErrors : {errors}",
+        "settings_catalog_library_near_only": "NEAR_ONLY — Bibliothèque Near uniquement\nNear ASTAP : {near}\nBlind 4D : indisponible\nWarnings : {warnings}\nErrors : {errors}",
+        "settings_catalog_library_blind_only": "BLIND4D_ONLY — Bibliothèque Blind 4D uniquement\nNear ASTAP : indisponible\nBlind 4D : {blind}\nCouverture globale Blind 4D : {all_sky}\nWarnings : {warnings}\nErrors : {errors}",
+        "settings_catalog_library_source_available": "disponible — {families}, {tiles} tuiles",
+        "settings_catalog_library_source_unavailable": "indisponible",
+        "settings_catalog_library_blind_available": "disponible — {indexes} index / {total} tuiles",
+        "settings_catalog_library_blind_unavailable": "indisponible",
+        "settings_catalog_library_all_sky_yes": "oui",
+        "settings_catalog_library_all_sky_no": "non",
+        "settings_catalog_library_cleared": "Bibliothèque désactivée. Les fichiers de la bibliothèque ne seront pas supprimés.",
+        "simple_wizard_library_ready": "Bibliothèque ZeSolver valide détectée. L’assistant est prêt.",
+        "simple_wizard_missing_library": "Aucune bibliothèque ZeSolver sélectionnée. Choisissez une bibliothèque ou utilisez la compatibilité historique.",
+        "simple_wizard_invalid_library": "La bibliothèque sélectionnée est invalide. Vérifiez-la ou choisissez une autre racine.",
+        "simple_wizard_legacy_compat": "Configuration historique valide utilisée en compatibilité.",
+        "catalog_compat_group_title": "Compatibilité historique et diagnostic",
+        "catalog_compat_warning": "Ces réglages servent au rollback, au diagnostic et aux anciennes installations. Ils ne sont pas nécessaires lorsque la Bibliothèque ZeSolver est valide.",
+        "catalog_compat_tools_title": "Outils avancés et maintenance des catalogues",
+        "catalog_compat_tools_warning": "Ces actions peuvent construire ou vérifier des artefacts historiques. Elles ne sont pas utilisées par le parcours normal Bibliothèque ZeSolver.",
+        "settings_legacy_astap_label": "Base ASTAP historique",
+        "settings_legacy_astap_tooltip": "Dossier contenant des fichiers *.1476 ou *.290.",
+        "settings_legacy_index_label": "Index Near historique",
+        "settings_legacy_index_tooltip": "Dossier contenant manifest.json et les artefacts Near historiques.",
+        "settings_blind4d_external_label": "Manifeste Blind 4D externe",
+        "settings_blind4d_external_tooltip": "Fichier JSON strict utilisé uniquement en rollback external-manifest.",
+        "settings_near_mode_label": "Near",
+        "settings_blind4d_mode_label": "Blind 4D",
+        "settings_mode_auto": "auto",
+        "settings_mode_astap_native": "astap-native",
+        "settings_mode_legacy_index": "legacy-index",
+        "settings_mode_library_view": "library-view",
+        "settings_mode_external_manifest": "external-manifest",
+        "settings_restore_auto_modes": "Rétablir le mode automatique recommandé",
+        "settings_rollback_inactive": "Mode produit normal : auto utilise la Bibliothèque ZeSolver quand elle est valide.",
+        "settings_rollback_active": "ROLLBACK HISTORIQUE ACTIF — Near : {near}; Blind 4D : {blind}",
+        "catalog_path_error": "{code}: {message}\nChamp attendu : {field}\nAction : {action}",
+        "field_catalog_library": "Bibliothèque ZeSolver",
+        "field_legacy_astap": "Base ASTAP historique",
+        "field_legacy_index": "Index Near historique",
+        "field_blind4d_manifest": "Manifeste Blind 4D externe",
+        "msg_catalog_library_used_as_legacy_near_index": "Ce dossier est une Bibliothèque ZeSolver, pas un index Near historique.",
+        "msg_legacy_near_index_used_as_catalog_library": "Ce dossier ressemble à un index Near historique. Une Bibliothèque ZeSolver doit contenir catalog.json.",
+        "msg_astap_source_used_as_catalog_library": "Ce dossier ressemble à une base ASTAP/HNSKY. Une Bibliothèque ZeSolver doit contenir catalog.json.",
+        "msg_blind4d_manifest_file_required": "Le champ Manifeste Blind 4D externe attend un fichier JSON strict, pas un dossier.",
+        "action_use_catalog_library_field": "Utilisez ce dossier dans le champ « Bibliothèque ZeSolver ».",
+        "action_use_legacy_index_field": "Utilisez ce dossier dans « Index Near historique » ou choisissez une Bibliothèque ZeSolver contenant catalog.json.",
+        "action_use_legacy_astap_field": "Utilisez ce dossier dans « Base ASTAP historique » ou adoptez une Bibliothèque ZeSolver.",
+        "action_choose_catalog_library": "Choisir une bibliothèque contenant catalog.json.",
+        "action_choose_legacy_index": "Choisir un index Near historique contenant manifest.json.",
+        "action_choose_blind4d_manifest": "Choisir un fichier JSON Blind 4D strict.",
+        "action_fix_or_choose_other": "Corriger le chemin ou choisir une autre ressource.",
+        "LEGACY_ROLLBACK_ACTIVE": "Mode de compatibilité explicite actif.",
+        "LEGACY_ROLLBACK_NOT_ENABLED": "Le rollback historique n'est pas activé.",
+        "catalog_preflight_timings": "Catalog preflight timings: {payload}",
+        "catalog_library_selected_log": "CatalogLibrary selected: {library_id}",
+        "catalog_library_status_log": "CatalogLibrary status: {status}",
+    },
+    "en": {
+        "settings_catalog_library_label": "ZeSolver library",
+        "settings_catalog_library_browse": "Browse…",
+        "settings_catalog_library_validate": "Verify",
+        "settings_catalog_library_clear": "Clear",
+        "settings_catalog_library_tooltip": "Choose the library root containing catalog.json.",
+        "settings_catalog_library_help": "Select the folder containing catalog.json.",
+        "settings_catalog_library_none": "AUCUNE_BIBLIOTHEQUE — no library selected.",
+        "settings_catalog_library_unverified": "INVALID — library not verified. Click Verify before starting a run.",
+        "settings_catalog_library_validating": "VALIDATION_EN_COURS — verifying library…",
+        "settings_catalog_library_missing": "MISSING — catalog.json not found or root missing.",
+        "settings_catalog_library_invalid": "INVALID — {error}",
+        "settings_catalog_library_ready_partial": "READY_PARTIAL — Library ready with partial coverage\nNear ASTAP: {near}\nBlind 4D: {blind}\nGlobal Blind 4D coverage: {all_sky}\nWarnings: {warnings}\nErrors: {errors}",
+        "settings_catalog_library_ready_full": "READY_FULL — Library ready\nNear ASTAP: {near}\nBlind 4D: {blind}\nGlobal Blind 4D coverage: {all_sky}\nWarnings: {warnings}\nErrors: {errors}",
+        "settings_catalog_library_near_only": "NEAR_ONLY — Near-only library\nNear ASTAP: {near}\nBlind 4D: unavailable\nWarnings: {warnings}\nErrors: {errors}",
+        "settings_catalog_library_blind_only": "BLIND4D_ONLY — Blind 4D-only library\nNear ASTAP: unavailable\nBlind 4D: {blind}\nGlobal Blind 4D coverage: {all_sky}\nWarnings: {warnings}\nErrors: {errors}",
+        "settings_catalog_library_source_available": "available — {families}, {tiles} tiles",
+        "settings_catalog_library_source_unavailable": "unavailable",
+        "settings_catalog_library_blind_available": "available — {indexes} indexes / {total} tiles",
+        "settings_catalog_library_blind_unavailable": "unavailable",
+        "settings_catalog_library_all_sky_yes": "yes",
+        "settings_catalog_library_all_sky_no": "no",
+        "settings_catalog_library_cleared": "Library disabled. Library files will not be deleted.",
+        "simple_wizard_library_ready": "Valid ZeSolver library detected. The assistant is ready.",
+        "simple_wizard_missing_library": "No ZeSolver library is selected. Choose a library or use legacy compatibility.",
+        "simple_wizard_invalid_library": "The selected library is invalid. Verify it or choose another root.",
+        "simple_wizard_legacy_compat": "Valid legacy configuration is being used for compatibility.",
+        "catalog_compat_group_title": "Legacy compatibility and diagnostics",
+        "catalog_compat_warning": "These settings are for rollback, diagnostics, and older installations. They are not needed when the ZeSolver library is valid.",
+        "catalog_compat_tools_title": "Advanced tools and catalog maintenance",
+        "catalog_compat_tools_warning": "These actions can build or verify historical artifacts. They are not used by the normal ZeSolver library path.",
+        "settings_legacy_astap_label": "Historical ASTAP source",
+        "settings_legacy_astap_tooltip": "Folder containing *.1476 or *.290 files.",
+        "settings_legacy_index_label": "Historical Near index",
+        "settings_legacy_index_tooltip": "Folder containing manifest.json and historical Near artifacts.",
+        "settings_blind4d_external_label": "External Blind 4D manifest",
+        "settings_blind4d_external_tooltip": "Strict JSON file used only for explicit external-manifest rollback.",
+        "settings_near_mode_label": "Near",
+        "settings_blind4d_mode_label": "Blind 4D",
+        "settings_mode_auto": "auto",
+        "settings_mode_astap_native": "astap-native",
+        "settings_mode_legacy_index": "legacy-index",
+        "settings_mode_library_view": "library-view",
+        "settings_mode_external_manifest": "external-manifest",
+        "settings_restore_auto_modes": "Restore recommended automatic mode",
+        "settings_rollback_inactive": "Normal product mode: auto uses the ZeSolver library when it is valid.",
+        "settings_rollback_active": "HISTORICAL ROLLBACK ACTIVE — Near: {near}; Blind 4D: {blind}",
+        "catalog_path_error": "{code}: {message}\nExpected field: {field}\nAction: {action}",
+        "field_catalog_library": "ZeSolver library",
+        "field_legacy_astap": "Historical ASTAP source",
+        "field_legacy_index": "Historical Near index",
+        "field_blind4d_manifest": "External Blind 4D manifest",
+        "msg_catalog_library_used_as_legacy_near_index": "This folder is a ZeSolver library, not a historical Near index.",
+        "msg_legacy_near_index_used_as_catalog_library": "This folder looks like a historical Near index. A ZeSolver library must contain catalog.json.",
+        "msg_astap_source_used_as_catalog_library": "This folder looks like an ASTAP/HNSKY source. A ZeSolver library must contain catalog.json.",
+        "msg_blind4d_manifest_file_required": "The external Blind 4D manifest field expects a strict JSON file, not a folder.",
+        "action_use_catalog_library_field": "Use this folder in the ZeSolver library field.",
+        "action_use_legacy_index_field": "Use this folder in Historical Near index, or choose a ZeSolver library containing catalog.json.",
+        "action_use_legacy_astap_field": "Use this folder in Historical ASTAP source, or adopt a ZeSolver library.",
+        "action_choose_catalog_library": "Choose a library containing catalog.json.",
+        "action_choose_legacy_index": "Choose a historical Near index containing manifest.json.",
+        "action_choose_blind4d_manifest": "Choose a strict Blind 4D JSON file.",
+        "action_fix_or_choose_other": "Fix the path or choose another resource.",
+        "LEGACY_ROLLBACK_ACTIVE": "Explicit compatibility mode is active.",
+        "LEGACY_ROLLBACK_NOT_ENABLED": "Historical rollback is not enabled.",
+        "catalog_preflight_timings": "Catalog preflight timings: {payload}",
+        "catalog_library_selected_log": "CatalogLibrary selected: {library_id}",
+        "catalog_library_status_log": "CatalogLibrary status: {status}",
+    },
+}
+for _lang, _mapping in _GUI_CATALOG_LIBRARY_I18N.items():
     base = GUI_TRANSLATIONS.setdefault(_lang, {})
     for _k, _v in _mapping.items():
         if _k not in base:
@@ -1021,8 +1301,13 @@ class SolveConfig:
     search_radius_attempts: int = DEFAULT_SEARCH_RADIUS_ATTEMPTS
     max_search_radius_deg: Optional[float] = None
     blind_enabled: bool = True
+    blind_only: bool = False
     blind_skip_if_valid: bool = True
     blind_index_path: Optional[Path] = None
+    blind_backend_profile: str = ZEBLIND_4D_EXPERIMENTAL_PROFILE
+    blind_4d_manifest_path: Optional[Path] = None
+    blind_4d_loaded_manifest: Optional[Loaded4DManifest] = None
+    catalog_library_path: Optional[Path] = None
     hint_ra_deg: Optional[float] = None
     hint_dec_deg: Optional[float] = None
     hint_radius_deg: Optional[float] = None
@@ -1064,6 +1349,8 @@ class SolveConfig:
     # triggering immediate blind fallback inside near_solve.
     near_defer_blind_fallback: bool = False
     near_allow_second_rescue: bool = False
+    near_catalog_mode: str = "auto"
+    blind4d_catalog_mode: str = "auto"
     # Blind solver (Python) tunables (mirrors settings panel). These were
     # previously only used by the settings tester; we surface them here so the
     # batch run uses and logs the same values as the GUI:
@@ -1105,6 +1392,19 @@ class SolveConfig:
             object.__setattr__(self, "families", value)
         if self.blind_index_path:
             object.__setattr__(self, "blind_index_path", Path(self.blind_index_path).expanduser())
+        profile = str(getattr(self, "blind_backend_profile", ZEBLIND_4D_EXPERIMENTAL_PROFILE) or ZEBLIND_4D_EXPERIMENTAL_PROFILE).strip().lower()
+        if profile not in {HISTORICAL_PROFILE, ZEBLIND_4D_EXPERIMENTAL_PROFILE}:
+            raise ValueError(f"unsupported blind backend profile: {profile}")
+        object.__setattr__(self, "blind_backend_profile", profile)
+        if self.blind_4d_manifest_path:
+            object.__setattr__(self, "blind_4d_manifest_path", Path(self.blind_4d_manifest_path).expanduser())
+        if self.catalog_library_path:
+            object.__setattr__(self, "catalog_library_path", Path(self.catalog_library_path).expanduser())
+        object.__setattr__(
+            self,
+            "blind4d_catalog_mode",
+            str(getattr(self, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-"),
+        )
         if self.search_radius_scale < 1.0:
             raise ValueError("search_radius_scale must be >= 1.0")
         if self.search_radius_attempts < 1:
@@ -1134,6 +1434,8 @@ class SolveConfig:
         object.__setattr__(self, "dev_detect_min_area", detect_area)
         # Legacy non-strict mode is retired.
         object.__setattr__(self, "near_astap_iso_strict", True)
+        mode = NearCatalogMode.normalize(getattr(self, "near_catalog_mode", "auto"))
+        object.__setattr__(self, "near_catalog_mode", mode.value)
         api_url = str(getattr(self, "astrometry_api_url", "https://nova.astrometry.net/api") or "https://nova.astrometry.net/api").strip()
         if not api_url:
             api_url = "https://nova.astrometry.net/api"
@@ -1144,6 +1446,39 @@ class SolveConfig:
         else:
             api_key = None
         object.__setattr__(self, "astrometry_api_key", api_key)
+
+
+def resolve_catalog_resources_for_config(config: SolveConfig) -> SolverCatalogResources:
+    return resolve_catalog_resources(
+        catalog_library=config.catalog_library_path,
+        legacy_db_root=config.db_root,
+        legacy_families=tuple(config.families or ()),
+        legacy_blind4d_manifest=config.blind_4d_manifest_path,
+        legacy_index_root=config.blind_index_path,
+        enable_environment_discovery=False,
+    )
+
+
+def apply_catalog_resources_to_config(config: SolveConfig) -> tuple[SolveConfig, SolverCatalogResources]:
+    resources = resolve_catalog_resources_for_config(config)
+    updates: dict[str, object] = {}
+    if resources.source in {"library", "environment"} and resources.near is not None:
+        updates["db_root"] = resources.near.root
+        updates["families"] = resources.near.families or None
+    if config.blind_backend_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+        try:
+            blind4d_runtime = resolve_blind4d_runtime(
+                resources,
+                mode=getattr(config, "blind4d_catalog_mode", "auto"),
+                external_manifest_path=config.blind_4d_manifest_path,
+            )
+        except Blind4DRuntimeError:
+            blind4d_runtime = None
+        if blind4d_runtime is not None and blind4d_runtime.available and blind4d_runtime.loaded_manifest is not None:
+            updates["blind_4d_manifest_path"] = blind4d_runtime.loaded_manifest.manifest_path
+            updates["blind_4d_loaded_manifest"] = blind4d_runtime.loaded_manifest
+    resolved = replace(config, **updates) if updates else config
+    return resolved, resources
 
 
 @dataclass(slots=True)
@@ -1185,6 +1520,7 @@ class ImageSolveResult:
 
 _PROC_NEAR_SOLVER: Optional["ImageSolver"] = None
 _PROC_NEAR_WORKER_BACKEND: str = "auto"
+_PROC_CANCEL_TOKEN: Optional[ProcessCancellationToken] = None
 
 
 def _result_to_payload(result: ImageSolveResult) -> dict[str, Any]:
@@ -1217,8 +1553,11 @@ def _payload_to_result(payload: Mapping[str, Any]) -> ImageSolveResult:
     )
 
 
-def _near_worker_init(config: SolveConfig) -> None:
-    global _PROC_NEAR_SOLVER, _PROC_NEAR_WORKER_BACKEND
+def _near_worker_init(config: SolveConfig, cancel_token: Optional[ProcessCancellationToken] = None) -> None:
+    global _PROC_NEAR_SOLVER, _PROC_NEAR_WORKER_BACKEND, _PROC_CANCEL_TOKEN
+    _PROC_CANCEL_TOKEN = cancel_token
+    if _PROC_CANCEL_TOKEN is not None:
+        _PROC_CANCEL_TOKEN.set_worker_state("initializing")
     cfg = config
     try:
         backend = str(getattr(config, "near_detect_backend", "auto") or "auto").strip().lower()
@@ -1239,14 +1578,20 @@ def _near_worker_init(config: SolveConfig) -> None:
 
     _PROC_NEAR_SOLVER = ImageSolver(cfg)
     try:
-        _PROC_NEAR_SOLVER.set_cancel_event(None)
+        _PROC_NEAR_SOLVER.set_cancel_event(_PROC_CANCEL_TOKEN)
     except Exception:
         pass
+    if _PROC_CANCEL_TOKEN is not None:
+        _PROC_CANCEL_TOKEN.set_worker_state("idle")
 
 
-def _near_worker_init_with_backend(config: SolveConfig, backend: str) -> None:
+def _near_worker_init_with_backend(
+    config: SolveConfig,
+    backend: str,
+    cancel_token: Optional[ProcessCancellationToken] = None,
+) -> None:
     forced = replace(config, near_detect_backend=str(backend or "cpu").strip().lower())
-    _near_worker_init(forced)
+    _near_worker_init(forced, cancel_token)
 
 
 def _near_worker_solve(path_text: str) -> dict[str, Any]:
@@ -1254,9 +1599,16 @@ def _near_worker_solve(path_text: str) -> dict[str, Any]:
     try:
         if _PROC_NEAR_SOLVER is None:
             raise RuntimeError("near worker not initialized")
+        if _PROC_CANCEL_TOKEN is not None:
+            _PROC_CANCEL_TOKEN.set_worker_state("active")
+            if _PROC_CANCEL_TOKEN.is_cancelled():
+                return _result_to_payload(ImageSolveResult(path=path, status="cancelled", message="cancelled"))
         result = _PROC_NEAR_SOLVER.solve_path(path, allow_blind_fallback=False)
     except Exception as exc:
         result = ImageSolveResult(path=path, status="failed", message=str(exc))
+    finally:
+        if _PROC_CANCEL_TOKEN is not None:
+            _PROC_CANCEL_TOKEN.set_worker_state("idle")
     payload = _result_to_payload(result)
     payload["worker_detect_backend"] = _PROC_NEAR_WORKER_BACKEND
     return payload
@@ -1307,6 +1659,40 @@ def _system_memory_gb() -> Optional[float]:
     except Exception:
         pass
     return None
+
+
+def _auto_blind_worker_count(
+    requested_workers: int,
+    ram_gb: Optional[float] = None,
+    *,
+    blind_backend_profile: str | None = None,
+) -> int:
+    """Bound concurrent blind solves independently from the lighter Near phase."""
+    requested = max(1, int(requested_workers or 1))
+    override = str(os.environ.get("ZE_BLIND_WORKERS", "") or "").strip()
+    if override:
+        try:
+            return max(1, min(requested, int(override)))
+        except ValueError:
+            logging.warning("Ignoring invalid ZE_BLIND_WORKERS=%r", override)
+
+    if str(blind_backend_profile or "").strip().lower() == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+        return 1
+
+    total_ram_gb = _system_memory_gb() if ram_gb is None else ram_gb
+    if total_ram_gb is None:
+        return min(requested, 4)
+    if total_ram_gb <= 8.0:
+        cap = 2
+    elif total_ram_gb <= 16.0:
+        cap = 3
+    elif total_ram_gb <= 32.0:
+        cap = 4
+    elif total_ram_gb <= 64.0:
+        cap = 6
+    else:
+        cap = 8
+    return max(1, min(requested, cap))
 
 
 def _format_bytes(value: Optional[int]) -> str:
@@ -1463,6 +1849,71 @@ def _header_has_wcs(header: fits.Header) -> bool:
     return False
 
 
+@dataclass(frozen=True, slots=True)
+class EffectiveWcsState:
+    status: str
+    detail: str = ""
+    primary_has_wcs: bool = False
+    other_hdus_have_wcs: bool = False
+
+
+def inspect_effective_wcs_state(path: Path) -> EffectiveWcsState:
+    """Inspect the WCS state that the main GUI solver flow actually uses."""
+    path = Path(path)
+    suffix = path.suffix.lower()
+    if suffix in FITS_EXTENSIONS:
+        try:
+            with fits.open(path, mode="readonly", memmap=False) as hdul:
+                primary_has_wcs = False
+                other_hdus_have_wcs = False
+                for index, hdu in enumerate(hdul):
+                    try:
+                        has_wcs = _header_has_wcs(hdu.header)
+                    except Exception:
+                        has_wcs = False
+                    if index == 0:
+                        primary_has_wcs = bool(has_wcs)
+                    elif has_wcs:
+                        other_hdus_have_wcs = True
+                try:
+                    h0 = hdul[0].header
+                    solved_without_wcs = bool(h0.get("SOLVED", False)) and not primary_has_wcs
+                except Exception:
+                    solved_without_wcs = False
+        except Exception as exc:
+            return EffectiveWcsState("failed", f"scan error: {exc}")
+        if primary_has_wcs:
+            return EffectiveWcsState("wcs", "", primary_has_wcs=True, other_hdus_have_wcs=other_hdus_have_wcs)
+        if solved_without_wcs:
+            return EffectiveWcsState(
+                "failed",
+                "SOLVED present but PRIMARY WCS cards missing",
+                primary_has_wcs=False,
+                other_hdus_have_wcs=other_hdus_have_wcs,
+            )
+        if other_hdus_have_wcs:
+            return EffectiveWcsState(
+                "waiting",
+                "PRIMARY WCS absent; extension WCS present",
+                primary_has_wcs=False,
+                other_hdus_have_wcs=True,
+            )
+        return EffectiveWcsState("waiting", "")
+
+    if suffix in RASTER_EXTENSIONS:
+        sidecar = path.with_suffix(path.suffix + SIDE_CAR_SUFFIX)
+        if sidecar.is_file():
+            try:
+                payload = json.loads(sidecar.read_text(errors="ignore"))
+                if isinstance(payload, dict) and all(k in payload for k in ("crpix", "crval", "cd")):
+                    return EffectiveWcsState("wcs", "")
+            except Exception:
+                pass
+        return EffectiveWcsState("waiting", "")
+
+    return EffectiveWcsState("waiting", "")
+
+
 def _fits_requires_memmap_off(header: fits.Header) -> bool:
     """Astropy cannot memmap scaled data (BZERO/BSCALE/BLANK)."""
     return any(key in header for key in FITS_MEMMAP_FORBIDDEN_KEYS)
@@ -1470,39 +1921,8 @@ def _fits_requires_memmap_off(header: fits.Header) -> bool:
 
 def _quick_scan_initial_status(path: Path) -> tuple[str, str]:
     """Best-effort pre-scan status for the file list (WCS present vs waiting)."""
-    suffix = path.suffix.lower()
-    if suffix in FITS_EXTENSIONS:
-        try:
-            with fits.open(path, mode="readonly", memmap=False) as hdul:
-                for hdu in hdul:
-                    try:
-                        if _header_has_wcs(hdu.header):
-                            return "wcs", ""
-                    except Exception:
-                        continue
-                # Diagnostic hint: file stamped solved but no usable WCS cards.
-                try:
-                    h0 = hdul[0].header
-                    if bool(h0.get("SOLVED", False)) and not _header_has_wcs(h0):
-                        return "failed", "SOLVED present but WCS cards missing"
-                except Exception:
-                    pass
-        except Exception as exc:
-            return "failed", f"scan error: {exc}"
-        return "waiting", ""
-
-    if suffix in RASTER_EXTENSIONS:
-        sidecar = path.with_suffix(path.suffix + SIDE_CAR_SUFFIX)
-        if sidecar.is_file():
-            try:
-                payload = json.loads(sidecar.read_text(errors='ignore'))
-                if isinstance(payload, dict) and all(k in payload for k in ("crpix", "crval", "cd")):
-                    return "wcs", ""
-            except Exception:
-                pass
-        return "waiting", ""
-
-    return "waiting", ""
+    state = inspect_effective_wcs_state(path)
+    return state.status, state.detail
 
 
 def _sexagesimal_to_deg(value: str, is_ra: bool) -> Optional[float]:
@@ -1693,14 +2113,23 @@ def _cuda_runtime_summary() -> tuple[int, list[str], Optional[str]]:
 
 class ImageSolver:
     def __init__(self, config: SolveConfig) -> None:
-        self.config = config
-        self.db = CatalogDB(config.db_root, families=config.families, cache_size=config.cache_size)
+        self.config, self.catalog_resources = apply_catalog_resources_to_config(config)
+        self.near_catalog_runtime = self._resolve_near_catalog_runtime()
+        self.blind4d_runtime = self._resolve_blind4d_runtime()
+        if self.blind4d_runtime.available and self.blind4d_runtime.loaded_manifest is not None:
+            self.config = replace(
+                self.config,
+                blind_4d_manifest_path=self.blind4d_runtime.loaded_manifest.manifest_path,
+                blind_4d_loaded_manifest=self.blind4d_runtime.loaded_manifest,
+            )
+        self.db = None if bool(getattr(self.config, "blind_only", False)) else CatalogDB(self.config.db_root, families=self.config.families, cache_size=self.config.cache_size)
         self._db_lock = threading.Lock()
-        self._family_candidates = self._init_family_candidates()
+        self._family_candidates = () if self.db is None else self._init_family_candidates()
         self._family_hint: Optional[str] = None
         # Sequential near-solver warm start: (scale_deg_per_px, rotation_rad, parity)
         self._near_seed: Optional[tuple[float, float, int]] = None
         self._near_warmstart_parallel_notified: bool = False
+        self._last_near_failure_message: Optional[str] = None
         # Recent solved sky positions used to sanity-check/replace bad header hints.
         self._blind_hint_lock = threading.Lock()
         self._recent_sky_hints: list[dict[str, Any]] = []
@@ -1822,6 +2251,9 @@ class ImageSolver:
                     "quality_rms": float(getattr(self.config, "blind_quality_rms", 1.2) or 1.2),
                     "fast_mode": bool(getattr(self.config, "blind_fast_mode", True)),
                 },
+                "catalog": self.catalog_resources.telemetry(include_paths=False),
+                "near_catalog_runtime": self.near_catalog_runtime.telemetry(include_paths=False),
+                "blind4d_catalog_runtime": self.blind4d_runtime.telemetry(include_paths=False),
             }
             logging.info("Run configuration: %s", json.dumps(run_cfg, ensure_ascii=False))
             try:
@@ -1844,6 +2276,68 @@ class ImageSolver:
         except Exception:
             # Never fail construction because of logging
             pass
+
+    def _resolve_near_catalog_runtime(self) -> NearCatalogRuntime:
+        try:
+            return resolve_near_catalog_runtime(
+                self.catalog_resources,
+                mode=getattr(self.config, "near_catalog_mode", "auto"),
+                legacy_index_root=self.config.blind_index_path,
+                blind_only=bool(getattr(self.config, "blind_only", False)),
+                legacy_cache_size=int(getattr(self.config, "near_tile_cache_size", 128) or 128),
+            )
+        except NearCatalogRuntimeError as exc:
+            try:
+                requested = NearCatalogMode.normalize(getattr(self.config, "near_catalog_mode", "auto"))
+            except Exception:
+                requested = NearCatalogMode.AUTO
+            effective = None
+            if requested is NearCatalogMode.ASTAP_NATIVE or str(exc.code).startswith("ASTAP_") or exc.code == "NEAR_CATALOG_FAMILY_UNAVAILABLE":
+                effective = NearCatalogMode.ASTAP_NATIVE
+            elif requested is NearCatalogMode.LEGACY_INDEX or str(exc.code).startswith("LEGACY_"):
+                effective = NearCatalogMode.LEGACY_INDEX
+            logging.info("[ZENEAR] near catalog runtime unavailable: %s", exc)
+            return NearCatalogRuntime(
+                requested_mode=requested,
+                effective_mode=effective,
+                provider=None,
+                provider_kind=None,
+                source=self.catalog_resources.source,
+                legacy_index_root=self.config.blind_index_path,
+                error_code=exc.code,
+                error_message=str(exc),
+            )
+
+    def _resolve_blind4d_runtime(self) -> Blind4DRuntimeSelection:
+        profile = str(getattr(self.config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower()
+        if profile != ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+            return Blind4DRuntimeSelection(
+                mode_requested=Blind4DCatalogMode.AUTO,
+                mode_effective=None,
+                source="unavailable",
+                warnings=("blind4d_profile_not_selected",),
+            )
+        try:
+            return resolve_blind4d_runtime(
+                self.catalog_resources,
+                mode=getattr(self.config, "blind4d_catalog_mode", "auto"),
+                external_manifest_path=self.config.blind_4d_manifest_path,
+            )
+        except Blind4DRuntimeError as exc:
+            try:
+                requested = Blind4DCatalogMode.normalize(getattr(self.config, "blind4d_catalog_mode", "auto"))
+            except Exception:
+                requested = Blind4DCatalogMode.AUTO
+            logging.info("[ZEBLIND] Blind 4D runtime unavailable: %s", exc)
+            return Blind4DRuntimeSelection(
+                mode_requested=requested,
+                mode_effective=None,
+                source="unavailable",
+                coverage=self.catalog_resources.coverage,
+                library_id=self.catalog_resources.catalog_library_id,
+                error_code=exc.code,
+                error_message=str(exc),
+            )
 
     @staticmethod
     def _autotune_io_limit(base_dir: Path, workers: int) -> int:
@@ -1887,7 +2381,16 @@ class ImageSolver:
         self._cancel_event = event
 
     def _cancelled(self) -> bool:
-        return bool(self._cancel_event and self._cancel_event.is_set())
+        if not self._cancel_event:
+            return False
+        is_cancelled = getattr(self._cancel_event, "is_cancelled", None)
+        if callable(is_cancelled):
+            return bool(is_cancelled())
+        is_set = getattr(self._cancel_event, "is_set", None)
+        return bool(is_set()) if callable(is_set) else bool(self._cancel_event)
+
+    def _cancelled_result(self, path: Path) -> ImageSolveResult:
+        return ImageSolveResult(path=path, status="cancelled", message="cancelled")
 
     def _init_family_candidates(self) -> tuple[str, ...]:
         ordered: list[str] = []
@@ -2220,7 +2723,7 @@ class ImageSolver:
         peaks: Optional[np.ndarray] = None
         try:
             if self._cancelled():
-                return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                return self._cancelled_result(path)
             t0 = time.perf_counter()
             data, metadata = self._load_image(path)
             logging.info(
@@ -2235,14 +2738,39 @@ class ImageSolver:
             )
             if metadata.has_wcs and not self.config.overwrite:
                 raise SolveError("WCS already present (use --overwrite to recompute)", skip=True)
-            # Prefer the internal index-powered near solver when an index root is configured.
-            # This uses Python-only metadata-assisted solving without quads.
+            if bool(getattr(self.config, "blind_only", False)):
+                blind_result = self._run_blind_solver(
+                    path,
+                    run_info,
+                    skip_if_header_has_wcs=False,
+                    skip_if_valid=False,
+                    ra_hint=None,
+                    dec_hint=None,
+                    metadata=metadata,
+                    frame_data=data,
+                )
+                if blind_result and blind_result["success"]:
+                    solved = self._build_blind_result(path, blind_result, run_info)
+                    solved.duration_s = time.perf_counter() - start
+                    return solved
+                return ImageSolveResult(
+                    path=path,
+                    status="failed",
+                    message=(blind_result or {}).get("message", "blind-only solve failed"),
+                    metadata_source=metadata.source if metadata else None,
+                    duration_s=time.perf_counter() - start,
+                    run_info=list(run_info),
+                )
+            # Prefer the provider-backed ZeNear solver when a runtime provider is
+            # configured. Legacy index mode keeps historical behavior; ASTAP-native
+            # mode does not fall back to another Near provider.
             if (
-                self.config.blind_index_path
+                (self.near_catalog_runtime.available or self.near_catalog_runtime.error_code)
                 and path.suffix.lower() in FITS_EXTENSIONS
             ):
                 if self._cancelled():
-                    return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                    return self._cancelled_result(path)
+                self._last_near_failure_message = None
                 near_first = self._run_index_near_solver(
                     path,
                     metadata,
@@ -2252,6 +2780,8 @@ class ImageSolver:
                     near_first.duration_s = time.perf_counter() - start
                     near_first.run_info.extend(run_info)
                     return near_first
+                if self.near_catalog_runtime.effective_mode is NearCatalogMode.ASTAP_NATIVE:
+                    raise SolveError(self._last_near_failure_message or "ZeNear ASTAP-native failed")
             if metadata.ra_deg is None or metadata.dec_deg is None:
                 # For rasters without metadata: attempt blind via temp FITS bridge
                 if (
@@ -2265,7 +2795,7 @@ class ImageSolver:
                         return bridged
                 raise SolveError("Missing RA/DEC metadata", skip=False)
             if self._cancelled():
-                return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                return self._cancelled_result(path)
             logging.info("[solve] detecting stars in %s", path.name)
             t1 = time.perf_counter()
             peaks = _detect_stars(
@@ -2285,7 +2815,7 @@ class ImageSolver:
             final_error: Optional[SolveError] = None
             for radius_index, radius in enumerate(radius_candidates):
                 if self._cancelled():
-                    return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                    return self._cancelled_result(path)
                 last_error: Optional[SolveError] = None
                 combined_label: Optional[str] = None
                 combined_catalog_family: Optional[str] = None
@@ -2301,7 +2831,7 @@ class ImageSolver:
                         path.name,
                     )
                     if self._cancelled():
-                        return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                        return self._cancelled_result(path)
                     result = self._solve_with_catalog(
                         path=path,
                         metadata=metadata,
@@ -2325,7 +2855,7 @@ class ImageSolver:
                     raise SolveError("No catalogue families available in the database")
                 for idx, family in enumerate(families_to_try):
                     if self._cancelled():
-                        return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                        return self._cancelled_result(path)
                     try:
                         result = self._solve_with_catalog(
                             path=path,
@@ -2378,7 +2908,7 @@ class ImageSolver:
             raise SolveError("No catalogue families available in the database")
         except SolveError as exc:
             if self._cancelled():
-                return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                return self._cancelled_result(path)
             if allow_blind_fallback:
                 blind_result = self._resolve_with_blind_after_failure(
                     path=path,
@@ -2421,7 +2951,7 @@ class ImageSolver:
         metadata: Optional[ImageMetadata] = None
         try:
             if self._cancelled():
-                return ImageSolveResult(path=path, status="skipped", message="cancelled")
+                return self._cancelled_result(path)
             data, metadata = self._load_image(path)
             if metadata.kind == "raster" and self._should_try_blind(path) and self.config.blind_index_path is not None:
                 bridged = self._run_blind_on_raster(raster_path=path, raster_data=data, run_info=run_info)
@@ -2509,28 +3039,38 @@ class ImageSolver:
             target.write_text(json.dumps(payload, indent=2))
 
     def _write_fits_solution(self, path: Path, solution: WCSSolution) -> None:
+        if self._cancelled():
+            raise SolveError("cancelled", skip=True)
+        critical = getattr(self._cancel_event, "critical_section", None) if self._cancel_event is not None else None
+        critical_context = critical("wcs_write") if callable(critical) else None
         with self._io_sema:
-            with fits.open(path, mode="update", memmap=False) as hdul:
-                header = hdul[0].header
-                header["WCSAXES"] = 2
-                header["CRPIX1"] = float(solution.crpix[0])
-                header["CRPIX2"] = float(solution.crpix[1])
-                header["CRVAL1"] = float(solution.crval[0])
-                header["CRVAL2"] = float(solution.crval[1])
-                header["CD1_1"] = float(solution.cd[0, 0])
-                header["CD1_2"] = float(solution.cd[0, 1])
-                header["CD2_1"] = float(solution.cd[1, 0])
-                header["CD2_2"] = float(solution.cd[1, 1])
-                header["CTYPE1"] = "RA---TAN"
-                header["CTYPE2"] = "DEC--TAN"
-                header["CUNIT1"] = "deg"
-                header["CUNIT2"] = "deg"
-                header["RADECSYS"] = "ICRS"
-                header["EQUINOX"] = 2000.0
-                header["ZESOLVER"] = (APP_VERSION, "WCS written by zesolver.py")
-                timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                header.add_history(f"ZeSolver WCS solution at {timestamp}")
-                hdul.flush()
+            if critical_context is not None:
+                critical_context.__enter__()
+            try:
+                with fits.open(path, mode="update", memmap=False) as hdul:
+                    header = hdul[0].header
+                    header["WCSAXES"] = 2
+                    header["CRPIX1"] = float(solution.crpix[0])
+                    header["CRPIX2"] = float(solution.crpix[1])
+                    header["CRVAL1"] = float(solution.crval[0])
+                    header["CRVAL2"] = float(solution.crval[1])
+                    header["CD1_1"] = float(solution.cd[0, 0])
+                    header["CD1_2"] = float(solution.cd[0, 1])
+                    header["CD2_1"] = float(solution.cd[1, 0])
+                    header["CD2_2"] = float(solution.cd[1, 1])
+                    header["CTYPE1"] = "RA---TAN"
+                    header["CTYPE2"] = "DEC--TAN"
+                    header["CUNIT1"] = "deg"
+                    header["CUNIT2"] = "deg"
+                    header["RADECSYS"] = "ICRS"
+                    header["EQUINOX"] = 2000.0
+                    header["ZESOLVER"] = (APP_VERSION, "WCS written by zesolver.py")
+                    timestamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    header.add_history(f"ZeSolver WCS solution at {timestamp}")
+                    hdul.flush()
+            finally:
+                if critical_context is not None:
+                    critical_context.__exit__(None, None, None)
 
     def _load_image(self, path: Path) -> tuple[np.ndarray, ImageMetadata]:
         suffix = path.suffix.lower()
@@ -2782,14 +3322,75 @@ class ImageSolver:
             return None
         if not self._should_try_blind(path):
             return None
-        index_root = self.config.blind_index_path
-        if not index_root:
-            logging.info("Blind solver skipped for %s: no index root configured", path.name)
-            return None
+        blind_profile = str(getattr(self.config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower()
+        loaded_manifest: Loaded4DManifest | None = None
+        if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+            if not self.blind4d_runtime.available or self.blind4d_runtime.loaded_manifest is None:
+                reason = self.blind4d_runtime.error_code or "BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE"
+                message = self.blind4d_runtime.error_message or reason
+                logging.error("Blind 4D runtime unavailable for %s: %s", path.name, message)
+                run_info.append(("run_info_blind_failed", {"message": f"4D runtime error: {message}", "status": reason}))
+                stats = {
+                    "blind_backend_profile": blind_profile,
+                    "blind4d_preflight_ok": False,
+                    "blind4d_called": False,
+                    "blind4d_failure_reason": reason,
+                    "historical_blind_called": False,
+                    "final_status": reason,
+                }
+                stats.update(self.blind4d_runtime.telemetry(include_paths=False))
+                return BlindSolveResult(
+                    success=False,
+                    message=f"{reason}: {message}",
+                    elapsed_sec=0.0,
+                    tried_dbs=[],
+                    used_db=None,
+                    wrote_wcs=False,
+                    updated_keywords={},
+                    output_path=str(path),
+                    stats=stats,
+                )
+            loaded_manifest = self.blind4d_runtime.loaded_manifest
+            index_root = loaded_manifest.manifest_path.parent
+        else:
+            message = (
+                "BLIND4D_CONFIGURATION_REQUIRED: legacy blind backend profile "
+                f"{blind_profile!r} is not part of the product chain"
+            )
+            logging.warning("Blind solver skipped for %s: %s", path.name, message)
+            run_info.append(
+                (
+                    "run_info_blind_failed",
+                    {
+                        "message": message,
+                        "status": "BLIND4D_CONFIGURATION_REQUIRED",
+                        "historical_blind_called": False,
+                    },
+                )
+            )
+            return BlindSolveResult(
+                success=False,
+                message=message,
+                elapsed_sec=0.0,
+                tried_dbs=[],
+                used_db=None,
+                wrote_wcs=False,
+                updated_keywords={},
+                output_path=str(path),
+                stats={
+                    "blind_backend_profile": blind_profile,
+                    "blind4d_preflight_ok": False,
+                    "blind4d_called": False,
+                    "blind4d_failure_reason": "BLIND4D_CONFIGURATION_REQUIRED",
+                    "historical_blind_called": False,
+                    "final_status": "BLIND4D_CONFIGURATION_REQUIRED",
+                },
+            )
         run_info.append(("run_info_blind_started", {"path": path.name}))
         logging.info(
-            "Blind solver attempt for %s (index=%s, skip_if_valid=%s)",
+            "Blind solver attempt for %s (profile=%s, index=%s, skip_if_valid=%s)",
             path.name,
+            blind_profile,
             Path(index_root).name or str(index_root),
             skip_if_valid,
         )
@@ -2798,7 +3399,7 @@ class ImageSolver:
             try:
                 root = Path(index_root).expanduser().resolve()
                 needs_check = not self._blind_index_checked or (self._blind_index_checked_root != root)
-                if needs_check:
+                if needs_check and blind_profile != ZEBLIND_4D_EXPERIMENTAL_PROFILE:
                     preflight_start = time.perf_counter()
                     manifest = root / "manifest.json"
                     ht = root / "hash_tables"
@@ -2840,6 +3441,16 @@ class ImageSolver:
                     self._blind_index_checked = True
                     self._blind_index_checked_root = root
                     logging.info("Blind preflight completed in %.2fs", time.perf_counter() - preflight_start)
+                elif needs_check and loaded_manifest is not None:
+                    logging.info(
+                        "Blind 4D manifest loaded: manifest=%s enabled_indexes=%d tiles=%s schema=%s",
+                        loaded_manifest.manifest_path,
+                        len(loaded_manifest.entries),
+                        ",".join(loaded_manifest.tile_keys),
+                        loaded_manifest.schema,
+                    )
+                    self._blind_index_checked = True
+                    self._blind_index_checked_root = root
             except Exception:
                 # Non-fatal; proceed to solver which will report a clear error
                 pass
@@ -2848,7 +3459,10 @@ class ImageSolver:
             final_ra = self.config.hint_ra_deg if self.config.hint_ra_deg is not None else ra_hint
             final_dec = self.config.hint_dec_deg if self.config.hint_dec_deg is not None else dec_hint
             explicit_user_hint = self.config.hint_ra_deg is not None and self.config.hint_dec_deg is not None
-            if not explicit_user_hint:
+            if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+                final_ra = None
+                final_dec = None
+            elif not explicit_user_hint:
                 prev_ra, prev_dec = final_ra, final_dec
                 final_ra, final_dec, adaptive_reason = self._select_adaptive_blind_hint(
                     path=path,
@@ -2865,46 +3479,11 @@ class ImageSolver:
                         "-" if prev_dec is None else f"{float(prev_dec):.6f}",
                         "-" if final_dec is None else f"{float(final_dec):.6f}",
                     )
-            blind_cfg = BlindSolveConfig(
-                # Tunables from GUI / persistent settings
-                max_candidates=int(getattr(self.config, "blind_max_candidates", 10) or 10),
-                max_stars=int(getattr(self.config, "blind_max_stars", 500) or 500),
-                max_quads=int(getattr(self.config, "blind_max_quads", 8000) or 8000),
-                detect_k_sigma=float(getattr(self.config, "dev_detect_k_sigma", 3.0) or 3.0),
-                detect_min_area=int(getattr(self.config, "dev_detect_min_area", 5) or 5),
-                bucket_cap_S=int(getattr(self.config, "dev_bucket_cap_S", 0) or 0),
-                bucket_cap_M=int(getattr(self.config, "dev_bucket_cap_M", 0) or 0),
-                bucket_cap_L=int(getattr(self.config, "dev_bucket_cap_L", 0) or 0),
-                quality_rms=float(getattr(self.config, "blind_quality_rms", 1.2) or 1.2),
-                quality_inliers=int(getattr(self.config, "blind_quality_inliers", 40) or 40),
-                pixel_tolerance=float(getattr(self.config, "blind_pixel_tolerance", 2.5) or 2.5),
-                fast_mode=bool(getattr(self.config, "blind_fast_mode", True)),
-                log_level=getattr(self.config, "log_level", "INFO"),
-                bucket_limit_override=int(getattr(self.config, "dev_bucket_limit_override", 0) or 0),
-                vote_percentile=int(getattr(self.config, "dev_vote_percentile", 40) or 40),
-                collect_matches_vectorized_experimental=bool(getattr(self.config, "dev_collect_matches_vectorized_experimental", False)),
-                # Hints / optics
-                ra_hint_deg=final_ra,
-                dec_hint_deg=final_dec,
-                radius_hint_deg=self.config.hint_radius_deg,
-                focal_length_mm=self.config.hint_focal_mm,
-                pixel_size_um=self.config.hint_pixel_um,
-                pixel_scale_arcsec=self.config.hint_resolution_arcsec,
-                pixel_scale_min_arcsec=self.config.hint_resolution_min_arcsec,
-                pixel_scale_max_arcsec=self.config.hint_resolution_max_arcsec,
-                downsample=max(1, int(self.config.downsample or 1)),
-                verify_logodds_enabled=bool(getattr(self.config, "dev_verify_logodds_enabled", False)),
-                verify_logodds_bail=float(getattr(self.config, "dev_verify_logodds_bail", -24.0) or -24.0),
-                verify_logodds_stoplooking=float(getattr(self.config, "dev_verify_logodds_stoplooking", 24.0) or 24.0),
-                verify_logodds_min_validations=int(getattr(self.config, "dev_verify_logodds_min_validations", 8) or 8),
-                hard_max_candidates_tried=int(getattr(self.config, "dev_hard_max_candidates_tried", 0) or 0),
-                hard_max_validations=int(getattr(self.config, "dev_hard_max_validations", 0) or 0),
-                depth_ladder_enabled=bool(getattr(self.config, "dev_depth_ladder_enabled", False)),
-                depth_ladder_caps=tuple(
-                    int(v)
-                    for v in getattr(self.config, "dev_depth_ladder_caps", (80, 160, 500))
-                    if isinstance(v, (int, float)) and int(v) > 0
-                ) or (80, 160, 500),
+            blind_cfg = build_blind_solve_config(
+                self.config,
+                ra_hint=final_ra,
+                dec_hint=final_dec,
+                loaded_manifest=loaded_manifest,
             )
 
             quality_profile, quality_metrics = self._select_blind_quality_profile(
@@ -2912,9 +3491,13 @@ class ImageSolver:
                 peaks=peaks,
                 frame_data=frame_data,
             )
-            if bool(getattr(blind_cfg, "depth_ladder_enabled", False)) and quality_profile != "degraded":
+            if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+                quality_profile = "p220_contract"
+                quality_metrics["quality_profile"] = quality_profile
+                quality_metrics["quality_reasons"] = ["zeblind_4d_experimental_contract"]
+            elif bool(getattr(blind_cfg, "depth_ladder_enabled", False)) and quality_profile != "degraded":
                 blind_cfg = replace(blind_cfg, depth_ladder_enabled=False)
-            if quality_profile == "degraded":
+            if blind_profile != ZEBLIND_4D_EXPERIMENTAL_PROFILE and quality_profile == "degraded":
                 blind_cfg = replace(
                     blind_cfg,
                     max_candidates=min(int(blind_cfg.max_candidates), 8),
@@ -2936,6 +3519,18 @@ class ImageSolver:
             try:
                 # Log the effective blind config used
                 log_cfg = {
+                    "blind_backend_profile": blind_profile,
+                    "blind_4d_manifest": str(loaded_manifest.manifest_path) if loaded_manifest is not None else None,
+                    "blind_4d_enabled_indexes": [str(p) for p in loaded_manifest.enabled_index_paths] if loaded_manifest is not None else [],
+                    "blind_4d_tile_keys": list(loaded_manifest.tile_keys) if loaded_manifest is not None else [],
+                    "quad_hash_schema": getattr(blind_cfg, "quad_hash_schema", None),
+                    "blind_astrometry_4d_validation_catalog_policy": getattr(blind_cfg, "blind_astrometry_4d_validation_catalog_policy", None),
+                    "blind_astrometry_4d_accept_policy": getattr(blind_cfg, "blind_astrometry_4d_accept_policy", None),
+                    "blind_astrometry_4d_max_hypotheses": getattr(blind_cfg, "blind_astrometry_4d_max_hypotheses", None),
+                    "blind_astrometry_4d_max_accepts": getattr(blind_cfg, "blind_astrometry_4d_max_accepts", None),
+                    "blind_astrometry_4d_match_radius_px": getattr(blind_cfg, "blind_astrometry_4d_match_radius_px", None),
+                    "blind_global_hard_budget_s": getattr(blind_cfg, "blind_global_hard_budget_s", None),
+                    "blind_astrometry_4d_search_budget_s": getattr(blind_cfg, "blind_astrometry_4d_search_budget_s", None),
                     "max_candidates": blind_cfg.max_candidates,
                     "max_stars": blind_cfg.max_stars,
                     "max_quads": blind_cfg.max_quads,
@@ -2972,6 +3567,7 @@ class ImageSolver:
                     "scale_max": blind_cfg.pixel_scale_max_arcsec,
                     "downsample": blind_cfg.downsample,
                 }
+                log_cfg.update(self.blind4d_runtime.telemetry(include_paths=False))
                 logging.info("Blind config: %s", json.dumps(log_cfg, ensure_ascii=False))
             except Exception:
                 pass
@@ -2998,6 +3594,8 @@ class ImageSolver:
                     {"max_candidates": 36, "max_quads": 24000, "pixel_tolerance": 3.4, "quality_rms": 2.0},
                 )
             )
+            if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+                rescue_plans = ()
             for rescue_idx, plan in enumerate(rescue_plans, start=1):
                 if result.get("success"):
                     break
@@ -3159,6 +3757,37 @@ class ImageSolver:
         for db in result["tried_dbs"]:
             label = Path(db).name or db
             run_info.append(("run_info_blind_db", {"db": label}))
+        stats_for_run_info = result.get("stats") if isinstance(result, Mapping) else None
+        if isinstance(stats_for_run_info, Mapping):
+            useful_stat_keys = (
+                "quad_hash_schema",
+                "astrometry_4d_runtime_enabled",
+                "astrometry_4d_runtime_accepted",
+                "astrometry_4d_stop_reason",
+                "astrometry_4d_hits",
+                "astrometry_4d_candidates",
+                "astrometry_4d_hits_tested",
+                "astrometry_4d_first_accepted_rank",
+                "astrometry_4d_accepted_candidates",
+                "astrometry_4d_selected_origin_tile_key",
+                "astrometry_4d_selected_rank",
+                "astrometry_4d_total_s",
+                "astrometry_4d_route_s",
+                "astrometry_4d_search_budget_s",
+                "astrometry_4d_validation_s",
+                "blind_pre_route_s",
+                "blind_post_route_s",
+                "blind_total_s",
+                "blind_attempt_budget_s",
+                "global_hard_budget_triggered",
+                "global_hard_budget_elapsed_s",
+            )
+            run_info.append(
+                (
+                    "run_info_blind_stats",
+                    {key: stats_for_run_info.get(key) for key in useful_stat_keys if key in stats_for_run_info},
+                )
+            )
         if result["success"]:
             try:
                 tile_key = (str(result.get("used_db")) if isinstance(result, Mapping) and result.get("used_db") is not None else None)
@@ -3213,6 +3842,40 @@ class ImageSolver:
                 except Exception:
                     pass
             logging.info("Blind solver failed for %s: %s", path.name, result["message"])
+        try:
+            stats = result.get("stats") or {}
+            if not isinstance(stats, Mapping):
+                stats = {}
+            event_payload = {
+                "event": "blind4d_result",
+                "case_filename": path.name,
+                "blind4d_preflight_ok": bool(blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE and loaded_manifest is not None),
+                "blind4d_called": bool(blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE),
+                "blind4d_call_count": 1 if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE else 0,
+                "blind4d_profile": blind_profile,
+                "blind4d_source_policy": str(getattr(blind_cfg, "blind_astrometry_4d_source_policy", "")),
+                "blind4d_indexes_considered": [str(p) for p in getattr(blind_cfg, "blind_astrometry_4d_index_paths", ())],
+                "blind4d_selected_index": str(stats.get("astrometry_4d_selected_origin_tile_key") or result.get("used_db") or ""),
+                "blind4d_success": bool(result.get("success")),
+                "blind4d_wcs_written": bool(result.get("success")),
+                "historical_blind_called": False,
+                "astrometry_web_called": False,
+                "final_backend": "BLIND4D" if result.get("success") and blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE else "NONE",
+                "final_status": "SOLVED" if result.get("success") else str(stats.get("final_status") or result.get("message") or "FAILED"),
+                "elapsed_s": float(result.get("elapsed_sec", 0.0) or 0.0),
+            }
+            event_payload.update(self.blind4d_runtime.telemetry(include_paths=False))
+            logging.info(
+                "ZN310B_EVENT %s",
+                json.dumps(
+                    event_payload,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    default=str,
+                ),
+            )
+        except Exception:
+            pass
         return result
 
     def _run_blind_on_raster(
@@ -3317,10 +3980,26 @@ class ImageSolver:
         result: BlindSolveResult,
         run_info: list[tuple[str, dict[str, Any]]],
     ) -> ImageSolveResult:
+        message = result["message"]
+        try:
+            stats = dict(result.get("stats") or {})
+            if bool(stats.get("astrometry_4d_runtime_accepted")):
+                tile = str(stats.get("astrometry_4d_selected_origin_tile_key") or result.get("used_db") or "?")
+                validation = stats.get("astrometry_4d_best_accepted_validation")
+                if not isinstance(validation, dict):
+                    validation = {}
+                inliers = validation.get("inliers", stats.get("astrometry_4d_best_inliers"))
+                rms = validation.get("rms_px", stats.get("astrometry_4d_best_rms_px"))
+                if inliers is not None and rms is not None:
+                    message = f"ZeBlind 4D - {tile} - {int(inliers)} inliers - RMS {float(rms):.3f} px"
+                else:
+                    message = f"ZeBlind 4D - {tile}"
+        except Exception:
+            message = result["message"]
         return ImageSolveResult(
             path=path,
             status="solved",
-            message=result["message"],
+            message=message,
             metadata_source="blind",
             duration_s=None,
             run_info=list(run_info),
@@ -3339,9 +4018,29 @@ class ImageSolver:
         Returns an ImageSolveResult on success, or None on failure.
         """
         try:
-            index_root = self.config.blind_index_path
-            if not index_root:
+            runtime = getattr(self, "near_catalog_runtime", None)
+            direct_legacy_runtime = runtime is None
+            if direct_legacy_runtime:
+                legacy_index = self.config.blind_index_path
+                if not legacy_index:
+                    return None
+                runtime = NearCatalogRuntime(
+                    requested_mode=NearCatalogMode.AUTO,
+                    effective_mode=NearCatalogMode.LEGACY_INDEX,
+                    provider=None,
+                    provider_kind="legacy_index",
+                    source="legacy",
+                    legacy_index_root=legacy_index,
+                )
+                self.near_catalog_runtime = runtime
+            if runtime.error_code is not None and runtime.provider is None:
+                message = runtime.error_message or runtime.error_code
+                logging.info("[ZENEAR] near catalog runtime error for %s: %s", path.name, message)
+                self._last_near_failure_message = message
                 return None
+            if runtime.provider is None and not direct_legacy_runtime:
+                return None
+            index_root = runtime.legacy_index_root if runtime.effective_mode is NearCatalogMode.LEGACY_INDEX else None
             # Use GUI FOV value as override for near solver when > 0
             fov_override = self.config.fov_deg if self.config.fov_deg and self.config.fov_deg > 0 else None
             family: Optional[str] = None
@@ -3428,14 +4127,21 @@ class ImageSolver:
                     "astap_hint_radius_deg": near_cfg.astap_hint_radius_deg,
                     "second_pass_refine_in_fastpath": near_cfg.second_pass_refine_in_fastpath,
                     "astap_iso_strict": near_cfg.astap_iso_strict,
+                    "strict_acceptance_mode": getattr(near_cfg, "strict_acceptance_mode", "diagnostic"),
                     "allow_second_rescue": bool(getattr(self.config, "near_allow_second_rescue", False)),
+                    "near_catalog_mode_requested": runtime.requested_mode.value,
+                    "near_catalog_mode_effective": runtime.effective_mode.value if runtime.effective_mode else None,
+                    "near_catalog_provider": runtime.provider_kind,
+                    "near_catalog_source": runtime.source,
                 }
                 logging.info("[ZENEAR] config: %s", json.dumps(log_near, ensure_ascii=False))
+                logging.info("Strict acceptance mode: %s", getattr(near_cfg, "strict_acceptance_mode", "diagnostic"))
             except Exception:
                 pass
             result = near_solve(
                 fits_path=str(path),
-                index_root=str(index_root),
+                index_root=(str(index_root) if index_root is not None else None),
+                catalog_provider=runtime.provider,
                 config=near_cfg,
                 log=logging.info,
                 skip_if_valid=False,
@@ -3443,6 +4149,7 @@ class ImageSolver:
                 fallback_to_blind=False,
                 cancel_check=(self._cancelled if self._cancel_event else None),
             )
+            self._attach_near_runtime_telemetry(result)
             if not result["success"] and not (self._cancelled() if self._cancel_event else False):
                 base_margin = float(near_cfg.search_margin)
                 base_tiles = int(near_cfg.max_tile_candidates)
@@ -3499,7 +4206,8 @@ class ImageSolver:
                     )
                     result = near_solve(
                         fits_path=str(path),
-                        index_root=str(index_root),
+                        index_root=(str(index_root) if index_root is not None else None),
+                        catalog_provider=runtime.provider,
                         config=near_cfg,
                         log=logging.info,
                         skip_if_valid=False,
@@ -3507,6 +4215,7 @@ class ImageSolver:
                         fallback_to_blind=False,
                         cancel_check=(self._cancelled if self._cancel_event else None),
                     )
+                    self._attach_near_runtime_telemetry(result)
                     if result["success"]:
                         logging.info(
                             "[ZENEAR] near_rescue_attempt=%d succeeded for %s",
@@ -3519,8 +4228,10 @@ class ImageSolver:
                     and bool(self.config.blind_enabled)
                     and not (self._cancelled() if self._cancel_event else False)
                 ):
-                    defer_blind = bool(getattr(self.config, "near_defer_blind_fallback", False)) and (not allow_blind_fallback)
-                    if defer_blind:
+                    defer_blind = (not allow_blind_fallback) or bool(
+                        getattr(self.config, "near_defer_blind_fallback", False)
+                    ) or str(getattr(self.config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower() == ZEBLIND_4D_EXPERIMENTAL_PROFILE
+                    if defer_blind or runtime.effective_mode is NearCatalogMode.ASTAP_NATIVE:
                         logging.info(
                             "[ZENEAR] near attempts exhausted for %s; deferring blind fallback to batch blind phase",
                             path.name,
@@ -3532,26 +4243,77 @@ class ImageSolver:
                         )
                         result = near_solve(
                             fits_path=str(path),
-                            index_root=str(index_root),
+                            index_root=(str(index_root) if index_root is not None else None),
+                            catalog_provider=runtime.provider,
                             config=near_cfg,
                             log=logging.info,
                             skip_if_valid=False,
                             fallback_to_blind=True,
                             cancel_check=(self._cancelled if self._cancel_event else None),
                         )
+                        self._attach_near_runtime_telemetry(result)
         except BlindSolverRuntimeError as exc:
             logging.info("Near solver (index) failed for %s: %s", path.name, exc)
+            self._last_near_failure_message = str(exc)
             return None
+        try:
+            stats = result.get("stats", {}) if isinstance(result, Mapping) else {}
+            strict_acceptance = stats.get("strict_acceptance") if isinstance(stats, Mapping) else {}
+            if not isinstance(strict_acceptance, Mapping):
+                strict_acceptance = {}
+            logging.info(
+                "ZN310B_EVENT %s",
+                json.dumps(
+                    {
+                        "event": "near_result",
+                        "case_filename": path.name,
+                        "near_called": True,
+                        "near_success": bool(result.get("success")),
+                        "near_failure_reason": "" if result.get("success") else str(result.get("message") or ""),
+                        "near_gate_mode": str(strict_acceptance.get("mode", getattr(near_cfg, "strict_acceptance_mode", "diagnostic"))),
+                        "near_gate_decision": str(strict_acceptance.get("decision", "")),
+                        "near_gate_reason": str(strict_acceptance.get("reason", "")),
+                        "near_wcs_written": bool(result.get("success")),
+                        "near_catalog_mode_requested": runtime.requested_mode.value,
+                        "near_catalog_mode_effective": runtime.effective_mode.value if runtime.effective_mode else None,
+                        "near_catalog_provider": runtime.provider_kind,
+                        "near_catalog_source": runtime.source,
+                        "near_catalog_fallback_used": bool(stats.get("near_catalog_fallback_used", False)) if isinstance(stats, Mapping) else False,
+                        "historical_blind_called": False,
+                        "astrometry_web_called": False,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+            )
+        except Exception:
+            pass
         if result["success"]:
             message = result.get("message") or "near solution found"
             # Update sequential seed from returned keywords when available
             try:
                 kw = result.get("updated_keywords", {}) or {}
-                s = float(kw.get("SEED_SCALE")) if kw.get("SEED_SCALE") is not None else None
-                r = float(kw.get("SEED_ROT")) if kw.get("SEED_ROT") is not None else None
-                p = int(kw.get("SEED_PAR")) if kw.get("SEED_PAR") is not None else 1
+                stats = result.get("stats", {}) or {}
+                s = float(stats.get("seed_scale")) if stats.get("seed_scale") is not None else None
+                r = float(stats.get("seed_rotation")) if stats.get("seed_rotation") is not None else None
+                p = int(stats.get("seed_parity")) if stats.get("seed_parity") is not None else 1
+                if s is None and kw.get("SEED_SCALE") is not None:
+                    s = float(kw.get("SEED_SCALE"))
+                if r is None and kw.get("SEED_ROT") is not None:
+                    r = float(kw.get("SEED_ROT"))
+                if kw.get("SEED_PAR") is not None and stats.get("seed_parity") is None:
+                    p = int(kw.get("SEED_PAR"))
                 if s and r is not None and use_seq_warm_start:
                     self._near_seed = (s, r, p)
+                strict_acceptance = stats.get("strict_acceptance") if isinstance(stats, Mapping) else None
+                if isinstance(strict_acceptance, Mapping):
+                    logging.info(
+                        "[ZENEAR] gate file=%s near_gate_mode=%s near_gate_decision=%s near_gate_reason=%s",
+                        path.name,
+                        str(strict_acceptance.get("mode", getattr(near_cfg, "strict_acceptance_mode", "diagnostic"))),
+                        str(strict_acceptance.get("decision", "")),
+                        str(strict_acceptance.get("reason", "")),
+                    )
                 tile_key = (str(result.get("used_db")) if result.get("used_db") is not None else None)
                 self._remember_keywords_hint(
                     path=path,
@@ -3571,7 +4333,19 @@ class ImageSolver:
                 pixel_scale_arcsec=None,
                 metadata_source="near-index",
             )
+        self._last_near_failure_message = str(result.get("message") or "ZeNear failed")
         return None
+
+    def _attach_near_runtime_telemetry(self, result: MutableMapping[str, Any]) -> None:
+        try:
+            stats = result.setdefault("stats", {})
+            if not isinstance(stats, MutableMapping):
+                stats = {}
+                result["stats"] = stats
+            for key, value in self.near_catalog_runtime.telemetry(include_paths=False).items():
+                stats[key] = value
+        except Exception:
+            pass
 
 
     def _resolve_with_blind_after_failure(
@@ -3609,9 +4383,9 @@ class ImageSolver:
 
 class BatchSolver:
     def __init__(self, config: SolveConfig, files: Optional[Sequence[Path]] = None) -> None:
-        self.config = config
+        self.config, self.catalog_resources = apply_catalog_resources_to_config(config)
         self.files: List[Path] = list(files) if files is not None else self._collect_files()
-        self.solver = ImageSolver(config)
+        self.solver = ImageSolver(self.config)
 
     def _collect_files(self) -> List[Path]:
         files = list(_iter_image_files(self.config.input_dir, self.config.formats))
@@ -3632,14 +4406,23 @@ class BatchSolver:
             )
             return
         # Propagate cancellation to the solver for cooperative early exit
+        process_cancel_controller = ProcessCancellationController()
+        thread_cancel_token = ThreadCancellationToken(cancel_event) if cancel_event is not None else None
+        run_cancel_token = (
+            CompositeCancellationToken((thread_cancel_token, process_cancel_controller.token))
+            if thread_cancel_token is not None
+            else process_cancel_controller.token
+        )
+        stop_token_logged = False
         try:
-            self.solver.set_cancel_event(cancel_event)
+            self.solver.set_cancel_event(run_cancel_token)
         except Exception:
             pass
 
         workers_base = max(1, self.config.workers)
         unresolved: dict[Path, ImageSolveResult] = {}
         yield_queue: list[ImageSolveResult] = []
+        emitted_paths: set[Path] = set()
         astrometry_api_key = str(getattr(self.config, "astrometry_api_key", "") or "").strip()
         astrometry_fallback_ready = bool(
             getattr(self.config, "astrometry_fallback_after_blind", True) and astrometry_api_key
@@ -3686,6 +4469,7 @@ class BatchSolver:
             )
 
         def _queue_result(result: ImageSolveResult) -> None:
+            emitted_paths.add(result.path)
             yield_queue.append(result)
             if on_result is not None:
                 try:
@@ -3694,7 +4478,17 @@ class BatchSolver:
                     pass
 
         def _cancel_requested() -> bool:
-            return bool(cancel_event and cancel_event.is_set())
+            nonlocal stop_token_logged
+            cancelled_now = bool(run_cancel_token and run_cancel_token.is_cancelled())
+            if cancelled_now:
+                process_cancel_controller.cancel()
+                if not stop_token_logged:
+                    logging.info("STOP_TOKEN_SET")
+                    stop_token_logged = True
+            return cancelled_now
+
+        def _cancelled_result(path: Path) -> ImageSolveResult:
+            return ImageSolveResult(path=path, status="cancelled", message="cancelled")
 
         def _run_phase(
             phase_paths: Sequence[Path],
@@ -3766,6 +4560,9 @@ class BatchSolver:
 
         # Phase 1: run ZeNear on all files (no per-file blind fallback)
         def _emit_phase1(path: Path, result: ImageSolveResult) -> None:
+            if result.status == "cancelled":
+                _queue_result(result)
+                return
             if result.status == "solved" or (result.status == "skipped" and "WCS already present" in (result.message or "")):
                 _queue_result(result)
                 return
@@ -3785,7 +4582,7 @@ class BatchSolver:
             pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=max(1, int(phase_workers)),
                 initializer=_near_worker_init,
-                initargs=(self.config,),
+                initargs=(self.config, process_cancel_controller.token),
             )
             it = iter(phase_paths)
             inflight: dict[concurrent.futures.Future[dict[str, Any]], Path] = {}
@@ -3820,7 +4617,10 @@ class BatchSolver:
                             payload = future.result()
                             result = _payload_to_result(payload)
                         except Exception as exc:
-                            result = ImageSolveResult(path=path, status="failed", message=str(exc))
+                            if _cancel_requested():
+                                result = _cancelled_result(path)
+                            else:
+                                result = ImageSolveResult(path=path, status="failed", message=str(exc))
                         emit(path, result)
                         if _cancel_requested():
                             cancelled = True
@@ -3834,12 +4634,26 @@ class BatchSolver:
                         break
             finally:
                 if cancelled or _cancel_requested():
-                    for f in list(inflight.keys()):
-                        f.cancel()
-                    try:
-                        pool.shutdown(wait=False, cancel_futures=True)
-                    except TypeError:
-                        pool.shutdown(wait=False)
+                    shutdown_process_executor(
+                        pool,
+                        inflight,
+                        token=process_cancel_controller.token,
+                        grace_period_s=float(os.environ.get("ZE_STOP_GRACE_PERIOD_S", "4") or "4"),
+                        log=logging.info,
+                    )
+                    for future, path in list(inflight.items()):
+                        if not future.done() or future.cancelled():
+                            continue
+                        try:
+                            payload = future.result()
+                            result = _payload_to_result(payload)
+                        except Exception as exc:
+                            if _cancel_requested():
+                                result = _cancelled_result(path)
+                            else:
+                                result = ImageSolveResult(path=path, status="failed", message=str(exc))
+                        emit(path, result)
+                        inflight.pop(future, None)
                 else:
                     pool.shutdown(wait=True)
             return cancelled
@@ -3862,12 +4676,12 @@ class BatchSolver:
             cpu_pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=cpu_w,
                 initializer=_near_worker_init_with_backend,
-                initargs=(self.config, "cpu"),
+                initargs=(self.config, "cpu", process_cancel_controller.token),
             )
             gpu_pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=gpu_w,
                 initializer=_near_worker_init_with_backend,
-                initargs=(self.config, "cuda"),
+                initargs=(self.config, "cuda", process_cancel_controller.token),
             )
             it = iter(phase_paths)
             inflight: dict[concurrent.futures.Future[dict[str, Any]], tuple[Path, str]] = {}
@@ -3914,7 +4728,10 @@ class BatchSolver:
                             payload = future.result()
                             result = _payload_to_result(payload)
                         except Exception as exc:
-                            result = ImageSolveResult(path=path, status="failed", message=str(exc))
+                            if _cancel_requested():
+                                result = _cancelled_result(path)
+                            else:
+                                result = ImageSolveResult(path=path, status="failed", message=str(exc))
                         emit(path, result)
                         if _cancel_requested():
                             cancelled = True
@@ -3928,16 +4745,36 @@ class BatchSolver:
                         break
             finally:
                 if cancelled or _cancel_requested():
-                    for f in list(inflight.keys()):
-                        f.cancel()
-                    try:
-                        cpu_pool.shutdown(wait=False, cancel_futures=True)
-                    except TypeError:
-                        cpu_pool.shutdown(wait=False)
-                    try:
-                        gpu_pool.shutdown(wait=False, cancel_futures=True)
-                    except TypeError:
-                        gpu_pool.shutdown(wait=False)
+                    cpu_inflight = {future: item for future, item in inflight.items() if item[1] == "cpu"}
+                    gpu_inflight = {future: item for future, item in inflight.items() if item[1] == "gpu"}
+                    shutdown_process_executor(
+                        cpu_pool,
+                        cpu_inflight,
+                        token=process_cancel_controller.token,
+                        grace_period_s=float(os.environ.get("ZE_STOP_GRACE_PERIOD_S", "4") or "4"),
+                        log=logging.info,
+                    )
+                    shutdown_process_executor(
+                        gpu_pool,
+                        gpu_inflight,
+                        token=process_cancel_controller.token,
+                        grace_period_s=float(os.environ.get("ZE_STOP_GRACE_PERIOD_S", "4") or "4"),
+                        log=logging.info,
+                    )
+                    for future, item in list(inflight.items()):
+                        path, _pool_name = item
+                        if not future.done() or future.cancelled():
+                            continue
+                        try:
+                            payload = future.result()
+                            result = _payload_to_result(payload)
+                        except Exception as exc:
+                            if _cancel_requested():
+                                result = _cancelled_result(path)
+                            else:
+                                result = ImageSolveResult(path=path, status="failed", message=str(exc))
+                        emit(path, result)
+                        inflight.pop(future, None)
                 else:
                     cpu_pool.shutdown(wait=True)
                     gpu_pool.shutdown(wait=True)
@@ -4121,6 +4958,14 @@ class BatchSolver:
             yield item
         yield_queue.clear()
         if cancelled:
+            for path in self.files:
+                if path not in emitted_paths:
+                    _queue_result(_cancelled_result(path))
+            for item in yield_queue:
+                yield item
+            yield_queue.clear()
+            logging.info("RUN_FINISHED_CANCELLED")
+            process_cancel_controller.shutdown()
             return
 
         # Phase 2: run Zeblind on unresolved files when enabled.
@@ -4128,8 +4973,23 @@ class BatchSolver:
         if self.config.blind_enabled and self.config.overwrite and final_unresolved:
             unresolved_paths = [p for p in self.files if p in final_unresolved]
             phase2_unresolved: dict[Path, ImageSolveResult] = {}
+            blind_workers = _auto_blind_worker_count(
+                workers_base,
+                ram_gb=ram_gb,
+                blind_backend_profile=getattr(self.config, "blind_backend_profile", None),
+            )
+            logging.info(
+                "Blind auto strategy: workers=%d base_workers=%d ram_gb=%s override=%s",
+                blind_workers,
+                workers_base,
+                f"{ram_gb:.2f}" if isinstance(ram_gb, float) else "n/a",
+                str(os.environ.get("ZE_BLIND_WORKERS", "") or "auto"),
+            )
 
             def _emit_phase2(path: Path, result: ImageSolveResult) -> None:
+                if result.status == "cancelled":
+                    _queue_result(result)
+                    return
                 solved = (result.status == "solved") or (
                     result.status == "skipped" and "WCS already present" in (result.message or "")
                 )
@@ -4145,13 +5005,21 @@ class BatchSolver:
                 unresolved_paths,
                 lambda p: self.solver.solve_path_blind_only(p, near_failure=final_unresolved.get(p)),
                 _emit_phase2,
-                phase_workers=workers_base,
+                phase_workers=blind_workers,
                 phase_name="phase-blind-thread",
             )
             for item in yield_queue:
                 yield item
             yield_queue.clear()
             if cancelled:
+                for path in self.files:
+                    if path not in emitted_paths:
+                        _queue_result(_cancelled_result(path))
+                for item in yield_queue:
+                    yield item
+                yield_queue.clear()
+                logging.info("RUN_FINISHED_CANCELLED")
+                process_cancel_controller.shutdown()
                 return
             final_unresolved = phase2_unresolved
 
@@ -4201,6 +5069,14 @@ class BatchSolver:
                     yield item
                 yield_queue.clear()
                 if _cancel_requested():
+                    for path in self.files:
+                        if path not in emitted_paths:
+                            _queue_result(_cancelled_result(path))
+                    for item in yield_queue:
+                        yield item
+                    yield_queue.clear()
+                    logging.info("RUN_FINISHED_CANCELLED")
+                    process_cancel_controller.shutdown()
                     return
             except Exception as exc:
                 logging.warning("[FALLBACK] Astrometry fallback unavailable: %s", exc)
@@ -4215,10 +5091,12 @@ class BatchSolver:
             yield_queue.clear()
 
         _log_runtime_memory(stage="run-end", force=True)
+        process_cancel_controller.shutdown()
 
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="ZeSolver batch GUI/CLI")
+    parser.add_argument("--catalog-library", type=Path, help="ZeSolver CatalogLibrary root or catalog.json")
     parser.add_argument("--db-root", type=Path, help="Directory containing the ASTAP/HNSKY catalogues")
     parser.add_argument("--input-dir", type=Path, help="Directory containing FITS/TIFF/PNG files to solve")
     parser.add_argument("--family", action="append", help="Restrict to specific catalogue families (e.g. d50)")
@@ -4376,10 +5254,38 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Path to the Zeblind index root (manifest + hash tables) used by the internal matcher",
     )
     parser.add_argument(
+        "--blind-profile",
+        choices=[HISTORICAL_PROFILE, ZEBLIND_4D_EXPERIMENTAL_PROFILE],
+        default=ZEBLIND_4D_EXPERIMENTAL_PROFILE,
+        help="Blind solver profile (default: zeblind_4d_experimental)",
+    )
+    parser.add_argument(
+        "--blind-4d-manifest",
+        type=Path,
+        help="Experimental ZeBlind 4D manifest JSON; required with --blind-profile zeblind_4d_experimental",
+    )
+    parser.add_argument(
         "--no-blind",
         dest="blind_enabled",
         action="store_false",
         help="Disable the automatic blind fallback when WCS metadata is missing",
+    )
+    parser.add_argument(
+        "--blind-only",
+        action="store_true",
+        help="Experimental: skip near/catalog solving and run the configured blind profile directly",
+    )
+    parser.add_argument(
+        "--near-catalog-mode",
+        choices=[mode.value for mode in NearCatalogMode],
+        default="auto",
+        help="Advanced ZeNear catalog provider mode: auto, astap-native, or legacy-index",
+    )
+    parser.add_argument(
+        "--blind4d-catalog-mode",
+        choices=[mode.value for mode in Blind4DCatalogMode],
+        default="auto",
+        help="Advanced Blind 4D runtime source mode: auto, library-view, or external-manifest",
     )
     parser.add_argument("--log-level", default="INFO", help="Logging level")
     parser.add_argument(
@@ -4486,13 +5392,64 @@ def _format_run_info_cli(key: str, payload: dict[str, Any], path: Path) -> Optio
 def run_cli(args: argparse.Namespace) -> int:
     _configure_logging(args.log_level)
     formats = tuple(_parse_formats_value(args.formats))
-    if not args.db_root or not args.input_dir:
-        raise SystemExit("--db-root and --input-dir are required in CLI mode (use --gui to launch the GUI)")
+    if not args.input_dir or (not args.db_root and not args.catalog_library):
+        raise SystemExit("--db-root and --input-dir are required in CLI mode unless --catalog-library provides the catalogue")
     families = _normalize_family_args(args.family)
+    pre_catalog_resources: SolverCatalogResources | None = None
+    db_root_for_config = args.db_root.expanduser().resolve() if args.db_root else None
+    if args.catalog_library:
+        try:
+            pre_catalog_resources = resolve_catalog_resources(
+                catalog_library=args.catalog_library,
+                legacy_db_root=args.db_root,
+                legacy_families=tuple(families or ()),
+                legacy_blind4d_manifest=args.blind_4d_manifest,
+                legacy_index_root=args.blind_index,
+                enable_environment_discovery=False,
+            )
+        except CatalogResourceResolutionError as exc:
+            raise SystemExit(f"Catalog library error: {exc}") from exc
+        if db_root_for_config is None and pre_catalog_resources.near is not None:
+            db_root_for_config = pre_catalog_resources.near.root
+        elif db_root_for_config is None:
+            if not bool(getattr(args, "blind_only", False)):
+                raise SystemExit("Catalog library does not provide a Near source; use --blind-only or provide --db-root")
+            db_root_for_config = Path(".").resolve()
     if bool(getattr(args, "near_astap_iso_strict", True)) is False:
         logging.warning("--no-near-astap-iso-strict is deprecated and ignored; strict mode is always enabled")
+    blind_profile = str(getattr(args, "blind_profile", ZEBLIND_4D_EXPERIMENTAL_PROFILE) or ZEBLIND_4D_EXPERIMENTAL_PROFILE).strip().lower()
+    loaded_4d_manifest: Loaded4DManifest | None = None
+    if blind_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE and not args.catalog_library:
+        if args.blind_4d_manifest is None:
+            args.blind_4d_manifest = resolve_default_4d_manifest_path()
+        try:
+            loaded_4d_manifest = load_4d_index_manifest(args.blind_4d_manifest)
+        except IndexManifestError as exc:
+            raise SystemExit(f"4D manifest error: {exc}") from exc
+        scale_range = (
+            f"{args.pixel_scale_min:.2f}..{args.pixel_scale_max:.2f}\"/px"
+            if args.pixel_scale_min is not None and args.pixel_scale_max is not None
+            else "not specified"
+        )
+        profile = get_solver_profile(blind_profile)
+        logging.info("Blind profile: %s", blind_profile)
+        logging.info("4D manifest: %s", loaded_4d_manifest.manifest_path)
+        logging.info("4D enabled indexes: %d", len(loaded_4d_manifest.entries))
+        logging.info("4D tile keys: %s", ",".join(loaded_4d_manifest.tile_keys))
+        logging.info("4D schema: %s", profile.parameters.get("quad_hash_schema"))
+        logging.info("4D scale range: %s", scale_range)
+        logging.info(
+            "4D budgets: max_quads=%s max_hypotheses=%s max_accepts=%s max_wall_s=%s match_radius_px=%s",
+            profile.parameters.get("max_quads"),
+            profile.parameters.get("max_hypotheses"),
+            profile.parameters.get("max_accepts"),
+            profile.parameters.get("max_wall_s"),
+            profile.parameters.get("match_radius_px"),
+        )
+    elif args.blind_4d_manifest is not None:
+        logging.info("Ignoring --blind-4d-manifest because blind profile is historical")
     config = SolveConfig(
-        db_root=args.db_root.expanduser().resolve(),
+        db_root=db_root_for_config,
         input_dir=args.input_dir.expanduser().resolve(),
         families=families,
         fov_deg=args.fov_deg,
@@ -4507,7 +5464,13 @@ def run_cli(args: argparse.Namespace) -> int:
         search_radius_attempts=args.search_radius_attempts,
         max_search_radius_deg=args.max_search_radius_deg,
         blind_enabled=args.blind_enabled,
+        blind_only=bool(getattr(args, "blind_only", False)),
         blind_index_path=args.blind_index,
+        blind_backend_profile=blind_profile,
+        blind_4d_manifest_path=args.blind_4d_manifest,
+        blind_4d_loaded_manifest=loaded_4d_manifest,
+        blind4d_catalog_mode=str(getattr(args, "blind4d_catalog_mode", "auto") or "auto"),
+        catalog_library_path=args.catalog_library,
         near_max_tile_candidates=max(1, int(args.near_max_tile_candidates or 48)),
         near_tile_cache_size=max(1, int(args.near_tile_cache_size or 128)),
         near_detect_backend=str(args.near_detect_backend or "auto"),
@@ -4521,6 +5484,7 @@ def run_cli(args: argparse.Namespace) -> int:
         near_warm_start=(True if args.near_warm_start is None else bool(args.near_warm_start)),
         near_defer_blind_fallback=bool(getattr(args, "near_defer_blind_fallback", False)),
         near_allow_second_rescue=bool(getattr(args, "near_allow_second_rescue", False)),
+        near_catalog_mode=str(getattr(args, "near_catalog_mode", "auto") or "auto"),
         near_ransac_seed=(int(args.near_ransac_seed) if args.near_ransac_seed is not None else None),
         hint_ra_deg=args.ra_hint,
         hint_dec_deg=args.dec_hint,
@@ -4597,7 +5561,6 @@ def launch_gui(args: argparse.Namespace) -> int:
     class SolveRunner(QtCore.QThread):
         progress = QtCore.Signal(object)
         started = QtCore.Signal(int)
-        finished = QtCore.Signal()
         info = QtCore.Signal(str)
         error = QtCore.Signal(str)
 
@@ -4606,62 +5569,104 @@ def launch_gui(args: argparse.Namespace) -> int:
             config: SolveConfig,
             files: Sequence[Path],
             translator: Callable[..., str],
+            catalog_resources: SolverCatalogResources | None = None,
         ):
             super().__init__()
             self.config = config
             self.files = [path for path in files]
+            self.catalog_resources = catalog_resources
             self._cancel_event = threading.Event()
             self._translate = translator
+            self._controller: Optional[GuiSolveController] = None
 
         def request_cancel(self) -> None:
+            self.info.emit("STOP_RUNNER_RECEIVED")
             self._cancel_event.set()
+            controller = self._controller
+            if controller is not None:
+                self.info.emit("STOP_CONTROLLER_RECEIVED")
+                controller.cancel()
 
         def run(self) -> None:  # pragma: no cover - GUI thread
-            try:
-                batch = BatchSolver(self.config, files=self.files)
-            except Exception as exc:
-                self.error.emit(str(exc))
-                return
-            # Propagate cancel event for cooperative cancellation
-            try:
-                batch.solver.set_cancel_event(self._cancel_event)
-            except Exception:
-                pass
-            self.started.emit(len(batch.files))
+            self.started.emit(len(self.files))
             self.info.emit(
                 self._translate(
                     "runner_start",
-                    files=len(batch.files),
+                    files=len(self.files),
                     workers=self.config.workers,
                 )
             )
             try:
-                import gc as _gc
-                processed = 0
+                gui_request = build_gui_solve_request_from_legacy_config(
+                    self.files,
+                    self.config,
+                    backend="local",
+                    catalog_resources=self.catalog_resources,
+                    cancel_token=self._cancel_event,
+                )
 
-                def _on_result(result: ImageSolveResult) -> None:
-                    nonlocal processed
-                    self.progress.emit(result)
-                    processed += 1
-                    # Optional periodic GC if requested
+                def _selection_log(selection) -> None:
                     try:
-                        interval = int(getattr(self.config, 'gc_interval', 0) or 0)
+                        self.info.emit(
+                            "Engine selection: requested={requested} selected={selected} supported={supported} reason={reason} warnings={warnings}".format(
+                                requested=selection.requested_mode.value,
+                                selected=selection.selected_mode.value,
+                                supported=selection.supported,
+                                reason=selection.reason,
+                                warnings=",".join(selection.warnings) if selection.warnings else "-",
+                            )
+                        )
                     except Exception:
-                        interval = 0
-                    if interval > 0 and processed % interval == 0:
-                        try:
-                            _gc.collect()
-                        except Exception:
-                            pass
+                        pass
 
-                for _ in batch.run(cancel_event=self._cancel_event, on_result=_on_result):
-                    if self._cancel_event.is_set():
-                        self.info.emit(self._translate("runner_stop_wait"))
-                        break
+                def _legacy_results(request, cancel_event, live_result_callback=None):
+                    batch = BatchSolver(self.config, files=request.input_paths)
+                    try:
+                        batch.solver.set_cancel_event(cancel_event)
+                    except Exception:
+                        pass
+                    import gc as _gc
+
+                    processed = 0
+
+                    def _on_result(_result: ImageSolveResult) -> None:
+                        nonlocal processed
+                        processed += 1
+                        try:
+                            interval = int(getattr(self.config, "gc_interval", 0) or 0)
+                        except Exception:
+                            interval = 0
+                        if interval > 0 and processed % interval == 0:
+                            try:
+                                _gc.collect()
+                            except Exception:
+                                pass
+                        if live_result_callback is not None:
+                            try:
+                                live_result_callback(_result)
+                            except Exception:
+                                pass
+
+                    yield from batch.run(cancel_event=cancel_event, on_result=_on_result)
+
+                controller = GuiSolveController(
+                    pipeline_runner_factory=lambda: PipelineGuiRunner(result_callback=self.progress.emit),
+                    legacy_runner_factory=lambda: LegacyGuiRunner(
+                        run_legacy=_legacy_results,
+                        result_callback=self.progress.emit,
+                    ),
+                    selection_logger=_selection_log,
+                )
+                self._controller = controller
+                controller.run(gui_request)
+                if self._cancel_event.is_set():
+                    self.info.emit(self._translate("runner_stop_wait"))
+            except GuiEngineSelectionError as exc:
+                self.error.emit(str(exc))
             except Exception as exc:
                 self.error.emit(str(exc))
             finally:
-                self.finished.emit()
+                self._controller = None
 
     class FileScanner(QtCore.QThread):
         file_found = QtCore.Signal(str, str, str)
@@ -5134,7 +6139,6 @@ def launch_gui(args: argparse.Namespace) -> int:
     class AstrometryRunner(QtCore.QThread):
         progress = QtCore.Signal(object)
         started = QtCore.Signal(int)
-        finished = QtCore.Signal()
         info = QtCore.Signal(str)
         error = QtCore.Signal(str)
         stage = QtCore.Signal(int, str)
@@ -5189,8 +6193,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                         break
             except Exception as exc:
                 self.error.emit(str(exc))
-            finally:
-                self.finished.emit()
 
     class ZeSolverWindow(QtWidgets.QMainWindow):
         def __init__(self, settings: PersistentSettings) -> None:
@@ -5209,13 +6211,29 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._pending_hash_level: Optional[str] = None
             self._current_input_dir: Optional[Path] = None
             self._results_seen = 0
+            self._progress_total = 0
+            self._progress_completed = 0
+            self._progress_seen_paths: set[Path] = set()
+            self._progress_run_id: Optional[int] = None
             self._run_started_ts: Optional[float] = None
             self._last_result_ts: Optional[float] = None
+            self._run_lifecycle = RunLifecycle()
+            self._active_run_failed = False
+            self._active_run_error_message: Optional[str] = None
             self._language_actions: dict[str, QtGui.QAction] = {}
             self._interface_actions: dict[str, QtGui.QAction] = {}
-            self._interface_mode = "easy"
+            self._interface_mode = str(getattr(settings, "interface_mode", "easy") or "easy").strip().lower()
+            if self._interface_mode not in {"easy", "expert"}:
+                self._interface_mode = "easy"
             self._settings = settings
             self._settings.solver_workers = self._dev_workers_choice
+            self._syncing_blind_profile_gui = False
+            self._blind_4d_verified_manifest: Loaded4DManifest | None = None
+            self._blind_4d_manifest_state = "not_verified"
+            self._catalog_library_state = "AUCUNE_BIBLIOTHEQUE"
+            self._catalog_library_validated_path: Optional[str] = None
+            self._catalog_library_validated_resources: SolverCatalogResources | None = None
+            self._catalog_library_validation_error: Optional[str] = None
             self._current_log_level = str(getattr(settings, "log_level", "INFO") or "INFO").upper()
             self._index_worker: Optional[IndexBuilder] = None
             self._blind_worker: Optional[BlindRunner] = None
@@ -5367,6 +6385,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             if mode not in ("expert", "easy"):
                 return
             self._interface_mode = mode
+            self._settings.interface_mode = mode
+            try:
+                save_persistent_settings(self._settings)
+            except Exception:
+                pass
             self._apply_interface_mode()
 
         def _set_tab_visible(self, tab_widget: QtWidgets.QWidget, visible: bool) -> None:
@@ -5385,7 +6408,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             if hasattr(self, "solver_scroll"):
                 self._set_tab_visible(self.solver_scroll, True)
             if hasattr(self, "database_scroll"):
-                self._set_tab_visible(self.database_scroll, True)
+                self._set_tab_visible(self.database_scroll, expert)
             if hasattr(self, "settings_scroll"):
                 self._set_tab_visible(self.settings_scroll, True)
             # Advanced tabs hidden in easy mode
@@ -5396,7 +6419,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             if not expert and hasattr(self, "solver_scroll"):
                 try:
                     current = self.tabs.currentWidget()
-                    hidden_tabs = [getattr(self, n, None) for n in ("dev_scroll", "performance_scroll", "benchmark_scroll", "fast_scroll", "astrometry_scroll")]
+                    hidden_tabs = [getattr(self, n, None) for n in ("database_scroll", "dev_scroll", "performance_scroll", "benchmark_scroll", "fast_scroll", "astrometry_scroll")]
                     if current in hidden_tabs:
                         self._activate_tab(self.solver_scroll)
                 except Exception:
@@ -5411,6 +6434,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     action.blockSignals(False)
             self._apply_simple_mode_visibility()
             self._apply_settings_mode_visibility()
+            self._sync_blind_profile_controls()
 
         def _apply_simple_mode_visibility(self) -> None:
             simple = bool(hasattr(self, "simple_mode_check") and self.simple_mode_check.isChecked())
@@ -5419,6 +6443,187 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _apply_settings_mode_visibility(self) -> None:
             expert = (self._interface_mode == "expert")
             apply_settings_easy_visibility(self, expert=expert)
+
+        def _current_blind_profile(self) -> str:
+            profile = str(getattr(self._settings, "blind_backend_profile", ZEBLIND_4D_EXPERIMENTAL_PROFILE) or ZEBLIND_4D_EXPERIMENTAL_PROFILE).strip().lower()
+            if profile not in {HISTORICAL_PROFILE, ZEBLIND_4D_EXPERIMENTAL_PROFILE}:
+                profile = ZEBLIND_4D_EXPERIMENTAL_PROFILE
+            return profile
+
+        def _manifest_text_or_default(self) -> str:
+            text = ""
+            if hasattr(self, "settings_blind_4d_manifest_edit"):
+                text = self.settings_blind_4d_manifest_edit.text().strip()
+            if hasattr(self, "blind_4d_manifest_edit"):
+                text = text or self.blind_4d_manifest_edit.text().strip()
+            if not text:
+                text = str(getattr(self._settings, "blind_4d_manifest_path", "") or "").strip()
+            return str(resolve_default_4d_manifest_path(text or None))
+
+        def _sync_compat_4d_manifest_text(self, text: str) -> None:
+            if hasattr(self, "blind_4d_manifest_edit") and self.blind_4d_manifest_edit.text().strip() != str(text or "").strip():
+                try:
+                    self.blind_4d_manifest_edit.blockSignals(True)
+                    self.blind_4d_manifest_edit.setText(str(text or ""))
+                finally:
+                    self.blind_4d_manifest_edit.blockSignals(False)
+            self._set_manifest_status("not_verified")
+
+        def _set_manifest_status(self, key: str, *, manifest: Loaded4DManifest | None = None, error: Exception | str | None = None) -> None:
+            self._blind_4d_manifest_state = key
+            label = getattr(self, "blind_4d_manifest_status_label", None)
+            if label is None:
+                return
+            if key == "valid" and manifest is not None:
+                tiles = ", ".join(manifest.tile_keys)
+                if len(tiles) > 80:
+                    tiles = tiles[:77] + "..."
+                label.setText(self._text("blind_4d_indexes_verified", count=len(manifest.entries), tiles=tiles))
+                label.setStyleSheet("color: #2b8a3e;")
+            elif key == "invalid":
+                label.setText(f"{self._text('blind_4d_manifest_invalid')}: {error}")
+                label.setStyleSheet("color: #c92a2a;")
+            elif key == "verifying":
+                label.setText(self._text("blind_4d_verifying"))
+                label.setStyleSheet("color: #5c7cfa;")
+            else:
+                label.setText(self._text("blind_4d_not_verified"))
+                label.setStyleSheet("color: #6c757d;")
+
+        def _sync_blind_profile_controls(self) -> None:
+            if self._syncing_blind_profile_gui:
+                return
+            self._syncing_blind_profile_gui = True
+            try:
+                profile = self._current_blind_profile()
+                is_4d = profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE
+                running = bool(getattr(self, "_gui_run_active", False))
+                blind_enabled = (bool(self.blind_check.isChecked()) if hasattr(self, "blind_check") else True) and not running
+                expert = (self._interface_mode == "expert")
+                if hasattr(self, "blind_4d_easy_row"):
+                    self.blind_4d_easy_row.setVisible(not expert)
+                if hasattr(self, "blind_4d_note_label"):
+                    self.blind_4d_note_label.setVisible(not expert)
+                if hasattr(self, "blind_4d_expert_container"):
+                    self.blind_4d_expert_container.setVisible(expert)
+                if hasattr(self, "blind_4d_easy_check"):
+                    self.blind_4d_easy_check.blockSignals(True)
+                    self.blind_4d_easy_check.setChecked(is_4d)
+                    self.blind_4d_easy_check.setEnabled(blind_enabled)
+                    self.blind_4d_easy_check.blockSignals(False)
+                if hasattr(self, "blind_4d_profile_combo"):
+                    self.blind_4d_profile_combo.blockSignals(True)
+                    idx = self.blind_4d_profile_combo.findData(profile)
+                    if idx < 0:
+                        idx = self.blind_4d_profile_combo.findData(HISTORICAL_PROFILE)
+                    self.blind_4d_profile_combo.setCurrentIndex(max(0, idx))
+                    self.blind_4d_profile_combo.setEnabled(blind_enabled)
+                    self.blind_4d_profile_combo.blockSignals(False)
+                manifest_enabled = blind_enabled and is_4d and expert
+                for name in ("blind_4d_manifest_label", "blind_4d_manifest_edit", "blind_4d_manifest_browse_btn", "blind_4d_manifest_verify_btn", "blind_4d_manifest_status_label"):
+                    widget = getattr(self, name, None)
+                    if widget is not None:
+                        widget.setEnabled(manifest_enabled)
+                if hasattr(self, "effective_chain_label"):
+                    chain_key = "solver.chain.4d" if is_4d else "solver.chain.historical"
+                    self.effective_chain_label.setText(self._text(chain_key))
+            finally:
+                self._syncing_blind_profile_gui = False
+
+        def _set_blind_profile_from_gui(self, profile: str, *, source: str) -> None:
+            normalized = str(profile or ZEBLIND_4D_EXPERIMENTAL_PROFILE).strip().lower()
+            if normalized not in {HISTORICAL_PROFILE, ZEBLIND_4D_EXPERIMENTAL_PROFILE}:
+                normalized = ZEBLIND_4D_EXPERIMENTAL_PROFILE
+            if normalized == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+                manifest_path = self._manifest_text_or_default()
+                if hasattr(self, "blind_4d_manifest_edit") and not self.blind_4d_manifest_edit.text().strip():
+                    self.blind_4d_manifest_edit.setText(manifest_path)
+                self._settings.blind_4d_manifest_path = manifest_path
+                if self.blind_check.isChecked():
+                    loaded = self._verify_4d_manifest_from_gui(show_error=(source == "easy"), rollback_on_failure=(source == "easy"))
+                    if loaded is None and source == "easy":
+                        return
+            self._settings.blind_backend_profile = normalized
+            if normalized == HISTORICAL_PROFILE:
+                self._blind_4d_verified_manifest = None
+            try:
+                save_persistent_settings(self._settings)
+            except Exception:
+                pass
+            self._sync_blind_profile_controls()
+
+        def _on_blind_enabled_toggled(self, _checked: bool) -> None:
+            self._settings.solver_blind_enabled = bool(self.blind_check.isChecked())
+            self._sync_blind_profile_controls()
+
+        def _on_easy_4d_toggled(self, checked: bool) -> None:
+            if self._syncing_blind_profile_gui:
+                return
+            self._set_blind_profile_from_gui(
+                ZEBLIND_4D_EXPERIMENTAL_PROFILE,
+                source="easy",
+            )
+
+        def _on_blind_profile_combo_changed(self, _index: int) -> None:
+            if self._syncing_blind_profile_gui:
+                return
+            data = self.blind_4d_profile_combo.currentData()
+            self._set_blind_profile_from_gui(str(data or ZEBLIND_4D_EXPERIMENTAL_PROFILE), source="expert")
+
+        def _pick_4d_manifest_file(self) -> None:
+            start = self.blind_4d_manifest_edit.text().strip() or str(resolve_default_4d_manifest_path())
+            path, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self,
+                self._text("blind_4d_manifest_label"),
+                start,
+                self._text("blind_4d_manifest_filter"),
+            )
+            if path:
+                if hasattr(self, "blind_4d_manifest_edit"):
+                    self.blind_4d_manifest_edit.setText(path)
+                if hasattr(self, "settings_blind_4d_manifest_edit"):
+                    self.settings_blind_4d_manifest_edit.setText(path)
+                self._settings.blind_4d_manifest_path = path
+                self._blind_4d_verified_manifest = None
+                self._set_manifest_status("not_verified")
+
+        def _verify_4d_manifest_from_gui(self, *, show_error: bool = True, rollback_on_failure: bool = False) -> Loaded4DManifest | None:
+            path_text = self._manifest_text_or_default()
+            if hasattr(self, "blind_4d_manifest_edit"):
+                self.blind_4d_manifest_edit.setText(path_text)
+            if hasattr(self, "settings_blind_4d_manifest_edit"):
+                self.settings_blind_4d_manifest_edit.setText(path_text)
+            self._set_manifest_status("verifying")
+            try:
+                loaded = load_4d_index_manifest(path_text)
+            except IndexManifestError as exc:
+                self._blind_4d_verified_manifest = None
+                self._set_manifest_status("invalid", error=exc)
+                if rollback_on_failure:
+                    self._settings.blind_backend_profile = ZEBLIND_4D_EXPERIMENTAL_PROFILE
+                    self._sync_blind_profile_controls()
+                if show_error:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        self._text("blind_4d_enable_failed_title"),
+                        self._text("blind_4d_enable_failed_body", manifest=path_text, error=str(exc)),
+                    )
+                return None
+            self._blind_4d_verified_manifest = loaded
+            self._settings.blind_4d_manifest_path = str(loaded.manifest_path)
+            self._set_manifest_status("valid", manifest=loaded)
+            self._log(f"{self._text('blind_4d_ready')}: {loaded.manifest_path} ({len(loaded.entries)} index)")
+            return loaded
+
+        def _preflight_4d_manifest_for_run(self, config: SolveConfig) -> Loaded4DManifest:
+            manifest_path = config.blind_4d_manifest_path or self._manifest_text_or_default()
+            loaded = load_4d_index_manifest(manifest_path)
+            self._blind_4d_verified_manifest = loaded
+            self._set_manifest_status("valid", manifest=loaded)
+            self._log(
+                f"ZeBlind 4D preflight: manifest={loaded.manifest_path} indexes={len(loaded.entries)} tiles={','.join(loaded.tile_keys)}"
+            )
+            return loaded
 
         def _run_startup_wizard_from_menu(self) -> None:
             ok = self._run_simple_startup_wizard()
@@ -5771,7 +6976,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.btn_pause_all.clicked.connect(_pause_all_clicked)
             self.btn_verify_hashes.clicked.connect(_verify_hashes_clicked)
 
-            column.addLayout(form)
             self.db_tab_browse.clicked.connect(lambda: self._pick_settings_directory(self.db_tab_edit))
             # Keep Settings tab DB field in sync
             def _sync_db_text(text: str) -> None:
@@ -6410,6 +7614,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.backend_note_label = QtWidgets.QLabel()
             self.backend_note_label.setWordWrap(True)
             form.addRow(self.backend_note_label)
+            self.effective_chain_label = QtWidgets.QLabel()
+            self.effective_chain_label.setWordWrap(True)
+            form.addRow(self.effective_chain_label)
             self.fov_spin = QtWidgets.QDoubleSpinBox()
             self.fov_spin.setRange(0.0, 20.0)
             self.fov_spin.setDecimals(2)
@@ -6498,6 +7705,43 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.overwrite_check.setChecked(bool(self._settings.solver_overwrite))
             self.blind_check = QtWidgets.QCheckBox()
             self.blind_check.setChecked(bool(self._settings.solver_blind_enabled))
+            self.blind_check.toggled.connect(self._on_blind_enabled_toggled)
+            self.blind_4d_easy_check = QtWidgets.QCheckBox()
+            self.blind_4d_easy_check.setChecked(self._current_blind_profile() == ZEBLIND_4D_EXPERIMENTAL_PROFILE)
+            self.blind_4d_easy_check.toggled.connect(self._on_easy_4d_toggled)
+            self.blind_4d_easy_row = QtWidgets.QWidget()
+            easy_row_layout = QtWidgets.QHBoxLayout(self.blind_4d_easy_row)
+            easy_row_layout.setContentsMargins(24, 0, 0, 0)
+            easy_row_layout.addWidget(self.blind_4d_easy_check)
+            self.blind_4d_note_label = QtWidgets.QLabel()
+            self.blind_4d_note_label.setWordWrap(True)
+            self.blind_4d_note_label.setStyleSheet("color: #6c757d;")
+            self.blind_4d_profile_label = QtWidgets.QLabel()
+            self.blind_4d_profile_combo = QtWidgets.QComboBox()
+            self.blind_4d_profile_combo.addItem(self._text("blind_4d_profile_historical"), HISTORICAL_PROFILE)
+            self.blind_4d_profile_combo.addItem(self._text("blind_4d_profile_experimental"), ZEBLIND_4D_EXPERIMENTAL_PROFILE)
+            self.blind_4d_profile_combo.currentIndexChanged.connect(self._on_blind_profile_combo_changed)
+            self.blind_4d_manifest_label = QtWidgets.QLabel()
+            self.blind_4d_manifest_edit = QtWidgets.QLineEdit(str(resolve_default_4d_manifest_path(getattr(self._settings, "blind_4d_manifest_path", None))))
+            self.blind_4d_manifest_edit.textChanged.connect(lambda _text: self._set_manifest_status("not_verified"))
+            self.blind_4d_manifest_browse_btn = QtWidgets.QPushButton()
+            self.blind_4d_manifest_browse_btn.clicked.connect(self._pick_4d_manifest_file)
+            self.blind_4d_manifest_verify_btn = QtWidgets.QPushButton()
+            self.blind_4d_manifest_verify_btn.clicked.connect(lambda: self._verify_4d_manifest_from_gui(show_error=True, rollback_on_failure=False))
+            manifest_row = QtWidgets.QWidget()
+            manifest_layout = QtWidgets.QHBoxLayout(manifest_row)
+            manifest_layout.setContentsMargins(0, 0, 0, 0)
+            manifest_layout.addWidget(self.blind_4d_manifest_edit, 1)
+            manifest_layout.addWidget(self.blind_4d_manifest_browse_btn)
+            manifest_layout.addWidget(self.blind_4d_manifest_verify_btn)
+            self.blind_4d_manifest_status_label = QtWidgets.QLabel()
+            self.blind_4d_manifest_status_label.setWordWrap(True)
+            self.blind_4d_expert_container = QtWidgets.QWidget()
+            expert_layout = QtWidgets.QFormLayout(self.blind_4d_expert_container)
+            expert_layout.setContentsMargins(0, 0, 0, 0)
+            expert_layout.addRow(self.blind_4d_profile_label, self.blind_4d_profile_combo)
+            expert_layout.addRow(self.blind_4d_manifest_label, manifest_row)
+            expert_layout.addRow(self.blind_4d_manifest_status_label)
             self.simple_mode_check = QtWidgets.QCheckBox()
             self.simple_mode_check.setChecked(True)
             self.simple_mode_check.toggled.connect(lambda _checked: self._apply_simple_mode_visibility())
@@ -6536,9 +7780,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.formats_label_widget, self.formats_edit)
             form.addRow(self.families_label_widget, self.families_combo)
             form.addRow(self.blind_check)
+            form.addRow(self.blind_4d_easy_row)
+            form.addRow(self.blind_4d_note_label)
+            form.addRow(self.blind_4d_expert_container)
             form.addRow(self.overwrite_check)
             form.addRow(self.simple_mode_check)
             form.addRow(self.simple_clean_wcs_check)
+            self._set_manifest_status("not_verified")
+            self._sync_blind_profile_controls()
             self._apply_simple_mode_visibility()
             return self.options_box
 
@@ -6594,44 +7843,127 @@ def launch_gui(args: argparse.Namespace) -> int:
             column = QtWidgets.QVBoxLayout(widget)
             form = QtWidgets.QFormLayout()
 
+            self.settings_catalog_library_label = QtWidgets.QLabel()
+            self.settings_catalog_library_edit = QtWidgets.QLineEdit(str(getattr(self._settings, "catalog_library_path", "") or ""))
+            self.settings_catalog_library_edit.setToolTip(self._text("settings_catalog_library_tooltip"))
+            self.settings_catalog_library_edit.textChanged.connect(self._on_catalog_library_text_changed)
+            self.settings_catalog_library_browse = QtWidgets.QPushButton()
+            self.settings_catalog_library_browse.clicked.connect(self._pick_catalog_library_directory)
+            self.settings_catalog_library_validate_btn = QtWidgets.QPushButton()
+            self.settings_catalog_library_validate_btn.clicked.connect(lambda: self._validate_catalog_library_from_gui(show_error=True))
+            self.settings_catalog_library_clear_btn = QtWidgets.QPushButton()
+            self.settings_catalog_library_clear_btn.clicked.connect(self._clear_catalog_library_selection)
+            catalog_row = QtWidgets.QWidget()
+            catalog_layout = QtWidgets.QHBoxLayout(catalog_row)
+            catalog_layout.setContentsMargins(0, 0, 0, 0)
+            catalog_layout.addWidget(self.settings_catalog_library_edit, 1)
+            catalog_layout.addWidget(self.settings_catalog_library_browse)
+            catalog_layout.addWidget(self.settings_catalog_library_validate_btn)
+            catalog_layout.addWidget(self.settings_catalog_library_clear_btn)
+            form.addRow(self.settings_catalog_library_label, catalog_row)
+            self.settings_catalog_library_status_label = QtWidgets.QLabel()
+            self.settings_catalog_library_status_label.setWordWrap(True)
+            form.addRow(self.settings_catalog_library_status_label)
+            self.settings_catalog_library_help_label = QtWidgets.QLabel(self._text("settings_catalog_library_help"))
+            self.settings_catalog_library_help_label.setWordWrap(True)
+            self.settings_catalog_library_help_label.setStyleSheet("color: #6c757d;")
+            form.addRow(self.settings_catalog_library_help_label)
+            column.addLayout(form)
+
+            self.catalog_compat_group = QtWidgets.QGroupBox(self._text("catalog_compat_group_title"))
+            self.catalog_compat_group.setCheckable(True)
+            self.catalog_compat_group.setChecked(False)
+            compat_layout = QtWidgets.QVBoxLayout(self.catalog_compat_group)
+            self.catalog_compat_body = QtWidgets.QWidget()
+            compat_body_layout = QtWidgets.QVBoxLayout(self.catalog_compat_body)
+            compat_body_layout.setContentsMargins(0, 0, 0, 0)
+            self.catalog_compat_warning_label = QtWidgets.QLabel(self._text("catalog_compat_warning"))
+            self.catalog_compat_warning_label.setWordWrap(True)
+            self.catalog_compat_warning_label.setStyleSheet("color: #8a6d3b;")
+            compat_body_layout.addWidget(self.catalog_compat_warning_label)
+            self.catalog_rollback_status_label = QtWidgets.QLabel()
+            self.catalog_rollback_status_label.setWordWrap(True)
+            compat_body_layout.addWidget(self.catalog_rollback_status_label)
+            legacy_form = QtWidgets.QFormLayout()
+            compat_body_layout.addLayout(legacy_form)
+
             self.settings_db_label = QtWidgets.QLabel()
             self.settings_db_edit = QtWidgets.QLineEdit(self._settings.db_root or "")
+            self.settings_db_edit.setToolTip(self._text("settings_legacy_astap_tooltip"))
             self.settings_db_browse = QtWidgets.QPushButton()
             db_row = QtWidgets.QWidget()
             db_layout = QtWidgets.QHBoxLayout(db_row)
             db_layout.setContentsMargins(0, 0, 0, 0)
             db_layout.addWidget(self.settings_db_edit)
             db_layout.addWidget(self.settings_db_browse)
-            form.addRow(self.settings_db_label, db_row)
+            legacy_form.addRow(self.settings_db_label, db_row)
 
             self.settings_index_label = QtWidgets.QLabel()
             self.settings_index_edit = QtWidgets.QLineEdit(self._settings.index_root or "")
+            self.settings_index_edit.setToolTip(self._text("settings_legacy_index_tooltip"))
+            self.settings_index_edit.textChanged.connect(lambda _text: self._validate_inactive_legacy_index_hint())
             self.settings_index_browse = QtWidgets.QPushButton()
             index_row = QtWidgets.QWidget()
             index_layout = QtWidgets.QHBoxLayout(index_row)
             index_layout.setContentsMargins(0, 0, 0, 0)
             index_layout.addWidget(self.settings_index_edit)
             index_layout.addWidget(self.settings_index_browse)
-            form.addRow(self.settings_index_label, index_row)
+            legacy_form.addRow(self.settings_index_label, index_row)
+
+            self.near_catalog_mode_label = QtWidgets.QLabel()
+            self.near_catalog_mode_combo = QtWidgets.QComboBox()
+            self.near_catalog_mode_combo.addItem(self._text("settings_mode_auto"), "auto")
+            self.near_catalog_mode_combo.addItem(self._text("settings_mode_astap_native"), "astap-native")
+            self.near_catalog_mode_combo.addItem(self._text("settings_mode_legacy_index"), "legacy-index")
+            self.near_catalog_mode_combo.currentIndexChanged.connect(lambda _idx: self._on_catalog_mode_combo_changed())
+            legacy_form.addRow(self.near_catalog_mode_label, self.near_catalog_mode_combo)
+
+            self.blind4d_catalog_mode_label = QtWidgets.QLabel()
+            self.blind4d_catalog_mode_combo = QtWidgets.QComboBox()
+            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_auto"), "auto")
+            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_library_view"), "library-view")
+            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_external_manifest"), "external-manifest")
+            self.blind4d_catalog_mode_combo.currentIndexChanged.connect(lambda _idx: self._on_catalog_mode_combo_changed())
+            legacy_form.addRow(self.blind4d_catalog_mode_label, self.blind4d_catalog_mode_combo)
+
+            self.settings_blind_4d_manifest_label = QtWidgets.QLabel()
+            self.settings_blind_4d_manifest_edit = QtWidgets.QLineEdit(str(resolve_default_4d_manifest_path(getattr(self._settings, "blind_4d_manifest_path", None))))
+            self.settings_blind_4d_manifest_edit.setToolTip(self._text("settings_blind4d_external_tooltip"))
+            self.settings_blind_4d_manifest_edit.textChanged.connect(lambda text: self._sync_compat_4d_manifest_text(text))
+            self.settings_blind_4d_manifest_browse_btn = QtWidgets.QPushButton()
+            self.settings_blind_4d_manifest_browse_btn.clicked.connect(self._pick_4d_manifest_file)
+            self.settings_blind_4d_manifest_verify_btn = QtWidgets.QPushButton()
+            self.settings_blind_4d_manifest_verify_btn.clicked.connect(lambda: self._verify_4d_manifest_from_gui(show_error=True, rollback_on_failure=False))
+            compat_manifest_row = QtWidgets.QWidget()
+            compat_manifest_layout = QtWidgets.QHBoxLayout(compat_manifest_row)
+            compat_manifest_layout.setContentsMargins(0, 0, 0, 0)
+            compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_edit, 1)
+            compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_browse_btn)
+            compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_verify_btn)
+            legacy_form.addRow(self.settings_blind_4d_manifest_label, compat_manifest_row)
+
+            self.settings_restore_auto_modes_btn = QtWidgets.QPushButton(self._text("settings_restore_auto_modes"))
+            self.settings_restore_auto_modes_btn.clicked.connect(self._restore_catalog_auto_modes)
+            legacy_form.addRow(self.settings_restore_auto_modes_btn)
 
             self.settings_mag_label = QtWidgets.QLabel()
             self.settings_mag_spin = QtWidgets.QDoubleSpinBox()
             self.settings_mag_spin.setRange(0.0, 20.0)
             self.settings_mag_spin.setDecimals(2)
             self.settings_mag_spin.setValue(self._settings.mag_cap)
-            form.addRow(self.settings_mag_label, self.settings_mag_spin)
+            legacy_form.addRow(self.settings_mag_label, self.settings_mag_spin)
 
             self.settings_max_stars_label = QtWidgets.QLabel()
             self.settings_max_stars_spin = QtWidgets.QSpinBox()
             self.settings_max_stars_spin.setRange(100, 10000)
             self.settings_max_stars_spin.setValue(self._settings.max_stars)
-            form.addRow(self.settings_max_stars_label, self.settings_max_stars_spin)
+            legacy_form.addRow(self.settings_max_stars_label, self.settings_max_stars_spin)
 
             self.settings_max_quads_label = QtWidgets.QLabel()
             self.settings_max_quads_spin = QtWidgets.QSpinBox()
             self.settings_max_quads_spin.setRange(100, 100000)
             self.settings_max_quads_spin.setValue(self._settings.max_quads_per_tile)
-            form.addRow(self.settings_max_quads_label, self.settings_max_quads_spin)
+            legacy_form.addRow(self.settings_max_quads_label, self.settings_max_quads_spin)
 
             self.settings_quad_storage_label = QtWidgets.QLabel()
             self.settings_quad_storage_combo = QtWidgets.QComboBox()
@@ -6646,7 +7978,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 (self._settings.quad_storage or QUAD_STORAGE_CHOICES[0]).lower(),
                 QUAD_STORAGE_CHOICES[0],
             )
-            form.addRow(self.settings_quad_storage_label, self.settings_quad_storage_combo)
+            legacy_form.addRow(self.settings_quad_storage_label, self.settings_quad_storage_combo)
 
             self.settings_tile_compression_label = QtWidgets.QLabel()
             self.settings_tile_compression_combo = QtWidgets.QComboBox()
@@ -6661,7 +7993,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 (self._settings.tile_compression or TILE_COMPRESSION_CHOICES[0]).lower(),
                 TILE_COMPRESSION_CHOICES[0],
             )
-            form.addRow(self.settings_tile_compression_label, self.settings_tile_compression_combo)
+            legacy_form.addRow(self.settings_tile_compression_label, self.settings_tile_compression_combo)
 
             self.settings_sample_label = QtWidgets.QLabel()
             self.settings_sample_edit = QtWidgets.QLineEdit(self._settings.sample_fits or "")
@@ -6671,23 +8003,33 @@ def launch_gui(args: argparse.Namespace) -> int:
             sample_layout.setContentsMargins(0, 0, 0, 0)
             sample_layout.addWidget(self.settings_sample_edit)
             sample_layout.addWidget(self.settings_sample_browse)
-            form.addRow(self.settings_sample_label, sample_row)
+            legacy_form.addRow(self.settings_sample_label, sample_row)
+            compat_layout.addWidget(self.catalog_compat_body)
+            self.catalog_compat_group.toggled.connect(self.catalog_compat_body.setVisible)
+            self.catalog_compat_body.setVisible(False)
+            column.addWidget(self.catalog_compat_group)
 
             # Presets/FOV/Reco groups
             build_presets_fov_reco_groups(self, QtWidgets, preset_utils, column, form)
 
             # Blind solver tuning group
             self.blind_group = build_blind_group(self, QtWidgets)
+            self.catalog_maintenance_group = QtWidgets.QGroupBox(self._text("catalog_compat_tools_title"))
+            maintenance_layout = QtWidgets.QVBoxLayout(self.catalog_maintenance_group)
+            self.catalog_maintenance_warning_label = QtWidgets.QLabel(self._text("catalog_compat_tools_warning"))
+            self.catalog_maintenance_warning_label.setWordWrap(True)
+            self.catalog_maintenance_warning_label.setStyleSheet("color: #8a6d3b;")
+            maintenance_layout.addWidget(self.catalog_maintenance_warning_label)
 
             button_row = QtWidgets.QHBoxLayout()
             self.settings_save_btn = QtWidgets.QPushButton()
             self.settings_build_btn = QtWidgets.QPushButton()
             self.settings_run_blind_btn = QtWidgets.QPushButton()
             self.settings_run_near_btn = QtWidgets.QPushButton()
-            button_row.addWidget(self.settings_save_btn)
             button_row.addWidget(self.settings_build_btn)
             button_row.addWidget(self.settings_run_blind_btn)
             button_row.addWidget(self.settings_run_near_btn)
+            maintenance_layout.addLayout(button_row)
 
             self.settings_log_view = QtWidgets.QPlainTextEdit()
             self.settings_log_view.setReadOnly(True)
@@ -6697,7 +8039,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception:
                 pass
             column.addWidget(self.blind_group)
-            column.addLayout(button_row)
+            column.addWidget(self.catalog_maintenance_group)
+            save_row = QtWidgets.QHBoxLayout()
+            save_row.addStretch(1)
+            save_row.addWidget(self.settings_save_btn)
+            column.addLayout(save_row)
             self.settings_log_label = QtWidgets.QLabel()
             column.addWidget(self.settings_log_label)
             # Progress bar for index/quads build
@@ -7133,6 +8479,247 @@ def launch_gui(args: argparse.Namespace) -> int:
             if directory:
                 target.setText(directory)
 
+        def _catalog_library_path_from_ui(self) -> str | None:
+            if hasattr(self, "settings_catalog_library_edit"):
+                text = self.settings_catalog_library_edit.text().strip()
+            else:
+                text = str(getattr(self._settings, "catalog_library_path", "") or "").strip()
+            if not text:
+                return None
+            return str(Path(text).expanduser())
+
+        def _on_catalog_library_text_changed(self, text: str) -> None:
+            self._catalog_library_validated_path = None
+            self._catalog_library_validated_resources = None
+            self._catalog_library_validation_error = None
+            if str(text or "").strip():
+                self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
+            else:
+                self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
+
+        def _pick_catalog_library_directory(self) -> None:
+            if not hasattr(self, "settings_catalog_library_edit"):
+                return
+            self._pick_settings_directory(self.settings_catalog_library_edit)
+
+        def _clear_catalog_library_selection(self) -> None:
+            if hasattr(self, "settings_catalog_library_edit"):
+                self.settings_catalog_library_edit.setText("")
+            self._settings.catalog_library_path = None
+            self._catalog_library_validated_path = None
+            self._catalog_library_validated_resources = None
+            self._catalog_library_validation_error = None
+            self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
+            self._log_settings(self._text("settings_catalog_library_cleared"))
+
+        def _current_near_catalog_mode_from_ui(self) -> str:
+            combo = getattr(self, "near_catalog_mode_combo", None)
+            if combo is not None:
+                value = combo.currentData()
+                if isinstance(value, str) and value.strip():
+                    return value.strip().lower()
+            return str(getattr(self._settings, "near_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-")
+
+        def _current_blind4d_catalog_mode_from_ui(self) -> str:
+            combo = getattr(self, "blind4d_catalog_mode_combo", None)
+            if combo is not None:
+                value = combo.currentData()
+                if isinstance(value, str) and value.strip():
+                    return value.strip().lower()
+            return str(getattr(self._settings, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-")
+
+        def _on_catalog_mode_combo_changed(self) -> None:
+            self._settings.near_catalog_mode = self._current_near_catalog_mode_from_ui()
+            self._settings.blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
+            self._update_catalog_rollback_status()
+
+        def _restore_catalog_auto_modes(self) -> None:
+            if hasattr(self, "near_catalog_mode_combo"):
+                self._set_combo_current_data(self.near_catalog_mode_combo, "auto", "auto")
+            if hasattr(self, "blind4d_catalog_mode_combo"):
+                self._set_combo_current_data(self.blind4d_catalog_mode_combo, "auto", "auto")
+            self._settings.near_catalog_mode = "auto"
+            self._settings.blind4d_catalog_mode = "auto"
+            self._update_catalog_rollback_status()
+            self._log_settings(self._text("settings_restore_auto_modes"))
+
+        def _update_catalog_rollback_status(self) -> None:
+            label = getattr(self, "catalog_rollback_status_label", None)
+            if label is None:
+                return
+            near_mode = self._current_near_catalog_mode_from_ui()
+            blind_mode = self._current_blind4d_catalog_mode_from_ui()
+            rollback = near_mode == "legacy-index" or blind_mode == "external-manifest"
+            if rollback:
+                label.setText(self._text("settings_rollback_active", near=near_mode, blind=blind_mode))
+                label.setStyleSheet("color: #c92a2a; font-weight: 600;")
+            else:
+                label.setText(self._text("settings_rollback_inactive"))
+                label.setStyleSheet("color: #6c757d;")
+
+        def _format_catalog_path_error(
+            self,
+            validation: GuiCatalogPathValidation,
+            *,
+            field_key: str,
+            action_key: str | None = None,
+        ) -> str:
+            action = self._text(action_key or self._action_for_catalog_path_error(validation.code))
+            return self._text(
+                "catalog_path_error",
+                code=validation.code,
+                message=self._catalog_path_error_message(validation),
+                field=self._text(field_key),
+                action=action,
+            )
+
+        def _catalog_path_error_message(self, validation: GuiCatalogPathValidation) -> str:
+            key_by_code = {
+                "CATALOG_LIBRARY_USED_AS_LEGACY_NEAR_INDEX": "msg_catalog_library_used_as_legacy_near_index",
+                "LEGACY_NEAR_INDEX_USED_AS_CATALOG_LIBRARY": "msg_legacy_near_index_used_as_catalog_library",
+                "ASTAP_SOURCE_USED_AS_CATALOG_LIBRARY": "msg_astap_source_used_as_catalog_library",
+                "BLIND4D_MANIFEST_FILE_REQUIRED": "msg_blind4d_manifest_file_required",
+            }
+            key = key_by_code.get(validation.code)
+            if key:
+                return self._text(key)
+            return validation.message
+
+        def _action_for_catalog_path_error(self, code: str) -> str:
+            if code == "CATALOG_LIBRARY_USED_AS_LEGACY_NEAR_INDEX":
+                return "action_use_catalog_library_field"
+            if code == "LEGACY_NEAR_INDEX_USED_AS_CATALOG_LIBRARY":
+                return "action_use_legacy_index_field"
+            if code == "ASTAP_SOURCE_USED_AS_CATALOG_LIBRARY":
+                return "action_use_legacy_astap_field"
+            if code.startswith("BLIND4D_"):
+                return "action_choose_blind4d_manifest"
+            if code.startswith("LEGACY_NEAR"):
+                return "action_choose_legacy_index"
+            if code.startswith("CATALOG_LIBRARY"):
+                return "action_choose_catalog_library"
+            return "action_fix_or_choose_other"
+
+        def _validate_inactive_legacy_index_hint(self) -> None:
+            text = self.settings_index_edit.text().strip() if hasattr(self, "settings_index_edit") else ""
+            if not text:
+                return
+            validation = validate_legacy_near_index_root(text)
+            if validation.code == "CATALOG_LIBRARY_USED_AS_LEGACY_NEAR_INDEX":
+                self._log_settings(
+                    self._format_catalog_path_error(
+                        validation,
+                        field_key="field_legacy_index",
+                        action_key="action_use_catalog_library_field",
+                    )
+                )
+
+        def _set_catalog_library_status(
+            self,
+            state: str,
+            *,
+            message: str | None = None,
+            resources: SolverCatalogResources | None = None,
+            error: Exception | str | None = None,
+        ) -> None:
+            self._catalog_library_state = state
+            label = getattr(self, "settings_catalog_library_status_label", None)
+            if label is None:
+                return
+            if message is None:
+                if state == "AUCUNE_BIBLIOTHEQUE":
+                    message = self._text("settings_catalog_library_none")
+                elif state == "VALIDATION_EN_COURS":
+                    message = self._text("settings_catalog_library_validating")
+                elif state == "MISSING":
+                    message = self._text("settings_catalog_library_missing")
+                elif state == "INVALID":
+                    message = self._text("settings_catalog_library_invalid", error=str(error or "CATALOG_LIBRARY_INVALID"))
+                elif resources is not None:
+                    message = self._catalog_library_status_summary(resources)
+                else:
+                    message = state
+            label.setText(message)
+            if state in {"READY_FULL", "READY_PARTIAL", "NEAR_ONLY", "BLIND4D_ONLY"}:
+                label.setStyleSheet("color: #2b8a3e;")
+            elif state == "VALIDATION_EN_COURS":
+                label.setStyleSheet("color: #5c7cfa;")
+            elif state == "AUCUNE_BIBLIOTHEQUE":
+                label.setStyleSheet("color: #6c757d;")
+            else:
+                label.setStyleSheet("color: #c92a2a;")
+
+        def _catalog_library_status_summary(self, resources: SolverCatalogResources) -> str:
+            status = resources.library_status or CatalogStatus.MISSING
+            near = self._text("settings_catalog_library_source_unavailable")
+            if resources.near is not None:
+                near = self._text(
+                    "settings_catalog_library_source_available",
+                    families=", ".join(resources.near.families or ("-",)),
+                    tiles=resources.near.coverage.covered_tiles or resources.near.coverage.total_tiles or 0,
+                )
+            blind = self._text("settings_catalog_library_blind_unavailable")
+            coverage = resources.coverage
+            total = coverage.total_tiles if coverage and coverage.total_tiles is not None else 0
+            if resources.blind4d_available:
+                blind = self._text(
+                    "settings_catalog_library_blind_available",
+                    indexes=resources.blind4d_index_count,
+                    total=total,
+                )
+            all_sky = self._text("settings_catalog_library_all_sky_yes" if resources.all_sky_blind4d else "settings_catalog_library_all_sky_no")
+            warnings = ", ".join(resources.warnings) if resources.warnings else "-"
+            errors = "-"
+            key = "settings_catalog_library_ready_partial"
+            if status is CatalogStatus.READY_FULL:
+                key = "settings_catalog_library_ready_full"
+            elif status in {CatalogStatus.NEAR_ONLY, CatalogStatus.SOURCE_ONLY}:
+                key = "settings_catalog_library_near_only"
+            elif status is CatalogStatus.BLIND4D_ONLY:
+                key = "settings_catalog_library_blind_only"
+            return self._text(key, near=near, blind=blind, all_sky=all_sky, warnings=warnings, errors=errors)
+
+        def _validate_catalog_library_from_gui(self, *, show_error: bool = True) -> SolverCatalogResources | None:
+            path_text = self._catalog_library_path_from_ui()
+            if not path_text:
+                self._settings.catalog_library_path = None
+                self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
+                return None
+            if hasattr(self, "settings_catalog_library_edit"):
+                self.settings_catalog_library_edit.setText(path_text)
+            self._set_catalog_library_status("VALIDATION_EN_COURS")
+            path = Path(path_text).expanduser()
+            try:
+                path_check = validate_catalog_library_root(path)
+                if not path_check.ok:
+                    message = self._format_catalog_path_error(path_check, field_key="field_catalog_library")
+                    if path_check.code == "CATALOG_LIBRARY_MANIFEST_MISSING":
+                        raise FileNotFoundError(message)
+                    raise CatalogLibraryError(message)
+                library = CatalogLibrary.open(path)
+                report = library.validate()
+                hard = [issue for issue in report.issues if issue.severity in {IssueSeverity.ERROR, IssueSeverity.FATAL}]
+                if hard or report.status in {CatalogStatus.CORRUPT, CatalogStatus.INCOMPATIBLE, CatalogStatus.MISSING}:
+                    codes = ", ".join(issue.code for issue in hard) or report.status.value
+                    raise CatalogLibraryError(f"CATALOG_LIBRARY_INVALID: {codes}")
+                resources = resolve_catalog_resources(catalog_library=library)
+            except Exception as exc:
+                self._catalog_library_validated_path = None
+                self._catalog_library_validated_resources = None
+                self._catalog_library_validation_error = str(exc)
+                state = "MISSING" if isinstance(exc, FileNotFoundError) else "INVALID"
+                self._set_catalog_library_status(state, error=exc)
+                if show_error:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                return None
+            self._settings.catalog_library_path = path_text
+            self._catalog_library_validated_path = path_text
+            self._catalog_library_validated_resources = resources
+            self._catalog_library_validation_error = None
+            state = resources.library_status.value if resources.library_status else "INVALID"
+            self._set_catalog_library_status(state, resources=resources)
+            return resources
+
         def _pick_settings_sample(self) -> None:
             path, _ = QtWidgets.QFileDialog.getOpenFileName(
                 self,
@@ -7144,8 +8731,31 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _populate_settings_ui(self) -> None:
             settings = self._settings
+            if hasattr(self, "settings_catalog_library_edit"):
+                try:
+                    self.settings_catalog_library_edit.blockSignals(True)
+                    self.settings_catalog_library_edit.setText(settings.catalog_library_path or "")
+                finally:
+                    self.settings_catalog_library_edit.blockSignals(False)
+                if settings.catalog_library_path:
+                    self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
+                else:
+                    self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
             self.settings_db_edit.setText(settings.db_root or "")
             self.settings_index_edit.setText(settings.index_root or "")
+            if hasattr(self, "near_catalog_mode_combo"):
+                self._set_combo_current_data(
+                    self.near_catalog_mode_combo,
+                    str(getattr(settings, "near_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-"),
+                    "auto",
+                )
+            if hasattr(self, "blind4d_catalog_mode_combo"):
+                self._set_combo_current_data(
+                    self.blind4d_catalog_mode_combo,
+                    str(getattr(settings, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-"),
+                    "auto",
+                )
+            self._update_catalog_rollback_status()
             self.settings_mag_spin.setValue(settings.mag_cap)
             self.settings_max_stars_spin.setValue(settings.max_stars)
             self.settings_max_quads_spin.setValue(settings.max_quads_per_tile)
@@ -7183,6 +8793,16 @@ def launch_gui(args: argparse.Namespace) -> int:
                     idx = self.backend_combo.findData("local")
                     if idx >= 0:
                         self.backend_combo.setCurrentIndex(idx)
+            except Exception:
+                pass
+            try:
+                if hasattr(self, "blind_4d_manifest_edit"):
+                    manifest_text = str(resolve_default_4d_manifest_path(getattr(settings, "blind_4d_manifest_path", None)))
+                    self.blind_4d_manifest_edit.setText(manifest_text)
+                    if hasattr(self, "settings_blind_4d_manifest_edit"):
+                        self.settings_blind_4d_manifest_edit.setText(manifest_text)
+                self._set_manifest_status("not_verified")
+                self._sync_blind_profile_controls()
             except Exception:
                 pass
             # Astrometry tab fields
@@ -7362,25 +8982,51 @@ def launch_gui(args: argparse.Namespace) -> int:
                     )
 
         def _read_settings_from_ui(self) -> PersistentSettings:
+            catalog_library_path = self._catalog_library_path_from_ui()
+            catalog_resources_for_save = None
+            if catalog_library_path:
+                catalog_resources_for_save = self._validate_catalog_library_from_gui(show_error=False)
+                if catalog_resources_for_save is None:
+                    raise ValueError(self._catalog_library_validation_error or "CATALOG_LIBRARY_INVALID")
+            near_catalog_mode = self._current_near_catalog_mode_from_ui()
+            blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
             db_root = self.settings_db_edit.text().strip()
-            if not db_root:
+            if not db_root and catalog_resources_for_save is None:
                 raise ValueError(self._text("error_database_required"))
             index_root = self.settings_index_edit.text().strip()
-            if not index_root:
+            if not index_root and catalog_resources_for_save is None:
                 raise ValueError(self._text("settings_index_missing"))
+            if db_root and (catalog_resources_for_save is None or near_catalog_mode == "legacy-index"):
+                validation = validate_astap_root(db_root)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_astap"))
+            if index_root and (catalog_resources_for_save is None or near_catalog_mode == "legacy-index"):
+                validation = validate_legacy_near_index_root(index_root)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_index"))
+            manifest_text_for_save = (
+                self._manifest_text_or_default()
+                if hasattr(self, "blind_4d_manifest_edit") or hasattr(self, "settings_blind_4d_manifest_edit")
+                else (getattr(self._settings, "blind_4d_manifest_path", None) or None)
+            )
+            if blind4d_catalog_mode == "external-manifest":
+                validation = validate_blind4d_manifest_file(manifest_text_for_save)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_blind4d_manifest"))
             # Enforce separation between database/ and index/
-            try:
-                dbp = Path(db_root).expanduser().resolve()
-                idxp = Path(index_root).expanduser().resolve()
-                same = (idxp == dbp)
-                inside = str(idxp).startswith(str(dbp) + os.sep)
-                if same or inside:
-                    raise ValueError(self._text("warn_sep_dirs"))
-            except Exception as _exc:
-                # Convert any path-related issue into a user-facing message
-                if not isinstance(_exc, ValueError):
-                    raise ValueError(self._text("warn_sep_dirs"))
-                raise
+            if db_root and index_root:
+                try:
+                    dbp = Path(db_root).expanduser().resolve()
+                    idxp = Path(index_root).expanduser().resolve()
+                    same = (idxp == dbp)
+                    inside = str(idxp).startswith(str(dbp) + os.sep)
+                    if same or inside:
+                        raise ValueError(self._text("warn_sep_dirs"))
+                except Exception as _exc:
+                    # Convert any path-related issue into a user-facing message
+                    if not isinstance(_exc, ValueError):
+                        raise ValueError(self._text("warn_sep_dirs"))
+                    raise
             # Read detection device from Performance tab
             try:
                 sel = self.perf_detect_combo.currentData()
@@ -7403,8 +9049,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                     tile_compression_value = data.strip().lower()
 
             return PersistentSettings(
-                db_root=db_root,
-                index_root=index_root,
+                catalog_library_path=catalog_library_path,
+                db_root=db_root or None,
+                index_root=index_root or None,
                 mag_cap=float(self.settings_mag_spin.value()),
                 max_stars=int(self.settings_max_stars_spin.value()),
                 max_quads_per_tile=int(self.settings_max_quads_spin.value()),
@@ -7435,6 +9082,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_detect_max_labels=int(self.fast_detect_max_labels_spin.value()) if hasattr(self, 'fast_detect_max_labels_spin') else 1200,
                 io_concurrency=int(self.perf_io_spin.value()) if hasattr(self, 'perf_io_spin') else 0,
                 near_warm_start=bool(self.perf_near_warm_check.isChecked()) if hasattr(self, 'perf_near_warm_check') else True,
+                near_catalog_mode=near_catalog_mode,
+                blind4d_catalog_mode=blind4d_catalog_mode,
                 # Near (fast solver) thresholds and tuning
                 near_quality_inliers=int(self.fast_quality_inliers_spin.value()) if hasattr(self, 'fast_quality_inliers_spin') else 60,
                 near_quality_rms=float(self.fast_quality_rms_spin.value()) if hasattr(self, 'fast_quality_rms_spin') else 1.0,
@@ -7450,6 +9099,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_search_margin=float(self.fast_search_margin_spin.value()) if hasattr(self, 'fast_search_margin_spin') else 1.2,
                 # Backend + astrometry
                 solver_backend=(self.backend_combo.currentData() if hasattr(self, 'backend_combo') else "local"),
+                interface_mode=str(getattr(self, "_interface_mode", "easy") or "easy"),
+                blind_backend_profile=self._current_blind_profile(),
+                blind_4d_manifest_path=manifest_text_for_save,
                 astrometry_api_url=(self.ast_api_url_edit.text().strip() if hasattr(self, 'ast_api_url_edit') else "https://nova.astrometry.net/api"),
                 astrometry_api_key=(self.ast_api_key_edit.text().strip() if hasattr(self, 'ast_api_key_edit') and self.ast_api_key_edit.text().strip() else (os.environ.get("ASTROMETRY_API_KEY") or None)),
                 astrometry_parallel_jobs=int(self.ast_parallel_spin.value()) if hasattr(self, 'ast_parallel_spin') else 2,
@@ -7752,49 +9404,31 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._settings = settings
             save_persistent_settings(settings)
             self.settings_run_blind_btn.setEnabled(False)
-            # Build blind config from settings
-            blind_cfg = BlindSolveConfig(
-                max_candidates=settings.blind_max_candidates,
-                max_stars=settings.blind_max_stars,
-                max_quads=settings.blind_max_quads,
-                detect_k_sigma=float(getattr(settings, "dev_detect_k_sigma", 3.0) or 3.0),
-                detect_min_area=int(getattr(settings, "dev_detect_min_area", 5) or 5),
-                bucket_cap_S=int(getattr(settings, "dev_bucket_cap_S", 0) or 0),
-                bucket_cap_M=int(getattr(settings, "dev_bucket_cap_M", 0) or 0),
-                bucket_cap_L=int(getattr(settings, "dev_bucket_cap_L", 0) or 0),
-                sip_order=2,
-                quality_rms=settings.blind_quality_rms,
-                quality_inliers=settings.blind_quality_inliers,
-                pixel_tolerance=settings.blind_pixel_tolerance,
-                fast_mode=settings.blind_fast_mode,
-                log_level=self._current_log_level,
-                bucket_limit_override=int(settings.dev_bucket_limit_override or 0),
-                vote_percentile=int(settings.dev_vote_percentile or 40),
-                ra_hint_deg=settings.solver_hint_ra_deg,
-                dec_hint_deg=settings.solver_hint_dec_deg,
-                radius_hint_deg=settings.solver_hint_radius_deg,
-                focal_length_mm=settings.solver_hint_focal_mm,
-                pixel_size_um=settings.solver_hint_pixel_um,
-                pixel_scale_arcsec=settings.solver_hint_resolution_arcsec,
-                pixel_scale_min_arcsec=settings.solver_hint_resolution_min_arcsec,
-                pixel_scale_max_arcsec=settings.solver_hint_resolution_max_arcsec,
-                downsample=max(1, int(settings.solver_downsample or 1)),
-                verify_logodds_enabled=bool(getattr(settings, "dev_verify_logodds_enabled", False)),
-                verify_logodds_bail=float(getattr(settings, "dev_verify_logodds_bail", -24.0) or -24.0),
-                verify_logodds_stoplooking=float(getattr(settings, "dev_verify_logodds_stoplooking", 24.0) or 24.0),
-                verify_logodds_min_validations=int(getattr(settings, "dev_verify_logodds_min_validations", 8) or 8),
-                hard_max_candidates_tried=int(getattr(settings, "dev_hard_max_candidates_tried", 0) or 0),
-                hard_max_validations=int(getattr(settings, "dev_hard_max_validations", 0) or 0),
-                depth_ladder_enabled=bool(getattr(settings, "dev_depth_ladder_enabled", False)),
-                depth_ladder_caps=tuple(
-                    int(v)
-                    for v in getattr(settings, "dev_depth_ladder_caps", (80, 160, 500))
-                    if isinstance(v, (int, float)) and int(v) > 0
-                ) or (80, 160, 500),
-            )
+            loaded_manifest = None
+            index_root = settings.index_root
+            if str(getattr(settings, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower() == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
+                try:
+                    if not settings.blind_4d_manifest_path:
+                        raise IndexManifestError("blind_4d_manifest_required")
+                    loaded_manifest = load_4d_index_manifest(settings.blind_4d_manifest_path)
+                    index_root = str(loaded_manifest.manifest_path.parent)
+                except IndexManifestError as exc:
+                    self.settings_run_blind_btn.setEnabled(True)
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), f"4D manifest error: {exc}")
+                    return
+            try:
+                blind_cfg = build_blind_solve_config(
+                    settings,
+                    log_level=self._current_log_level,
+                    loaded_manifest=loaded_manifest,
+                )
+            except Exception as exc:
+                self.settings_run_blind_btn.setEnabled(True)
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                return
             self._blind_worker = BlindRunner(
                 fits_path=sample_path,
-                index_root=settings.index_root,
+                index_root=index_root,
                 blind_config=blind_cfg,
             )
             self._blind_worker.log.connect(self._log_settings)
@@ -8065,11 +9699,38 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception:
                 pass
             self.blind_check.setText(self._text("blind_label"))
+            if hasattr(self, "blind_4d_easy_check"):
+                self.blind_4d_easy_check.setText(self._text("blind_4d_easy_label"))
+                self.blind_4d_easy_check.setToolTip(self._text("blind_4d_tooltip"))
+            if hasattr(self, "blind_4d_note_label"):
+                self.blind_4d_note_label.setText(self._text("blind_4d_limited_note"))
+            if hasattr(self, "blind_4d_profile_label"):
+                self.blind_4d_profile_label.setText(self._text("blind_4d_profile_label"))
+            if hasattr(self, "blind_4d_profile_combo"):
+                hist_idx = self.blind_4d_profile_combo.findData(HISTORICAL_PROFILE)
+                if hist_idx >= 0:
+                    self.blind_4d_profile_combo.setItemText(hist_idx, self._text("blind_4d_profile_historical"))
+                exp_idx = self.blind_4d_profile_combo.findData(ZEBLIND_4D_EXPERIMENTAL_PROFILE)
+                if exp_idx >= 0:
+                    self.blind_4d_profile_combo.setItemText(exp_idx, self._text("blind_4d_profile_experimental"))
+            if hasattr(self, "blind_4d_manifest_label"):
+                self.blind_4d_manifest_label.setText(self._text("blind_4d_manifest_label"))
+            if hasattr(self, "blind_4d_manifest_edit"):
+                self.blind_4d_manifest_edit.setToolTip(self._text("blind_4d_manifest_tooltip"))
+            if hasattr(self, "blind_4d_manifest_browse_btn"):
+                self.blind_4d_manifest_browse_btn.setText(self._text("blind_4d_browse"))
+            if hasattr(self, "blind_4d_manifest_verify_btn"):
+                self.blind_4d_manifest_verify_btn.setText(self._text("blind_4d_verify"))
+            if hasattr(self, "effective_chain_label"):
+                self.effective_chain_label.setText(
+                    self._text("solver.chain.4d" if self._current_blind_profile() == ZEBLIND_4D_EXPERIMENTAL_PROFILE else "solver.chain.historical")
+                )
             self.overwrite_check.setText(self._text("overwrite_label"))
             if hasattr(self, "simple_mode_check"):
                 self.simple_mode_check.setText(self._text("simple_mode_label"))
             if hasattr(self, "simple_clean_wcs_check"):
                 self.simple_clean_wcs_check.setText(self._text("simple_clean_wcs_label"))
+            self._sync_blind_profile_controls()
             self.files_view.setHeaderLabels(
                 [
                     self._text("files_header"),
@@ -8116,12 +9777,79 @@ def launch_gui(args: argparse.Namespace) -> int:
                 except Exception:
                     pass
             browse_label = self._text("browse_button")
+            if hasattr(self, "settings_catalog_library_label"):
+                self.settings_catalog_library_label.setText(self._text("settings_catalog_library_label"))
+            if hasattr(self, "settings_catalog_library_browse"):
+                self.settings_catalog_library_browse.setText(self._text("settings_catalog_library_browse"))
+            if hasattr(self, "settings_catalog_library_validate_btn"):
+                self.settings_catalog_library_validate_btn.setText(self._text("settings_catalog_library_validate"))
+            if hasattr(self, "settings_catalog_library_clear_btn"):
+                self.settings_catalog_library_clear_btn.setText(self._text("settings_catalog_library_clear"))
+            if hasattr(self, "settings_catalog_library_edit"):
+                self.settings_catalog_library_edit.setToolTip(self._text("settings_catalog_library_tooltip"))
+            if hasattr(self, "settings_catalog_library_help_label"):
+                self.settings_catalog_library_help_label.setText(self._text("settings_catalog_library_help"))
+            if hasattr(self, "settings_catalog_library_status_label"):
+                if self._catalog_library_validated_resources is not None:
+                    self._set_catalog_library_status(
+                        self._catalog_library_validated_resources.library_status.value
+                        if self._catalog_library_validated_resources.library_status
+                        else "INVALID",
+                        resources=self._catalog_library_validated_resources,
+                    )
+                elif self.settings_catalog_library_edit.text().strip():
+                    self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
+                else:
+                    self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
             if hasattr(self, "settings_db_label"):
-                self.settings_db_label.setText(self._text("settings_db_label"))
+                self.settings_db_label.setText(self._text("settings_legacy_astap_label"))
+                self.settings_db_edit.setToolTip(self._text("settings_legacy_astap_tooltip"))
                 self.settings_db_browse.setText(browse_label)
             if hasattr(self, "settings_index_label"):
-                self.settings_index_label.setText(self._text("settings_index_label"))
+                self.settings_index_label.setText(self._text("settings_legacy_index_label"))
+                self.settings_index_edit.setToolTip(self._text("settings_legacy_index_tooltip"))
                 self.settings_index_browse.setText(browse_label)
+            if hasattr(self, "catalog_compat_group"):
+                self.catalog_compat_group.setTitle(self._text("catalog_compat_group_title"))
+            if hasattr(self, "catalog_compat_warning_label"):
+                self.catalog_compat_warning_label.setText(self._text("catalog_compat_warning"))
+            if hasattr(self, "catalog_maintenance_group"):
+                self.catalog_maintenance_group.setTitle(self._text("catalog_compat_tools_title"))
+            if hasattr(self, "catalog_maintenance_warning_label"):
+                self.catalog_maintenance_warning_label.setText(self._text("catalog_compat_tools_warning"))
+            if hasattr(self, "near_catalog_mode_label"):
+                self.near_catalog_mode_label.setText(self._text("settings_near_mode_label"))
+            if hasattr(self, "blind4d_catalog_mode_label"):
+                self.blind4d_catalog_mode_label.setText(self._text("settings_blind4d_mode_label"))
+            if hasattr(self, "settings_blind_4d_manifest_label"):
+                self.settings_blind_4d_manifest_label.setText(self._text("settings_blind4d_external_label"))
+            if hasattr(self, "settings_blind_4d_manifest_edit"):
+                self.settings_blind_4d_manifest_edit.setToolTip(self._text("settings_blind4d_external_tooltip"))
+            if hasattr(self, "settings_blind_4d_manifest_browse_btn"):
+                self.settings_blind_4d_manifest_browse_btn.setText(self._text("blind_4d_browse"))
+            if hasattr(self, "settings_blind_4d_manifest_verify_btn"):
+                self.settings_blind_4d_manifest_verify_btn.setText(self._text("blind_4d_verify"))
+            if hasattr(self, "near_catalog_mode_combo"):
+                for value, key in (
+                    ("auto", "settings_mode_auto"),
+                    ("astap-native", "settings_mode_astap_native"),
+                    ("legacy-index", "settings_mode_legacy_index"),
+                ):
+                    idx = self.near_catalog_mode_combo.findData(value)
+                    if idx >= 0:
+                        self.near_catalog_mode_combo.setItemText(idx, self._text(key))
+            if hasattr(self, "blind4d_catalog_mode_combo"):
+                for value, key in (
+                    ("auto", "settings_mode_auto"),
+                    ("library-view", "settings_mode_library_view"),
+                    ("external-manifest", "settings_mode_external_manifest"),
+                ):
+                    idx = self.blind4d_catalog_mode_combo.findData(value)
+                    if idx >= 0:
+                        self.blind4d_catalog_mode_combo.setItemText(idx, self._text(key))
+            if hasattr(self, "settings_restore_auto_modes_btn"):
+                self.settings_restore_auto_modes_btn.setText(self._text("settings_restore_auto_modes"))
+            self._update_catalog_rollback_status()
             # Database tab labels
             if hasattr(self, "db_tab_label"):
                 self.db_tab_label.setText(self._text("select_db_root"))
@@ -8383,6 +10111,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             return value
 
         def _prefill_from_args(self, cli_args: argparse.Namespace) -> None:
+            if getattr(cli_args, "catalog_library", None):
+                catalog_library = str(cli_args.catalog_library)
+                self._settings.catalog_library_path = catalog_library
+                if hasattr(self, "settings_catalog_library_edit"):
+                    self.settings_catalog_library_edit.setText(catalog_library)
             if cli_args.db_root:
                 db_root = str(cli_args.db_root)
                 self._settings.db_root = db_root
@@ -8687,21 +10420,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.files_view.setUpdatesEnabled(False)
             try:
                 entries: list[tuple[Path, QtWidgets.QTreeWidgetItem]] = []
-                color_map = {
-                    "wcs": QtGui.QColor("#2b8a3e"),
-                    "failed": QtGui.QColor("#c92a2a"),
-                    "waiting": QtGui.QColor("#ffffff"),
-                }
                 for path, status, detail in self._scan_buffer:
                     status_key = status if status in {"waiting", "wcs", "failed", "solved", "skipped"} else "waiting"
                     item = QtWidgets.QTreeWidgetItem(
-                        [self._format_path(path), self._status_label_for(status_key), detail or ""]
+                        [self._format_path(path), "", ""]
                     )
-                    item.setData(1, QtCore.Qt.UserRole, status_key)
-                    color = color_map.get(status_key)
-                    if color is not None:
-                        for idx in range(3):
-                            item.setForeground(idx, color)
+                    self._apply_item_status(item, status_key, detail or "")
                     entries.append((path, item))
                 if entries:
                     self.files_view.addTopLevelItems([item for _, item in entries])
@@ -8729,12 +10453,29 @@ def launch_gui(args: argparse.Namespace) -> int:
             return path.name
 
         def _build_config(self) -> SolveConfig:
+            catalog_library_path = self._catalog_library_path_from_ui()
+            catalog_resources_for_config: SolverCatalogResources | None = None
+            if catalog_library_path:
+                catalog_resources_for_config = self._validate_catalog_library_from_gui(show_error=False)
+                if catalog_resources_for_config is None:
+                    raise ValueError(self._catalog_library_validation_error or "CATALOG_LIBRARY_INVALID")
+            near_catalog_mode = self._current_near_catalog_mode_from_ui()
+            blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
             db_root_text = self._settings.db_root
-            if not db_root_text:
+            if hasattr(self, "settings_db_edit"):
+                db_root_text = self.settings_db_edit.text().strip() or db_root_text
+            if not db_root_text and catalog_resources_for_config is None:
                 raise ValueError(self._text("error_database_required"))
-            db_root = Path(db_root_text).expanduser()
-            if not db_root.is_dir():
+            if catalog_resources_for_config is not None and catalog_resources_for_config.near is not None:
+                db_root = catalog_resources_for_config.near.root
+            else:
+                db_root = Path(db_root_text).expanduser() if db_root_text else Path(catalog_library_path or ".").expanduser()
+            if catalog_resources_for_config is None and not db_root.is_dir():
                 raise ValueError(self._text("error_database_missing", path=db_root))
+            if db_root_text and (catalog_resources_for_config is None or near_catalog_mode == "legacy-index"):
+                validation = validate_astap_root(db_root_text)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_astap"))
             if not self._current_input_dir:
                 raise ValueError(self._text("error_no_input_dir"))
             # Family selection via dropdown ('Auto' → no restriction)
@@ -8748,11 +10489,26 @@ def launch_gui(args: argparse.Namespace) -> int:
             max_radius_value = self.max_radius_spin.value()
             max_radius = max_radius_value if max_radius_value > 0 else None
             index_root_text = self._settings.index_root
-            if not index_root_text:
+            if hasattr(self, "settings_index_edit"):
+                index_root_text = self.settings_index_edit.text().strip() or index_root_text
+            if not index_root_text and catalog_resources_for_config is None:
                 raise ValueError(self._text("settings_index_missing"))
-            index_root = Path(index_root_text).expanduser()
-            if not index_root.is_dir():
+            index_root = Path(index_root_text).expanduser() if index_root_text else None
+            if catalog_resources_for_config is None and (index_root is None or not index_root.is_dir()):
                 raise ValueError(self._text("settings_index_missing"))
+            if index_root_text and (catalog_resources_for_config is None or near_catalog_mode == "legacy-index"):
+                validation = validate_legacy_near_index_root(index_root_text)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_index"))
+            manifest_text_for_run = (
+                self._manifest_text_or_default()
+                if hasattr(self, "blind_4d_manifest_edit") or hasattr(self, "settings_blind_4d_manifest_edit")
+                else (getattr(self._settings, "blind_4d_manifest_path", None) or None)
+            )
+            if blind4d_catalog_mode == "external-manifest":
+                validation = validate_blind4d_manifest_file(manifest_text_for_run)
+                if not validation.ok:
+                    raise ValueError(self._format_catalog_path_error(validation, field_key="field_blind4d_manifest"))
             # Persist solver panel + performance settings for next runs
             try:
                 self._settings.solver_fov_deg = float(self.fov_spin.value())
@@ -8768,6 +10524,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._settings.solver_family = str(sel_fam).strip().lower() or None
                 self._settings.solver_blind_enabled = bool(self.blind_check.isChecked())
                 self._settings.solver_overwrite = bool(self.overwrite_check.isChecked())
+                self._settings.catalog_library_path = catalog_library_path
+                self._settings.db_root = db_root_text or None
+                self._settings.index_root = index_root_text or None
+                self._settings.near_catalog_mode = near_catalog_mode
+                self._settings.blind4d_catalog_mode = blind4d_catalog_mode
+                self._settings.interface_mode = str(getattr(self, "_interface_mode", "easy") or "easy")
+                self._settings.blind_backend_profile = self._current_blind_profile()
+                self._settings.blind_4d_manifest_path = manifest_text_for_run
                 self._settings.solver_hint_ra_deg = (
                     None if self.ra_hint_spin.value() <= -0.5 else float(self.ra_hint_spin.value())
                 )
@@ -8855,6 +10619,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 max_search_radius_deg=max_radius,
                 blind_enabled=self.blind_check.isChecked(),
                 blind_index_path=index_root,
+                blind_backend_profile=self._current_blind_profile(),
+                blind_4d_manifest_path=manifest_text_for_run,
+                blind4d_catalog_mode=blind4d_catalog_mode,
+                catalog_library_path=catalog_library_path,
                 hint_ra_deg=ra_hint,
                 hint_dec_deg=dec_hint,
                 hint_radius_deg=radius_hint,
@@ -8886,6 +10654,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_try_parity_flip=bool(self._settings.near_try_parity_flip),
                 near_defer_blind_fallback=bool(getattr(self._settings, 'near_defer_blind_fallback', False)),
                 near_allow_second_rescue=bool(getattr(self._settings, 'near_allow_second_rescue', False)),
+                near_catalog_mode=near_catalog_mode,
                 near_search_margin=float(self._settings.near_search_margin or 1.2),
                 # Blind solver tunables from the Settings panel
                 blind_max_stars=int(self._settings.blind_max_stars or 500),
@@ -8923,52 +10692,43 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
 
         def _run_simple_startup_wizard(self) -> bool:
+            library_text = self._catalog_library_path_from_ui()
+            if library_text:
+                resources = self._validate_catalog_library_from_gui(show_error=False)
+                if resources is not None:
+                    self._log_settings(self._text("simple_wizard_library_ready"))
+                    return True
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    self._text("simple_wizard_title"),
+                    self._text("simple_wizard_invalid_library"),
+                )
+                if hasattr(self, "settings_scroll"):
+                    self._activate_tab(self.settings_scroll)
+                return False
             db_text = (self.settings_db_edit.text().strip() if hasattr(self, "settings_db_edit") else "")
             if not db_text and hasattr(self, "db_tab_edit"):
                 db_text = self.db_tab_edit.text().strip()
             db_path = Path(db_text).expanduser() if db_text else None
 
-            if (not db_path) or (not db_path.is_dir()):
-                answer = QtWidgets.QMessageBox.question(
-                    self,
-                    self._text("simple_wizard_title"),
-                    self._text("simple_wizard_missing_db"),
-                    QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-                    QtWidgets.QMessageBox.Yes,
-                )
-                if answer != QtWidgets.QMessageBox.Yes:
-                    return False
-                if hasattr(self, "database_scroll"):
-                    self._activate_tab(self.database_scroll)
-                if hasattr(self, "settings_db_edit"):
-                    self._pick_settings_directory(self.settings_db_edit)
-                    db_text = self.settings_db_edit.text().strip()
-                    if hasattr(self, "db_tab_edit") and self.db_tab_edit.text().strip() != db_text:
-                        self.db_tab_edit.setText(db_text)
-                db_path = Path(db_text).expanduser() if db_text else None
-                if (not db_path) or (not db_path.is_dir()):
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        self._text("simple_wizard_title"),
-                        self._text("simple_wizard_missing_db_invalid"),
-                    )
-                    return False
-
             index_text = self.settings_index_edit.text().strip() if hasattr(self, "settings_index_edit") else ""
             index_path = Path(index_text).expanduser() if index_text else None
-            if (not index_path) or (not index_path.is_dir()):
-                QtWidgets.QMessageBox.information(
-                    self,
-                    self._text("simple_wizard_title"),
-                    self._text("simple_wizard_missing_index"),
-                )
-                if hasattr(self, "settings_scroll"):
-                    self._activate_tab(self.settings_scroll)
-                return False
+            if db_path and db_path.is_dir() and index_path and index_path.is_dir():
+                self._settings.db_root = str(db_path)
+                self._settings.index_root = str(index_path)
+                self._log_settings(self._text("simple_wizard_legacy_compat"))
+                return True
 
-            self._settings.db_root = str(db_path)
-            self._settings.index_root = str(index_path)
-            return True
+            QtWidgets.QMessageBox.information(
+                self,
+                self._text("simple_wizard_title"),
+                self._text("simple_wizard_missing_library"),
+            )
+            if hasattr(self, "settings_scroll"):
+                self._activate_tab(self.settings_scroll)
+            if hasattr(self, "catalog_compat_group"):
+                self.catalog_compat_group.setChecked(False)
+            return False
 
         def _run_simple_mode_assistant(self, file_count: int) -> bool:
             if not hasattr(self, "simple_mode_check") or not self.simple_mode_check.isChecked():
@@ -9021,25 +10781,44 @@ def launch_gui(args: argparse.Namespace) -> int:
 
             total_cards = 0
             changed_files = 0
+            refreshed = 0
+            self.files_view.setUpdatesEnabled(False)
             for path in targets:
                 try:
                     deleted, edited_hdus = process_fits(
                         str(path),
                         dry_run=False,
-                        backup=True,
+                        backup=False,
                         only_if_wcs=True,
                         all_hdus=False,
                     )
                     total_cards += int(deleted)
                     if int(edited_hdus) > 0:
                         changed_files += 1
+                        state = inspect_effective_wcs_state(path)
+                        detail = "WCS nettoyé"
+                        if state.other_hdus_have_wcs and not state.primary_has_wcs:
+                            detail = "WCS nettoyé du PRIMARY ; WCS secondaire présent"
+                        elif state.detail:
+                            detail = state.detail
+                        key = self._normalize_progress_path(path)
+                        item = self._item_by_path.get(key)
+                        if item is not None:
+                            self._apply_item_status(item, state.status, detail)
+                            refreshed += 1
+                        if refreshed and refreshed % 250 == 0:
+                            self.files_view.setUpdatesEnabled(True)
+                            QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
+                            self.files_view.setUpdatesEnabled(False)
                 except Exception as exc:
+                    self.files_view.setUpdatesEnabled(True)
                     QtWidgets.QMessageBox.warning(
                         self,
                         self._text("simple_wizard_title"),
                         self._text("simple_clean_failed", error=f"{path.name}: {exc}"),
                     )
                     return False
+            self.files_view.setUpdatesEnabled(True)
 
             self._log(self._text("simple_clean_done", files=changed_files, cards=total_cards))
             return True
@@ -9060,11 +10839,91 @@ def launch_gui(args: argparse.Namespace) -> int:
                 return
             if not self._run_simple_mode_wcs_cleaning(self._pending_files):
                 return
+            preflight_started = time.perf_counter()
+            preflight_timings: dict[str, float] = {}
+            near_runtime: NearCatalogRuntime | None = None
             try:
+                t0 = time.perf_counter()
                 config = self._build_config()
-            except ValueError as exc:
+                preflight_timings["catalog_library_open_s"] = time.perf_counter() - t0
+                t0 = time.perf_counter()
+                config, catalog_resources = apply_catalog_resources_to_config(config)
+                preflight_timings["catalog_resource_resolution_s"] = time.perf_counter() - t0
+                self._log("Catalog resources: " + json.dumps(catalog_resources.telemetry(include_paths=False), ensure_ascii=False))
+                if catalog_resources.source == "library":
+                    self._log(self._text("catalog_library_selected_log", library_id=catalog_resources.catalog_library_id or "-"))
+                    self._log(self._text("catalog_library_status_log", status=catalog_resources.library_status.value if catalog_resources.library_status else "-"))
+                t0 = time.perf_counter()
+                near_runtime = resolve_near_catalog_runtime(
+                    catalog_resources,
+                    mode=getattr(config, "near_catalog_mode", "auto"),
+                    legacy_index_root=config.blind_index_path,
+                    blind_only=bool(getattr(config, "blind_only", False)),
+                    legacy_cache_size=int(getattr(config, "near_tile_cache_size", 128) or 128),
+                )
+                preflight_timings["near_runtime_resolution_s"] = time.perf_counter() - t0
+                self._log("Near catalog preflight: " + json.dumps(near_runtime.telemetry(include_paths=False), ensure_ascii=False))
+            except (ValueError, CatalogResourceResolutionError) as exc:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
+            if (
+                config.blind_enabled
+                and str(getattr(config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower()
+                == ZEBLIND_4D_EXPERIMENTAL_PROFILE
+            ):
+                try:
+                    t0 = time.perf_counter()
+                    requested_mode = Blind4DCatalogMode.normalize(getattr(config, "blind4d_catalog_mode", "auto"))
+                    external_manifest = config.blind_4d_manifest_path
+                    if catalog_resources.source != "library" and external_manifest is None:
+                        external_manifest = self._manifest_text_or_default()
+                    blind4d_runtime = resolve_blind4d_runtime(
+                        catalog_resources,
+                        mode=requested_mode,
+                        external_manifest_path=external_manifest,
+                    )
+                    preflight_timings["blind4d_runtime_resolution_s"] = time.perf_counter() - t0
+                    if blind4d_runtime.available and blind4d_runtime.loaded_manifest is not None:
+                        loaded_manifest = blind4d_runtime.loaded_manifest
+                        config = replace(
+                            config,
+                            blind_4d_manifest_path=loaded_manifest.manifest_path,
+                            blind_4d_loaded_manifest=loaded_manifest,
+                        )
+                        self._log(
+                            "ZeBlind 4D preflight: "
+                            + json.dumps(blind4d_runtime.telemetry(include_paths=False), ensure_ascii=False)
+                        )
+                    elif requested_mode is not Blind4DCatalogMode.AUTO:
+                        raise Blind4DRuntimeError(
+                            blind4d_runtime.error_code or "BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE",
+                            blind4d_runtime.error_message or "Blind 4D runtime unavailable",
+                        )
+                    else:
+                        self._log(
+                            "ZeBlind 4D unavailable: "
+                            + json.dumps(blind4d_runtime.telemetry(include_paths=False), ensure_ascii=False)
+                        )
+                except (Blind4DRuntimeError, IndexManifestError) as exc:
+                    message = self._text("blind_4d_preflight_failed", error=str(exc))
+                    self._log(message)
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        self._text("blind_4d_enable_failed_title"),
+                        self._text(
+                            "blind_4d_enable_failed_body",
+                            manifest=(config.blind_4d_manifest_path or "CatalogLibrary"),
+                            error=str(exc),
+                        ),
+                    )
+                    return
+            preflight_timings["catalog_preflight_total_s"] = time.perf_counter() - preflight_started
+            self._log(
+                self._text(
+                    "catalog_preflight_timings",
+                    payload=json.dumps({key: round(value, 4) for key, value in preflight_timings.items()}, ensure_ascii=False),
+                )
+            )
             self._results_seen = 0
             try:
                 self._log(
@@ -9085,13 +10944,35 @@ def launch_gui(args: argparse.Namespace) -> int:
             target_total = max(1, target_total)
             self.progress_bar.setMaximum(target_total * 100)
             self.progress_bar.setValue(0)
-            self.status_label.setText(f"0 / {target_total}")
+            self._progress_total = target_total
+            self._progress_completed = 0
+            self._progress_seen_paths = set()
+            self._progress_run_id = None
+            self.status_label.setText(
+                self._text(
+                    "progress_status",
+                    done=0,
+                    total=target_total,
+                    remaining=target_total,
+                )
+            )
+            run_id = self._run_lifecycle.start()
+            self._progress_run_id = run_id
+            self._active_run_failed = False
+            self._active_run_error_message = None
+            logging.info("GUI_RUN_BEGIN run_id=%s", run_id)
             self._run_started_ts = time.perf_counter()
             self._last_result_ts = self._run_started_ts
             self._progress_timer.start()
             self._set_running(True)
             backend = (self.backend_combo.currentData() if hasattr(self, 'backend_combo') else 'local')
             self._log(self._text("solver.status.using_backend", backend=self.backend_combo.currentText() if hasattr(self, 'backend_combo') else 'Local'))
+            self._log(self._text("solver.chain.4d" if config.blind_backend_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE else "solver.chain.historical"))
+            self._log("Strict acceptance mode: diagnostic")
+            self._log(
+                "Astrometry.net web: "
+                + ("enabled" if str(backend).strip().lower() == "astrometry" or bool(config.astrometry_api_key) else "disabled")
+            )
             if not config.blind_enabled:
                 self._log(self._text("solver.status.blind_disabled"))
             if backend == 'astrometry':
@@ -9109,6 +10990,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                         pass
                     self._run_started_ts = None
                     self._last_result_ts = None
+                    self._run_lifecycle.reset()
                     return
                 parallel = int(self.ast_parallel_spin.value()) if hasattr(self, 'ast_parallel_spin') else 2
                 timeout_s = int(self.ast_timeout_spin.value()) if hasattr(self, 'ast_timeout_spin') else 600
@@ -9126,6 +11008,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     index_root=index_root,
                     translator=self._text,
                 )
+                setattr(self._worker, "_gui_run_id", run_id)
                 self._worker.started.connect(self._on_worker_started)
                 self._worker.progress.connect(self._on_worker_progress)
                 self._worker.info.connect(self._log)
@@ -9135,7 +11018,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._worker.start()
                 return
             # Local backend (default)
-            self._worker = SolveRunner(config, self._pending_files, self._text)
+            self._worker = SolveRunner(config, self._pending_files, self._text, catalog_resources=catalog_resources)
+            setattr(self._worker, "_gui_run_id", run_id)
             self._worker.started.connect(self._on_worker_started)
             self._worker.progress.connect(self._on_worker_progress)
             self._worker.info.connect(self._log)
@@ -9145,39 +11029,114 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _stop_solving(self) -> None:
             if self._worker:
+                logging.info("STOP_UI_CLICKED")
+                self.status_label.setText(self._text("status_stopping"))
+                self.stop_btn.setEnabled(False)
+                self.stop_btn.setText(self._text("status_stopping"))
+                self.start_btn.setEnabled(False)
                 self._worker.request_cancel()
                 self._log(self._text("log_stop_requested"))
 
         def _set_running(self, running: bool) -> None:
+            self._gui_run_active = bool(running)
             self.start_btn.setEnabled(not running)
             self.stop_btn.setEnabled(running)
+            self.stop_btn.setText(self._text("stop_button"))
             self.scan_btn.setEnabled(not running)
             self.input_edit.setEnabled(not running)
+            if hasattr(self, "blind_check"):
+                self.blind_check.setEnabled(not running)
+            self._sync_blind_profile_controls()
 
         def _on_worker_started(self, total: int) -> None:
             if total == 0:
                 self.progress_bar.setMaximum(1)
             self._log(self._text("processing_count", count=total))
 
+        def _normalize_progress_path(self, path: Path) -> Path:
+            try:
+                return Path(path).resolve()
+            except Exception:
+                return Path(path)
+
+        def _set_progress_status(self, *, cancelled: bool = False) -> None:
+            total = max(0, int(self._progress_total or len(self._pending_files) or 0))
+            done = max(0, min(total, int(self._progress_completed or 0)))
+            remaining = max(0, total - done)
+            key = "progress_status_cancelled" if cancelled else "progress_status"
+            self.status_label.setText(
+                self._text(
+                    key,
+                    done=done,
+                    total=total,
+                    remaining=remaining,
+                )
+            )
+
+        def _apply_item_status(self, item: QtWidgets.QTreeWidgetItem, status_key: str, detail: str = "") -> None:
+            status_key = str(status_key or "waiting").strip().lower()
+            if status_key not in {"waiting", "wcs", "solved", "failed", "skipped", "cancelled"}:
+                status_key = "waiting"
+            item.setText(1, self._status_label_for(status_key))
+            item.setData(1, QtCore.Qt.UserRole, status_key)
+            item.setText(2, detail or "")
+            color_map = {
+                "solved": QtGui.QColor("#2b8a3e"),
+                "wcs": QtGui.QColor("#2b8a3e"),
+                "failed": QtGui.QColor("#c92a2a"),
+                "skipped": QtGui.QColor("#5f3dc4"),
+                "cancelled": QtGui.QColor("#5c6770"),
+            }
+            color = color_map.get(status_key)
+            if color:
+                for idx in range(3):
+                    item.setForeground(idx, color)
+            else:
+                for idx in range(3):
+                    item.setForeground(idx, QtGui.QBrush())
+
         def _on_worker_progress(self, result: ImageSolveResult) -> None:
-            if result.run_info:
-                for key, payload in result.run_info:
+            app = QtWidgets.QApplication.instance()
+            if app is not None and QtCore.QThread.currentThread() is not app.thread():
+                logging.warning("GUI progress slot executed outside Qt main thread")
+                return
+            sender = self.sender()
+            callback_run_id = getattr(sender, "_gui_run_id", self._progress_run_id)
+            if callback_run_id != self._run_lifecycle.active_run_id or callback_run_id != self._progress_run_id:
+                logging.info(
+                    "GUI_PROGRESS_STALE_IGNORED run_id=%s active_run_id=%s path=%s",
+                    callback_run_id,
+                    self._run_lifecycle.active_run_id,
+                    getattr(result, "path", ""),
+                )
+                return
+            run_info = tuple(getattr(result, "run_info", ()) or ())
+            if run_info:
+                for key, payload in run_info:
                     self._log(self._text(key, **payload))
             if not result.path.is_dir():
-                self._results_seen += 1
+                key = self._normalize_progress_path(result.path)
+                if key in self._progress_seen_paths:
+                    logging.info("GUI_PROGRESS_DUPLICATE_IGNORED run_id=%s path=%s", callback_run_id, key)
+                    return
+                self._progress_seen_paths.add(key)
+                total_limit = max(1, int(self._progress_total or len(self._pending_files) or 1))
+                self._progress_completed = min(total_limit, self._progress_completed + 1)
+                self._results_seen = self._progress_completed
                 self._last_result_ts = time.perf_counter()
                 # If we are in fine-grained mode (100 per file), advance to end of current file bucket
                 try:
                     maxv = int(self.progress_bar.maximum())
-                    total_files = max(1, len(self._pending_files))
+                    total_files = max(1, self._progress_total or len(self._pending_files))
                     unit = max(1, maxv // total_files)
-                    self.progress_bar.setValue(min(self._results_seen * unit, maxv))
+                    self.progress_bar.setValue(min(self._progress_completed * unit, maxv))
                 except Exception:
-                    self.progress_bar.setValue(min(self._results_seen, self.progress_bar.maximum()))
+                    self.progress_bar.setValue(min(self._progress_completed, self.progress_bar.maximum()))
                 # Keep textual counter based on files completed
-                self.status_label.setText(f"{self._results_seen} / {len(self._pending_files)}")
+                self._set_progress_status()
                 self._update_item(result)
-            status_text = self._status_label_for(result.status)
+            status_value = str(getattr(result, "legacy_status", result.status) or result.status)
+            status_text = self._status_label_for(status_value)
             if result.message:
                 self._log(
                     self._text(
@@ -9204,26 +11163,11 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.files_view.addTopLevelItem(item)
                 resolved = self._store_item_path(item, result.path)
                 self._item_by_path[resolved] = item
-            status_key = result.status
+            status_key = str(getattr(result, "legacy_status", result.status) or result.status)
+            status_key = status_key.strip().lower()
             if status_key == "skipped" and "WCS already present" in (result.message or ""):
                 status_key = "wcs"
-            item.setText(1, self._status_label_for(status_key))
-            item.setData(1, QtCore.Qt.UserRole, status_key)
-            item.setText(2, result.message or "")
-            color_map = {
-                "solved": QtGui.QColor("#2b8a3e"),
-                "wcs": QtGui.QColor("#2b8a3e"),
-                "failed": QtGui.QColor("#c92a2a"),
-                "skipped": QtGui.QColor("#5f3dc4"),
-            }
-            color = color_map.get(status_key)
-            if color:
-                for idx in range(3):
-                    item.setForeground(idx, color)
-            else:
-                # Reset to default palette for statuses without explicit colors
-                for idx in range(3):
-                    item.setForeground(idx, QtGui.QBrush())
+            self._apply_item_status(item, status_key, result.message or "")
 
         def _store_item_path(self, item: QtWidgets.QTreeWidgetItem, path: Path) -> Path:
             try:
@@ -9275,11 +11219,44 @@ def launch_gui(args: argparse.Namespace) -> int:
                 )
 
         def _on_worker_error(self, message: str) -> None:
+            self._active_run_failed = True
+            self._active_run_error_message = str(message)
             QtWidgets.QMessageBox.critical(self, "ZeSolver", message)
             self._log(f"{self._text('log_error_prefix')}: {message}")
 
         def _on_worker_finished(self) -> None:
-            self._log(self._text("log_processing_done"))
+            sender = self.sender()
+            worker = sender if sender is not None else self._worker
+            run_id = getattr(worker, "_gui_run_id", None)
+            if run_id is None:
+                run_id = self._run_lifecycle.active_run_id
+            terminal_cancelled = self._worker_cancelled(worker)
+            if not self._run_lifecycle.finish_once(
+                run_id,
+                terminal_state=(
+                    "FAILED"
+                    if self._active_run_failed
+                    else ("CANCELLED" if terminal_cancelled else "FINISHED")
+                ),
+            ):
+                logging.warning(
+                    "Duplicate or stale GUI completion ignored run_id=%s active_run_id=%s",
+                    run_id,
+                    self._run_lifecycle.active_run_id,
+                )
+                return
+            logging.info("GUI_COMPLETION_TRACE run_id=%s handler=_on_worker_finished call_index=%d", run_id, self._run_lifecycle.run_terminal_count)
+            if self._active_run_failed:
+                self._log(
+                    self._text(
+                        "log_processing_failed",
+                        error=self._active_run_error_message or self._text("log_error_prefix"),
+                    )
+                )
+            elif terminal_cancelled:
+                self._log(self._text("log_processing_cancelled"))
+            else:
+                self._log(self._text("log_processing_done"))
             self._set_running(False)
             try:
                 self._progress_timer.stop()
@@ -9287,17 +11264,32 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
             self._run_started_ts = None
             self._last_result_ts = None
-            self._copy_runtime_log_to_output()
-            if self._worker:
-                self._worker.deleteLater()
-            self._worker = None
-            self.status_label.setText(self._text("status_ready"))
+            self._copy_runtime_log_to_output(run_id=run_id)
+            try:
+                if worker is not None:
+                    worker.finished.disconnect(self._on_worker_finished)
+            except Exception:
+                pass
+            if worker is not None:
+                worker.deleteLater()
+            if self._worker is worker:
+                self._worker = None
+            if terminal_cancelled:
+                self._set_progress_status(cancelled=True)
+            else:
+                self.status_label.setText(self._text("status_ready"))
+            self._run_lifecycle.transition_idle_once(run_id)
+
+        def _worker_cancelled(self, worker: object | None) -> bool:
+            event = getattr(worker, "_cancel_event", None)
+            is_set = getattr(event, "is_set", None)
+            return bool(is_set()) if callable(is_set) else False
 
         def _on_progress_tick(self) -> None:
             if self._worker is None:
                 return
-            total_files = max(1, len(self._pending_files))
-            if self._results_seen >= total_files:
+            total_files = max(1, int(self._progress_total or len(self._pending_files) or 1))
+            if self._progress_completed >= total_files:
                 return
             maxv = max(1, int(self.progress_bar.maximum()))
             if maxv <= total_files:
@@ -9306,19 +11298,22 @@ def launch_gui(args: argparse.Namespace) -> int:
             run_start = self._run_started_ts or now
             last_result = self._last_result_ts or run_start
             elapsed = max(0.0, now - run_start)
-            if self._results_seen > 0:
-                avg_per_file = max(0.001, elapsed / float(self._results_seen))
+            if self._progress_completed > 0:
+                avg_per_file = max(0.001, elapsed / float(self._progress_completed))
                 since_last = max(0.0, now - last_result)
                 extra_pct = int(min(95.0, 100.0 * min(0.95, since_last / avg_per_file)))
             else:
                 warm = max(0.0, now - run_start)
                 extra_pct = int(min(15.0, warm * 3.0))
-            base = int(self._results_seen * 100)
+            base = int(self._progress_completed * 100)
             target = min(maxv - 1, base + max(0, extra_pct))
             if target > int(self.progress_bar.value()):
                 self.progress_bar.setValue(target)
 
-        def _copy_runtime_log_to_output(self) -> None:
+        def _copy_runtime_log_to_output(self, *, run_id: int | None = None) -> None:
+            if not self._run_lifecycle.mark_log_copy_once(run_id):
+                logging.warning("Duplicate runtime log copy ignored run_id=%s", run_id)
+                return
             try:
                 src = Path(LOG_FILE)
             except Exception:
@@ -9388,8 +11383,15 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
 
         def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # pragma: no cover - GUI hook
-            self._shutdown_thread(self._worker, cancel_method="request_cancel")
-            self._worker = None
+            active_worker = self._worker
+            self._shutdown_thread(active_worker, cancel_method="request_cancel")
+            try:
+                if active_worker is not None and (not active_worker.isRunning()) and self._worker is active_worker:
+                    self._on_worker_finished()
+            except Exception:
+                pass
+            if self._worker is active_worker:
+                self._worker = None
             self._shutdown_thread(self._scanner, cancel_method="cancel")
             self._scanner = None
             self._shutdown_thread(self._index_worker)

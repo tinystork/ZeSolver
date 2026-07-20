@@ -1,338 +1,477 @@
 # ZeSolver
 
-An offline WCS (World Coordinate System) solver designed specifically for Seestar / ZeSolver
-workflows. The project ingests the ASTAP / HNSKY ``.1476`` (Dxx/V50) and ``.290`` (G05) Gaia
-catalogue shards directly from disk and exposes:
+**ZeSolver** is an open-source, offline WCS (World Coordinate System) solver developed for
+large Seestar imaging workflows.
 
-- A modular Python API (`zewcs290`) for loading catalogue tiles, querying stars in spatial
-  regions and feeding them into astrometric solvers.
-- A binary inspection utility (`tools/inspect_290.py`) to reverse engineer catalogue metadata
-  and sanity‑check local databases without touching the network.
-- Stubs for the star detection and solving workflows required for a fully offline plate solver.
+It was created for the needs of **The Seestar Collective**, a small community of amateur
+astronomers who may collect several thousand — sometimes more than 10,000 — short exposures
+of a target before stacking and assembling them into mosaics.
 
-The project deliberately **does not** bundle any astronomical catalogues. You must point the code
-to an existing ASTAP installation (e.g. D20/D50/V50/G05 databases).
+ZeSolver is designed to solve these large batches locally and efficiently while preserving
+the original image pixels.
+
+> [!IMPORTANT]
+> ZeSolver is an independent community project. It is not affiliated with, maintained by,
+> or officially endorsed by ASTAP, HNSKY, Astrometry.net, ESA, or the Gaia project.
+
+## Current status
+
+ZeSolver is under active development and is not yet considered ready for a general public
+release.
+
+The solver core, batch pipeline, catalogue library, WCS safeguards, progress reporting,
+cancellation, and the main Near/Blind solving paths are functional and covered by regression
+tests. Packaging, first-install experience, documentation, simplified GUI work, and broader
+Blind 4D catalogue coverage are still being finalized.
+
+Blind 4D coverage may be partial depending on the installed indexes. ZeSolver reports this
+explicitly and must not be presented as all-sky unless the installed library actually provides
+all-sky coverage.
+
+## How ZeSolver works
+
+The local solving chain is:
+
+```text
+ZeNear
+  -> ZeBlind 4D
+  -> optional Astrometry.net web fallback
+```
+
+### ZeNear
+
+**ZeNear** is the fast, metadata-assisted solver.
+
+When approximate sky coordinates and optical information are available, it reads nearby stars
+directly from locally installed ASTAP/HNSKY catalogue shards through ZeSolver's own Python
+catalogue provider. It then detects image stars, matches them against catalogue stars, validates
+the solution, and writes a TAN WCS when the result passes the configured quality checks.
+
+The ASTAP executable is **not** invoked by the current ZeNear product path.
+
+### ZeBlind 4D
+
+**ZeBlind 4D** is the fully blind local solver.
+
+It uses precomputed geometric quad indexes derived from locally installed catalogue data. Its
+general blind-solving approach is conceptually inspired by the geometric indexing techniques
+used by Astrometry.net, while the implementation and runtime integration in this repository are
+part of ZeSolver.
+
+ZeBlind 4D uses the same catalogue-library provenance as ZeNear whenever possible, so source
+catalogues, derived indexes, generation parameters, versions, and coverage can be related and
+validated together.
+
+### Optional Astrometry.net fallback
+
+An Astrometry.net web fallback can be configured as a last resort after the local Near and Blind
+paths. When enabled, images may be uploaded to a third-party service; users are responsible for
+their own API credentials, rights, and privacy choices.
+
+## Acknowledgements
+
+ZeSolver exists thanks to the work of the wider astronomical software and data community.
+
+### ASTAP and HNSKY
+
+Special thanks to **Han Kleijn**, developer of
+[ASTAP](https://www.hnsky.org/astap.htm) and HNSKY.
+
+ASTAP has been a major technical reference throughout the development of ZeSolver, particularly
+for catalogue organization, practical plate-solving workflows, and the metadata-assisted
+**ZeNear** path. ZeSolver reads the ASTAP/HNSKY `.1476` and `.290` catalogue formats through an
+independent Python implementation.
+
+ZeSolver does not include ASTAP source code, does not invoke the ASTAP executable in its current
+local product chain, and does not claim to be an official ASTAP component.
+
+### Astrometry.net
+
+The **ZeBlind 4D** work was informed by the principles behind
+[Astrometry.net](https://astrometry.net/), including geometric quad-based blind solving.
+
+Credit is due to **Dustin Lang, David W. Hogg, Keir Mierle**, and the other Astrometry.net
+contributors for their foundational work in blind astrometric calibration.
+
+### Gaia and catalogue data
+
+The stellar data used by ASTAP/HNSKY catalogue families originates from upstream astronomical
+catalogues, including Gaia data produced by the European Space Agency and the Gaia collaboration.
+
+All catalogue data remains subject to the rights, licences, acknowledgements, and distribution
+conditions of its respective providers.
+
+## Catalogue and derived-index policy
+
+This repository deliberately does **not** bundle or redistribute the original ASTAP/HNSKY
+catalogue shards.
+
+Users currently provide their own local catalogue installation, such as D20, D50, V50, G05, or
+other supported families.
+
+ZeSolver can generate its own working assets from those catalogues, including:
+
+- normalized tile snapshots;
+- compressed or uncompressed `.npz` data;
+- `.npy` memory-mapped data;
+- quad tables;
+- 4D geometric hash indexes;
+- manifests, provenance, version, and coverage metadata.
+
+These files are derived runtime assets for ZeSolver and are not the original ASTAP/HNSKY
+downloads.
+
+Precomputed derived assets are not included in this repository. Any future redistribution of
+such assets must be handled separately, with appropriate permission, attribution, documentation,
+and licence notices. The original ASTAP/HNSKY catalogue files will not be repackaged as part of
+ZeSolver.
+
+## Main features
+
+- Offline batch WCS solving for FITS images.
+- Metadata-assisted **ZeNear** solving.
+- Local **ZeBlind 4D** fallback.
+- Optional Astrometry.net web fallback.
+- Direct ASTAP/HNSKY `.1476` and `.290` catalogue reading.
+- Unified ZeSolver catalogue-library validation and provenance.
+- FITS pixel-integrity safeguards.
+- Existing-WCS detection and configurable overwrite policy.
+- TAN WCS output, with validated metadata updates.
+- JSON WCS sidecars for supported raster formats.
+- Real-time batch progress and per-file status.
+- Responsive cancellation and safe restart.
+- CPU operation by default.
+- Optional CUDA acceleration for Near star detection.
+- GUI and command-line workflows.
+- Index construction, validation, benchmarking, and diagnostic tools.
 
 ## Repository layout
 
-```
-zewcs290/          # Python package (catalogue reader, tilings, solver stubs)
-tools/             # Standalone utilities (inspect_290.py, future helpers)
-database/          # User-provided ASTAP catalogues (not version controlled)
-examples/          # FITS samples for solver development
-tests/             # Pytest suite
-pyproject.toml     # Build + dependency metadata
+```text
+zesolver/           Product orchestration, catalogue library, settings, GUI pipeline, and core
+zeblindsolver/      Blind solver, quad generation, index builders, and validation
+zewcs290/           Native ASTAP/HNSKY catalogue readers and spatial queries
+settings/           Stable product/runtime settings models
+tools/              Benchmarks, audits, diagnostics, and maintenance utilities
+tests/              Unit, integration, regression, GUI, corpus, and safeguard tests
+docs/               Architecture, stabilization, validation, and development reports
+packaging/          PyInstaller and release helpers
+examples/           Development and example inputs where provided
+pyproject.toml      Build and dependency metadata
 ```
 
-## Quick start
+Catalogue databases, generated indexes, large test corpora, and local runtime files are not meant
+to be committed to the repository.
+
+## Requirements
+
+- Python 3.10 or newer.
+- A local ASTAP/HNSKY catalogue installation for offline catalogue-backed solving.
+- PySide6 for the desktop GUI.
+- CUDA and CuPy only when optional GPU detection is desired.
+
+ZeSolver must remain fully usable on CPU without CUDA.
+
+## Quick start from source
 
 ```bash
+git clone https://github.com/tinystork/ZeSolver.git
+cd ZeSolver
+
 python -m venv .venv
-source .venv/bin/activate   # macOS / Linux
-# .venv\Scripts\activate  # Windows PowerShell
-pip install -r requirements.txt
+source .venv/bin/activate
+# Windows PowerShell:
+# .venv\Scripts\Activate.ps1
+
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
 python zesolver.py
-
-
-# Inspect a Gaia G05 catalogue directory
-python tools/inspect_290.py --db ./database --family g05 --limit 3 --json report.json
 ```
+
+The project is still being prepared for a clean public installation experience. Until packaging
+and first-run documentation are finalized, source installations should be considered development
+or beta installations.
+
+## Catalogue library
+
+The target product model is a single user-selected concept:
+
+```text
+ZeSolver Library
+```
+
+A valid library relates:
+
+- the ASTAP/HNSKY source catalogue families used by ZeNear;
+- the derived Blind 4D indexes;
+- generation settings and format versions;
+- file fingerprints and provenance;
+- installed coverage and known limitations.
+
+Legacy database-root, index-root, family, and external-manifest paths may remain available as
+advanced compatibility or diagnostic overrides while the product surface is being simplified.
+
+Coverage warnings must not be hidden. A partial Blind 4D library is valid for development or
+limited use, but it is not equivalent to all-sky coverage.
+
+## Building derived indexes
+
+The `zebuildindex` command can generate ZeSolver-friendly tiles and quad indexes from a local
+ASTAP/HNSKY catalogue installation.
+
+Example:
+
+```bash
+python -m zeblindsolver.db_convert \
+  --db-root database \
+  --index-root index \
+  --max-quads-per-tile 20000 \
+  --quad-storage npy \
+  --tile-compression uncompressed \
+  --workers 8
+```
+
+On Windows PowerShell:
+
+```powershell
+python -m zeblindsolver.db_convert `
+  --db-root .\database `
+  --index-root .\index `
+  --max-quads-per-tile 20000 `
+  --quad-storage npy `
+  --tile-compression uncompressed `
+  --workers 8
+```
+
+Relevant storage options include:
+
+- `--quad-storage npz` for compressed `.npz`;
+- `--quad-storage npz_uncompressed` for store-only `.npz`;
+- `--quad-storage npy` for memory-mapped `.npy` bundles;
+- `--tile-compression compressed`;
+- `--tile-compression uncompressed`.
+
+When only the quad sampler or hash encoding has changed, a quads-only rebuild can reuse existing
+tile data:
+
+```bash
+python -m zeblindsolver.db_convert \
+  --db-root database \
+  --index-root index \
+  --mag-cap 15.5 \
+  --max-stars 2000 \
+  --max-quads-per-tile 20000 \
+  --quad-storage npy \
+  --tile-compression uncompressed \
+  --workers 8 \
+  --quads-only
+```
+
+Generated assets should be validated before use. ZeSolver includes index and library validation
+tools that detect missing files, incompatible formats, stale metadata, provenance mismatches, and
+partial coverage.
+
+## Batch solver GUI and CLI
+
+The `zesolver.py` entry point provides the main batch workflow.
+
+GUI launch:
+
+```bash
+python zesolver.py
+```
+
+or, where supported:
+
+```bash
+python zesolver.py --gui
+```
+
+A headless CLI workflow can be launched with explicit paths and parameters. The exact advanced CLI
+surface may evolve while the settings and packaging layers are being stabilized.
+
+Example legacy-compatible invocation:
+
+```bash
+python zesolver.py \
+  --db-root ./database \
+  --input-dir ./examples \
+  --workers 4 \
+  --fov-deg 1.4
+```
+
+The batch pipeline can:
+
+- scan FITS and supported raster files;
+- detect existing WCS information;
+- preserve or replace WCS according to the selected policy;
+- route compatible inputs through the current pipeline;
+- keep explicit legacy compatibility paths where necessary;
+- report processed, total, and remaining files in real time;
+- emit at most one terminal result per file;
+- stop cleanly and restart after cancellation.
+
+For FITS files, the primary status reflects the WCS state of the `PRIMARY` HDU. Pixel data must not
+be modified by WCS solving or cleanup operations.
+
+For supported raster formats, WCS information is stored in a sidecar file rather than modifying
+the source raster.
+
+## Optional GPU acceleration
+
+ZeSolver works on CPU by default.
+
+Optional CUDA acceleration currently targets Near star detection on supported Linux/NVIDIA
+systems.
+
+Install the optional runtime where appropriate:
+
+```bash
+python -m pip install -U \
+  cupy-cuda12x \
+  nvidia-cuda-runtime-cu12 \
+  nvidia-cuda-nvrtc-cu12
+```
+
+In the GUI, select `Auto` or `CUDA` for the star-detection backend.
+
+When CUDA or one of its runtime libraries is unavailable, ZeSolver should fall back safely to CPU
+and record the reason in the log.
+
+## Benchmarking and diagnostics
+
+The repository includes utilities for controlled solver benchmarks, catalogue inspection, index
+validation, regression gates, and FITS/WCS integrity checks.
+
+Example benchmark:
+
+```bash
+python tools/benchmark_solver.py \
+  --index-root index \
+  --output-json bench.json \
+  --output-csv bench.csv \
+  examples/*.fit
+```
+
+Benchmark inputs may include files, directories, glob patterns, or list files. By default,
+benchmarks should preserve pristine copies and avoid modifying original FITS files unless writing
+is explicitly enabled.
+
+Development and validation utilities include, depending on the current branch:
+
+- catalogue and binary inspection;
+- index and manifest validation;
+- source and GUI inventories;
+- WCS cleanup;
+- pixel-integrity checks;
+- core-boundary checks;
+- hermetic regression suites;
+- corpus and graphical validation instructions.
 
 ## macOS readiness preflight
 
-Before first production run on macOS, execute:
+Before a production-oriented macOS test, run:
 
 ```bash
 .venv/bin/python -m zesolver.macos_preflight
 ```
 
-This validates imports, multiprocessing behavior, and a real `zesolver.py --help` launch.
-If it ends with `0 failure(s)`, the environment is ready.
+This checks imports, multiprocessing behavior, and a real `zesolver.py --help` launch.
 
-## Packaging (Windows / macOS / Linux)
+A successful preflight is useful, but it does not replace a real GUI test or a complete clean-machine
+installation test.
 
-PyInstaller helpers are provided here:
+## Packaging
 
-- `packaging/pyinstaller/build.py`
-- `packaging/pyinstaller/convert_icon.py`
-- `packaging/pyinstaller/README.md`
+PyInstaller helpers are available under:
 
-### Icon assets used by GUI and packaged app
-
-Place icon files in `icon/` with these names:
-
-- `ZSicon.ico` (Windows)
-- `ZSicon.icns` (macOS)
-- `ZSicon.png` (Linux fallback)
-
-From a source image (example `icon/ZSicon.jpeg`), regenerate all icon formats:
-
-```bash
-.venv/bin/python packaging/pyinstaller/convert_icon.py --source icon/ZSicon.jpeg
+```text
+packaging/pyinstaller/
 ```
 
-At runtime, ZeSolver applies this icon in the GUI (window top-left + app icon) with OS-specific priority.
-
-### Build command
+Typical development build:
 
 ```bash
 .venv/bin/python -m pip install pyinstaller
 .venv/bin/python packaging/pyinstaller/build.py --clean
 ```
 
-Windows PowerShell equivalent:
-
-```powershell
-.venv\Scripts\python.exe -m pip install pyinstaller
-.venv\Scripts\python.exe packaging\pyinstaller\build.py --clean
-```
-
-Optional onefile build:
+Optional one-file build:
 
 ```bash
 .venv/bin/python packaging/pyinstaller/build.py --clean --onefile
 ```
 
-The build script automatically embeds the icon resources inside the bundle.
+Packaging is still an active work area. A version number in `pyproject.toml` does not by itself mean
+that a stable public release has been completed.
 
-## Release checklist (v1.0.0)
+Before release, builds must be tested on clean Windows, macOS, and Linux environments, including
+CPU-only systems.
 
-For readers preparing a release build:
+## Release checklist
 
-- [ ] Version updated in `pyproject.toml` (`project.version`)
-- [ ] GUI title shows the expected version (`ZeSolver ... Vx.y.z`)
-- [ ] Icons regenerated from source image (`convert_icon.py`)
-- [ ] macOS preflight passes (`python -m zesolver.macos_preflight`)
-- [ ] Full M106 validation run completed and archived
-- [ ] PyInstaller build generated on target OS (`build.py --clean`)
-- [ ] App launch test OK on Windows, macOS, Linux
-- [ ] README packaging commands verified on a clean environment
+Before publishing a release:
 
-## Optional GPU acceleration (Near star detection)
+- [ ] Project name, package name, and version are consistent.
+- [ ] `pyproject.toml` contains a valid build-system configuration.
+- [ ] Wheel and source distribution build successfully.
+- [ ] Editable installation works.
+- [ ] Installation from the built wheel works.
+- [ ] CPU-only operation works without CUDA packages.
+- [ ] GUI and CLI entry points work.
+- [ ] Windows, macOS, and Linux launch tests pass.
+- [ ] Paths containing spaces and non-ASCII characters are tested.
+- [ ] Existing WCS and pixel-integrity safeguards pass.
+- [ ] Near, Blind 4D, pipeline, and fallback regression tests pass.
+- [ ] Installed Blind 4D coverage is documented accurately.
+- [ ] Credits, licences, and third-party notices are complete.
+- [ ] Catalogue and derived-index distribution terms are documented.
+- [ ] First-run and clean-machine installation guides are verified.
+- [ ] Known limitations and fallback behavior are documented.
 
-ZeSolver works fully on CPU by default. GPU acceleration is optional and currently targets the
-Near star-detection path.
+## Development safeguards
 
-### 1) Install GPU Python runtime (Linux + NVIDIA, CUDA 12.x)
+The project follows several non-negotiable rules:
 
-```bash
-pip install -U cupy-cuda12x nvidia-cuda-runtime-cu12 nvidia-cuda-nvrtc-cu12
-```
+- never modify image pixels while writing or cleaning WCS metadata;
+- never overwrite an existing WCS silently;
+- preserve unrelated FITS HDUs and metadata;
+- keep raster WCS in sidecar files;
+- reject incompatible forced routes with a clear error;
+- avoid silent fallbacks between solver implementations;
+- report partial Blind 4D coverage honestly;
+- keep the solver core independent from the GUI;
+- ensure cancellation cannot leave a file advertised as solved with an incomplete header;
+- ensure each file receives at most one terminal GUI result per run.
 
-### 2) Enable it in ZeSolver
+## Contributing
 
-- Performance tab:
-  - Star detection backend: `Auto` or `CUDA`
-  - Star detection device: `Auto` or `CUDA:0`
+Contributions, testing, bug reports, and technical discussion are welcome.
 
-### 3) Validate in logs
+Because ZeSolver is still evolving rapidly, contributors should first read the current project
+mission and the relevant architecture or stabilization notes under `docs/`.
 
-Look for lines like:
+Changes to solver thresholds, catalogue formats, WCS acceptance rules, FITS-writing behavior, or
+routing logic should be isolated, tested, and justified by reproducible evidence.
 
-- `near detect backend used: requested=auto used=cuda device=0`
+## Licence
 
-If runtime pieces are missing, ZeSolver safely falls back to CPU and logs the reason, for example:
+ZeSolver source code is released under the **MIT Licence**, subject to the contents of the
+repository's licence and notice files.
 
-- `near detect backend used: requested=auto used=cpu device=0 (fallback) reason=Failure finding "libnvrtc.so"...`
+This MIT licence applies to ZeSolver's own source code. It does not grant rights to redistribute
+third-party catalogue data, upstream software, trademarks, or other external assets.
 
-This fallback is expected behavior and does not block processing.
+ASTAP, HNSKY, Astrometry.net, Gaia, ESA, and all other third-party names and materials remain the
+property of their respective owners and are governed by their own terms.
 
-## Brute-force benchmark sweeps
+## Contact
 
-When tuning solver heuristics you can exhaustively try several `SolveConfig` profiles on a small
-image set with the new helper below:
+Project repository:
 
-```bash
-python tools/benchmark_solver.py ^
-  --index-root index ^
-  --output-json bench.json ^
-  --output-csv bench.csv ^
-  examples/*.fit
-```
+https://github.com/tinystork/ZeSolver
 
-The harness keeps a pristine copy of every FITS by default (set `--allow-write` if in-place header
-updates are desired), prints the outcome of each preset, and optionally writes structured logs for
-post-processing. It accepts directories, glob patterns, or list files (`@images.lst`) and stops on
-the first success per frame unless `--continue-after-success` is set.
+Maintainer:
 
-Prefer the GUI? The new **Benchmark** tab mirrors every CLI option: paste your file list (one path,
-glob, or `@list` per line), point it to the same index directory, and launch the sweep directly from
-ZeSolver. The log pane reports each attempt, while JSON/CSV outputs can be configured in the same
-panel for post-run analysis.
-
-Custom sweeps can be supplied through `--grid sweeps.json`:
-
-```json
-[
-  {"label": "fast", "max_stars": 600, "detect_k_sigma": 3.0},
-  {"label": "deep", "overrides": {"max_stars": 1200, "vote_percentile": 28}}
-]
-```
-
-Each entry is merged into the base CLI options (matching the `zeblindsolve` defaults), making it easy
-to benchmark a chain of candidate tunings on the same corpus.
-
-Within Python:
-
-```python
-from zewcs290 import CatalogDB
-
-db = CatalogDB(db_root="database", families=["d50", "g05"])
-stars = db.query_cone(ra_deg=184.17, dec_deg=47.14, radius_deg=1.0, mag_limit=17.5)
-print(stars[:3])
-```
-
-## Building an index
-
-Use the `zebuildindex` CLI (`python -m zeblindsolver.db_convert`) to convert ASTAP/HNSKY
-catalogues into ZeSolver-friendly tiles and quad hash tables. The builder now exposes a
-few knobs so you can trade disk usage for I/O speed:
-
-- `--quad-storage {npz,npz_uncompressed,npy}` writes `hash_tables/quads_*` either as
-  compressed `.npz` (default), store-only `.npz` (faster loads), or directory-based `.npy`
-  bundles that ZeSolver memory-maps directly.
-- `--tile-compression {compressed,uncompressed}` controls how `tiles/*.npz` snapshots are
-  saved. Uncompressed tiles cost more disk but load ~25% faster during solving.
-- `--workers N` sets the number of processes used to hash quads. The default remains
-  `max(1, cpu_count/2)`.
-
-For example:
-
-```bash
-python -m zeblindsolver.db_convert ^
-  --db-root database ^
-  --index-root index ^
-  --max-quads-per-tile 20000 ^
-  --quad-storage npy ^
-  --tile-compression uncompressed ^
-  --workers 8
-```
-
-The Settings tab in the GUI exposes the same drop-downs right above the "Construire l'index" button, so you can pick the quad storage (compressed `.npz`, store-only `.npz`, or `.npy` folders) and tile compression modes without memorising the CLI flags.
-Whenever you drop additional ASTAP/HNSKY databases in your configured `database/` directory, the GUI now scans the folder in the background and logs the newly detected families, offering to kick off an index rebuild so the fresh catalogs become available inside the solver without blocking the interface.
-When the quad sampler or hash encoder changes, you can refresh the hash tables without re-projecting every tile by adding `--quads-only` to the `zebuildindex` command. This flag reuses the existing `tiles/` snapshots and `manifest.json`, wipes the old `hash_tables/quads_*`, and regenerates them with the current sampler metadata so the solver reports an actionable "stale index" error instead of failing mid-run.
-eg : 
-python -m zeblindsolver.db_convert --db-root ".\database" --index-root ".\index" --mag-cap 15.5 --max-stars 2000 --max-quads-per-tile 20000 --quad-storage npy --tile-compression uncompressed --workers 8 --quads-only
-or
-python -m zeblindsolver.db_convert `
-  --db-root .\database `
-  --index-root .\index `
-  --mag-cap 15.5 `
-  --max-stars 2000 `
-  --max-quads-per-tile 20000 `
-  --quad-storage npy `
-  --tile-compression uncompressed `
-  --workers 8 `
-  --quads-only
-
-
-## Batch solver GUI/CLI
-
-The `zesolver.py` entry point wraps the catalogue reader with a lightweight plate
-solver, supporting both CLI and PySide6 GUI workflows:
-
-```bash
-# CLI mode (headless batch) – uses half of the available CPU threads by default
-python zesolver.py --db-root ./database --input-dir ./examples --workers 4 --fov-deg 1.4
-
-# GUI mode (requires PySide6, install via `pip install .[gui]`)
-python zesolver.py --gui
-```
-
-The GUI lets you pick the ASTAP/HNSKY database folder, select an input directory
-containing FITS/TIFF/PNG frames, adjust the FOV/downsample parameters, and launch
-multi-threaded solving. Results are written back to the FITS headers (or stored
-as JSON sidecars for raster formats).  Optional RA/Dec/radius and optical hints
-(focal length, pixel size, resolution range) can be entered in the solver panel
-or passed via CLI (`--ra-hint`, `--dec-hint`, `--radius-hint`, `--focal-length`,
-`--pixel-size`, `--pixel-scale`, `--pixel-scale-min`, `--pixel-scale-max`) to
-pre-prune candidate tiles and speed up convergence.  A unified `--downsample`
-switch (and matching GUI spin box) now applies to both the near and blind
-pipelines, resampling the image pyramid, adjusting detection kernels, and
-propagating the coordinate scale automatically.
-
-**GUI workflow tip.** In the *Réglages* tab, pick your instrument in **Presets
-d’instruments** (or fill the “Par FOV” fields manually) then click **Calculer**.
-The calculator pushes the resulting focal length, pixel size, and resolution
-window straight into the blind-solver hint widgets on the **Solveur** page, so
-those fields show “Auto” only when no preset/FOV data was supplied. If you skip
-the presets, you can still override the hints manually in the Solveur tab.
-
-## Blind solver (`zeblindsolver`)
-
-`zeblindsolver` is a standalone ASTAP-based blind solver that sanitises FITS
-headers, tries the local D80/D50/V50/D20/D05/G05/W08/H18 databases in cascade,
-and writes back a validated WCS solution (including `SOLVED`, `SOLVER=ZeSolver`,
-`SOLVMODE=BLIND`, `BLINDVER`, `USED_DB`, `RMSPX`, `INLIERS`). It exposes both a
-Python API and a CLI:
-
-```bash
-# Blind solve a single FITS file in place with the default ASTAP sequence
-zeblindsolver --input Light_M81.fit --db "D50;D20;W08" --profile S50 --timeout 90
-
-# Copy the solved FITS somewhere else
-zeblindsolver --input raw.fit --db "/data/D50;/data/G05" --write-to solved.fit
-```
-
-The solver keeps recently accessed `tiles/*.npz` files in an in-process LRU cache keyed
-by absolute path + file signature (mtime/size). Use `--tile-cache-size N` (or the
-`ZE_TILE_CACHE_SIZE` environment variable) to tune the capacity; set it to `0` to disable
-the cache when memory is tight.
-
-`zesolver.py` automatically triggers the blind fallback when a FITS header lacks
-a trustworthy WCS (unless `--no-blind` is provided). Successful blind solves are
-logged in both CLI and GUI modes (`run_info_blind_*` entries) and prevent GUI
-freezes because ASTAP runs in worker threads.
-
-The blind path now loads RAW/TIFF/JPG/PNG frames natively, converts them to
-float32 luminance in memory, and emits a `.wcs.json` sidecar with TAN/SIP
-keywords when the source is not a FITS container. Solving is organised in
-phases—metadata-assisted (RA+scale), scale-only, then fully blind—with fast/S
-levels attempted first when the “Fast mode” toggle is enabled. Phase statistics
-(name, elapsed time, levels explored) are surfaced through the returned
-`WcsSolution` and logs so you can gauge which hints actually helped.
-
-In the GUI, the settings tab now includes a "Blind solver (Python)" group with
-the main tunables and a "Fast mode (S-only, fallback M/L)" option that tries the
-most selective level first for speed.
-
-## Metadata-assisted near solver
-
-The new `zeblindsolver/metadata_solver.py` path keeps the solving workflow
-entirely in Python and only requires the manifest + tile projections produced by
-`zebuildindex`.  No quad hash tables are needed.  Given a FITS file with an RA/Dec
-hint and approximate optical metadata, the solver:
-
-- Detects image stars via the shared `star_detect` module.
-- Loads nearby catalogue tiles from `index/tiles/*.npz`, reprojects them onto the
-  requested tangent plane, and matches stars via similarity RANSAC (with optional
-  parity flips).
-- Writes a TAN WCS (and SIP terms if needed) together with `SOLVED`, `SOLVER=ZeSolver`,
-  `SOLVMODE=NEAR`, `QUALITY`, `NEAR_VER`, `INLIERS`, `RMSPX`, and `PIXSCAL` keywords.
-- Falls back to the quad-based blind solver automatically when metadata is
-  missing or inconsistent (if the quad tables are present).
-
-Programmatic usage mirrors the blind helper:
-
-```python
-from pathlib import Path
-from zesolver import NearSolveConfig, near_solve
-
-config = NearSolveConfig(max_img_stars=400, max_cat_stars=1000)
-result = near_solve("examples/Light_M31.fit", index_root="index", config=config)
-print(result["message"])
-```
-
-The GUI settings tab exposes a dedicated **“Near solve (Python, no quads)”**
-button next to the blind test action so you can validate a sample FITS file
-against your local index without launching ASTAP.
-
-## Status
-
-Phase 1 focuses on catalogue ingest, inspection, and the assisted solver path. Blind solving,
-triangle hashing, SIP fitting, and full CLI wiring will land in subsequent iterations.
-
-## License
-
-MIT. Catalogue data remains copyrighted by their respective owners (Gaia/ESA, ASTAP,
-HNSKY). The code only reads those files in place.
+**Tristan Nauleau — Tinystork**

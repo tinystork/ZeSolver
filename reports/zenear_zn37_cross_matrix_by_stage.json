@@ -1,0 +1,126 @@
+{
+  "initial": {
+    "S00": {
+      "catalog_quads": 188,
+      "catalog_stars": 249,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "path_used": "find_fit_using_hash",
+      "refs": 28,
+      "success": true
+    },
+    "S01": {
+      "catalog_quads": 187,
+      "catalog_stars": 248,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "path_used": "find_fit_using_hash",
+      "refs": 28,
+      "success": true
+    },
+    "S10": {
+      "catalog_quads": 188,
+      "catalog_stars": 249,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "path_used": "find_fit_using_hash",
+      "refs": 28,
+      "success": true
+    },
+    "S11": {
+      "catalog_quads": 187,
+      "catalog_stars": 248,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "path_used": "find_fit_using_hash",
+      "refs": 28,
+      "success": true
+    },
+    "stage_meta": {
+      "center_dec_deg": 47.162222,
+      "center_ra_deg": 184.91667,
+      "fov_deg": 1.2760928419647206,
+      "search_radius_deg": 2.2969671155364972,
+      "search_window_deg": 1.9825871802542967,
+      "stage_type": "initial",
+      "strict_db_target_stars": 249.0,
+      "tangent_center_dec_deg": 47.162222,
+      "tangent_center_ra_deg": 184.91667
+    }
+  },
+  "recenter_second_pass": {
+    "S00": {
+      "catalog_quads": 188,
+      "catalog_stars": 249,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "path_used": "find_fit_using_hash",
+      "refs": 28,
+      "success": true
+    },
+    "S01": {
+      "catalog_quads": 76,
+      "catalog_stars": 101,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 13,
+      "matches_raw": 13,
+      "path_used": "find_fit",
+      "refs": 13,
+      "success": true
+    },
+    "S10": {
+      "catalog_quads": 188,
+      "catalog_stars": 249,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 28,
+      "matches_raw": 28,
+      "path_used": "find_fit_using_hash",
+      "refs": 28,
+      "success": true
+    },
+    "S11": {
+      "catalog_quads": 76,
+      "catalog_stars": 101,
+      "failure_stage": null,
+      "image_quads": 224,
+      "image_stars": 58,
+      "matches_kept": 13,
+      "matches_raw": 13,
+      "path_used": "find_fit",
+      "refs": 13,
+      "success": true
+    },
+    "stage_meta": {
+      "center_dec_deg": 47.29868581717479,
+      "center_ra_deg": 185.20561944810663,
+      "fov_deg": 1.2760928419647206,
+      "initial_dec_deg": 47.162222,
+      "initial_ra_deg": 184.91667,
+      "search_radius_deg": 2.2969671155364972,
+      "search_window_deg": 1.9825871802542967,
+      "stage_type": "recenter_second_pass",
+      "strict_db_target_stars": 249.0,
+      "tangent_center_dec_deg": 47.29868581717479,
+      "tangent_center_ra_deg": 185.20561944810663
+    }
+  }
+}

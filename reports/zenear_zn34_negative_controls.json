@@ -1,0 +1,20 @@
+[
+  {
+    "control": "bad_center",
+    "false_positive": false,
+    "message": "near solver could not estimate a similarity transform",
+    "success": false
+  },
+  {
+    "control": "blank_image",
+    "false_positive": false,
+    "message": "no stars detected in the frame",
+    "success": false
+  },
+  {
+    "control": "empty_catalog",
+    "false_positive": false,
+    "message": "index manifest has no tiles",
+    "success": false
+  }
+]

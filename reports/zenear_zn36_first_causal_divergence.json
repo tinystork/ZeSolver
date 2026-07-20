@@ -1,0 +1,15 @@
+{
+  "astap_observed": 58,
+  "case_id": "232102",
+  "correctif_applied": false,
+  "first_stage_divergent": "IMAGE_FINAL_FOR_QUADS",
+  "first_stage_identical": "clean_base/provenance and ASTAP oracle success from ZN3.5B",
+  "h00_interpretation": "Near core resolves 232102 from ASTAP final lists; divergence is before/at final input lists.",
+  "near_observed": 58,
+  "secondary_divergence": {
+    "astap_observed": 249,
+    "near_observed": 248,
+    "stage": "CATALOG_FINAL_FOR_QUADS"
+  },
+  "verdict": "INPUT_FINAL_LIST_DIVERGENCE"
+}

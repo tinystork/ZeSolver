@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "source_report": "reports/zenear_zn39_near_matrix.json",
+  "source_commit": "f5a76cd2ec8998d552332a3556325ebba5c116cf plus P0A test recovery",
+  "date": "2026-07-17",
+  "profile": "ZeNear strict ASTAP-ISO, strict_acceptance_mode=diagnostic",
+  "validation": "ZN3.9 independent WCS validation against clean ASTAP oracles",
+  "summary": {
+    "total_unique": 142,
+    "near_success": 142,
+    "near_wcs_confirmed": 142,
+    "wrong_field": 0,
+    "generic_fallback_called": 0,
+    "historical_blind_called": 0,
+    "m31_canonical": "8/8",
+    "m106": "60/60",
+    "ngc6888": "27/27",
+    "ngc3628": "2/2"
+  }
+}

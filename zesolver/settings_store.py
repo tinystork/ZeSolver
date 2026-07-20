@@ -6,7 +6,7 @@
 # ║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
 # ║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
 # ║                                                                                   ║
-# ║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+# ║ Licence du dépôt : GPL V3 (voir pyproject.toml / repository metadata)               ║
 # ║                                                                                   ║
 # ║ Remerciements amont :                                                             ║
 # ║ - ASTAP, par Han Kleijn                                                           ║
@@ -45,7 +45,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 8
+SETTINGS_SCHEMA_VERSION = 11
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -54,6 +54,7 @@ TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
 @dataclass
 class PersistentSettings:
     schema_version: int = SETTINGS_SCHEMA_VERSION
+    catalog_library_path: Optional[str] = None
     db_root: Optional[str] = None
     index_root: Optional[str] = None
     mag_cap: float = DEFAULT_MAG_CAP
@@ -79,6 +80,9 @@ class PersistentSettings:
     blind_quality_inliers: int = 40
     blind_quality_rms: float = 1.2
     blind_fast_mode: bool = True
+    blind_index_scale_overlap_prefilter_enabled: bool = False
+    blind_index_scale_overlap_proxy_lo_frac: float = 0.05
+    blind_index_scale_overlap_proxy_hi_frac: float = 0.95
     # Near solver performance
     near_max_tile_candidates: int = 48
     near_tile_cache_size: int = 128
@@ -105,6 +109,8 @@ class PersistentSettings:
     # Optional batch behavior: when True, failed ZeNear files are held for phase-2 blind
     near_defer_blind_fallback: bool = False
     near_allow_second_rescue: bool = False
+    near_catalog_mode: str = "auto"
+    blind4d_catalog_mode: str = "auto"
     dev_bucket_limit_override: int = 0
     dev_vote_percentile: int = 40
     dev_detect_k_sigma: float = 3.0
@@ -130,6 +136,9 @@ class PersistentSettings:
     solver_family: Optional[str] = None  # lower-case key, None = Auto
     solver_blind_enabled: bool = True
     solver_overwrite: bool = True
+    interface_mode: str = "easy"
+    blind_backend_profile: str = "zeblind_4d_experimental"
+    blind_4d_manifest_path: Optional[str] = None
     solver_hint_ra_deg: Optional[float] = None
     solver_hint_dec_deg: Optional[float] = None
     solver_hint_radius_deg: Optional[float] = None
@@ -221,6 +230,7 @@ def load_persistent_settings() -> PersistentSettings:
     bench_tile_cache = int(payload.get("benchmark_tile_cache_size", 128) or 128)
     settings = PersistentSettings(
         schema_version=int(payload.get("schema_version", 1)),
+        catalog_library_path=(payload.get("catalog_library_path") or None),
         db_root=payload.get("db_root"),
         index_root=payload.get("index_root"),
         mag_cap=float(payload.get("mag_cap", DEFAULT_MAG_CAP)),
@@ -244,6 +254,9 @@ def load_persistent_settings() -> PersistentSettings:
         blind_quality_inliers=int(payload.get("blind_quality_inliers", 40)),
         blind_quality_rms=float(payload.get("blind_quality_rms", 1.2)),
         blind_fast_mode=bool(payload.get("blind_fast_mode", True)),
+        blind_index_scale_overlap_prefilter_enabled=bool(payload.get("blind_index_scale_overlap_prefilter_enabled", False)),
+        blind_index_scale_overlap_proxy_lo_frac=float(payload.get("blind_index_scale_overlap_proxy_lo_frac", 0.05)),
+        blind_index_scale_overlap_proxy_hi_frac=float(payload.get("blind_index_scale_overlap_proxy_hi_frac", 0.95)),
         near_max_tile_candidates=int(payload.get("near_max_tile_candidates", 48)),
         near_tile_cache_size=int(payload.get("near_tile_cache_size", 128)),
         near_detect_backend=str(payload.get("near_detect_backend", "auto")),
@@ -268,6 +281,8 @@ def load_persistent_settings() -> PersistentSettings:
         near_astap_iso_strict=bool(payload.get("near_astap_iso_strict", True)),
         near_defer_blind_fallback=bool(payload.get("near_defer_blind_fallback", False)),
         near_allow_second_rescue=bool(payload.get("near_allow_second_rescue", False)),
+        near_catalog_mode=str(payload.get("near_catalog_mode", "auto") or "auto"),
+        blind4d_catalog_mode=str(payload.get("blind4d_catalog_mode", "auto") or "auto"),
         dev_bucket_limit_override=int(payload.get("dev_bucket_limit_override", 0)),
         dev_vote_percentile=int(payload.get("dev_vote_percentile", 40)),
         dev_detect_k_sigma=float(payload.get("dev_detect_k_sigma", 3.0)),
@@ -292,6 +307,9 @@ def load_persistent_settings() -> PersistentSettings:
         solver_family=(payload.get("solver_family") or None),
         solver_blind_enabled=bool(payload.get("solver_blind_enabled", True)),
         solver_overwrite=bool(payload.get("solver_overwrite", True)),
+        interface_mode=str(payload.get("interface_mode", "easy") or "easy"),
+        blind_backend_profile=str(payload.get("blind_backend_profile", "zeblind_4d_experimental") or "zeblind_4d_experimental"),
+        blind_4d_manifest_path=(payload.get("blind_4d_manifest_path") or None),
         solver_hint_ra_deg=_float_or_none(payload.get("solver_hint_ra_deg")),
         solver_hint_dec_deg=_float_or_none(payload.get("solver_hint_dec_deg")),
         solver_hint_radius_deg=_float_or_none(payload.get("solver_hint_radius_deg")),
@@ -373,6 +391,41 @@ def _migrate_settings_if_needed(settings: PersistentSettings) -> tuple[Persisten
     # v8: retire legacy non-strict Near mode.
     if settings.near_astap_iso_strict is not True:
         settings.near_astap_iso_strict = True
+        changed = True
+
+    near_catalog_mode = str(getattr(settings, "near_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-")
+    if near_catalog_mode not in {"auto", "astap-native", "legacy-index"}:
+        near_catalog_mode = "auto"
+        changed = True
+    if getattr(settings, "near_catalog_mode", "auto") != near_catalog_mode:
+        settings.near_catalog_mode = near_catalog_mode
+        changed = True
+
+    blind4d_catalog_mode = str(getattr(settings, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-")
+    if blind4d_catalog_mode not in {"auto", "library-view", "external-manifest"}:
+        blind4d_catalog_mode = "auto"
+        changed = True
+    if getattr(settings, "blind4d_catalog_mode", "auto") != blind4d_catalog_mode:
+        settings.blind4d_catalog_mode = blind4d_catalog_mode
+        changed = True
+
+    profile = str(getattr(settings, "blind_backend_profile", "zeblind_4d_experimental") or "zeblind_4d_experimental").strip().lower()
+    if profile not in {"historical", "zeblind_4d_experimental"}:
+        settings.blind_backend_profile = "zeblind_4d_experimental"
+        changed = True
+    elif profile == "historical":
+        settings.blind_backend_profile = "zeblind_4d_experimental"
+        changed = True
+    elif settings.blind_backend_profile != profile:
+        settings.blind_backend_profile = profile
+        changed = True
+
+    interface_mode = str(getattr(settings, "interface_mode", "easy") or "easy").strip().lower()
+    if interface_mode not in {"easy", "expert"}:
+        settings.interface_mode = "easy"
+        changed = True
+    elif settings.interface_mode != interface_mode:
+        settings.interface_mode = interface_mode
         changed = True
 
     if current_version < SETTINGS_SCHEMA_VERSION:

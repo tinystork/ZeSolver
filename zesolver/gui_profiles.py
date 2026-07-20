@@ -6,7 +6,7 @@
 # ║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
 # ║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
 # ║                                                                                   ║
-# ║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+# ║ Licence du dépôt : GPL V3 (voir pyproject.toml / repository metadata)               ║
 # ║                                                                                   ║
 # ║ Remerciements amont :                                                             ║
 # ║ - ASTAP, par Han Kleijn                                                           ║
@@ -47,6 +47,8 @@ _SETTINGS_EXPERT_GROUPS: tuple[str, ...] = (
     "fov_group",
     "reco_group",
     "blind_group",
+    "catalog_compat_group",
+    "catalog_maintenance_group",
 )
 
 # Buttons meant for diagnostics/manual expert runs only.

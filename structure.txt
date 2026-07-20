@@ -1,79 +1,387 @@
+ZeSolver repository structure
+
 .
-├── .gitignore
-├── __pycache__
-│   └── zesolver.cpython-312.pyc
-├── CHANGELOG.md
-├── database
-│   ├── d20_0101.1476
-│   ├── d50_3409.1476
-│   ├── d50_3501.1476
-│   ├── d50_3502.1476
-│   ├── d50_3503.1476
-│   ├── d50_3601.1476
-│   ├── d80_0101.1476
-│   ├── d80_0201.1476
-│   ├── deep_sky.csv
-│   ├── g05_0101.290
-│   ├── g05_1801.290
-│   ├── hyperleda.csv
-│   ├── v50_3502.1476
-│   ├── v50_3601.1476
-│   ├── variable_stars.csv
-│   ├── variable_stars_8.csv
-│   └── w08_0101.001
-├── examples
-│   ├── Light_M 81_10.0s_IRCUT_20241129-012439.fit
-│   ├── [.....]
-│   ├── Light_M 81_10.0s_IRCUT_20241129-013850.fit
-│   ├── [.....]
-│   ├── Light_M31_180.0s_Bin1_20231009-010829_0009.fit
-│   ├── Light_M31_60.0s_Bin1_UHC_20241030-224215_0002_thn.jpg
-│   ├── Light_M31_60.0s_Bin1_UHC_20241030-224358_0003.fit
-│   ├── [.....]
-│   ├── Light_M31_60.0s_Bin1_UHC_20241030-224757_0006_thn.jpg
-│   └── zemosaic_MT16_R65.fits
-├── pyproject.toml
-├── README.md
-├── requirements.txt
-├── structure.txt
-├── tests
-│   ├── __pycache__
-│   │   ├── conftest.cpython-312-pytest-7.4.4.pyc
-│   │   ├── test_catalog290.cpython-312-pytest-7.4.4.pyc
-│   │   └── test_zeblindsolver.cpython-312-pytest-7.4.4.pyc
-│   ├── conftest.py
-│   ├── test_catalog290.py
-│   └── test_zeblindsolver.py
-├── tools
-│   ├── build_blind_index.py
-│   └── inspect_290.py
-├── zedatabase..py
-├── zesolver
-│   ├── __init__.py
-│   ├── __pycache__
-│   │   ├── __init__.cpython-312.pyc
-│   │   ├── __init__.cpython-313.pyc
-│   │   ├── blindindex.cpython-313.pyc
-│   │   ├── zeblindsolver.cpython-312.pyc
-│   │   └── zeblindsolver.cpython-313.pyc
-│   ├── blindindex.py
-│   └── zeblindsolver.py
-├── zesolver.log
-├── zesolver.py
-└── zewcs290
-    ├── __init__.py
-    ├── __pycache__
-    │   ├── __init__.cpython-312.pyc
-    │   ├── __init__.cpython-313.pyc
-    │   ├── catalog290.cpython-312.pyc
-    │   ├── catalog290.cpython-313.pyc
-    │   ├── layouts.cpython-312.pyc
-    │   └── layouts.cpython-313.pyc
-    ├── catalog290.py
-    ├── data
-    │   ├── __init__.py
-    │   ├── __pycache__
-    │   │   ├── __init__.cpython-312.pyc
-    │   │   └── __init__.cpython-313.pyc
-    │   └── layouts.json
-    └── layouts.py
+|-- config
+|   `-- zeblind_4d_experimental_manifest.json
+|-- docs
+|   |-- architecture
+|   |   |-- astap_family_strategy.md
+|   |   |-- batch_concurrency_map.md
+|   |   |-- batch_pipeline.md
+|   |   |-- blind4d_coverage_audit.json
+|   |   |-- blind4d_coverage_audit.md
+|   |   |-- blind_production_path_map.md
+|   |   |-- catalog_consumers_inventory.md
+|   |   |-- catalog_data_flow.md
+|   |   |-- catalog_integration_map.md
+|   |   |-- catalog_library.md
+|   |   |-- catalog_library_implementation.md
+|   |   |-- catalog_manifest_example.json
+|   |   |-- catalog_manifest_schema.json
+|   |   |-- catalog_migration_matrix.md
+|   |   |-- core_dependency_boundary.md
+|   |   |-- core_extraction_map.md
+|   |   |-- engine_selection.md
+|   |   |-- gui_pipeline_capability_matrix.md
+|   |   |-- settings_inventory.md
+|   |   |-- settings_migration_v2.md
+|   |   |-- settings_public_surface.md
+|   |   |-- solver_pipeline.md
+|   |   `-- solver_profiles.md
+|   |-- stabilization
+|   |   |-- baseline_failure_triage.md
+|   |   |-- baseline_recovery_report.md
+|   |   |-- initial_state.md
+|   |   |-- p0b_regression_foundation_report.md
+|   |   |-- p1a_catalog_architecture_report.md
+|   |   |-- p1b_catalog_library_report.md
+|   |   |-- p1c_catalog_integration_report.md
+|   |   |-- p2a_settings_separation_report.md
+|   |   |-- p2b01_corpus_repair_report.md
+|   |   |-- p2b02_canonical_fixture_report.md
+|   |   |-- p2b0_external_baseline_report.md
+|   |   |-- p2b0_git_freeze_audit.md
+|   |   |-- p2b1_core_extraction_report.md
+|   |   |-- p2b2a_blind_adapter_report.md
+|   |   |-- p2b2a_zn310b_blind_parity.md
+|   |   |-- p2b2b_batch_extraction_report.md
+|   |   |-- regression_suite.md
+|   |   |-- repository_reproducibility.md
+|   |   `-- zn310b_gui_validation_result.md
+|   `-- zeblind_astrometry_4d_experimental.md
+|-- icon
+|   |-- ZSicon.icns
+|   |-- ZSicon.ico
+|   |-- ZSicon.jpeg
+|   `-- ZSicon.png
+|-- packaging
+|   `-- pyinstaller
+|       |-- build.py
+|       |-- convert_icon.py
+|       `-- README.md
+|-- tests
+|   |-- corpus
+|   |   |-- oracles
+|   |   |   |-- pipeline_reference.json
+|   |   |   |-- zeblind4d_reference.json
+|   |   |   `-- zenear_reference.json
+|   |   |-- manifest.json
+|   |   `-- README.md
+|   |-- batch_pipeline_fixtures.py
+|   |-- catalog_library_fixtures.py
+|   |-- catalog_resource_helpers.py
+|   |-- conftest.py
+|   |-- corpus_loader.py
+|   |-- solver_pipeline_fixtures.py
+|   |-- test_astrometry_client_stub.py
+|   |-- test_backend_select.py
+|   |-- test_batch_blind_fallback.py
+|   |-- test_batch_pipeline_cancellation.py
+|   |-- test_batch_pipeline_compatibility.py
+|   |-- test_batch_pipeline_concurrency.py
+|   |-- test_batch_pipeline_failures.py
+|   |-- test_batch_pipeline_models.py
+|   |-- test_batch_pipeline_routing.py
+|   |-- test_batch_pipeline_scheduling.py
+|   |-- test_batch_pipeline_zn310b.py
+|   |-- test_benchmark_solver.py
+|   |-- test_blind_config_builder_parity.py
+|   |-- test_blind_port_config_parity.py
+|   |-- test_blind_port_result_parity.py
+|   |-- test_blind_production_port.py
+|   |-- test_catalog290.py
+|   |-- test_catalog_library_adapters.py
+|   |-- test_catalog_library_audit.py
+|   |-- test_catalog_library_blind4d_integration.py
+|   |-- test_catalog_library_discovery.py
+|   |-- test_catalog_library_manifest.py
+|   |-- test_catalog_library_near_integration.py
+|   |-- test_catalog_library_pipeline_integration.py
+|   |-- test_catalog_library_status.py
+|   |-- test_catalog_library_validation.py
+|   |-- test_catalog_resource_resolution.py
+|   |-- test_configuration_assembly.py
+|   |-- test_core_dependency_boundaries.py
+|   |-- test_core_import_isolation.py
+|   |-- test_core_without_entrypoint.py
+|   |-- test_corpus_fixture_derivation.py
+|   |-- test_developer_overrides.py
+|   |-- test_downloads.py
+|   |-- test_engine_selection.py
+|   |-- test_failures.py
+|   |-- test_matcher.py
+|   |-- test_metadata_solver.py
+|   |-- test_p220_manifest_loader.py
+|   |-- test_p221_app_integration.py
+|   |-- test_p222_gui_integration.py
+|   |-- test_p224_budget_concurrency.py
+|   |-- test_presets.py
+|   |-- test_product_settings.py
+|   |-- test_quad_code_diagnostic.py
+|   |-- test_quad_storage.py
+|   |-- test_real_s50.py
+|   |-- test_regression_blind4d.py
+|   |-- test_regression_fits_integrity.py
+|   |-- test_regression_manifest.py
+|   |-- test_regression_near.py
+|   |-- test_regression_pipeline.py
+|   |-- test_settings_migration_v2.py
+|   |-- test_settings_persistence.py
+|   |-- test_solver_pipeline_blind_production.py
+|   |-- test_solver_pipeline_compatibility.py
+|   |-- test_solver_pipeline_models.py
+|   |-- test_solver_pipeline_preflight.py
+|   |-- test_solver_pipeline_result_adapter.py
+|   |-- test_solver_pipeline_routing.py
+|   |-- test_solver_pipeline_wcs_io.py
+|   |-- test_solver_pipeline_zn310b_production.py
+|   |-- test_solver_profiles.py
+|   |-- test_synthetic.py
+|   |-- test_tile_cache.py
+|   |-- test_zeblindsolver.py
+|   |-- test_zn2_astap_tools.py
+|   |-- test_zn310b_gui_fallback_dataset.py
+|   |-- test_zn31_astap_oracles.py
+|   |-- test_zn32_catalog_reader.py
+|   |-- test_zn33_image_detector.py
+|   |-- test_zn34_hardening.py
+|   |-- test_zn35_oracle_gate_chain.py
+|   |-- test_zn35b_resumable_replay.py
+|   |-- test_zn36_astap_near_parity.py
+|   |-- test_zn37_astap_list_selection.py
+|   |-- test_zn38_astap_image_selector.py
+|   |-- test_zn39_qualification.py
+|   `-- test_zn3_input_lists.py
+|-- tools
+|   |-- astap_zn2_build_and_compare.py
+|   |-- audit_catalog_library.py
+|   |-- bench_zeblind_focus4.py
+|   |-- bench_zeblind_focus4_pipeline.py
+|   |-- bench_zeblind_vs_astrometry_online.py
+|   |-- bench_zenear_from_list.py
+|   |-- benchmark_astap_vs_zenear_m106_50.py
+|   |-- benchmark_solver.py
+|   |-- build_blind_index.py
+|   |-- build_zn310b_gui_dataset.py
+|   |-- check_core_boundaries.py
+|   |-- compare_bench_json.py
+|   |-- corpus_fixture_derivation.py
+|   |-- diagnose_astrometry_quad_code.py
+|   |-- diagnose_disk_4d_index_probe.py
+|   |-- diagnose_memory_4d_backend.py
+|   |-- diagnose_p210_4d_m106_bounded_multi_index_corpus.py
+|   |-- diagnose_p211_4d_experimental_runtime_hardening.py
+|   |-- diagnose_p212_4d_m106_30_bounded_validation.py
+|   |-- diagnose_p213_4d_m106_failure_autopsy.py
+|   |-- diagnose_p214_4d_source_policy_bakeoff.py
+|   |-- diagnose_p215_4d_split_quad_verify_sources.py
+|   |-- diagnose_p216_4d_candidate_refine_residual_audit.py
+|   |-- diagnose_p217_4d_runtime_replay_parity.py
+|   |-- diagnose_p218_4d_m106_all30_direct_metric_closure.py
+|   |-- diagnose_p219_4d_multifield_validation.py
+|   |-- diagnose_p219b_incremental_multiregime.py
+|   |-- diagnose_p220_4d_mixed_index_pool.py
+|   |-- diagnose_p221_app_integration.py
+|   |-- diagnose_p223_m31_intermittent_4d.py
+|   |-- diagnose_p224_app_path_budget_concurrency.py
+|   |-- diagnose_p23_4d_source_list_contract.py
+|   |-- diagnose_p24_4d_source_policy_bakeoff.py
+|   |-- diagnose_p25_4d_experimental_product_slice.py
+|   |-- diagnose_p26_4d_oracle_tile_routing.py
+|   |-- diagnose_p27_4d_d50_2823_density_probe.py
+|   |-- diagnose_p28_4d_validation_support_audit.py
+|   |-- diagnose_p29_4d_bounded_multi_index_union_validation.py
+|   |-- diagnose_runtime_4d_route.py
+|   |-- diagnose_zn1_zenear_astap_parity.py
+|   |-- diagnose_zn2_astap_internal_parity.py
+|   |-- diagnose_zn310b_gui_fallback.py
+|   |-- diagnose_zn31_astap_oracles.py
+|   |-- diagnose_zn31_catalog_gate.py
+|   |-- diagnose_zn31_image_gate.py
+|   |-- diagnose_zn32_catalog_gate.py
+|   |-- diagnose_zn32_catalog_reader.py
+|   |-- diagnose_zn32_catalog_records.py
+|   |-- diagnose_zn33_image_detector.py
+|   |-- diagnose_zn33_image_gate.py
+|   |-- diagnose_zn33_image_sections.py
+|   |-- diagnose_zn34_corpus.py
+|   |-- diagnose_zn34_negative_controls.py
+|   |-- diagnose_zn34_performance.py
+|   |-- diagnose_zn34_promotion_gate.py
+|   |-- diagnose_zn34_wcs.py
+|   |-- diagnose_zn35_acceptance_gate.py
+|   |-- diagnose_zn35_blind4d_coverage.py
+|   |-- diagnose_zn35_corpus.py
+|   |-- diagnose_zn35_m106_checkpoints.py
+|   |-- diagnose_zn35_replay.py
+|   |-- diagnose_zn35_solver_chain.py
+|   |-- diagnose_zn35_wcs_independent.py
+|   |-- diagnose_zn36_parity.py
+|   |-- diagnose_zn37_selection.py
+|   |-- diagnose_zn38_image_selector.py
+|   |-- diagnose_zn39_qualification.py
+|   |-- diagnose_zn3_input_list_parity.py
+|   |-- inspect_290.py
+|   |-- macos_preflight.py
+|   |-- profile_zenear_hotspots_m106.py
+|   |-- r47i_s1_canonical_strict_closure.py
+|   |-- r47i_s1_forced_payload_full_replay.py
+|   |-- r47i_s1_samehit_candidate_replay.py
+|   |-- r47i_s1_verify_only_replay.py
+|   |-- r47i_s3_batch_probe_from_coverage.py
+|   |-- r47i_s3_build_focused_index.py
+|   |-- r47i_s3_index_coverage_audit.py
+|   |-- r47i_s3_onefield_multisol_probe.py
+|   |-- r47i_s3_select_fits_by_coverage.py
+|   |-- r47i_s3a5_callback_semantics_audit.py
+|   |-- r47i_s3a6_dedup_semantics_audit.py
+|   |-- r47i_s4_astrometry_source_diff_audit.py
+|   |-- r47i_s4_closure_audit.py
+|   |-- r47i_s4_counter_mapping_check.py
+|   |-- r47i_s4_loader_config_probe.py
+|   |-- r47i_s4_runtime_probe.py
+|   |-- r47i_s4_stop_policy_audit.py
+|   |-- r47i_s5_astrometry_source_diff_audit.py
+|   |-- r47i_s5_callsite_drift_audit.py
+|   |-- r47i_s5_callsite_permutation_audit.py
+|   |-- r47i_s5_math_permutation_audit.py
+|   |-- r47i_s5_multicase_head_residual_audit.py
+|   |-- r47i_s5_newpoint_permutation_gap_audit.py
+|   |-- r47i_s5_pass_tag_acceptance_audit.py
+|   |-- r47i_s5_permutation_callsite_audit.py
+|   |-- r47i_s5_remaining_head_order_audit.py
+|   |-- r47i_s5_same_candidate_transition_audit.py
+|   |-- r47i_s5_skip_hypothesis_audit.py
+|   |-- r47i_s5_stage_callsite_mapping_audit.py
+|   |-- r47i_s5_tuple_semantic_diff_audit.py
+|   |-- r47i_s5_upstream_audit.py
+|   |-- r47i_s5_upstream_candidate_trace.py
+|   |-- r47i_s5_upstream_diff_audit.py
+|   |-- r47i_s5_upstream_trace_probe.py
+|   |-- r47i_s6_astrometry_engine_verify_audit.py
+|   |-- r47i_s6_astrometry_seed_residual_incoherence_audit.py
+|   |-- r47i_s6_bounded_verify_probe.py
+|   |-- r47i_s6_build_ze_matchfile.py
+|   |-- r47i_s6_checkpoint_contract_audit.py
+|   |-- r47i_s6_effective_fit_geometry_audit.py
+|   |-- r47i_s6_false_positive_logodds_validity_audit.py
+|   |-- r47i_s6_first_divergence_topdown_audit.py
+|   |-- r47i_s6_m106_blind_oracle_compare.py
+|   |-- r47i_s6_m106_first_divergence_audit.py
+|   |-- r47i_s6_scale_anchor_source_audit.py
+|   |-- r47i_s6_verify_sequence_diff.py
+|   |-- r47i_s6_verify_snapshot_audit.py
+|   |-- r47i_s6_verify_support_step0_audit.py
+|   |-- r47i_s8_blind_oracle_smoke.py
+|   |-- r47i_s8_p09_resolve_hit_audit.py
+|   |-- r47i_s8_p13_hash_index_forensic.py
+|   |-- r47i_s8_p21_astrometry_source_list_audit.py
+|   |-- r47i_s8_p21_image2xy_injection_probe.py
+|   |-- r47i_s8_p22_source_gate_oracle_collect_audit.py
+|   |-- r47i_s8_p23_remaining_front_classifier.py
+|   |-- run_regression_suite.py
+|   |-- update_structure.py
+|   `-- wcs_oracle_compare.py
+|-- zeblindsolver
+|   |-- __init__.py
+|   |-- astap_db_reader.py
+|   |-- asterisms.py
+|   |-- astrometry_backend.py
+|   |-- astrometry_client.py
+|   |-- astrometry_startree.py
+|   |-- candidate_search.py
+|   |-- db_convert.py
+|   |-- downloads.py
+|   |-- fits_utils.py
+|   |-- image_io.py
+|   |-- image_prep.py
+|   |-- index_manifest_4d.py
+|   |-- levels.py
+|   |-- matcher.py
+|   |-- metadata_solver.py
+|   |-- presets.py
+|   |-- profiles.py
+|   |-- projections.py
+|   |-- quad_code_diagnostic.py
+|   |-- quad_index_4d.py
+|   |-- quad_index_builder.py
+|   |-- quad_sampling.py
+|   |-- README.md
+|   |-- star_detect.py
+|   |-- verify.py
+|   |-- wcs_fit.py
+|   |-- wcs_header.py
+|   `-- zeblindsolver.py
+|-- zesolver
+|   |-- catalog_library
+|   |   |-- __init__.py
+|   |   |-- adapters.py
+|   |   |-- coverage.py
+|   |   |-- discovery.py
+|   |   |-- manifest.py
+|   |   |-- models.py
+|   |   `-- validation.py
+|   |-- core
+|   |   |-- batch
+|   |   |   |-- __init__.py
+|   |   |   |-- models.py
+|   |   |   `-- runner.py
+|   |   |-- __init__.py
+|   |   |-- blind_models.py
+|   |   |-- blind_port.py
+|   |   |-- blind_result_adapter.py
+|   |   |-- models.py
+|   |   |-- pipeline.py
+|   |   |-- preflight.py
+|   |   |-- result_adapter.py
+|   |   |-- telemetry.py
+|   |   `-- wcs_io.py
+|   |-- settings
+|   |   |-- __init__.py
+|   |   |-- assembly.py
+|   |   |-- migration.py
+|   |   |-- product.py
+|   |   |-- profiles.py
+|   |   `-- runtime.py
+|   |-- solver_config
+|   |   |-- __init__.py
+|   |   |-- blind.py
+|   |   `-- compatibility.py
+|   |-- __init__.py
+|   |-- blind4d_runtime.py
+|   |-- blindindex.py
+|   |-- catalog_resources.py
+|   |-- engine_selection.py
+|   |-- gui_profiles.py
+|   |-- gui_settings_sections.py
+|   |-- macos_preflight.py
+|   |-- settings_store.py
+|   `-- zeblindsolver.py
+|-- zewcs290
+|   |-- data
+|   |   |-- __init__.py
+|   |   `-- layouts.json
+|   |-- __init__.py
+|   |-- catalog290.py
+|   `-- layouts.py
+|-- .gitignore
+|-- AGENT.md
+|-- benchmark_report.csv
+|-- benchmark_report.json
+|-- CHANGELOG.md
+|-- firstrun.txt
+|-- followup.md
+|-- install.ps1
+|-- memory.md
+|-- nono_handoff.md
+|-- nono_status.md
+|-- pyproject.toml
+|-- README.md
+|-- reports_cleanup_candidates_20260627_020935.txt
+|-- reports_cleanup_manifest_20260627_020935.txt
+|-- requirements.txt
+|-- structure.txt
+|-- zedatabase..py
+|-- zeindexcheck.py
+|-- zesolver.py
+`-- zewcscleaner.py

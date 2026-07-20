@@ -1,0 +1,102 @@
+{
+  "gui_mixed": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/gui_mixed",
+  "items": [
+    {
+      "case_id": "ZN310B_001_M31",
+      "expected_blind4d": false,
+      "expected_final_backend": "NEAR",
+      "expected_near": true,
+      "gui_filename": "ZN310B_CONTROL_001.fit",
+      "gui_path": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/gui_mixed/ZN310B_CONTROL_001.fit",
+      "oracle_sidecar": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/oracle_sidecars/ZN310B_001_M31.json",
+      "source_SHA256": "c24fe1c2fee406bd9d98f617998061aba6e4cdfbcd2ec6dff8b640be17dcfd5b",
+      "source_path": "/home/tristan/near_bench_cmp30/thread4/002_Light_M 31_11_30.0s_IRCUT_20250922-230409.fit",
+      "variant": "CONTROL"
+    },
+    {
+      "case_id": "ZN310B_002_M31",
+      "expected_blind4d": false,
+      "expected_final_backend": "NEAR",
+      "expected_near": true,
+      "gui_filename": "ZN310B_CONTROL_002.fit",
+      "gui_path": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/gui_mixed/ZN310B_CONTROL_002.fit",
+      "oracle_sidecar": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/oracle_sidecars/ZN310B_002_M31.json",
+      "source_SHA256": "e325bb604860db9a6ca57dd950485bc284802554c3a464b8c1d5b39412bb170e",
+      "source_path": "/home/tristan/near_bench_cmp30/thread4/003_Light_M 31_11_30.0s_IRCUT_20250922-230510.fit",
+      "variant": "CONTROL"
+    },
+    {
+      "case_id": "ZN310B_003_M31",
+      "expected_blind4d": false,
+      "expected_final_backend": "NEAR",
+      "expected_near": true,
+      "gui_filename": "ZN310B_CONTROL_003.fit",
+      "gui_path": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/gui_mixed/ZN310B_CONTROL_003.fit",
+      "oracle_sidecar": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/oracle_sidecars/ZN310B_003_M31.json",
+      "source_SHA256": "ee64f39b7471ae4529bb153c1ac0663ee3ee74052824b7aad9c95b94de1a3b52",
+      "source_path": "/home/tristan/near_bench_cmp30/thread4/004_Light_M 31_11_30.0s_IRCUT_20250922-230650.fit",
+      "variant": "CONTROL"
+    },
+    {
+      "case_id": "ZN310B_004_M106",
+      "expected_blind4d": true,
+      "expected_final_backend": "BLIND4D",
+      "expected_near": false,
+      "gui_filename": "ZN310B_NOHINT_004.fit",
+      "gui_path": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/gui_mixed/ZN310B_NOHINT_004.fit",
+      "oracle_sidecar": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/oracle_sidecars/ZN310B_004_M106.json",
+      "source_SHA256": "e5304fc197142ef9bce4216f88c7bf45750d1bcc57bbdf1ad80426b885292918",
+      "source_path": "/home/tristan/near_bench_cmp30/thread4/001_Light_mosaic_M 106_20.0s_IRCUT_20250518-233459.fit",
+      "variant": "NOHINT"
+    },
+    {
+      "case_id": "ZN310B_005_M106",
+      "expected_blind4d": true,
+      "expected_final_backend": "BLIND4D",
+      "expected_near": false,
+      "gui_filename": "ZN310B_NOHINT_005.fit",
+      "gui_path": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/gui_mixed/ZN310B_NOHINT_005.fit",
+      "oracle_sidecar": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/oracle_sidecars/ZN310B_005_M106.json",
+      "source_SHA256": "3ab172ef38ff42fc77b3efc5ca6f824cf75d648503a2452efb2f5133efc79a18",
+      "source_path": "/home/tristan/near_bench_cmp30/thread4/027_Light_mosaic_M 106_20.0s_IRCUT_20250518-232102.fit",
+      "variant": "NOHINT"
+    },
+    {
+      "case_id": "ZN310B_006_M106",
+      "expected_blind4d": true,
+      "expected_final_backend": "BLIND4D",
+      "expected_near": false,
+      "gui_filename": "ZN310B_NOHINT_006.fit",
+      "gui_path": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/gui_mixed/ZN310B_NOHINT_006.fit",
+      "oracle_sidecar": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/oracle_sidecars/ZN310B_006_M106.json",
+      "source_SHA256": "0b17cfc0a241caa2a8bf1f404d4d363f29f71837b88f9410251129704194d5d6",
+      "source_path": "/home/tristan/near_bench_cmp30/thread4/028_Light_mosaic_M 106_20.0s_IRCUT_20250518-232144.fit",
+      "variant": "NOHINT"
+    },
+    {
+      "case_id": "ZN310B_007_NGC6888",
+      "expected_blind4d": true,
+      "expected_final_backend": "BLIND4D",
+      "expected_near": false,
+      "gui_filename": "ZN310B_BADHINT_007.fit",
+      "gui_path": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/gui_mixed/ZN310B_BADHINT_007.fit",
+      "oracle_sidecar": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/oracle_sidecars/ZN310B_007_NGC6888.json",
+      "source_SHA256": "fa4b2a03167c60a0884d0382584eb5a8ec84e8d7dabba7373aae68018301c514",
+      "source_path": "/home/tristan/near_bench_cmp30/thread4/010_Light_NGC 6888_30.0s_LP_20250619-015627.fit",
+      "variant": "BADHINT"
+    },
+    {
+      "case_id": "ZN310B_008_NGC6888",
+      "expected_blind4d": true,
+      "expected_final_backend": "BLIND4D",
+      "expected_near": false,
+      "gui_filename": "ZN310B_BADHINT_008.fit",
+      "gui_path": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/gui_mixed/ZN310B_BADHINT_008.fit",
+      "oracle_sidecar": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840/oracle_sidecars/ZN310B_008_NGC6888.json",
+      "source_SHA256": "98ddf383b56074ae0b7924da952266eb36f184ad4c36994ae968a4513b91ad5f",
+      "source_path": "/home/tristan/near_bench_cmp30/thread4/011_Light_NGC 6888_30.0s_LP_20250619-015658.fit",
+      "variant": "BADHINT"
+    }
+  ],
+  "run_dir": "/home/tristan/near_bench_cmp30/zn310b_gui_fallback4d_20260717_021840"
+}

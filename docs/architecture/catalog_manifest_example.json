@@ -1,0 +1,230 @@
+{
+  "schema_version": 1,
+  "library_id": "zesolver-catalog-example-current-partial",
+  "created_at": "2026-07-17T00:00:00Z",
+  "created_by": "P1A architecture draft",
+  "minimum_zesolver_version": null,
+  "status": "READY_PARTIAL",
+  "sources": [
+    {
+      "id": "astap-d50-primary",
+      "kind": "astap_hnsky",
+      "family": "d50",
+      "families": ["d50"],
+      "format": "1476-5",
+      "mode": "external-reference",
+      "path_policy": "external_reference",
+      "path": {
+        "kind": "external_reference",
+        "value": "/opt/astap"
+      },
+      "tile_count": 1476,
+      "layout": "hnsky_1476",
+      "layout_fingerprint": "example-fast-layout-fingerprint-not-a-real-install-hash",
+      "reader_version": "zewcs290.catalog290",
+      "fingerprint_policy": "fast",
+      "coverage": {
+        "status": "FULL",
+        "all_sky": true,
+        "families": ["d50"],
+        "tile_keys": [],
+        "dec_min_deg": -90.0,
+        "dec_max_deg": 90.0,
+        "ra_segments_deg": [[0.0, 360.0]],
+        "covered_tiles": 1476,
+        "total_tiles": 1476,
+        "fraction": 1.0,
+        "notes": "Example assumes a complete external D50 source installation. Real manifests must verify file presence and checksums."
+      },
+      "shards": [
+        {
+          "path": "d50_2823.1476",
+          "family": "d50",
+          "tile_code": "2823",
+          "size_bytes": null,
+          "sha256": null,
+          "mtime_ns": null,
+          "status": "FAST_VERIFIED"
+        }
+      ],
+      "integrity": {
+        "checksum_algorithm": "sha256",
+        "files": []
+      },
+      "provenance": {
+        "upstream": "ASTAP/HNSKY Gaia DR3 D50",
+        "notes": "External source catalogue adopted by reference."
+      },
+      "status": "EXTERNAL_REFERENCE"
+    }
+  ],
+  "derived_indexes": [
+    {
+      "id": "zeblind4d-current-six-d50",
+      "engine": "blind4d",
+      "category": "product",
+      "schema": "zeblind.astrometry_4d_index_manifest.v1",
+      "algorithm_version": "astrometry_ab_code_4d_v1",
+      "path": {
+        "kind": "relative",
+        "value": "indexes/blind4d/"
+      },
+      "manifest_path": {
+        "kind": "relative",
+        "value": "indexes/blind4d/manifest.json"
+      },
+      "source_ids": ["astap-d50-primary"],
+      "source_tiles": [
+        "d50_2602",
+        "d50_2644",
+        "d50_2645",
+        "d50_2702",
+        "d50_2822",
+        "d50_2823"
+      ],
+      "families": ["d50"],
+      "parameters": {
+        "level": "S",
+        "mag_cap": null,
+        "max_stars_per_tile": 2000,
+        "max_quads_per_tile": 40000,
+        "sampler_tag": "catalog_ring_coverage",
+        "code_tol_recommended": 0.015,
+        "dtype": "float32",
+        "tan_center_policy": null,
+        "star_ordering_policy": null,
+        "star_truncation_policy": null,
+        "projection_implementation": null,
+        "projection_version": null,
+        "quad_schema": "astrometry_ab_code_4d_v1",
+        "quad_version": 1,
+        "builder_version": null,
+        "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg"
+      },
+      "build_parameters": {
+        "level": "S",
+        "max_stars_per_tile": 2000,
+        "max_quads_per_tile": 40000,
+        "sampler_tag": "catalog_ring_coverage",
+        "code_tol_recommended": 0.015,
+        "catalog_source": "tile_npz:x_deg/y_deg/ra_deg/dec_deg"
+      },
+      "parameter_status": "PARTIAL",
+      "provenance_fingerprint": "example-canonical-provenance-fingerprint-not-a-real-install-hash",
+      "reconstruction_status": "PARTIAL",
+      "scale_range_arcsec": null,
+      "coverage": {
+        "status": "PARTIAL",
+        "all_sky": false,
+        "families": ["d50"],
+        "tile_keys": [
+          "d50_2602",
+          "d50_2644",
+          "d50_2645",
+          "d50_2702",
+          "d50_2822",
+          "d50_2823"
+        ],
+        "dec_min_deg": 36.0,
+        "dec_max_deg": 51.42857143,
+        "ra_segments_deg": [],
+        "covered_tiles": 6,
+        "total_tiles": 1476,
+        "fraction": 0.0040650406504065045,
+        "notes": "This mirrors the current bundled 4D validation set; it is not all-sky."
+      },
+      "integrity": {
+        "checksum_algorithm": "sha256",
+        "files": [
+          {
+            "path": "indexes/blind4d/d50_2823_S_q40000.npz",
+            "sha256": "63ede21d82d4bb885ad10b73ececff2750e49bd914c2625f321ed16a3a1529e5",
+            "size_bytes": 1057701
+          },
+          {
+            "path": "indexes/blind4d/d50_2822_S_q40000.npz",
+            "sha256": "04ecc3ea867307e64cbc8a8bf00cdca847b590b822289edce991e96aa9db1967",
+            "size_bytes": 1057322
+          },
+          {
+            "path": "indexes/blind4d/d50_2644_S_q40000.npz",
+            "sha256": "577bb69cbe23063a718f177d58a8e1b1367f4ccc19a0c2dab09bfbad26c7c9e7",
+            "size_bytes": 1057306
+          },
+          {
+            "path": "indexes/blind4d/d50_2645_S_q40000.npz",
+            "sha256": "b963ebe462c98556b98520584e515b77b5ab87bd08de70de52ec9d871c91b2df",
+            "size_bytes": 1057767
+          },
+          {
+            "path": "indexes/blind4d/d50_2602_S_q40000.npz",
+            "sha256": "3ab3a747d2005ac6523a5dc62ef82fc19374fc31df27c8757307b36ade556693",
+            "size_bytes": 1057143
+          },
+          {
+            "path": "indexes/blind4d/d50_2702_S_q40000.npz",
+            "sha256": "15d82411ab1213505660be448a9290b9129e2bc3243cff960dfa79b6475d0fd6",
+            "size_bytes": 1058508
+          }
+        ]
+      },
+      "derived_files": [
+        {
+          "path": "indexes/blind4d/d50_2823_S_q40000.npz",
+          "sha256": "63ede21d82d4bb885ad10b73ececff2750e49bd914c2625f321ed16a3a1529e5",
+          "size_bytes": 1057701,
+          "mtime_ns": null
+        }
+      ],
+      "source_file_refs": [
+        "d50_2602",
+        "d50_2644",
+        "d50_2645",
+        "d50_2702",
+        "d50_2822",
+        "d50_2823"
+      ],
+      "compatibility": {
+        "minimum_zesolver_version": null,
+        "runtime_loader": "zeblindsolver.index_manifest_4d.load_4d_index_manifest"
+      },
+      "status": "READY_PARTIAL"
+    }
+  ],
+  "runtime_order": {
+    "blind4d": [
+      "zeblind4d-current-six-d50"
+    ]
+  },
+  "coverage": {
+    "status": "PARTIAL",
+    "all_sky": false,
+    "families": ["d50"],
+    "tile_keys": [
+      "d50_2602",
+      "d50_2644",
+      "d50_2645",
+      "d50_2702",
+      "d50_2822",
+      "d50_2823"
+    ],
+    "dec_min_deg": 36.0,
+    "dec_max_deg": 51.42857143,
+    "ra_segments_deg": [],
+    "covered_tiles": 6,
+    "total_tiles": 1476,
+    "fraction": 0.0040650406504065045,
+    "notes": "Near may be all-sky if the external D50 source is complete; current Blind 4D is partial."
+  },
+  "integrity": {
+    "manifest_sha256": null,
+    "checksum_algorithm": "sha256"
+  },
+  "provenance": {
+    "astap_hnsky_source": "ASTAP/HNSKY Gaia DR3 D50 adopted by reference",
+    "zesolver_commit": null,
+    "fingerprint_policy": "fast",
+    "canonicalization": "sort_keys JSON, compact separators, generated timestamps and mtimes excluded from provenance fingerprints",
+    "notes": "Example only. Real generated manifests should record exact source checksums and generation commands when FULL verification is requested."
+  }
+}
