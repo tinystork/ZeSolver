@@ -82,6 +82,22 @@ for catalogue organization, practical plate-solving workflows, and the metadata-
 **ZeNear** path. ZeSolver reads the ASTAP/HNSKY `.1476` and `.290` catalogue formats through an
 independent Python implementation.
 
+Written permission was received from Han Kleijn on 20 July 2026 to use
+ASTAP/HNSKY databases as intermediate catalogue data and to redistribute
+them for non-commercial purposes, provided that Han Kleijn, ASTAP and
+HNSKY are credited and that the applicable ESA/Gaia/DPAC attribution and
+copyright text accompanies every redistribution.
+
+ZeSolver-derived catalogue tiles, quad tables and geometric indexes
+distributed by the project are handled under the same non-commercial,
+attribution and notice requirements as the source catalogue packages.
+
+The complete applicable terms and notices are provided in:
+
+- [`NOTICE.md`](NOTICE.md)
+- [`legal/ASTAP_HNSKY_DATA_TERMS.md`](legal/ASTAP_HNSKY_DATA_TERMS.md)
+- [`legal/GAIA_DATA_TERMS.txt`](legal/GAIA_DATA_TERMS.txt)
+
 ZeSolver does not include ASTAP source code, does not invoke the ASTAP executable in its current
 local product chain, and does not claim to be an official ASTAP component.
 
@@ -102,29 +118,43 @@ All catalogue data remains subject to the rights, licences, acknowledgements, an
 conditions of its respective providers.
 
 ## Catalogue and derived-index policy
+## Catalogue and derived-index distribution
 
-This repository deliberately does **not** bundle or redistribute the original ASTAP/HNSKY
-catalogue shards.
+The ZeSolver source repository does not contain the large original
+ASTAP/HNSKY catalogue packages or precomputed ZeSolver indexes. These
+assets may instead be provided as separate optional downloads.
 
-Users currently provide their own local catalogue installation, such as D20, D50, V50, G05, or
-other supported families.
+With written permission from Han Kleijn, the project may:
 
-ZeSolver can generate its own working assets from those catalogues, including:
+- use ASTAP/HNSKY databases as intermediate catalogue data;
+- redistribute supported ASTAP/HNSKY catalogue packages;
+- distribute ZeSolver-derived normalized tiles, `.npz` or `.npy` data,
+  quad tables, geometric hash indexes and associated manifests.
 
-- normalized tile snapshots;
-- compressed or uncompressed `.npz` data;
-- `.npy` memory-mapped data;
-- quad tables;
-- 4D geometric hash indexes;
-- manifests, provenance, version, and coverage metadata.
+Catalogue packages and catalogue-derived assets are distributed for
+**non-commercial use only**. They must credit Han Kleijn, ASTAP and
+HNSKY, and must include the applicable ESA/Gaia/DPAC attribution and
+copyright text.
 
-These files are derived runtime assets for ZeSolver and are not the original ASTAP/HNSKY
-downloads.
+Every catalogue or derived-index distribution must include:
 
-Precomputed derived assets are not included in this repository. Any future redistribution of
-such assets must be handled separately, with appropriate permission, attribution, documentation,
-and licence notices. The original ASTAP/HNSKY catalogue files will not be repackaged as part of
-ZeSolver.
+NOTICE.md
+legal/ASTAP_HNSKY_DATA_TERMS.md
+legal/GAIA_DATA_TERMS.txt
+
+These data conditions are separate from the GNU GPL licence governing
+ZeSolver's own source code.
+
+In particular:
+
+ZeSolver source code and executable builds are governed by
+GPL-3.0-or-later;
+optional ASTAP/HNSKY catalogue packages and catalogue-derived index
+packages are governed by their accompanying non-commercial data terms.
+
+Users generating indexes locally remain responsible for obtaining their
+catalogue data legitimately and preserving the required upstream
+attributions when redistributing any resulting assets.
 
 ## Main features
 
@@ -158,6 +188,9 @@ docs/               Architecture, stabilization, validation, and development rep
 packaging/          PyInstaller and release helpers
 examples/           Development and example inputs where provided
 pyproject.toml      Build and dependency metadata
+LICENSE             GNU GPL v3 licence text for ZeSolver source code
+NOTICE.md           Third-party credits and distribution notices
+legal/              ASTAP/HNSKY and ESA/Gaia/DPAC data terms
 ```
 
 Catalogue databases, generated indexes, large test corpora, and local runtime files are not meant
@@ -166,7 +199,9 @@ to be committed to the repository.
 ## Requirements
 
 - Python 3.10 or newer.
-- A local ASTAP/HNSKY catalogue installation for offline catalogue-backed solving.
+- A compatible ASTAP/HNSKY catalogue installation, or a separately
+  distributed ZeSolver catalogue/index package, for offline
+  catalogue-backed solving.
 - PySide6 for the desktop GUI.
 - CUDA and CuPy only when optional GPU detection is desired.
 
@@ -456,15 +491,33 @@ Changes to solver thresholds, catalogue formats, WCS acceptance rules, FITS-writ
 routing logic should be isolated, tested, and justified by reproducible evidence.
 
 ## Licence
+## Licence and third-party data
 
-ZeSolver source code is released under the **MIT Licence**, subject to the contents of the
-repository's licence and notice files.
+ZeSolver's own source code is released under the
+**GNU General Public License, version 3 or any later version**
+(`GPL-3.0-or-later`).
 
-This MIT licence applies to ZeSolver's own source code. It does not grant rights to redistribute
-third-party catalogue data, upstream software, trademarks, or other external assets.
+See [`LICENSE`](LICENSE) for the complete licence text.
 
-ASTAP, HNSKY, Astrometry.net, Gaia, ESA, and all other third-party names and materials remain the
-property of their respective owners and are governed by their own terms.
+The GNU GPL applies to ZeSolver's source code and executable
+distributions. It does not replace or override the separate conditions
+governing third-party catalogue data, catalogue-derived assets,
+trademarks or upstream projects.
+
+Optional ASTAP/HNSKY catalogue packages and ZeSolver-derived catalogue
+indexes are distributed separately for **non-commercial use only**,
+subject to attribution and the applicable ESA/Gaia/DPAC notices.
+
+See:
+
+- [`NOTICE.md`](NOTICE.md)
+- [`legal/ASTAP_HNSKY_DATA_TERMS.md`](legal/ASTAP_HNSKY_DATA_TERMS.md)
+- [`legal/GAIA_DATA_TERMS.txt`](legal/GAIA_DATA_TERMS.txt)
+
+ASTAP, HNSKY, Astrometry.net, Gaia, ESA and all other third-party names
+and materials remain the property of their respective owners. ZeSolver
+is an independent project and is not affiliated with or endorsed by
+those projects or organizations.
 
 ## Contact
 
