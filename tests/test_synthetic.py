@@ -26,13 +26,56 @@
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 from pathlib import Path
 
-from zeblindsolver.asterisms import hash_quads, sample_quads
+from zeblindsolver.asterisms import hash_quads, opposite_edge_ratio_code, sample_quads
+from zeblindsolver.zeblindsolver import _hash_from_ordered_quad_points, _quad_ratio_code
 from zeblindsolver.candidate_search import tally_candidates
 from zeblindsolver.verify import validate_solution
 from zeblindsolver.wcs_fit import fit_wcs_tan
+
+
+def test_quad_hash_is_invariant_to_vertex_ids_and_similarity():
+    points = np.array(
+        [
+            [0.2, -0.4],
+            [3.8, 0.7],
+            [2.9, 4.6],
+            [-1.1, 2.3],
+        ],
+        dtype=np.float64,
+    )
+    baseline = int(hash_quads(np.array([[0, 1, 2, 3]]), points).hashes[0])
+
+    for permutation in itertools.permutations(range(4)):
+        renumbered = points[list(permutation)]
+        hashed = hash_quads(np.array([[0, 1, 2, 3]]), renumbered)
+        assert int(hashed.hashes[0]) == baseline
+
+    angle = np.deg2rad(37.0)
+    rotation = np.array(
+        [[np.cos(angle), -np.sin(angle)], [np.sin(angle), np.cos(angle)]]
+    )
+    transformed = (points @ rotation.T) * 7.25 + np.array([123.0, -48.0])
+    reflected = transformed * np.array([-1.0, 1.0])
+    assert int(hash_quads(np.array([[0, 1, 2, 3]]), transformed).hashes[0]) == baseline
+    assert int(hash_quads(np.array([[0, 1, 2, 3]]), reflected).hashes[0]) == baseline
+
+    components = (
+        (baseline >> 48) & 0xFFFF,
+        (baseline >> 32) & 0xFFFF,
+        (baseline >> 16) & 0xFFFF,
+    )
+    assert all(0 <= value <= 255 for value in components)
+    assert baseline & 0xFFFF == 0
+
+    expected_code = opposite_edge_ratio_code(points)
+    assert expected_code is not None
+    assert np.allclose(_quad_ratio_code(points), expected_code)
+    assert _hash_from_ordered_quad_points(points) == baseline
 
 
 def _load_tile_arrays(index_root: Path) -> tuple[np.ndarray, np.ndarray]:
@@ -63,9 +106,71 @@ def test_synthetic_index_produces_candidate(synthetic_index, synthetic_star_cata
 
     matches = np.column_stack((image_points, np.column_stack((ra_deg, dec_deg))))
     wcs, _ = fit_wcs_tan(matches)
-    stats = validate_solution(wcs, matches, thresholds={"rms_px": 1.0, "inliers": 4})
+    stats = validate_solution(
+        wcs,
+        matches,
+        thresholds={"rms_px": 1.0, "inliers": 4, "scale_max_arcsec": 300.0},
+    )
     assert stats["quality"] == "GOOD"
     assert stats["rms_px"] < 1.0
+
+
+def test_catalog_coverage_first_spreads_fixed_budget_across_seeds():
+    rng = np.random.default_rng(42)
+    count = 160
+    xs, ys = np.meshgrid(np.linspace(0.0, 1.0, 20), np.linspace(0.0, 1.0, 8))
+    points = np.column_stack((xs.ravel(), ys.ravel()))[:count]
+    points += rng.normal(0.0, 0.003, points.shape)
+    stars = np.zeros(count, dtype=[("x", "f4"), ("y", "f4"), ("mag", "f4")])
+    stars["x"] = points[:, 0].astype(np.float32)
+    stars["y"] = points[:, 1].astype(np.float32)
+    stars["mag"] = np.arange(count, dtype=np.float32)
+
+    legacy = sample_quads(stars, max_quads=240, strategy="log_spaced")
+    coverage = sample_quads(stars, max_quads=240, strategy="catalog_coverage_first")
+
+    assert legacy.shape[0] == coverage.shape[0] == 240
+    assert np.unique(coverage[:, 0]).shape[0] > np.unique(legacy[:, 0]).shape[0] * 10
+    assert np.unique(coverage).shape[0] > np.unique(legacy).shape[0] * 2
+
+
+def test_catalog_ring_coverage_reaches_mid_rank_local_geometry():
+    count = 180
+    xs, ys = np.meshgrid(np.linspace(0.0, 1.0, 20), np.linspace(0.0, 1.0, 9))
+    points = np.column_stack((xs.ravel(), ys.ravel()))[:count]
+    stars = np.zeros(count, dtype=[("x", "f4"), ("y", "f4"), ("mag", "f4")])
+    stars["x"] = points[:, 0].astype(np.float32)
+    stars["y"] = points[:, 1].astype(np.float32)
+    stars["mag"] = np.arange(count, dtype=np.float32)
+
+    target = tuple(sorted((41, 42, 61, 84)))
+    legacy = sample_quads(stars, max_quads=1200, strategy="catalog_coverage_first")
+    ring = sample_quads(stars, max_quads=1200, strategy="catalog_ring_coverage")
+
+    legacy_sets = {tuple(sorted(map(int, row))) for row in legacy}
+    ring_sets = {tuple(sorted(map(int, row))) for row in ring}
+
+    assert target not in legacy_sets
+    assert target in ring_sets
+    assert ring.shape[0] == 1200
+
+
+def test_validate_solution_parity_mode_keeps_fail_quality_but_marks_progress(synthetic_index, synthetic_star_catalog):
+    positions, _mags = synthetic_star_catalog
+    ra_deg, dec_deg = _load_tile_arrays(synthetic_index)
+    image_points = positions.astype(np.float32)
+    matches = np.column_stack((image_points, np.column_stack((ra_deg, dec_deg))))
+    wcs, _ = fit_wcs_tan(matches)
+    stats = validate_solution(
+        wcs,
+        matches,
+        thresholds={"rms_px": 1.0, "inliers": 10, "astrometry_parity_mode": True},
+    )
+    assert stats["quality"] == "FAIL"
+    assert stats["success"] is False
+    assert stats["validation_metrics_only"] is True
+    assert stats["validation_progress_eligible"] is True
+    assert str(stats["reason"]).startswith("validation_metrics_only[")
 
 
 def test_tally_candidates_respects_allowed_tiles(synthetic_index, synthetic_star_catalog):

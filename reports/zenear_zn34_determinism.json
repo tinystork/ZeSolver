@@ -1,0 +1,235 @@
+{
+  "cases": {
+    "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230409_A0_zenear_native_run1.fit": {
+      "runs": [
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        },
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        },
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        }
+      ],
+      "stable_inliers": true,
+      "stable_rms": true,
+      "stable_success": true
+    },
+    "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230409_A0_zenear_native_run2.fit": {
+      "runs": [
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        },
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        },
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        }
+      ],
+      "stable_inliers": true,
+      "stable_rms": true,
+      "stable_success": true
+    },
+    "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230409_A1_zenear_rescue_run1.fit": {
+      "runs": [
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        },
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        },
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        }
+      ],
+      "stable_inliers": true,
+      "stable_rms": true,
+      "stable_success": true
+    },
+    "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230409_A1_zenear_rescue_run2.fit": {
+      "runs": [
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        },
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        },
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        }
+      ],
+      "stable_inliers": true,
+      "stable_rms": true,
+      "stable_success": true
+    },
+    "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn1_runtime/Light_M_31_11_30.0s_IRCUT_20250922-230409_B0_astap_native_run1.fit": {
+      "runs": [
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        },
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        },
+        {
+          "message": "near solution found",
+          "stats": {
+            "inliers": 314,
+            "inliers_raw": 314,
+            "pix_scale_arcsec": 2.3756065023677113,
+            "quality": "GOOD",
+            "reason": "strict_astap_iso_mirror",
+            "rms_px": 0.5200583523485258,
+            "success": true
+          },
+          "success": true
+        }
+      ],
+      "stable_inliers": true,
+      "stable_rms": true,
+      "stable_success": true
+    }
+  },
+  "repetitions": 3
+}

@@ -6,7 +6,7 @@
 # ║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
 # ║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
 # ║                                                                                   ║
-# ║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+# ║ Licence du dépôt : GPL V3 (voir pyproject.toml / repository metadata)               ║
 # ║                                                                                   ║
 # ║ Remerciements amont :                                                             ║
 # ║ - ASTAP, par Han Kleijn                                                           ║
@@ -81,6 +81,7 @@ def validate_solution(
         thresholds = {"rms_px": 1.0, "inliers": 60}
     if matches.size == 0:
         return {"quality": "FAIL", "success": False, "reason": "no matches"}
+    parity_metrics_only = bool(thresholds.get("astrometry_parity_mode", False))
     try:
         world = wcs.wcs_pix2world(matches[:, :2], 0)
     except InvalidTransformError:
@@ -101,13 +102,30 @@ def validate_solution(
         }
 
     scale_arcsec = float(scale_deg * 3600.0)
-    if scale_arcsec < 0.3 or scale_arcsec > 15.0:
+    try:
+        scale_min = float(thresholds.get("scale_min_arcsec", 0.3))
+    except Exception:
+        scale_min = 0.3
+    try:
+        scale_max = float(thresholds.get("scale_max_arcsec", 15.0))
+    except Exception:
+        scale_max = 15.0
+    scale_min = max(0.05, scale_min)
+    scale_max = max(scale_min + 1e-6, scale_max)
+    scale_in_range = bool(scale_min <= scale_arcsec <= scale_max)
+    if (not parity_metrics_only) and (not scale_in_range):
         return {
             "quality": "FAIL",
             "success": False,
-            "reason": f"pixel_scale_out_of_range[{scale_arcsec:.3f}]",
+            "reason": (
+                f"pixel_scale_out_of_range[scale={scale_arcsec:.3f},"
+                f"min={scale_min:.3f},max={scale_max:.3f}]"
+            ),
             "rms_px": float("inf"),
             "inliers": int(matches.shape[0]),
+            "pix_scale_arcsec": scale_arcsec,
+            "scale_min_arcsec": scale_min,
+            "scale_max_arcsec": scale_max,
         }
 
     residuals_px = residuals / max(scale_deg, 1e-12)
@@ -141,12 +159,37 @@ def validate_solution(
         }
 
     rms_px = float(np.sqrt(np.mean((residuals_px[inlier_mask]) ** 2)))
-    success = rms_px <= float(thresholds.get("rms_px", 1.0)) and n >= int(thresholds.get("inliers", 60))
+    rms_thr = float(thresholds.get("rms_px", 1.0))
+    inlier_thr = int(thresholds.get("inliers", 60))
+    rms_ok = bool(rms_px <= rms_thr)
+    inliers_ok = bool(n >= inlier_thr)
+    success = bool(rms_ok and inliers_ok)
+    metrics_only_progression = bool(parity_metrics_only and (not success))
+    reason = None
+    if not success:
+        reason_tag = "validation_metrics_only" if metrics_only_progression else "validation_failed"
+        reason = (
+            f"{reason_tag}[rms_ok={int(rms_ok)},inliers_ok={int(inliers_ok)},"
+            f"scale_ok={int(scale_in_range)},rms={rms_px:.3f},rms_thr={rms_thr:.3f},"
+            f"inliers={n},inliers_thr={inlier_thr}]"
+        )
     return {
         "quality": "GOOD" if success else "FAIL",
-        "success": success,
+        "success": bool(success),
+        "reason": reason,
         "rms_px": rms_px,
         "inliers": n,
         "inliers_raw": int(matches.shape[0]),
         "pix_scale_arcsec": scale_arcsec,
+        "rms_threshold_px": rms_thr,
+        "inliers_threshold": inlier_thr,
+        "gate_scale_ok": scale_in_range,
+        "gate_rms_ok": rms_ok,
+        "gate_inliers_ok": inliers_ok,
+        "astrometry_parity_mode": bool(parity_metrics_only),
+        "validation_metrics_only": bool(metrics_only_progression),
+        "validation_progress_eligible": bool(metrics_only_progression),
+        "robust_tol_px": float(robust_tol),
+        "median_residual_px": float(med),
+        "mad_residual_px": float(mad),
     }

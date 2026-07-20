@@ -6,7 +6,7 @@
 # ║ Auteur principal : Tinystork (Tristan Nauleau)                                   ║
 # ║ Partenaire IA   : J.A.R.V.I.S. (OpenAI ChatGPT)                                  ║
 # ║                                                                                   ║
-# ║ Licence du dépôt : MIT (voir pyproject.toml / repository metadata)               ║
+# ║ Licence du dépôt : GPL V3 (voir pyproject.toml / repository metadata)               ║
 # ║                                                                                   ║
 # ║ Remerciements amont :                                                             ║
 # ║ - ASTAP, par Han Kleijn                                                           ║
@@ -147,7 +147,6 @@ def build_presets_fov_reco_groups(owner: Any, QtWidgets: Any, preset_utils: Any,
     reco_form.addRow(owner.reco_quads_label, owner.reco_quads_value)
     reco_form.addRow(owner.reco_notes_label)
 
-    column.addLayout(form)
     column.addWidget(owner.presets_group)
     column.addWidget(owner.fov_group)
     column.addWidget(owner.reco_group)

@@ -37,6 +37,7 @@ from astropy.wcs import WCS
 from zesolver import zeblindsolver
 from zeblindsolver import zeblindsolver as core_solver
 from zeblindsolver import metadata_solver as near_solver
+from zeblindsolver.astrometry_startree import AstrometryStartree
 from zeblindsolver.image_io import load_raster_image
 from zeblindsolver.image_prep import downsample_image
 from zeblindsolver.quad_index_builder import select_tiles_in_cone
@@ -105,6 +106,7 @@ def test_blind_solve_delegates_to_internal(monkeypatch, tmp_path) -> None:
         *,
         config: Optional[Any],
         cancel_check: Optional[Any] = None,
+        prep_cache: Optional[dict[str, Any]] = None,
     ) -> SimpleNamespace:
         captured.append((input_fits, index_root_arg))
         return SimpleNamespace(
@@ -126,6 +128,69 @@ def test_blind_solve_delegates_to_internal(monkeypatch, tmp_path) -> None:
     assert result["tried_dbs"] == [str(Path(index_root).expanduser())]
     assert result["updated_keywords"]["SOLVED"] == 1
     assert captured and captured[0][0] == str(path)
+
+
+def test_blind_solve_external_retry_can_bound_internal_first_pass(monkeypatch, tmp_path) -> None:
+    path = tmp_path / "input.fits"
+    fits.PrimaryHDU(data=np.zeros((2, 2), dtype=np.float32)).writeto(path)
+    index_root = tmp_path / "index"
+    index_root.mkdir()
+
+    configs: list[core_solver.SolveConfig] = []
+
+    def fake_internal(
+        input_fits: str,
+        index_root_arg: str,
+        *,
+        config: Optional[Any],
+        cancel_check: Optional[Any] = None,
+        prep_cache: Optional[dict[str, Any]] = None,
+    ) -> SimpleNamespace:
+        assert input_fits == str(path)
+        assert index_root_arg == str(index_root)
+        configs.append(config)
+        if len(configs) == 1:
+            return SimpleNamespace(
+                success=False,
+                message="global hard budget exceeded (45.0s)",
+                tile_key=None,
+                header_updates={},
+                stats={"fail_stage": "verify_prob", "best_fail_inliers": 26},
+            )
+        return SimpleNamespace(
+            success=True,
+            message="ok",
+            tile_key="tile99",
+            header_updates={"SOLVED": 1},
+            stats={"total_candidates_tried": 1},
+        )
+
+    monkeypatch.setattr(zeblindsolver, "_internal_solve_blind", fake_internal)
+    cfg = core_solver.SolveConfig(
+        blind_global_hard_budget_s=90.0,
+        blind_astrometry_external_image2xy_enabled=True,
+        blind_astrometry_external_image2xy_after_internal_fail_enabled=True,
+        blind_astrometry_external_image2xy_internal_first_budget_s=45.0,
+    )
+    result = zeblindsolver.blind_solve(
+        fits_path=str(path),
+        index_root=str(index_root),
+        config=cfg,
+        skip_if_valid=False,
+    )
+
+    assert result["success"]
+    assert result["used_db"] == "tile99"
+    assert len(configs) == 2
+    assert configs[0].blind_astrometry_external_image2xy_enabled is False
+    assert configs[0].blind_global_hard_budget_s == pytest.approx(45.0)
+    assert configs[1].blind_astrometry_external_image2xy_enabled is True
+    assert configs[1].blind_global_hard_budget_s == pytest.approx(90.0)
+    retry = result["stats"]["external_image2xy_after_internal_fail"]
+    assert retry["internal_fail_stage"] == "verify_prob"
+    assert retry["internal_best_fail_inliers"] == 26
+    assert retry["internal_budget_s"] == pytest.approx(45.0)
+    assert retry["external_success"] is True
 
 
 def test_manifest_cone_filter():
@@ -204,6 +269,18 @@ def test_detection_params_forwarded(monkeypatch, tmp_path):
     assert recorded["min_area"] == 7
 
 
+def test_blind_global_hard_budget_is_reported(tmp_path) -> None:
+    fits_path = tmp_path / "scene.fits"
+    fits.PrimaryHDU(data=np.zeros((16, 16), dtype=np.float32)).writeto(fits_path)
+    cfg = core_solver.SolveConfig(blind_global_hard_budget_s=1.0e-9)
+    result = core_solver.solve_blind(str(fits_path), str(tmp_path), config=cfg)
+    assert not result.success
+    assert "blind attempt budget exceeded" in result.message
+    assert result.stats["global_hard_budget_triggered"] is True
+    assert result.stats["global_hard_budget_s"] == pytest.approx(1.0e-9)
+    assert result.stats["blind_attempt_budget_s"] == pytest.approx(1.0e-9)
+
+
 def _build_simple_tan_wcs(*, crval1: float, crval2: float, scale_arcsec: float = 2.37) -> WCS:
     w = WCS(naxis=2)
     w.wcs.ctype = ["RA---TAN", "DEC--TAN"]
@@ -247,3 +324,777 @@ def test_near_conformance_accepts_consistent_solution() -> None:
     assert ok
     assert reason == "ok"
     assert isinstance(diag, dict)
+
+
+def test_onefield_logodds_score_priority() -> None:
+    row = {"prob_logodds": 1.0, "accept_logodds": 2.0, "solve_logodds": 3.0, "onefield_final_logodds": 4.0}
+    assert core_solver._onefield_logodds_score_from_row(row) == pytest.approx(4.0)
+    row2 = {"prob_logodds": 1.5, "accept_logodds": 2.5}
+    assert core_solver._onefield_logodds_score_from_row(row2) == pytest.approx(2.5)
+    row3 = {"prob_logodds": -0.5}
+    assert core_solver._onefield_logodds_score_from_row(row3) == pytest.approx(-0.5)
+
+
+def test_unsupported_verify_reject_signature_stable_across_reentry_contexts() -> None:
+    stats = {
+        "inliers": 38,
+        "rms_px": 6.1662,
+        "model_scale_arcsec": 12.1234,
+        "onefield_final_logodds": -1.38629,
+        "verify_entry_provenance_path": "resolve_hit_direct",
+    }
+    sig1 = core_solver._unsupported_verify_reject_signature(
+        stats,
+        {"phase": "hinted", "level": "S", "parity": "nominal"},
+        source="resolve_hit_direct",
+        candidate_key="d50_2725",
+        level_name="S",
+        parity_label="nominal",
+    )
+    sig2 = core_solver._unsupported_verify_reject_signature(
+        dict(stats),
+        {"phase": "blind", "level": "S", "parity": "nominal"},
+        source="resolve_hit_direct",
+        candidate_key="d50_2725",
+        level_name="S",
+        parity_label="nominal",
+    )
+    assert sig1 == sig2
+
+
+def test_should_reject_duplicate_no_positive_verify_match_requires_seen_signature() -> None:
+    stats = {
+        "inliers": 38,
+        "rms_px": 6.1662,
+        "model_scale_arcsec": 12.1234,
+        "onefield_final_logodds": -1.38629,
+        "prob_matches": 0,
+        "prob_theta_match_total": 0,
+        "verify_entry_provenance_path": "resolve_hit_direct",
+    }
+    reject, sig, counts = core_solver._should_reject_duplicate_no_positive_verify_match(
+        stats,
+        {"phase": "blind", "level": "S", "parity": "nominal"},
+        source="resolve_hit_direct",
+        candidate_key="d50_2725",
+        level_name="S",
+        parity_label="nominal",
+        seen_signatures=set(),
+        strict_astrometry_accept_mode=True,
+        require_positive_match_support=True,
+    )
+    assert not reject
+    assert counts == {"prob_matches": 0, "prob_theta_match_total": 0}
+
+    reject_seen, sig_seen, counts_seen = core_solver._should_reject_duplicate_no_positive_verify_match(
+        stats,
+        {"phase": "hinted", "level": "S", "parity": "nominal"},
+        source="resolve_hit_direct",
+        candidate_key="d50_2725",
+        level_name="S",
+        parity_label="nominal",
+        seen_signatures={sig},
+        strict_astrometry_accept_mode=True,
+        require_positive_match_support=True,
+    )
+    assert reject_seen
+    assert sig_seen == sig
+    assert counts_seen == counts
+
+
+def test_should_reject_duplicate_no_positive_verify_match_ignores_positive_support() -> None:
+    stats = {
+        "inliers": 38,
+        "rms_px": 6.1662,
+        "model_scale_arcsec": 12.1234,
+        "onefield_final_logodds": -1.38629,
+        "prob_matches": 1,
+        "prob_theta_match_total": 0,
+        "verify_entry_provenance_path": "resolve_hit_direct",
+    }
+    sig = core_solver._unsupported_verify_reject_signature(
+        stats,
+        {"phase": "blind", "level": "S", "parity": "nominal"},
+        source="resolve_hit_direct",
+        candidate_key="d50_2725",
+        level_name="S",
+        parity_label="nominal",
+    )
+    reject, _, counts = core_solver._should_reject_duplicate_no_positive_verify_match(
+        stats,
+        {"phase": "blind", "level": "S", "parity": "nominal"},
+        source="resolve_hit_direct",
+        candidate_key="d50_2725",
+        level_name="S",
+        parity_label="nominal",
+        seen_signatures={sig},
+        strict_astrometry_accept_mode=True,
+        require_positive_match_support=True,
+    )
+    assert not reject
+    assert counts == {"prob_matches": 1, "prob_theta_match_total": 0}
+
+
+def test_prevalidate_duplicate_signature_stable_for_identical_reentry() -> None:
+    img = np.array([[1.1111, 2.2222], [3.3333, 4.4444], [5.5555, 6.6666], [7.7777, 8.8888]], dtype=np.float64)
+    tile = np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]], dtype=np.float64)
+    err = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64)
+    sig1 = core_solver._prevalidate_duplicate_signature(
+        candidate_key="d50_2725",
+        level_name="S",
+        parity_label="nominal",
+        source="resolve_hit",
+        model_scale_arcsec=12.1234,
+        pair_err_px=err,
+        img_points_subset=img,
+        tile_points_subset=tile,
+    )
+    sig2 = core_solver._prevalidate_duplicate_signature(
+        candidate_key="d50_2725",
+        level_name="S",
+        parity_label="nominal",
+        source="resolve_hit",
+        model_scale_arcsec=12.12341,
+        pair_err_px=np.array([1.0001, 1.9999, 3.0001, 4.0], dtype=np.float64),
+        img_points_subset=np.array(img, copy=True),
+        tile_points_subset=np.array(tile, copy=True),
+    )
+    assert sig1 == sig2
+
+
+def test_prevalidate_duplicate_signature_changes_when_pairset_changes() -> None:
+    img1 = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]], dtype=np.float64)
+    img2 = np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [9.0, 10.0]], dtype=np.float64)
+    tile = np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]], dtype=np.float64)
+    err = np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64)
+    sig1 = core_solver._prevalidate_duplicate_signature(
+        candidate_key="d50_2725",
+        level_name="S",
+        parity_label="nominal",
+        source="resolve_hit",
+        model_scale_arcsec=12.1234,
+        pair_err_px=err,
+        img_points_subset=img1,
+        tile_points_subset=tile,
+    )
+    sig2 = core_solver._prevalidate_duplicate_signature(
+        candidate_key="d50_2725",
+        level_name="S",
+        parity_label="nominal",
+        source="resolve_hit",
+        model_scale_arcsec=12.1234,
+        pair_err_px=err,
+        img_points_subset=img2,
+        tile_points_subset=tile,
+    )
+    assert sig1 != sig2
+
+
+def test_should_reject_duplicate_prevalidate_validation_requires_seen_signature() -> None:
+    sig = core_solver._prevalidate_duplicate_signature(
+        candidate_key="d50_2725",
+        level_name="S",
+        parity_label="nominal",
+        source="resolve_hit",
+        model_scale_arcsec=12.1234,
+        pair_err_px=np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float64),
+        img_points_subset=np.array([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0], [7.0, 8.0]], dtype=np.float64),
+        tile_points_subset=np.array([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6], [0.7, 0.8]], dtype=np.float64),
+    )
+    assert not core_solver._should_reject_duplicate_prevalidate_validation(
+        sig,
+        seen_signatures=set(),
+        strict_astrometry_accept_mode=True,
+        source="resolve_hit",
+    )
+    assert core_solver._should_reject_duplicate_prevalidate_validation(
+        sig,
+        seen_signatures={sig},
+        strict_astrometry_accept_mode=True,
+        source="resolve_hit",
+    )
+    assert not core_solver._should_reject_duplicate_prevalidate_validation(
+        sig,
+        seen_signatures={sig},
+        strict_astrometry_accept_mode=False,
+        source="resolve_hit",
+    )
+    assert not core_solver._should_reject_duplicate_prevalidate_validation(
+        sig,
+        seen_signatures={sig},
+        strict_astrometry_accept_mode=True,
+        source="spread_repair",
+    )
+
+
+def test_astrometry_verify_positive_match_support_requires_real_match_when_present() -> None:
+    ok_missing, counts_missing = core_solver._astrometry_verify_has_positive_match_support({})
+    assert ok_missing
+    assert counts_missing == {"prob_matches": 0, "prob_theta_match_total": 0}
+
+    ok_zero, counts_zero = core_solver._astrometry_verify_has_positive_match_support(
+        {"prob_matches": 0, "prob_theta_match_total": 0}
+    )
+    assert not ok_zero
+    assert counts_zero == {"prob_matches": 0, "prob_theta_match_total": 0}
+
+    ok_prob, _ = core_solver._astrometry_verify_has_positive_match_support({"prob_matches": 1})
+    ok_theta, _ = core_solver._astrometry_verify_has_positive_match_support({"prob_theta_match_total": 1})
+    assert ok_prob
+    assert ok_theta
+
+
+def test_onefield_dedup_rows_field_identity_and_sort() -> None:
+    rows = [
+        {"fieldfile": "a.fit", "fieldnum": 7, "solve_logodds": 1.0, "inliers": 10, "rms_px": 2.0},
+        {"fieldfile": "a.fit", "fieldnum": 7, "solve_logodds": 2.0, "inliers": 8, "rms_px": 3.0},
+        {"fieldfile": "b.fit", "fieldnum": 3, "accept_logodds": 1.5, "inliers": 12, "rms_px": 1.0},
+        {"fieldfile": "", "fieldnum": -1, "prob_logodds": 0.3, "inliers": 4, "rms_px": 5.0},
+    ]
+    out = core_solver._onefield_dedup_rows(rows, sep_arcsec=3.0)
+    assert len(out) == 3
+    keys = [(str(r.get("fieldfile") or ""), int(r.get("fieldnum", -1) or -1)) for r in out]
+    assert keys.count(("a.fit", 7)) == 1
+    # Best score for duplicate key kept.
+    kept_a = [r for r in out if str(r.get("fieldfile")) == "a.fit" and int(r.get("fieldnum")) == 7][0]
+    assert float(kept_a.get("solve_logodds")) == pytest.approx(2.0)
+    # Valid rows follow Astrometry-like onefield ordering: fieldfile, fieldnum, logodds desc.
+    assert keys[:2] == [("a.fit", 7), ("b.fit", 3)]
+
+
+def test_onefield_field_identity_uses_canonical_defaults() -> None:
+    fieldfile, fieldnum = core_solver._onefield_field_identity_from_row(
+        {"fieldfile": "", "fieldnum": None},
+        default_fieldfile="/tmp/m106.fit",
+        default_fieldnum=0,
+    )
+    assert fieldfile == "/tmp/m106.fit"
+    assert fieldnum == 0
+
+
+def test_onefield_insert_sorted_row_uses_astrometry_compare_order() -> None:
+    rows: list[dict[str, object]] = []
+    core_solver._onefield_insert_sorted_row(rows, {"fieldfile": "b.fit", "fieldnum": 0, "solve_logodds": 10.0})
+    core_solver._onefield_insert_sorted_row(rows, {"fieldfile": "a.fit", "fieldnum": 0, "solve_logodds": 1.0})
+    core_solver._onefield_insert_sorted_row(rows, {"fieldfile": "a.fit", "fieldnum": 0, "solve_logodds": 3.0})
+    keys = [(str(r.get("fieldfile") or ""), int(r.get("fieldnum", -1) if r.get("fieldnum", None) is not None else -1)) for r in rows]
+    scores = [float(r.get("solve_logodds", float("nan")) or float("nan")) for r in rows]
+    assert keys == [("a.fit", 0), ("a.fit", 0), ("b.fit", 0)]
+    assert scores[:2] == [3.0, 1.0]
+
+
+def test_resolve_scale_arcsec_prefers_local_hint_in_native_mode() -> None:
+    cfg = core_solver.SolveConfig(
+        pixel_scale_arcsec=9.56,
+        pixel_scale_min_arcsec=2.0,
+        pixel_scale_max_arcsec=2.8,
+    )
+    default_scale, default_source = core_solver._resolve_scale_arcsec(cfg, 2.39, return_source=True)
+    native_scale, native_source = core_solver._resolve_scale_arcsec(
+        cfg,
+        2.39,
+        prefer_local_hint=True,
+        return_source=True,
+    )
+    assert default_scale == pytest.approx(9.56)
+    assert default_source == "config_pixel_scale_arcsec"
+    assert native_scale == pytest.approx(2.39)
+    assert native_source == "header_scale_arcsec"
+
+
+def test_estimate_pairset_local_scale_summary_returns_local_arcsec() -> None:
+    img_points = np.asarray(
+        [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            [10.0, 10.0],
+            [5.0, 15.0],
+        ],
+        dtype=np.float64,
+    )
+    scale_arcsec = 2.392674
+    deg_per_px = scale_arcsec / 3600.0
+    tile_points = img_points * deg_per_px
+    summary = core_solver._estimate_pairset_local_scale_summary(img_points, tile_points)
+    assert float(summary["median_arcsec"]) == pytest.approx(scale_arcsec, rel=1e-6)
+    assert float(summary["span_arcsec"]) == pytest.approx(scale_arcsec, rel=1e-6)
+
+
+def test_empty_inliers_fallback_disallowed_in_native_mode() -> None:
+    cfg = core_solver.SolveConfig(blind_astrometry_empty_inliers_fallback_enabled=True)
+    assert core_solver._empty_inliers_fallback_allowed(
+        cfg,
+        strict_astrometry_now=True,
+        astrometry_native_verify_semantics_mode=False,
+    )
+    assert not core_solver._empty_inliers_fallback_allowed(
+        cfg,
+        strict_astrometry_now=True,
+        astrometry_native_verify_semantics_mode=True,
+    )
+    assert not core_solver._empty_inliers_fallback_allowed(
+        cfg,
+        strict_astrometry_now=False,
+        astrometry_native_verify_semantics_mode=False,
+    )
+
+
+def test_pairset_scale_gate_does_not_hard_reject_on_strict_astrometry_lookup_ready() -> None:
+    assert not core_solver._pairset_scale_gate_can_hard_reject(
+        strict_verify_path_enabled=True,
+        astrometry_lookup_ready=True,
+        astrometry_native_verify_semantics_mode=False,
+        pairset_scale_gate_enabled=True,
+    )
+
+
+def test_pairset_scale_gate_still_allows_noncanonical_hard_reject() -> None:
+    assert core_solver._pairset_scale_gate_can_hard_reject(
+        strict_verify_path_enabled=False,
+        astrometry_lookup_ready=True,
+        astrometry_native_verify_semantics_mode=False,
+        pairset_scale_gate_enabled=True,
+    )
+    assert core_solver._pairset_scale_gate_can_hard_reject(
+        strict_verify_path_enabled=True,
+        astrometry_lookup_ready=False,
+        astrometry_native_verify_semantics_mode=False,
+        pairset_scale_gate_enabled=True,
+    )
+    assert not core_solver._pairset_scale_gate_can_hard_reject(
+        strict_verify_path_enabled=True,
+        astrometry_lookup_ready=True,
+        astrometry_native_verify_semantics_mode=True,
+        pairset_scale_gate_enabled=True,
+    )
+    assert not core_solver._pairset_scale_gate_can_hard_reject(
+        strict_verify_path_enabled=True,
+        astrometry_lookup_ready=False,
+        astrometry_native_verify_semantics_mode=False,
+        pairset_scale_gate_enabled=False,
+    )
+
+
+def test_native_verify_ref_pool_hard_cap_disabled_on_canonical_paths() -> None:
+    assert not core_solver._native_verify_ref_pool_can_hard_cap(
+        astrometry_native_verify_semantics_mode=True,
+        mirror_scope_enabled=False,
+    )
+    assert not core_solver._native_verify_ref_pool_can_hard_cap(
+        astrometry_native_verify_semantics_mode=False,
+        mirror_scope_enabled=True,
+    )
+    assert core_solver._native_verify_ref_pool_can_hard_cap(
+        astrometry_native_verify_semantics_mode=False,
+        mirror_scope_enabled=False,
+    )
+
+
+def test_astrometry_startree_query_preserves_leaf_order_and_native_ids() -> None:
+    scale = float((1 << 31) - 1)
+    minval = np.asarray([-1.0, -1.0, -1.0], dtype=np.float64)
+    xyz = np.asarray(
+        [
+            [1.0, 0.0, 0.0],
+            [0.9999, 0.01, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    data = np.rint((xyz - minval[None, :]) * scale).astype(np.uint32)
+    tree = AstrometryStartree(
+        data=data,
+        lr=np.asarray([2], dtype=np.uint32),
+        split=np.empty((0,), dtype=np.uint32),
+        sweep=np.asarray([7, 3, 1], dtype=np.uint8),
+        minval=minval,
+        scale=scale,
+        ninterior=0,
+    )
+    result = tree.query_radec(0.0, 0.0, 1.0)
+    assert result.star_ids.tolist() == [0, 1]
+    assert result.sweep.tolist() == [7, 3]
+    assert result.xyz[:, :2] == pytest.approx(xyz[:2, :2], abs=2e-9)
+
+
+def test_resolve_native_mo_scale_prefers_wcs_scale_on_native_path() -> None:
+    scale, source = core_solver._resolve_native_mo_scale_arcsec_px(
+        astrometry_native_verify_semantics_mode=True,
+        model_scale_arcsec=4.433,
+        pix_scale_arcsec=4.500,
+        fallback_pixel_geom_scale=180.689,
+        probe_model_scale_enabled=False,
+    )
+    assert scale == pytest.approx(4.433)
+    assert source == "model_scale_arcsec_native"
+
+
+def test_resolve_native_mo_scale_keeps_pixel_geom_on_noncanonical_path() -> None:
+    scale, source = core_solver._resolve_native_mo_scale_arcsec_px(
+        astrometry_native_verify_semantics_mode=False,
+        model_scale_arcsec=4.433,
+        pix_scale_arcsec=4.500,
+        fallback_pixel_geom_scale=180.689,
+        probe_model_scale_enabled=False,
+    )
+    assert scale == pytest.approx(180.689)
+    assert source == "quadpix_median_px"
+
+
+def test_resolve_native_mo_scale_prefers_pix_scale_if_model_missing_on_native_path() -> None:
+    scale, source = core_solver._resolve_native_mo_scale_arcsec_px(
+        astrometry_native_verify_semantics_mode=True,
+        model_scale_arcsec=None,
+        pix_scale_arcsec=4.500,
+        fallback_pixel_geom_scale=180.689,
+        probe_model_scale_enabled=False,
+    )
+    assert scale == pytest.approx(4.500)
+    assert source == "pix_scale_arcsec_native_fallback"
+
+
+def test_resolve_verify_quad_geometry_uses_ab_midpoint_on_native_path() -> None:
+    center, q2, source = core_solver._resolve_verify_quad_geometry_px(
+        astrometry_native_verify_semantics_mode=True,
+        quadpix_points=[
+            [1000.323974609375, 494.0926208496094],
+            [1041.4422607421875, 738.7149658203125],
+            [978.0613403320312, 462.7736511230469],
+            [993.9321899414062, 433.05499267578125],
+        ],
+    )
+    assert center == pytest.approx([1020.8831176757812, 616.4037933349609])
+    assert q2 == pytest.approx(15382.701278366381)
+    assert source == "matchobj_ab_midpoint_native"
+
+
+def test_resolve_verify_quad_geometry_keeps_centroid_on_noncanonical_path() -> None:
+    center, q2, source = core_solver._resolve_verify_quad_geometry_px(
+        astrometry_native_verify_semantics_mode=False,
+        quadpix_points=[
+            [1000.323974609375, 494.0926208496094],
+            [1041.4422607421875, 738.7149658203125],
+            [978.0613403320312, 462.7736511230469],
+            [993.9321899414062, 433.05499267578125],
+        ],
+    )
+    assert center == pytest.approx([1003.43994140625, 532.1590576171875])
+    assert q2 == pytest.approx(15234.6758496142)
+    assert source == "quad_centroid_mean_r2"
+
+
+def test_resolve_verify_quad_geometry_requires_two_points() -> None:
+    center, q2, source = core_solver._resolve_verify_quad_geometry_px(
+        astrometry_native_verify_semantics_mode=True,
+        quadpix_points=[[1.0, 2.0]],
+    )
+    assert center is None
+    assert q2 is None
+    assert source == "none"
+
+
+def test_apply_verify_ror_filter_preserves_test_ids_with_mask_order() -> None:
+    test_xy = np.asarray(
+        [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [100.0, 0.0],
+            [200.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    test_ids = np.asarray([11, 12, 13, 14], dtype=np.int64)
+    ref_xy = np.asarray(
+        [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [100.0, 0.0],
+            [200.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    ref_ids = np.asarray([21, 22, 23, 24], dtype=np.int64)
+    tkeep, tid_keep, rkeep, rid_keep, effa, stats = core_solver._apply_verify_ror_filter(
+        test_xy_px=test_xy,
+        teststarid_px=test_ids,
+        ref_xy_px=ref_xy,
+        refstarid_px=ref_ids,
+        image_shape=(256, 256),
+        sigma2_px=1.0,
+        distractor_rate=0.25,
+        enabled=False,
+    )
+    assert tkeep.shape == (4, 2)
+    assert rkeep.shape == (4, 2)
+    assert tid_keep.tolist() == [11, 12, 13, 14]
+    assert rid_keep.tolist() == [21, 22, 23, 24]
+    assert effa == pytest.approx(256.0 * 256.0)
+    assert stats["ror_applied"] is False
+
+
+def test_apply_verify_ror_filter_uses_bin_area_fallback_at_cutnside_zero() -> None:
+    test_xy = np.asarray(
+        [
+            [120.0, 120.0],
+            [132.0, 128.0],
+            [140.0, 136.0],
+            [148.0, 144.0],
+        ],
+        dtype=np.float64,
+    )
+    ref_xy = np.asarray(
+        [
+            [118.0, 122.0],
+            [134.0, 126.0],
+            [142.0, 138.0],
+            [150.0, 146.0],
+        ],
+        dtype=np.float64,
+    )
+    _, _, _, _, effa, stats = core_solver._apply_verify_ror_filter(
+        test_xy_px=test_xy,
+        teststarid_px=None,
+        ref_xy_px=ref_xy,
+        refstarid_px=None,
+        image_shape=(256, 256),
+        sigma2_px=1.0,
+        distractor_rate=0.25,
+        enabled=True,
+        center_xy=np.asarray([128.0, 128.0], dtype=np.float64),
+        quad_q2_px2=64.0,
+        verify_uniformize=True,
+        index_cutnside=0,
+        mo_scale_arcsec_px=4.433,
+    )
+    assert stats["ror_applied"] is True
+    assert stats["ror_uniformize_nw"] == 1
+    assert stats["ror_uniformize_nh"] == 1
+    assert stats["ror_uniformize_goodbins_n"] == 1
+    assert effa == pytest.approx(256.0 * 256.0)
+
+
+def test_astrometry_verify_dedup_teststar_indices_drops_later_sigma_neighbor() -> None:
+    test_xy = np.asarray(
+        [
+            [18.121782302856445, 1908.493408203125],
+            [6.658976078033447, 1902.537109375],
+            [200.0, 200.0],
+        ],
+        dtype=np.float64,
+    )
+    keep, removed = core_solver._astrometry_verify_dedup_teststar_indices(
+        test_xy,
+        sigma2_px=1.0270715472637384,
+        quad_center_px=np.asarray([1020.8831176757812, 616.4037933349609], dtype=np.float64),
+        quad_q2_px2=15382.701278366381,
+    )
+    assert keep.tolist() == [0, 2]
+    assert removed.tolist() == [1]
+
+
+def test_sort_stars_for_astrometry_parity_orders_by_flux_desc_stably() -> None:
+    stars = np.array(
+        [
+            (1.0, 1.0, 10.0, 2.0),
+            (2.0, 2.0, 30.0, 2.0),
+            (3.0, 3.0, 30.0, 2.0),
+            (4.0, 4.0, 20.0, 2.0),
+        ],
+        dtype=[("x", "f8"), ("y", "f8"), ("flux", "f8"), ("fwhm", "f8")],
+    )
+    out = core_solver._sort_stars_for_astrometry_parity(stars)
+    assert out["flux"].tolist() == [30.0, 30.0, 20.0, 10.0]
+    assert out["x"].tolist()[:2] == [2.0, 3.0]
+
+
+def test_reset_scale_anchor_for_candidate_scopes_native_mode_to_initial_anchor() -> None:
+    arcsec, source = core_solver._reset_scale_anchor_for_candidate(
+        24.21388441049848,
+        "candidate_pairset_local",
+        2.3926740786838514,
+        "header_scale_arcsec",
+        candidate_scoped_enabled=True,
+    )
+    assert arcsec == pytest.approx(2.3926740786838514)
+    assert source == "header_scale_arcsec"
+
+
+def test_reset_scale_anchor_for_candidate_keeps_state_when_disabled() -> None:
+    arcsec, source = core_solver._reset_scale_anchor_for_candidate(
+        24.21388441049848,
+        "candidate_pairset_local",
+        2.3926740786838514,
+        "header_scale_arcsec",
+        candidate_scoped_enabled=False,
+    )
+    assert arcsec == pytest.approx(24.21388441049848)
+    assert source == "candidate_pairset_local"
+
+
+def test_pairset_scale_anchor_rejects_contaminated_native_scale() -> None:
+    arcsec, source, promoted, reason = core_solver._resolve_pairset_scale_anchor(
+        2.3926740786838514,
+        "header_scale_arcsec",
+        13.638204598599607,
+        2.3926740786838514,
+        astrometry_native_verify_semantics_mode=True,
+        promote_enabled=True,
+        max_ratio_from_approx=1.8,
+    )
+    assert promoted is False
+    assert reason == "ratio_vs_approx"
+    assert arcsec == pytest.approx(2.3926740786838514)
+    assert source == "header_scale_arcsec"
+
+
+def test_pairset_scale_anchor_promotes_consistent_native_scale() -> None:
+    arcsec, source, promoted, reason = core_solver._resolve_pairset_scale_anchor(
+        2.3926740786838514,
+        "header_scale_arcsec",
+        2.45,
+        2.3926740786838514,
+        astrometry_native_verify_semantics_mode=True,
+        promote_enabled=True,
+        max_ratio_from_approx=1.8,
+    )
+    assert promoted is True
+    assert reason is None
+    assert arcsec == pytest.approx(2.45)
+    assert source == "candidate_pairset_local"
+
+
+def test_resolve_hit_support_rank_boost_is_native_only_and_capped() -> None:
+    assert core_solver._resolve_hit_support_rank_boost(
+        5,
+        enabled=True,
+        weight=1.25,
+        max_boost=8.0,
+        native_verify_semantics=True,
+    ) == pytest.approx(6.25)
+    assert core_solver._resolve_hit_support_rank_boost(
+        20,
+        enabled=True,
+        weight=1.25,
+        max_boost=8.0,
+        native_verify_semantics=True,
+    ) == pytest.approx(8.0)
+    assert core_solver._resolve_hit_support_rank_boost(
+        5,
+        enabled=True,
+        weight=1.25,
+        max_boost=8.0,
+        native_verify_semantics=False,
+    ) == 0.0
+
+
+def test_refit_prune_similarity_pairs_drops_outlier() -> None:
+    src = np.array(
+        [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            [10.0, 10.0],
+            [5.0, 5.0],
+        ],
+        dtype=np.float64,
+    )
+    dst = 2.0 * src + np.array([3.0, -4.0])
+    dst[-1] += np.array([20.0, -15.0])
+    result = core_solver._refit_prune_similarity_pairs(
+        src,
+        dst,
+        reflected=False,
+        min_pairs=4,
+        max_exhaustive_pairs=8,
+    )
+    assert result is not None
+    keep, src_keep, dst_keep, rs, tr, rms = result
+    assert keep.tolist() == [0, 1, 2, 3]
+    assert src_keep.shape == (4, 2)
+    assert dst_keep.shape == (4, 2)
+    assert abs(rs) == pytest.approx(2.0)
+    assert tr.real == pytest.approx(3.0)
+    assert tr.imag == pytest.approx(-4.0)
+    assert rms < 1.0e-9
+
+
+def test_extend_similarity_support_pairs_adds_consensus_matches() -> None:
+    src_pool = np.array(
+        [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+            [10.0, 10.0],
+            [20.0, 5.0],
+            [5.0, 20.0],
+            [30.0, 15.0],
+            [80.0, 80.0],
+        ],
+        dtype=np.float64,
+    )
+    scale = 0.01
+    dst_pool = scale * src_pool + np.array([1.0, -2.0])
+    dst_pool[-1] += np.array([0.4, -0.3])
+    world_pool = dst_pool + np.array([10.0, 20.0])
+    result = core_solver._extend_similarity_support_pairs(
+        src_pool,
+        dst_pool,
+        world_pool,
+        src_pool[:4],
+        dst_pool[:4],
+        reflected=False,
+        tol_deg=0.02,
+        min_pairs=6,
+        min_gain=2,
+        max_points=16,
+        max_pairs=16,
+        max_rms_px=0.25,
+    )
+    assert result is not None
+    src_idx, dst_idx, src_keep, dst_keep, world_keep, rs, tr, rms = result
+    assert src_idx.size >= 6
+    assert dst_idx.tolist() == src_idx.tolist()
+    assert src_keep.shape == dst_keep.shape
+    assert np.allclose(world_keep, world_pool[dst_idx])
+    assert abs(rs) == pytest.approx(scale)
+    assert tr.real == pytest.approx(1.0)
+    assert tr.imag == pytest.approx(-2.0)
+    assert rms < 0.25
+
+
+def test_default_config_prioritizes_exact_quad_hashes() -> None:
+    cfg = core_solver.SolveConfig()
+    assert cfg.blind_astrometry_exact_hash_first_enabled is True
+    assert cfg.blind_astrometry_exact_hash_identity_perm_enabled is True
+
+
+def test_astrometry_uniformize_order_interleaves_spatial_bins() -> None:
+    x = np.array([10.0, 12.0, 90.0, 92.0], dtype=np.float64)
+    y = np.array([10.0, 12.0, 10.0, 12.0], dtype=np.float64)
+    order, stats = core_solver._astrometry_uniformize_order_xy(x, y, approx_boxes=2)
+    assert order.tolist() == [0, 2, 1, 3]
+    assert stats["nx"] > 1
+    assert stats["ny"] == 1
+
+
+def test_astrometry_source_list_gate_uniformizes_before_cap() -> None:
+    stars = np.array(
+        [
+            (10.0, 10.0, 100.0, 2.0),
+            (12.0, 12.0, 90.0, 2.0),
+            (90.0, 10.0, 80.0, 2.0),
+            (92.0, 12.0, 70.0, 2.0),
+        ],
+        dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")],
+    )
+    out, stats = core_solver._astrometry_source_list_gate(
+        stars,
+        image_shape=(100, 100),
+        approx_boxes=2,
+        max_sources=3,
+        min_keep_ratio=0.0,
+    )
+    assert out["x"].tolist() == pytest.approx([10.0, 90.0, 12.0])
+    assert int(stats["kept"]) == 3
+    assert int(stats["uniform_nx"]) > 1

@@ -4,7 +4,8 @@ version = "1.0.0"
 description = "Offline WCS solver built around ASTAP/HNSKY 1476/290 catalogues"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { text = "GPL-3.0-or-later" }
+license-files = ["LICENSE", "NOTICE*"]
 authors = [
   { name = "ZeSolver Contributors" }
 ]
@@ -37,6 +38,12 @@ minversion = "7.0"
 addopts = "-ra"
 testpaths = [
   "tests",
+]
+markers = [
+  "external_catalog: requires a local ASTAP/HNSKY catalog database outside the repository",
+  "corpus: requires local FITS corpus data",
+  "slow: long-running integration or corpus validation",
+  "blind4d: exercises ZeBlind 4D runtime/index behavior",
 ]
 
 [tool.black]

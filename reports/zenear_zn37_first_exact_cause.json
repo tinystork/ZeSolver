@@ -1,0 +1,204 @@
+{
+  "astap_rule": "ASTAP bin_and_find_stars returns the post-detection selected list directly; catalogue target then follows nrstars_required=round(nrstars_image*height/width), oversize based on nrstars_image, and nrstars_required2=round(nrstars_required*oversize^2).",
+  "authorized_verdict": "F - Plusieurs causes independantes",
+  "correctif_applied": false,
+  "evidence": {
+    "232102_catalog_identity": {
+      "astap_count": 249,
+      "extra_in_near": 0,
+      "identity_kind": "decoded_coordinate_surrogate",
+      "missing_in_near": 249,
+      "near_count": 0,
+      "physical_id_overlap": 0,
+      "physical_id_overlap_fraction": 0.0
+    },
+    "232102_catalog_matrix": {
+      "H0_astap_image_astap_catalog": {
+        "catalog_quads": 188,
+        "catalog_stars": 249,
+        "failure_stage": null,
+        "image_quads": 224,
+        "image_stars": 58,
+        "matches_kept": 28,
+        "matches_raw": 28,
+        "path_used": "find_fit_using_hash",
+        "refs": 28,
+        "success": true
+      },
+      "H1_physical_intersection": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      },
+      "H3_same_selection_projection_near": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      },
+      "H4_same_selection_common_projection": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      },
+      "H5_near_prefix_1000": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      },
+      "H5_near_prefix_128": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      },
+      "H5_near_prefix_192": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      },
+      "H5_near_prefix_249": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      },
+      "H5_near_prefix_250": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      },
+      "H5_near_prefix_260": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      },
+      "H5_near_prefix_384": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      },
+      "H5_near_prefix_512": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      },
+      "H6_astap_policy_proxy": {
+        "catalog_stars": 0,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 58,
+        "success": false
+      }
+    },
+    "232102_image_identity": {
+      "astap_count": 58,
+      "near_count": 0,
+      "present_2px": 0
+    },
+    "232102_image_matrix": {
+      "E0_astap_image_astap_catalog": {
+        "catalog_quads": 188,
+        "catalog_stars": 249,
+        "failure_stage": null,
+        "image_quads": 224,
+        "image_stars": 58,
+        "matches_kept": 28,
+        "matches_raw": 28,
+        "path_used": "find_fit_using_hash",
+        "refs": 28,
+        "success": true
+      },
+      "E1_near_intersection_near_order": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E2_near_intersection_astap_order": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E3_near_prefix_100": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E3_near_prefix_120": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E3_near_prefix_146": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E3_near_prefix_250": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E3_near_prefix_32": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E3_near_prefix_48": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E3_near_prefix_500": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E3_near_prefix_58": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E3_near_prefix_64": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E3_near_prefix_80": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      },
+      "E4_astap_policy_proxy": {
+        "catalog_stars": 249,
+        "failure_stage": "INSUFFICIENT_INPUTS",
+        "image_stars": 0,
+        "success": false
+      }
+    }
+  },
+  "first_divergent_stage": "IMAGE_FINAL_FOR_QUADS",
+  "last_identical_stage": "clean branches, ASTAP oracle, and Near core H00 from ASTAP final lists",
+  "near_behavior": "Near strict currently uses its own Python image list for this M106 case; the ASTAP stars are mostly present but mixed with many extra stars. The catalogue target is consequently much larger and Near final catalog is not physically aligned with ASTAP final catalog.",
+  "recommendation": "Open a narrower mission to port the exact ASTAP image post-detection selection/ranking for M106 first; do not change catalogue, quads, lookup, transform, thresholds, gate, or 4D in the same patch.",
+  "verdict": "MULTIPLE_INDEPENDENT_DIVERGENCES"
+}

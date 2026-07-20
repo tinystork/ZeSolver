@@ -1,0 +1,152 @@
+{
+  "CAT-P": {
+    "runs": [
+      {
+        "catalog_dump": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn32cat_matrix_runs/Light_M_31_11_30.0s_IRCUT_20250922-230409_CATP_zenear_catalog_stars.csv",
+        "elapsed_s": 3.1173739619989647,
+        "final_stars": 448,
+        "message": "near solution found",
+        "name": "Light_M 31_11_30.0s_IRCUT_20250922-230409.fit",
+        "stats": {
+          "inliers": 140,
+          "inliers_raw": 140,
+          "pix_scale_arcsec": 2.375840943996129,
+          "quality": "GOOD",
+          "reason": "strict_astap_iso_mirror",
+          "rms_px": 0.3314604995880794,
+          "success": true
+        },
+        "stem": "Light_M_31_11_30.0s_IRCUT_20250922-230409",
+        "success": true
+      },
+      {
+        "catalog_dump": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn32cat_matrix_runs/Light_M_31_11_30.0s_IRCUT_20250922-230510_CATP_zenear_catalog_stars.csv",
+        "elapsed_s": 1.5761866559987538,
+        "final_stars": 459,
+        "message": "near solution found",
+        "name": "Light_M 31_11_30.0s_IRCUT_20250922-230510.fit",
+        "stats": {
+          "inliers": 145,
+          "inliers_raw": 145,
+          "pix_scale_arcsec": 2.3757601826558257,
+          "quality": "GOOD",
+          "reason": "strict_astap_iso_mirror",
+          "rms_px": 0.3062128163678652,
+          "success": true
+        },
+        "stem": "Light_M_31_11_30.0s_IRCUT_20250922-230510",
+        "success": true
+      },
+      {
+        "catalog_dump": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn32cat_matrix_runs/Light_M_31_11_30.0s_IRCUT_20250922-230650_CATP_zenear_catalog_stars.csv",
+        "elapsed_s": 1.5441634570015594,
+        "final_stars": 457,
+        "message": "near solution found",
+        "name": "Light_M 31_11_30.0s_IRCUT_20250922-230650.fit",
+        "stats": {
+          "inliers": 134,
+          "inliers_raw": 134,
+          "pix_scale_arcsec": 2.3761767300074057,
+          "quality": "GOOD",
+          "reason": "strict_astap_iso_mirror",
+          "rms_px": 0.3905169486712914,
+          "success": true
+        },
+        "stem": "Light_M_31_11_30.0s_IRCUT_20250922-230650",
+        "success": true
+      },
+      {
+        "catalog_dump": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn32cat_matrix_runs/Light_M_31_11_30.0s_IRCUT_20250922-230720_CATP_zenear_catalog_stars.csv",
+        "elapsed_s": 1.5679926939992583,
+        "final_stars": 462,
+        "message": "near solution found",
+        "name": "Light_M 31_11_30.0s_IRCUT_20250922-230720.fit",
+        "stats": {
+          "inliers": 133,
+          "inliers_raw": 133,
+          "pix_scale_arcsec": 2.375846434795298,
+          "quality": "GOOD",
+          "reason": "strict_astap_iso_mirror",
+          "rms_px": 0.5698228595188017,
+          "success": true
+        },
+        "stem": "Light_M_31_11_30.0s_IRCUT_20250922-230720",
+        "success": true
+      },
+      {
+        "catalog_dump": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn32cat_matrix_runs/Light_M_31_11_30.0s_IRCUT_20250922-230853_CATP_zenear_catalog_stars.csv",
+        "elapsed_s": 1.6402795079993666,
+        "final_stars": 484,
+        "message": "near solution found",
+        "name": "Light_M 31_11_30.0s_IRCUT_20250922-230853.fit",
+        "stats": {
+          "inliers": 136,
+          "inliers_raw": 136,
+          "pix_scale_arcsec": 2.376126135841262,
+          "quality": "GOOD",
+          "reason": "strict_astap_iso_mirror",
+          "rms_px": 0.49158085808766616,
+          "success": true
+        },
+        "stem": "Light_M_31_11_30.0s_IRCUT_20250922-230853",
+        "success": true
+      },
+      {
+        "catalog_dump": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn32cat_matrix_runs/Light_M_31_11_30.0s_IRCUT_20250922-231350_CATP_zenear_catalog_stars.csv",
+        "elapsed_s": 1.5642529479955556,
+        "final_stars": 457,
+        "message": "near solution found",
+        "name": "Light_M 31_11_30.0s_IRCUT_20250922-231350.fit",
+        "stats": {
+          "inliers": 148,
+          "inliers_raw": 148,
+          "pix_scale_arcsec": 2.375613276696982,
+          "quality": "GOOD",
+          "reason": "strict_astap_iso_mirror",
+          "rms_px": 0.5424611493639682,
+          "success": true
+        },
+        "stem": "Light_M_31_11_30.0s_IRCUT_20250922-231350",
+        "success": true
+      },
+      {
+        "catalog_dump": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn32cat_matrix_runs/Light_M_31_11_30.0s_IRCUT_20250922-231844_CATP_zenear_catalog_stars.csv",
+        "elapsed_s": 1.5360197499976493,
+        "final_stars": 491,
+        "message": "near solution found",
+        "name": "Light_M 31_11_30.0s_IRCUT_20250922-231844.fit",
+        "stats": {
+          "inliers": 143,
+          "inliers_raw": 143,
+          "pix_scale_arcsec": 2.3753166078230303,
+          "quality": "GOOD",
+          "reason": "strict_astap_iso_mirror",
+          "rms_px": 0.35260296991742646,
+          "success": true
+        },
+        "stem": "Light_M_31_11_30.0s_IRCUT_20250922-231844",
+        "success": true
+      },
+      {
+        "catalog_dump": "/home/tristan/.openclaw/workspace/projects/ZeSolver/reports/zn32cat_matrix_runs/Light_M_31_11_30.0s_IRCUT_20250922-231915_CATP_zenear_catalog_stars.csv",
+        "elapsed_s": 1.5313540220013238,
+        "final_stars": 443,
+        "message": "near solution found",
+        "name": "Light_M 31_11_30.0s_IRCUT_20250922-231915.fit",
+        "stats": {
+          "inliers": 128,
+          "inliers_raw": 128,
+          "pix_scale_arcsec": 2.37577292909355,
+          "quality": "GOOD",
+          "reason": "strict_astap_iso_mirror",
+          "rms_px": 0.31037931865388957,
+          "success": true
+        },
+        "stem": "Light_M_31_11_30.0s_IRCUT_20250922-231915",
+        "success": true
+      }
+    ],
+    "successes": 8,
+    "total": 8
+  }
+}

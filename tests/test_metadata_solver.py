@@ -84,12 +84,37 @@ def _make_synthetic_fits(path: Path, star_px: np.ndarray, center_ra: float, cent
     fits.PrimaryHDU(data=image, header=header).writeto(path)
 
 
-def test_metadata_solver_solves_synthetic_frame(tmp_path):
+def _stars_from_pixels(star_px: np.ndarray) -> np.ndarray:
+    stars = np.zeros(star_px.shape[0], dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")])
+    stars["x"] = star_px[:, 0].astype(np.float32)
+    stars["y"] = star_px[:, 1].astype(np.float32)
+    stars["flux"] = np.linspace(4000, 1000, star_px.shape[0], dtype=np.float32)
+    stars["fwhm"] = np.float32(2.0)
+    return stars
+
+
+def _patch_strict_detector(monkeypatch, star_px: np.ndarray) -> None:
+    stars = _stars_from_pixels(star_px)
+
+    def _strict_detect_stub(*args, **kwargs):
+        return stars.copy(), {
+            "raw_candidates": int(stars.size),
+            "selected_count": int(stars.size),
+            "source": "unit_test_strict_detector_stub",
+        }
+
+    monkeypatch.setattr(metadata_solver, "astap_adaptive_image_detection", _strict_detect_stub)
+
+
+def test_metadata_solver_solves_synthetic_frame(tmp_path, monkeypatch):
     center_ra = 33.0
     center_dec = 12.0
     scale_arcsec = 5.0
     scale_deg = scale_arcsec / 3600.0
-    base_pixels = np.array([[100, 100], [120, 105], [82, 123], [140, 140]], dtype=np.float64)
+    base_pixels = np.array(
+        [[100, 100], [120, 105], [82, 123], [140, 140], [60, 80], [155, 82], [70, 150], [132, 166]],
+        dtype=np.float64,
+    )
     offsets = (base_pixels - np.array([100.0, 100.0])) * scale_deg
     ra_offsets = offsets[:, 0] / np.cos(np.radians(center_dec))
     ra_vals = center_ra + ra_offsets
@@ -98,6 +123,25 @@ def test_metadata_solver_solves_synthetic_frame(tmp_path):
     _build_test_index(index_root, ra_vals, dec_vals, center_ra, center_dec)
     fits_path = tmp_path / "frame.fits"
     _make_synthetic_fits(fits_path, base_pixels, center_ra, center_dec)
+
+    _patch_strict_detector(monkeypatch, base_pixels)
+
+    def _iso_success(*args, **kwargs):
+        center_offset = -scale_arcsec * np.array([100.0, 100.0], dtype=np.float64)
+        return (
+            metadata_solver.SimilarityTransform(
+                scale=scale_arcsec,
+                rotation=0.0,
+                translation=(float(center_offset[0]), float(center_offset[1])),
+                parity=1,
+            ),
+            np.eye(2, dtype=np.float64) * scale_arcsec,
+            center_offset,
+            8,
+        )
+
+    monkeypatch.setattr(metadata_solver, "_astap_iso_hypothesis", _iso_success)
+
     config = NearSolveConfig(
         max_img_stars=50,
         max_cat_stars=50,
@@ -149,6 +193,7 @@ def test_strict_fov_hint_source_override_priority(tmp_path, monkeypatch):
     _build_test_index(index_root, ra_vals, dec_vals, center_ra, center_dec)
     fits_path = tmp_path / "frame_override.fits"
     _make_synthetic_fits(fits_path, base_pixels, center_ra, center_dec)
+    _patch_strict_detector(monkeypatch, base_pixels)
     with fits.open(fits_path, mode="update") as hdul:
         hdul[0].header["FOV"] = 2.5
         hdul.flush()
@@ -191,6 +236,7 @@ def test_strict_fov_hint_source_header_without_override(tmp_path, monkeypatch):
     _build_test_index(index_root, ra_vals, dec_vals, center_ra, center_dec)
     fits_path = tmp_path / "frame_header.fits"
     _make_synthetic_fits(fits_path, base_pixels, center_ra, center_dec)
+    _patch_strict_detector(monkeypatch, base_pixels)
     with fits.open(fits_path, mode="update") as hdul:
         hdul[0].header["FOVDEG"] = 1.8
         hdul.flush()
@@ -232,6 +278,7 @@ def test_strict_scale_source_low_support_skips_autofov(tmp_path, monkeypatch):
     _build_test_index(index_root, ra_vals, dec_vals, center_ra, center_dec)
     fits_path = tmp_path / "frame_scale.fits"
     _make_synthetic_fits(fits_path, base_pixels, center_ra, center_dec)
+    _patch_strict_detector(monkeypatch, base_pixels)
 
     def _iso_fail(*args, **kwargs):
         diag = kwargs.get("diag")
@@ -265,18 +312,17 @@ def test_strict_contextual_retry_zero_ref_patience(tmp_path, monkeypatch):
     index_root = tmp_path / "index_dense"
     _build_dense_test_index(index_root, center_ra, center_dec, n=320)
 
-    # Image content is irrelevant, we patch detect_stars to return rich support.
+    # Image content is irrelevant, we patch the strict ASTAP-ISO detector to return rich support.
     fits_path = tmp_path / "frame_dense.fits"
     _make_synthetic_fits(fits_path, np.array([[100, 100]], dtype=np.float64), center_ra, center_dec)
 
-    stars = np.zeros(40, dtype=[("x", "f4"), ("y", "f4"), ("flux", "f4"), ("fwhm", "f4")])
-    stars["x"] = np.linspace(20, 180, 40, dtype=np.float32)
-    stars["y"] = np.linspace(25, 175, 40, dtype=np.float32)
-    stars["flux"] = np.linspace(1000, 4000, 40, dtype=np.float32)
-    stars["fwhm"] = np.float32(2.0)
-
-    def _detect_stub(*args, **kwargs):
-        return stars.copy()
+    strict_pixels = np.column_stack(
+        [
+            np.linspace(20, 180, 40, dtype=np.float64),
+            np.linspace(25, 175, 40, dtype=np.float64),
+        ]
+    )
+    _patch_strict_detector(monkeypatch, strict_pixels)
 
     def _iso_fail(*args, **kwargs):
         diag = kwargs.get("diag")
@@ -292,7 +338,6 @@ def test_strict_contextual_retry_zero_ref_patience(tmp_path, monkeypatch):
             )
         return None, None, None, 0
 
-    monkeypatch.setattr(metadata_solver, "detect_stars", _detect_stub)
     monkeypatch.setattr(metadata_solver, "_astap_iso_hypothesis", _iso_fail)
     records = _capture_debug_records(monkeypatch)
 

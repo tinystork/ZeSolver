@@ -1,0 +1,517 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://zesolver.local/schemas/catalog_manifest_schema.v1.json",
+  "title": "ZeSolver Catalog Library Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "library_id",
+    "created_at",
+    "minimum_zesolver_version",
+    "sources",
+    "derived_indexes",
+    "coverage",
+    "integrity",
+    "provenance",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "library_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": ["string", "null"],
+      "description": "ISO-8601 timestamp when this manifest was created."
+    },
+    "created_by": {
+      "type": ["string", "null"]
+    },
+    "minimum_zesolver_version": {
+      "type": ["string", "null"]
+    },
+    "status": {
+      "$ref": "#/$defs/status"
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/source"
+      }
+    },
+    "derived_indexes": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/derived_index"
+      }
+    },
+    "runtime_order": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "blind4d": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Explicit Blind 4D runtime search order by derived index id."
+        }
+      }
+    },
+    "coverage": {
+      "$ref": "#/$defs/coverage"
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "manifest_sha256": {
+          "type": ["string", "null"]
+        },
+        "checksum_algorithm": {
+          "type": "string",
+          "default": "sha256"
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "astap_hnsky_source": {
+          "type": ["string", "null"]
+        },
+        "zesolver_commit": {
+          "type": ["string", "null"]
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "compatibility_resources": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/compatibility_resource"
+      }
+    }
+  },
+  "$defs": {
+    "status": {
+      "type": "string",
+      "enum": [
+        "READY_FULL",
+        "READY_PARTIAL",
+        "NEAR_ONLY",
+        "BLIND4D_ONLY",
+        "SOURCE_ONLY",
+        "INDEX_BUILD_REQUIRED",
+        "INCOMPATIBLE",
+        "CORRUPT",
+        "MISSING"
+      ]
+    },
+    "data_status": {
+      "type": "string",
+      "enum": [
+        "PRESENT",
+        "READY_PARTIAL",
+        "FULL",
+        "PARTIAL",
+        "MISSING",
+        "INCOMPATIBLE",
+        "CORRUPT",
+        "UNVERIFIED",
+        "FAST_VERIFIED",
+        "FULL_VERIFIED",
+        "MISMATCH",
+        "EXTERNAL_REFERENCE"
+      ]
+    },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "family",
+        "format",
+        "path",
+        "tile_count",
+        "coverage",
+        "integrity",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "const": "astap_hnsky"
+        },
+        "family": {
+          "type": "string",
+          "enum": ["d05", "d20", "d50", "d80", "v50", "g05"]
+        },
+        "families": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["d05", "d20", "d50", "d80", "v50", "g05"]
+          }
+        },
+        "format": {
+          "type": "string",
+          "enum": ["1476-5", "1476-6", "290-5"]
+        },
+        "mode": {
+          "type": "string",
+          "enum": ["managed", "external-reference"]
+        },
+        "path_policy": {
+          "type": "string",
+          "enum": ["relative", "external_reference"]
+        },
+        "path": {
+          "$ref": "#/$defs/path_ref"
+        },
+        "tile_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "layout": {
+          "type": ["string", "null"]
+        },
+        "layout_fingerprint": {
+          "type": ["string", "null"]
+        },
+        "reader_version": {
+          "type": ["string", "null"]
+        },
+        "fingerprint_policy": {
+          "type": ["string", "null"],
+          "enum": ["fast", "full", null]
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "shards": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/source_shard"
+          }
+        },
+        "integrity": {
+          "$ref": "#/$defs/integrity_set"
+        },
+        "provenance": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "status": {
+          "$ref": "#/$defs/data_status"
+        }
+      }
+    },
+    "derived_index": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "engine",
+        "schema",
+        "path",
+        "source_ids",
+        "source_tiles",
+        "coverage",
+        "integrity",
+        "status"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "engine": {
+          "type": "string",
+          "enum": ["blind4d", "historical"]
+        },
+        "category": {
+          "type": "string",
+          "enum": ["product", "compatibility"]
+        },
+        "schema": {
+          "type": "string"
+        },
+        "algorithm_version": {
+          "type": ["string", "null"]
+        },
+        "path": {
+          "$ref": "#/$defs/path_ref"
+        },
+        "manifest_path": {
+          "$ref": "#/$defs/optional_path_ref"
+        },
+        "source_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "source_tiles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "families": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "parameters": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "build_parameters": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "parameter_status": {
+          "type": "string",
+          "enum": ["KNOWN", "PARTIAL", "UNKNOWN"]
+        },
+        "provenance_fingerprint": {
+          "type": ["string", "null"]
+        },
+        "reconstruction_status": {
+          "type": "string",
+          "enum": ["KNOWN", "PARTIAL", "UNKNOWN"]
+        },
+        "scale_range_arcsec": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["min", "max"],
+          "properties": {
+            "min": {
+              "type": ["number", "null"]
+            },
+            "max": {
+              "type": ["number", "null"]
+            }
+          }
+        },
+        "coverage": {
+          "$ref": "#/$defs/coverage"
+        },
+        "integrity": {
+          "$ref": "#/$defs/integrity_set"
+        },
+        "derived_files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/integrity_file"
+          }
+        },
+        "source_file_refs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "compatibility": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "status": {
+          "$ref": "#/$defs/data_status"
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status"],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["FULL", "PARTIAL", "MISSING", "INCOMPATIBLE", "CORRUPT", "UNKNOWN"]
+        },
+        "all_sky": {
+          "type": "boolean"
+        },
+        "families": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tile_keys": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "dec_min_deg": {
+          "type": ["number", "null"]
+        },
+        "dec_max_deg": {
+          "type": ["number", "null"]
+        },
+        "ra_segments_deg": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "prefixItems": [
+              { "type": "number" },
+              { "type": "number" }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "covered_tiles": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "total_tiles": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "fraction": {
+          "type": ["number", "null"],
+          "minimum": 0.0,
+          "maximum": 1.0
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "integrity_set": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "checksum_algorithm": {
+          "type": "string",
+          "default": "sha256"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/integrity_file"
+          }
+        }
+      }
+    },
+    "integrity_file": {
+      "type": "object",
+      "required": ["path", "sha256"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": ["string", "null"]
+        },
+        "size_bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "mtime_ns": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      }
+    },
+    "source_shard": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "family", "status"],
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "family": {
+          "type": "string"
+        },
+        "tile_code": {
+          "type": ["string", "null"]
+        },
+        "size_bytes": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "sha256": {
+          "type": ["string", "null"]
+        },
+        "mtime_ns": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "status": {
+          "$ref": "#/$defs/data_status"
+        }
+      }
+    },
+    "path_ref": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "value"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["relative", "external_reference"]
+        },
+        "value": {
+          "type": "string"
+        }
+      }
+    },
+    "optional_path_ref": {
+      "anyOf": [
+        { "$ref": "#/$defs/path_ref" },
+        { "type": "null" }
+      ]
+    },
+    "compatibility_resource": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["id", "category", "path", "status"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string",
+          "const": "compatibility"
+        },
+        "path": {
+          "$ref": "#/$defs/path_ref"
+        },
+        "manifest_path": {
+          "$ref": "#/$defs/optional_path_ref"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/integrity_file"
+          }
+        },
+        "status": {
+          "$ref": "#/$defs/data_status"
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}

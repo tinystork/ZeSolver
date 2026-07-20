@@ -41,6 +41,10 @@ __all__ = [
     "iter_db_tiles",
     "load_tile_stars",
     "build_index_from_astap",
+    "build_4d_index_from_astap",
+    "Astap4DBuildConfig",
+    "AstapTileMaterializationConfig",
+    "materialize_astap_tile_for_4d",
     "zebuildindex",
     "solve_blind",
     "zeblindsolve",
@@ -62,6 +66,15 @@ def __getattr__(name: str) -> Any:  # PEP 562 lazy re‑exports
         mapping = {
             "build_index_from_astap": _db.build_index_from_astap,
             "zebuildindex": getattr(_db, "zebuildindex", _db.main),
+        }
+        return mapping[name]
+    if name in {"build_4d_index_from_astap", "Astap4DBuildConfig", "AstapTileMaterializationConfig", "materialize_astap_tile_for_4d"}:
+        from . import astap_4d_builder as _direct
+        mapping = {
+            "build_4d_index_from_astap": _direct.build_4d_index_from_astap,
+            "Astap4DBuildConfig": _direct.Astap4DBuildConfig,
+            "AstapTileMaterializationConfig": _direct.AstapTileMaterializationConfig,
+            "materialize_astap_tile_for_4d": _direct.materialize_astap_tile_for_4d,
         }
         return mapping[name]
     if name in {"solve_blind", "zeblindsolve", "WcsSolution"}:

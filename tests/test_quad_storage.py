@@ -36,7 +36,16 @@ import pytest
 import zeblindsolver.db_convert as db_convert_mod
 from zeblindsolver.db_convert import build_index_from_astap
 from zeblindsolver.levels import LEVEL_SPECS
-from zeblindsolver.quad_index_builder import QuadIndex, build_quad_index, lookup_hashes, _INDEX_CACHE
+from zeblindsolver.quad_index_builder import (
+    QUAD_HASH_SCHEMA,
+    QUAD_SAMPLER_TAG,
+    QUAD_TABLE_VERSION,
+    QuadIndex,
+    _INDEX_CACHE,
+    _validate_metadata,
+    build_quad_index,
+    lookup_hashes,
+)
 
 
 def _create_base_index(tmp_path: Path, positions: np.ndarray, mags: np.ndarray) -> Path:
@@ -136,7 +145,57 @@ def test_quads_only_rebuild(tmp_path, synthetic_star_catalog, monkeypatch):
         assert table.exists()
         with np.load(table, allow_pickle=False) as payload:
             metadata = json.loads(str(payload["metadata"][0]))
-        assert metadata["sampler"] == "pairwise_multiscale_v1"
+        assert metadata["sampler"] == QUAD_SAMPLER_TAG
+        assert metadata["version"] == QUAD_TABLE_VERSION
+        assert metadata["hash_schema"] == QUAD_HASH_SCHEMA
+        assert metadata["level_spec"] == level.to_manifest()
+
+    rebuilt_manifest = json.loads(manifest.read_text(encoding="utf-8"))
+    assert rebuilt_manifest["levels"] == [
+        level.to_manifest() for level in db_convert_mod.LEVEL_SPECS
+    ]
+
+
+def test_quad_metadata_rejects_previous_hash_schema():
+    with pytest.raises(RuntimeError, match="outdated"):
+        _validate_metadata(
+            {
+                "version": QUAD_TABLE_VERSION - 1,
+                "sampler": QUAD_SAMPLER_TAG,
+                "level": "S",
+            },
+            level="S",
+        )
+
+    with pytest.raises(RuntimeError, match="hash schema"):
+        _validate_metadata(
+            {
+                "version": QUAD_TABLE_VERSION,
+                "sampler": QUAD_SAMPLER_TAG,
+                "hash_schema": "legacy_id_ordered_ratio_v1",
+                "level": "S",
+            },
+            level="S",
+        )
+
+    with pytest.raises(RuntimeError, match="level spec"):
+        _validate_metadata(
+            {
+                "version": QUAD_TABLE_VERSION,
+                "sampler": QUAD_SAMPLER_TAG,
+                "hash_schema": QUAD_HASH_SCHEMA,
+                "level": "S",
+                "level_spec": {
+                    "name": "S",
+                    "min_area": 0.01,
+                    "max_area": 1.5,
+                    "min_diameter": 0.05,
+                    "max_diameter": 2.0,
+                    "bucket_cap": 6000,
+                },
+            },
+            level="S",
+        )
 
 
 def test_quads_only_requires_manifest(tmp_path):
