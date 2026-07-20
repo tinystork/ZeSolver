@@ -348,3 +348,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 zebuildindex = main
+
+if __name__ == "__main__":
+    raise SystemExit(main())
