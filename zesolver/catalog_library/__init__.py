@@ -20,6 +20,19 @@ from .manifest import (
     CatalogVersionError,
     load_manifest,
 )
+from .management import (
+    AstapFamilyInfo,
+    CatalogLibraryManagementCancelled,
+    CatalogLibraryManagementError,
+    CatalogLibraryManagementService,
+    LibraryAnalysisResult,
+    LibraryCreateOptions,
+    LibraryDiagnosticItem,
+    LibraryInstallOptions,
+    LibraryManagementProgress,
+    LibraryOperationResult,
+    LibraryRepairPlan,
+)
 from .models import (
     Blind4DIndexDescriptor,
     CatalogCapabilities,
@@ -47,6 +60,7 @@ from .models import (
 
 __all__ = [
     "Blind4DIndexDescriptor",
+    "AstapFamilyInfo",
     "CatalogCapabilities",
     "CatalogCompatibilityError",
     "CatalogCorruptionError",
@@ -67,6 +81,9 @@ __all__ = [
     "CatalogLibraryAdoptionTelemetry",
     "CatalogLibraryAdoptionWriter",
     "CatalogLibrary",
+    "CatalogLibraryManagementCancelled",
+    "CatalogLibraryManagementError",
+    "CatalogLibraryManagementService",
     "CatalogLibraryError",
     "CatalogManifest",
     "CatalogManifestError",
@@ -80,6 +97,13 @@ __all__ = [
     "FingerprintPolicy",
     "IssueSeverity",
     "LegacyIndexDescriptor",
+    "LibraryAnalysisResult",
+    "LibraryCreateOptions",
+    "LibraryDiagnosticItem",
+    "LibraryInstallOptions",
+    "LibraryManagementProgress",
+    "LibraryOperationResult",
+    "LibraryRepairPlan",
     "NearCatalogDescriptor",
     "blind4d_index_descriptors",
     "build_blind4d_manifest_view",
