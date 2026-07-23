@@ -66,6 +66,7 @@ class CatalogLibraryAdoptionPlan:
         include_legacy: bool = True,
         progress_callback: ProgressCallback | None = None,
         generated_at: str | None = None,
+        astap_families: Iterable[str] | None = None,
     ) -> CatalogLibraryAdoptionPlanResult:
         policy = _coerce_policy(fingerprint_policy)
         root = Path(library_root).expanduser().resolve()
@@ -74,6 +75,7 @@ class CatalogLibraryAdoptionPlan:
         repair_actions: list[CatalogRepairAction] = []
         source_hashed_count = 0
         index_hashed_count = 0
+        family_filter = _normalize_family_filter(astap_families)
 
         sources: list[CatalogSource] = []
         source_tiles: dict[str, set[str]] = {}
@@ -82,6 +84,7 @@ class CatalogLibraryAdoptionPlan:
                 astap_root,
                 root_index=root_index,
                 policy=policy,
+                family_filter=family_filter,
                 progress_callback=progress_callback,
                 warnings=warnings,
                 errors=errors,
@@ -160,6 +163,7 @@ def _discover_astap_root(
     *,
     root_index: int,
     policy: FingerprintPolicy,
+    family_filter: tuple[str, ...] | None,
     progress_callback: ProgressCallback | None,
     warnings: list[CatalogIssue],
     errors: list[CatalogIssue],
@@ -184,7 +188,9 @@ def _discover_astap_root(
     hashed = 0
     suffix = "" if root_index == 0 else f"-{root_index + 1}"
     for family, spec in sorted(FAMILY_SPECS.items()):
-        files = sorted(root.glob(spec.glob_pattern()), key=lambda path: path.name)
+        if family_filter is not None and family not in family_filter:
+            continue
+        files = _find_family_files(root, family)
         if not files:
             continue
         total_tiles = _layout_tile_count(family)
@@ -719,6 +725,32 @@ def _family_from_tiles(tile_keys: tuple[str, ...]) -> str | None:
         if "_" in tile_key:
             return tile_key.split("_", 1)[0].lower()
     return None
+
+
+def _normalize_family_filter(values: Iterable[str] | None) -> tuple[str, ...] | None:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values or ():
+        family = str(value).strip().lower()
+        if not family or family in seen:
+            continue
+        seen.add(family)
+        result.append(family)
+    return tuple(result) or None
+
+
+def _find_family_files(root: Path, family: str) -> tuple[Path, ...]:
+    spec = FAMILY_SPECS[family]
+    expected_prefix = f"{spec.prefix}_".lower()
+    expected_suffix = f".{spec.extension}".lower()
+    matches = [
+        path
+        for path in root.iterdir()
+        if path.is_file()
+        and path.name.lower().startswith(expected_prefix)
+        and path.name.lower().endswith(expected_suffix)
+    ]
+    return tuple(sorted(matches, key=lambda item: item.name.lower()))
 
 
 def _layout_name(family: str) -> str:

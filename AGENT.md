@@ -1,11 +1,11 @@
 # AGENT.md — Mission active de ZeSolver
 
-**Projet :** ZeSolver
-**Écosystème :** ZeMosaic / ZeSeestarStacker
-**Auteur principal :** Tinystork — Tristan Nauleau
-**Mise à jour :** 19 juillet 2026
-**Phase active :** P3B — GUI simplifié
-**Statut :** P1D fermé, P3B prochaine phase active
+**Projet :** ZeSolver  
+**Écosystème :** ZeMosaic / ZeSeestarStacker  
+**Auteur principal :** Tinystork — Tristan Nauleau  
+**Mise à jour :** 23 juillet 2026  
+**Phase active :** Stabilisation post-P3B-1D du runtime batch et du GUI  
+**Statut :** P3B-1D terminé ; P3B-1E suspendu jusqu’à fermeture des quatre correctifs ci-dessous
 
 ---
 
@@ -14,23 +14,14 @@
 Ce fichier s’applique à tout le dépôt, sauf instruction plus spécifique dans un
 sous-répertoire.
 
-Il contient uniquement :
+Il remplace la mission active précédente. Les travaux déjà terminés restent
+conservés dans `docs/stabilization/` et `docs/architecture/` et ne doivent pas
+être recommencés sans régression reproduite.
 
-- l’état actuel ;
-- les invariants à préserver ;
-- la mission active ;
-- les validations obligatoires ;
-- les travaux encore ouverts.
-
-Les étapes déjà accomplies sont documentées dans `docs/stabilization/` et
-`docs/architecture/`. Elles ne doivent pas être recommencées sans régression
-reproduite ou demande explicite.
-
-L’ancienne mission générale du 16 juillet 2026 est archivée dans :
-
-```text
-docs/stabilization/original_stabilization_roadmap_20260716.md
-```
+La prochaine intégration de distribution officielle des Bibliothèques ZeSolver
+(P3B-1E) est temporairement suspendue. Avant de poursuivre la simplification et
+la distribution, quatre problèmes observés lors d’un run réel doivent être
+traités dans l’ordre imposé par ce fichier.
 
 ---
 
@@ -39,88 +30,124 @@ docs/stabilization/original_stabilization_roadmap_20260716.md
 | Chantier | État |
 |---|---|
 | P0 — baseline et non-régression | Terminé, à préserver |
-| P0 — pixels et WCS | Validé pour poursuivre ; audit final avant publication |
-| P1 — `CatalogLibrary` | Cœur et adaptateurs intégrés ; fermeture ASTAP unique active |
-| P1 — couverture ZeBlind 4D | Partielle et explicitement détectée |
-| P1D — bibliothèque ASTAP unique | **Terminé et fermé** |
-| P1D-1A — provider ZeNear ASTAP-native | Terminé |
-| P1D-1B — basculement produit ZeNear | Terminé |
-| P1D-2A — provenance et plan d'adoption | Terminé |
-| P1D-2B — adoption atomique CatalogLibrary | Terminé |
-| P1D-3A — builder Blind 4D direct ASTAP | Terminé |
-| P1D-3B — validation runtime Blind 4D directe | Terminé |
-| P1D-4A — vue stricte 4D générée par la bibliothèque | Terminé |
-| P1D-4B — basculement produit Blind 4D | Terminé |
-| P1D-5A — sélection CatalogLibrary dans le GUI | Terminé |
-| P1D-5B — surface compatibilité avancée | Terminé |
-| P2 — réglages, profils et façade | Stabilisés |
-| P2 — extraction du cœur | Suffisante pour P3B |
+| P1 — `CatalogLibrary` | Intégré |
+| P1D — bibliothèque ASTAP unique | Terminé, sous réserve du correctif de vue Blind 4D |
+| P2 — réglages, profils et cœur | Stabilisés |
 | P3A — GUI/pipeline | Terminé |
-| P3A-V1 — Stop et relance | Terminé |
-| P3A-V2 — fin exactement une fois | Terminé |
-| P3A-V3 — progression et état WCS temps réel | Terminé |
-| P3B — GUI simplifié | Prochaine phase active, non commencée ici |
-| P4 — packaging et publication | Ouvert |
-| P5 — optimisations avancées | Différé |
+| P3A-V1/V2/V3 — Stop, terminaison, progression | Terminé, à préserver |
+| P3B-1A — retrait Benchmark | Terminé |
+| P3B-1B — audit Développement | Terminé |
+| P3B-1C — réorganisation Développement | Terminé |
+| P3B-1D — gestionnaire de bibliothèques | Terminé |
+| **P3B-S1 — batch, mémoire et réutilisation runtime** | **Mission active prioritaire** |
+| P3B-S2 — validité de la vue Blind 4D | Bloqué par S1 |
+| P3B-S3 — nettoyage WCS asynchrone | Bloqué par S2 |
+| P3B-S4 — familles ASTAP absentes | Bloqué par S3 |
+| P3B-1E — distribution officielle | Suspendu jusqu’à fermeture S1–S4 |
+| P4 — packaging/publication | Non prêt |
 
-Le projet est :
+Le projet est actuellement :
 
 ```text
-READY_TO_RESUME_P3B_GUI_SIMPLIFICATION
+READY_FOR_P3B_RUNTIME_STABILIZATION
 ```
 
 Il n’est pas encore :
 
 ```text
+READY_FOR_P3B1E_LIBRARY_DISTRIBUTION_INTEGRATION
+READY_FOR_P4_PACKAGING
 READY_FOR_PUBLIC_RELEASE
 ```
 
 ---
 
-## 3. Invariants absolus
+## 3. Incident réel à reproduire
 
-### 3.1 Résolution
+Le run utilisateur du 23 juillet 2026 constitue la référence initiale.
 
-Pendant P1D et lors de la reprise P3B, ne pas modifier sans mission dédiée :
+Configuration et symptômes observés :
 
-- ZeNear ;
-- ZeBlind 4D ;
-- les seuils ;
+- une Bibliothèque ZeSolver fondée uniquement sur D50 ;
+- D50 détectée avec 1 476 tuiles et couverture annoncée complète ;
+- 100 fichiers FITS ;
+- 6 threads ;
+- nettoyage WCS réussi sur 100 fichiers, avec 1 776 cartes retirées ;
+- interface figée pendant le nettoyage ;
+- préflight catalogue total d’environ 74,5 secondes ;
+- résolution Blind 4D d’environ 34,5 secondes puis échec
+  `BLIND4D_LIBRARY_VIEW_INVALID` ;
+- résolution Near réussie sur le corpus ;
+- démarrages des solves par vagues, avec de longues pauses entre les vagues ;
+- consommation mémoire observée jusqu’à environ 4,3 Go ;
+- débit final très inférieur aux précédents essais sur base partielle.
+
+Diagnostic de travail à confirmer, et non à accepter aveuglément :
+
+1. `BatchSolverPipeline` construit actuellement un nouveau `SolverPipeline`
+   dans chaque tâche/fichier ;
+2. chaque nouveau pipeline peut répéter la résolution des ressources catalogue,
+   la création du provider Near, la création de caches et la validation Blind ;
+3. `SolverPipeline.solve()` résout actuellement le runtime Blind 4D avant de
+   tenter Near, y compris lorsque Near réussit ;
+4. le cache de runtime Blind appartient à une instance de pipeline jetée après
+   un seul fichier et perd donc son bénéfice ;
+5. les résultats Near ne sont pas nécessairement transmis au GUI au moment où
+   chaque future se termine ;
+6. la condition de cohérence de couverture dans
+   `zesolver/catalog_library/blind4d_view.py` paraît suspecte lorsqu’une
+   couverture FULL/all-sky est considérée comme une erreur ;
+7. le nettoyage WCS intégré exécute la boucle FITS dans le thread Qt principal ;
+8. la création de bibliothèque doit considérer l’absence de familles ASTAP non
+   installées comme un état normal, pas comme un échec final.
+
+Avant toute correction, reproduire et instrumenter suffisamment pour confirmer
+ou infirmer chacun de ces points.
+
+---
+
+## 4. Invariants absolus
+
+### 4.1 Résultats astrométriques
+
+Ne pas modifier sans preuve et mission explicite :
+
+- les algorithmes ZeNear ;
+- les algorithmes ZeBlind 4D ;
+- les seuils d’acceptation ;
 - les profils ;
-- les catalogues ;
-- les index ;
-- les règles d’acceptation WCS ;
-- l’ordre Near → Blind 4D → Astrometry.net ;
-- les formats de résultats.
+- les règles WCS ;
+- l’ordre logique Near → Blind 4D → Astrometry.net ;
+- les formats de résultats ;
+- les pixels.
 
-Toute modification simultanée des algorithmes, seuils, profils ou règles
-d’acceptation est interdite pendant P1D. Une refonte GUI qui modifie un
-résultat astrométrique est une régression.
+Une optimisation de cycle de vie ne doit pas changer le résultat astrométrique.
+Comparer les résultats avant/après sur les corpus existants.
 
-### 3.2 Fichiers et WCS
+### 4.2 Fichiers et WCS
 
 - Ne jamais modifier les pixels.
 - Ne pas écraser silencieusement un WCS existant.
 - Préserver les HDU et les métadonnées non concernées.
-- Les rasters utilisent un sidecar WCS ; le raster source reste inchangé.
+- Les rasters utilisent un sidecar ; le raster source reste inchangé.
 - Pour un FITS, le statut principal reflète le WCS du HDU `PRIMARY`.
-- Une interruption ne doit pas laisser un fichier annoncé comme résolu avec un
-  en-tête incomplet.
-- Toute modification du chemin d’écriture impose une comparaison avant/après et
-  une relecture WCS.
+- Une interruption ne doit jamais laisser un fichier annoncé comme résolu avec
+  un en-tête incomplet.
+- Toute modification du chemin d’écriture impose une relecture WCS et, si les
+  données FITS sont réécrites, un contrôle d’intégrité des pixels.
 
-### 3.3 Routage
+### 4.3 Routage
 
 Le routage `AUTO / PIPELINE / LEGACY` reste explicite :
 
 - FITS compatible → pipeline autorisé ;
 - raster → legacy ;
-- fallback Astrometry.net incompatible avec pipeline → legacy ;
+- fallback web incompatible avec pipeline → legacy ;
 - moteur forcé incompatible → erreur claire ;
 - aucun fallback silencieux ;
-- route legacy conservée jusqu’à validation finale du nouveau GUI.
+- la route legacy reste disponible pendant cette stabilisation.
 
-### 3.4 Cycle de vie GUI
+### 4.4 Cycle GUI
 
 Pour chaque `run_id` :
 
@@ -139,10 +166,9 @@ au maximum 1 résultat terminal GUI
 
 Conserver :
 
-- progression en temps réel ;
+- progression au fil du traitement ;
 - compteur traité / total / restant ;
-- mise à jour des lignes au fil du run ;
-- rafraîchissement après nettoyage WCS ;
+- mise à jour des lignes en temps réel ;
 - Stop réactif ;
 - relance après Stop ;
 - fermeture propre ;
@@ -150,11 +176,11 @@ Conserver :
 - widgets modifiés uniquement dans le thread Qt principal ;
 - aucune fausse progression à 100 % après annulation.
 
-### 3.5 Architecture
+### 4.5 Architecture
 
 Le cœur ne doit importer aucun module GUI.
 
-La chaîne cible est :
+Chaîne cible :
 
 ```text
 GUI
@@ -166,287 +192,672 @@ GUI
 → GUI
 ```
 
-Le nouveau GUI ne doit pas appeler directement `solve_near()` ou
-`solve_blind()`.
+Le GUI ne doit pas appeler directement les algorithmes internes Near ou Blind.
 
 ---
 
-## 4. Mission fermée — P1D
+## 5. Règles de séquencement
 
-### 4.1 Objectif
-
-L’architecture de bibliothèque ASTAP unique est fermée. La prochaine phase
-active est la simplification GUI P3B.
-
-Objectif produit :
+Les quatre missions suivantes sont obligatoirement séquentielles.
 
 ```text
-une Bibliothèque ZeSolver sélectionnée par l’utilisateur
-→ ZeNear lit ASTAP/HNSKY depuis cette bibliothèque
-→ ZeBlind 4D utilise des index dérivés de ces mêmes sources
-→ provenance, versions, paramètres et empreintes reliés
-→ plus de choix normal séparé db_root / index_root / familles / manifeste 4D
+S1 → S2 → S3 → S4 → reprise éventuelle de P3B-1E
 ```
 
-Astrometry.net reste un fallback web facultatif et distinct.
+Ne pas mélanger les quatre corrections dans un seul gros patch.
 
-### 4.2 Invariants P1D
+Pour chaque mission :
 
-Pendant P1D :
+1. observer l’état Git ;
+2. reproduire le problème ;
+3. écrire ou renforcer les tests qui échouent avant correction ;
+4. effectuer le plus petit changement sûr ;
+5. exécuter les tests ciblés ;
+6. exécuter les barrières générales ;
+7. produire un rapport dédié ;
+8. conclure par le gate attendu ;
+9. ne commencer l’étape suivante que si le gate précédent est positif.
 
-- ne pas modifier les algorithmes Near ;
-- ne pas modifier les algorithmes Blind ;
-- ne pas modifier les seuils ;
-- ne pas modifier les profils ;
-- ne pas modifier les catalogues ou index existants ;
-- ne pas modifier les FITS ou les pixels ;
-- ne pas modifier le comportement GUI hors branchement strictement nécessaire ;
-- conserver les invariants P0, P2 et P3A ;
-- conserver un rollback legacy explicite ;
-- ne jamais masquer la couverture partielle Blind 4D.
+Ne pas pousser sur le dépôt distant sans autorisation explicite.
 
-### 4.3 Séquence P1D retenue
+---
 
-Ordre de travail :
+# 6. P3B-S1 — Stabiliser le batch, la mémoire et les runtimes
 
-1. **P1D-0 — Audit de fermeture**
-   - cartographier les dépendances historiques restantes ;
-   - recommander la stratégie ;
-   - aucune modification de solveur.
-2. **P1D-1A — Provider ZeNear ASTAP-native** — terminé
-   - fournisseur de tuiles ASTAP natif ajouté ;
-   - provider historique conservé comme rollback/oracle ;
-   - parité provider démontrée.
-3. **P1D-1B — Basculement produit ZeNear** — terminé
-   - `CatalogLibrary` valide sélectionne ASTAP-native par défaut ;
-   - routes PIPELINE et LEGACY partagent la même politique ;
-   - rollback `legacy-index` explicite conservé ;
-   - aucun fallback silencieux vers legacy en mode natif.
-4. **P1D-2 — Manifest/provenance/réparation** — terminé
-   - enrichir `catalog.json` pour reconstruction déterministe ;
-   - ajouter adoption `REFERENCE_EXISTING` non destructive.
-5. **P1D-3 — Builder Blind 4D depuis ASTAP**
-   - **P1D-3A terminé** : builder direct ASTAP, coeur partagé, déterminisme
-     et comparaison exacte avec le chemin historique actuel ;
-   - **P1D-3B terminé** : validation runtime baseline produit vs index directs
-     sur M106 all30, mini-corpus intégré, cas difficiles et contrôles négatifs.
-6. **P1D-4 — Manifeste 4D possédé par la bibliothèque**
-   - **P1D-4A terminé** : génération déterministe, validation, ordre runtime,
-     matérialisation facultative et parité runtime de la vue stricte depuis
-     `CatalogLibrary` ;
-  - **P1D-4B terminé** : basculement produit Blind 4D sur la vue
-     `CatalogLibrary`, avec rollback manifeste externe explicite et sans
-     fallback silencieux.
-7. **P1D-5 — Surface produit**
-   - **P1D-5A terminé** : sélection, validation, persistance et activation GUI
-     de `CatalogLibrary`, avec Near `astap_native`, Blind 4D
-     `catalog_library_view`, rollback explicite et validation graphique réelle ;
-   - **P1D-5B terminé** : parcours normal limité à la Bibliothèque ZeSolver,
-     chemins historiques déplacés en compatibilité/diagnostic, messages ciblés
-     pour les confusions, rollback explicite conservé, validation graphique
-     réelle et barrières vertes.
+## 6.1 Objectif
 
-P1D est fermé. Ne pas reprendre une sous-phase P1D sans régression reproduite
-ou demande explicite.
+Supprimer les coûts répétés par fichier et empêcher la mémoire de croître ou de
+provoquer du thrashing pendant les gros batchs.
 
-### 4.4 Gate P1D-0
+La correction doit préserver strictement les résultats, le routage, Stop, la
+progression et la terminaison exactement une fois.
 
-P1D-0 est fermé lorsque :
+## 6.2 Fichiers à inspecter en priorité
 
-- le flux actuel ZeNear est documenté ;
-- le flux actuel ZeBlind 4D est documenté ;
-- les dépendances historiques restantes sont inventoriées ;
-- les stratégies compatibilité et ASTAP-native sont comparées ;
-- une prochaine étape unique est choisie ;
-- `AGENT.md` marque P1D comme phase active ;
-- seuls les documents sont modifiés.
+```text
+zesolver/core/batch/runner.py
+zesolver/core/pipeline.py
+zesolver/core/preflight.py
+zesolver/catalog_resources.py
+zesolver/gui_pipeline/pipeline_runner.py
+zesolver/gui_pipeline/progress_adapter.py
+zesolver/gui_pipeline/lifecycle.py
+```
+
+Inspecter aussi les factories de pipeline et les adaptateurs de réglages qui
+peuvent recréer indirectement les ressources.
+
+Ne modifier `zeblindsolver/` que si une preuve démontre que le problème ne peut
+pas être corrigé proprement dans le cycle de vie du pipeline.
+
+## 6.3 Travail obligatoire
+
+### A. Mesurer le cycle actuel
+
+Ajouter des tests ou compteurs déterministes permettant de connaître :
+
+- le nombre de créations de `SolverPipeline` par phase ;
+- le nombre de résolutions de `SolverCatalogResources` ;
+- le nombre de résolutions Near runtime/provider ;
+- le nombre de résolutions ou matérialisations Blind 4D ;
+- le nombre de créations de caches catalogue ;
+- l’ordre et le moment d’émission des résultats ;
+- le comportement avec 1, 2 et plusieurs workers.
+
+L’instrumentation produit doit rester légère. Ne pas ajouter une dépendance
+obligatoire uniquement pour mesurer la mémoire.
+
+### B. Réutiliser les pipelines au niveau worker
+
+Le pipeline ne doit plus être recréé pour chaque fichier.
+
+Implémentation acceptable, à choisir après audit :
+
+- un pipeline par thread worker via stockage thread-local ;
+- ou un initialiseur de `ThreadPoolExecutor` ;
+- ou une petite pool explicite de pipelines ;
+- ou une instance partagée uniquement si tous ses composants mutables sont
+  démontrés thread-safe.
+
+Préférer :
+
+```text
+ressources immuables partagées au niveau du batch
++ état mutable et cache possédés par chaque worker
+```
+
+Ne pas partager aveuglément un provider, un cache ou un objet Astropy/NumPy
+mutable entre threads.
+
+### C. Résoudre les ressources une seule fois par run
+
+La sélection de `CatalogLibrary`, les chemins, familles et métadonnées de
+couverture doivent être résolus au niveau du run, puis injectés dans les
+pipelines worker.
+
+L’ouverture ou la validation complète de la bibliothèque ne doit pas être
+répétée pour chaque fichier.
+
+Les changements de configuration entre deux runs doivent néanmoins produire de
+nouvelles ressources ; aucun cache global permanent ne doit masquer un
+changement utilisateur.
+
+### D. Rendre Blind 4D paresseux
+
+Pour un fichier qui réussit avec Near :
+
+- ne pas charger les gros index Blind 4D ;
+- ne pas matérialiser leur vue stricte par fichier ;
+- ne pas répéter leur checksum ou validation coûteuse ;
+- conserver uniquement la télémétrie catalogue légère nécessaire.
+
+Le runtime Blind 4D doit être résolu :
+
+- immédiatement pour un run `blind_only` ;
+- avant la phase Blind si le batch est explicitement en deux phases ;
+- ou au premier véritable fallback Blind ;
+- au maximum une fois par run ou une fois par worker si une contrainte de
+  thread-safety l’impose et est documentée.
+
+Une indisponibilité Blind ne doit pas empêcher Near de réussir, sauf mode qui
+exige explicitement Blind.
+
+### E. Émettre les résultats au fil des futures
+
+Lors de la phase Near :
+
+- un succès Near final doit pouvoir être transmis dès sa fin ;
+- un échec Near destiné à la phase Blind ne doit pas être présenté comme un
+  échec terminal ;
+- aucun fichier ne doit recevoir deux résultats terminaux ;
+- `preserve_order=True` doit continuer à ordonner le résultat final du batch,
+  sans bloquer la progression temps réel ;
+- Stop et `stop_on_error` doivent conserver leur sémantique.
+
+### F. Borner les caches et libérer les références
+
+Vérifier :
+
+- que la taille de cache configurée est réellement appliquée ;
+- que les tableaux lourds temporaires ne restent pas référencés après le solve ;
+- que la liste des futures terminées n’entretient pas inutilement les résultats
+  et exceptions lourds ;
+- que les pipelines worker sont détruits à la fin du run ;
+- qu’un second run ne réutilise pas un état périmé du premier.
+
+Ne pas utiliser `gc.collect()` comme correction principale. Il peut seulement
+servir de garde ponctuelle si une raison mesurée le justifie.
+
+## 6.4 Tests ciblés obligatoires
+
+Créer ou renforcer des tests couvrant au minimum :
+
+1. 100 requêtes Near réussies avec 6 workers ;
+2. nombre de créations de pipeline borné par le nombre de workers, et non par le
+   nombre de fichiers ;
+3. ressources catalogue résolues une seule fois par batch lorsque possible ;
+4. aucun chargement Blind lourd pour un batch dont tous les fichiers réussissent
+   en Near ;
+5. un échec Near déclenche bien la phase Blind ;
+6. `blind_only` charge Blind sans tenter Near ;
+7. une ressource Blind invalide ne bloque pas un succès Near en mode normal ;
+8. résultats de progression émis avant la fin de toute la phase Near ;
+9. aucun doublon terminal ;
+10. ordre final conservé lorsque demandé ;
+11. Stop pendant Near ;
+12. Stop entre Near et Blind ;
+13. Stop pendant Blind ;
+14. deuxième run après Stop ;
+15. changement de bibliothèque entre deux runs ;
+16. aucune régression sur les tests pipeline, batch, GUI et WCS existants.
+
+Tests à examiner notamment :
+
+```text
+tests/test_batch_pipeline_concurrency.py
+tests/test_batch_pipeline_scheduling.py
+tests/test_batch_pipeline_cancellation.py
+tests/test_batch_pipeline_routing.py
+tests/test_batch_blind_fallback.py
+tests/test_solver_pipeline_preflight.py
+tests/test_solver_pipeline_routing.py
+tests/test_catalog_library_pipeline_integration.py
+tests/test_p224_budget_concurrency.py
+```
+
+## 6.5 Validation réelle obligatoire
+
+Sur la même machine et le même corpus de 100 FITS :
+
+- 6 workers ;
+- même bibliothèque D50 ;
+- mêmes réglages ;
+- même politique WCS ;
+- relever temps total, temps avant premier solve, rythme des démarrages, mémoire
+  maximale observée et statut final ;
+- vérifier l’absence des longues pauses périodiques entre groupes ;
+- vérifier que la mémoire atteint un plateau et ne croît pas avec le nombre de
+  fichiers ;
+- vérifier que le pic est inférieur à la référence observée d’environ 4,3 Go ou
+  expliquer précisément la mémoire résiduelle restante ;
+- lancer ensuite un second batch dans la même session ;
+- tester Stop puis relance.
+
+Le gate ne doit pas être accordé sur un micro-test uniquement.
+
+## 6.6 Critères de sortie
+
+S1 est terminée seulement si :
+
+- les pipelines ne sont plus créés par fichier ;
+- les ressources ne sont plus validées lourdement par fichier ;
+- Blind est paresseux pour les succès Near ;
+- la progression est effectivement temps réel ;
+- le pic mémoire ne croît pas avec la longueur du batch ;
+- le run de 100 FITS ne présente plus les vagues séparées par de longues pauses ;
+- résultats et WCS restent équivalents ;
+- Stop, relance et terminaison exactement une fois restent valides ;
+- tests ciblés et barrières générales sont verts.
 
 Gate attendu :
 
 ```text
-READY_FOR_P1D1_ASTAP_RUNTIME_UNIFICATION
+READY_FOR_P3B_S2_BLIND4D_VIEW_FIX
 ```
 
----
-
-## 5. Mission active suivante — P3B
-
-P3B est la prochaine phase active après fermeture de P1D. Elle ne doit pas
-être commencée sans demande explicite, mais c'est désormais le cap de reprise.
-
-### 5.1 Objectif P3B
-
-Créer une interface principale simple permettant à un utilisateur non expert de :
+Sinon :
 
 ```text
-1. choisir les images
-2. vérifier la bibliothèque
-3. choisir la politique WCS
-4. résoudre
-5. suivre la progression
-6. consulter les résultats
+NOT_READY_FOR_P3B_S2_BLIND4D_VIEW_FIX
 ```
 
-L’utilisateur normal ne doit pas avoir besoin de comprendre les familles ASTAP,
-les manifestes 4D, les quads, les buckets ou les seuils internes.
+---
 
-### 5.2 Écran principal attendu
+# 7. P3B-S2 — Corriger la vue Blind 4D de la bibliothèque
 
-L’écran principal doit montrer au maximum :
+## 7.1 Objectif
 
-- dossier ou fichiers d’entrée ;
-- nombre et état initial des images ;
-- état de la bibliothèque ZeSolver ;
-- dossier de sortie ou politique d’écriture ;
-- règle concernant les WCS existants ;
-- fallback web facultatif ;
-- bouton **Résoudre** ;
-- bouton **Stop** ;
-- barre de progression ;
-- compteur traité / total / restant ;
-- statut par fichier ;
-- résumé final ;
-- accès au journal.
+Une bibliothèque annoncée `READY_FULL`, contenant un index Blind 4D valide et
+1 476/1 476 tuiles, doit produire un runtime Blind 4D disponible.
 
-### 5.3 Outils avancés
-
-Sortir du parcours principal :
-
-- benchmark ;
-- construction ou réparation d’index ;
-- reconstruction des hashes ;
-- index checker ;
-- explorateur de catalogues ;
-- WCS Cleaner autonome ;
-- téléchargements manuels ;
-- paramètres Near/Blind ;
-- paramètres de quads ;
-- profils expérimentaux ;
-- diagnostics développeur.
-
-Ces fonctions peuvent rester dans :
-
-- un menu **Outils avancés** ;
-- des fenêtres distinctes ;
-- des utilitaires séparés ;
-- le CLI.
-
-Ne supprimer aucune capacité utile uniquement pour alléger l’écran principal.
-
-### 5.4 `CatalogLibrary`
-
-Le mode normal doit présenter un seul concept :
+Le cas observé suivant est incohérent et doit être reproduit :
 
 ```text
-Bibliothèque ZeSolver
+CatalogLibrary status: READY_FULL
+blind4d_index_count: 1
+blind4d_all_sky: true
+
+puis
+
+BLIND4D_LIBRARY_VIEW_INVALID
+blind4d_index_count: 0
 ```
 
-Il ne doit plus demander séparément :
+## 7.2 Fichiers à inspecter
 
-- la base ASTAP ;
-- le dossier d’index ;
-- le manifeste 4D ;
-- les familles.
-
-Les chemins historiques peuvent rester dans une zone de compatibilité pendant la
-migration.
-
-La couverture partielle doit rester visible. Ne jamais la présenter comme
-all-sky.
-
-### 5.5 Non-objectifs
-
-P3B ne traite pas :
-
-- la génération de nouveaux index ;
-- l’extension de couverture 4D ;
-- l’optimisation GPU ;
-- le packaging ;
-- les installateurs ;
-- la publication ;
-- les nouvelles fonctions astrométriques.
-
----
-
-## 6. Stratégie de migration P3B
-
-Ne pas remplacer le GUI en une seule opération.
-
-Ordre recommandé :
-
-1. figer une baseline locale P3A-V3 ;
-2. spécifier le parcours, les états et les erreurs ;
-3. créer une coque GUI importable et testable ;
-4. brancher entrées et scan ;
-5. brancher `CatalogLibrary` ;
-6. brancher politique WCS et réglages produit ;
-7. brancher `GuiSolveController` ;
-8. brancher progression, Stop, résultats et journal ;
-9. déplacer les outils avancés ;
-10. comparer ancien et nouveau GUI ;
-11. retirer l’ancien GUI uniquement après parité.
-
-Pendant la migration :
-
-- conserver un rollback clair ;
-- séparer refactorisation et changement fonctionnel ;
-- préférer de petits commits locaux ;
-- ne pas déplacer les solveurs pour des raisons purement visuelles ;
-- ne pas multiplier les nouvelles abstractions sans usage réel.
-
----
-
-## 7. Méthode de travail
-
-Avant toute modification :
-
-1. lire ce fichier ;
-2. identifier la sous-phase active P1D ou P3B ;
-3. lire seulement les rapports pertinents ;
-4. inspecter le code et les tests ;
-5. reproduire le comportement actuel ;
-6. définir des critères mesurables ;
-7. vérifier `git status` ;
-8. ne pas toucher aux changements utilisateur sans demande.
-
-Aucune erreur affectant le routage, le catalogue, le WCS, l’écriture, Stop, la
-progression ou la terminaison ne doit être ignorée silencieusement.
-
-Les erreurs utilisateur doivent indiquer une action possible.
-
----
-
-## 8. Validation obligatoire
-
-### 8.1 Tests ciblés
-
-Exécuter les tests directement liés aux fichiers modifiés.
-
-Pour le GUI, couvrir au minimum :
-
-- sélection moteur ;
-- pipeline ;
-- legacy ;
-- progression temps réel ;
-- absence de doublons ;
-- nettoyage WCS ;
-- Stop ;
-- relance ;
-- callback tardif ;
-- terminaison exactement une fois ;
-- copie du log ;
-- fermeture.
-
-Commande indicative :
-
-```bash
-QT_QPA_PLATFORM=offscreen \
-.venv/bin/python -m pytest tests/test_gui_* -q
+```text
+zesolver/catalog_library/blind4d_view.py
+zesolver/catalog_library/coverage.py
+zesolver/catalog_library/validation.py
+zesolver/catalog_library/manifest.py
+zesolver/catalog_resources.py
+zesolver/blind4d_runtime.py
 ```
 
-### 8.2 Barrières générales
+## 7.3 Travail obligatoire
 
-Après une étape P1D ou P3B significative :
+### A. Confirmer l’invariant de couverture
+
+Examiner la condition qui ajoute
+`BLIND4D_VIEW_COVERAGE_INCONSISTENT` lorsque :
+
+```python
+coverage.all_sky or coverage.status is CoverageStatus.FULL
+```
+
+Cette condition paraît inversée, mais ne pas la remplacer mécaniquement sans
+vérifier la définition de `CatalogCoverage`, `FULL`, `PARTIAL` et `all_sky`.
+
+Définir explicitement les invariants attendus :
+
+- `FULL` et `all_sky=True` peuvent être valides ;
+- une couverture partielle peut être valide et doit rester annoncée partielle ;
+- `all_sky=True` avec un ensemble incomplet doit être invalide ;
+- des doublons de tuiles, tuiles manquantes, checksums incorrects, ordre runtime
+  incohérent ou fichier absent restent invalides.
+
+### B. Ne pas masquer les vraies erreurs
+
+La correction ne doit pas transformer toutes les vues en valides.
+
+Préserver les erreurs concernant :
+
+- absence d’index ;
+- index absent ou corrompu ;
+- checksum incorrect ;
+- schéma non supporté ;
+- ordre runtime manquant, dupliqué ou incohérent ;
+- tuiles dupliquées entre index ;
+- couverture déclarée différente du contenu réel ;
+- chemin invalide.
+
+### C. Valider le runtime complet
+
+Après correction :
+
+1. ouvrir la bibliothèque réelle D50 ;
+2. construire sa vue Blind 4D ;
+3. vérifier `view.valid` ;
+4. matérialiser le manifeste strict ;
+5. le recharger avec le loader 4D ;
+6. appeler `resolve_blind4d_runtime()` ;
+7. vérifier `available=True`, `index_count=1` et couverture 1 476/1 476 ;
+8. exécuter un vrai solve Blind sur une image dont Near ne fournit pas la
+   solution ou en mode `blind_only`.
+
+## 7.4 Tests ciblés obligatoires
+
+Ajouter au minimum :
+
+- vue FULL/all-sky valide ;
+- vue PARTIAL valide mais explicitement partielle ;
+- incohérence all-sky/tiles invalide ;
+- absence d’index invalide ;
+- ordre runtime manquant invalide ;
+- doublon de tuiles invalide ;
+- checksum incorrect invalide ;
+- bibliothèque `READY_FULL` → runtime Blind disponible ;
+- bibliothèque Near-only → code d’indisponibilité stable ;
+- solve Blind réel ou fixture équivalente avec la vue library-owned.
+
+Tests à examiner notamment :
+
+```text
+tests/test_catalog_library_blind4d_integration.py
+tests/test_catalog_library_validation.py
+tests/test_catalog_library_status.py
+tests/test_catalog_resource_resolution.py
+tests/test_solver_pipeline_blind_production.py
+tests/test_regression_blind4d.py
+```
+
+## 7.5 Critères de sortie
+
+S2 est terminée seulement si :
+
+- la bibliothèque réelle D50 n’est plus rejetée à tort ;
+- le runtime Blind 4D est réellement disponible ;
+- les cas corrompus restent rejetés ;
+- la couverture partielle n’est jamais présentée comme complète ;
+- un solve Blind réel fonctionne ;
+- les résultats Near ne sont pas modifiés ;
+- les tests ciblés et barrières générales sont verts.
+
+Gate attendu :
+
+```text
+READY_FOR_P3B_S3_ASYNC_WCS_CLEANER
+```
+
+Sinon :
+
+```text
+NOT_READY_FOR_P3B_S3_ASYNC_WCS_CLEANER
+```
+
+---
+
+# 8. P3B-S3 — Rendre le nettoyage WCS intégré asynchrone
+
+## 8.1 Objectif
+
+Le nettoyage WCS doit continuer à utiliser la logique fiable de
+`zewcscleaner.py`, mais ne doit plus bloquer le thread Qt principal.
+
+Le nettoyage de 100 FITS doit :
+
+- laisser la fenêtre réactive ;
+- afficher une progression réelle ;
+- pouvoir être annulé proprement ;
+- rafraîchir l’état WCS des fichiers après traitement ;
+- ne jamais modifier les pixels.
+
+## 8.2 Fichiers à inspecter
+
+```text
+zesolver.py
+zewcscleaner.py
+zesolver/gui_pipeline/lifecycle.py
+zesolver/cancellation.py
+```
+
+Réutiliser de préférence le patron de worker Qt déjà employé par le Gestionnaire
+de Bibliothèques, plutôt que créer une seconde architecture incompatible.
+
+## 8.3 Travail obligatoire
+
+### A. Conserver une fonction non-GUI testable
+
+`process_fits()` ou une façade équivalente doit rester indépendante de Qt et
+utilisable par le CLI/tests.
+
+Ne pas déplacer la logique FITS dans un widget.
+
+### B. Worker Qt dédié
+
+Exécuter la boucle de fichiers dans :
+
+- un `QObject` déplacé dans un `QThread` ;
+- ou une infrastructure worker existante offrant les mêmes garanties.
+
+Le worker émet des signaux contenant uniquement des données simples :
+
+- fichier courant ;
+- index courant ;
+- total ;
+- cartes supprimées ;
+- HDU modifiés ;
+- erreur éventuelle ;
+- statut terminal.
+
+Aucun widget ne doit être lu ou modifié depuis le worker.
+
+### C. Annulation coopérative
+
+Vérifier l’annulation entre deux fichiers.
+
+Ne pas interrompre brutalement une écriture FITS en cours. Laisser le fichier
+courant se terminer proprement, puis arrêter avant le suivant.
+
+Le résultat final doit distinguer :
+
+```text
+terminé
+annulé
+échoué
+```
+
+### D. Progression et rafraîchissement
+
+- progression mise à jour à chaque fichier ;
+- compteur courant/total ;
+- journal non bloquant ;
+- bouton Résoudre désactivé tant que le nettoyage préalable est actif ;
+- bouton Stop ou Annuler correctement routé ;
+- après nettoyage, rescanner l’état WCS et mettre à jour les lignes ;
+- ne pas lancer le solve si le nettoyage préalable a échoué ou a été annulé,
+  sauf choix utilisateur explicite déjà prévu par le produit.
+
+### E. Fermeture
+
+Fermer l’application pendant le nettoyage doit :
+
+- demander ou déclencher l’annulation ;
+- attendre proprement la fin de l’écriture FITS en cours ;
+- ne pas laisser de thread Qt vivant ;
+- ne pas produire de callback tardif vers une fenêtre détruite.
+
+## 8.4 Tests ciblés obligatoires
+
+Couvrir au minimum :
+
+1. nettoyage de plusieurs fichiers sans bloquer l’event loop ;
+2. progression 1…N ;
+3. succès total ;
+4. fichier sans WCS ;
+5. fichier invalide ;
+6. erreur partielle avec résumé ;
+7. annulation entre deux fichiers ;
+8. fermeture pendant nettoyage ;
+9. absence de double événement terminal ;
+10. rafraîchissement des statuts WCS ;
+11. pixels strictement identiques avant/après ;
+12. préservation des HDU ;
+13. lancement du solve après nettoyage réussi ;
+14. aucune régression du cleaner autonome.
+
+## 8.5 Validation graphique réelle
+
+Avec environ 100 FITS :
+
+- déplacer/redimensionner la fenêtre pendant le nettoyage ;
+- changer d’onglet ;
+- vérifier la progression ;
+- tester Annuler ;
+- relancer le nettoyage ;
+- lancer ensuite un solve ;
+- fermer l’application pendant une opération ;
+- vérifier les fichiers et le journal après relance.
+
+Un test offscreen ne remplace pas cette validation.
+
+## 8.6 Critères de sortie
+
+S3 est terminée seulement si :
+
+- le GUI ne freeze plus ;
+- la progression est réelle ;
+- l’annulation et la fermeture sont propres ;
+- les statuts WCS sont rafraîchis ;
+- les pixels et HDU sont préservés ;
+- le cleaner autonome continue de fonctionner ;
+- les tests ciblés et barrières générales sont verts.
+
+Gate attendu :
+
+```text
+READY_FOR_P3B_S4_ASTAP_FAMILY_HANDLING
+```
+
+Sinon :
+
+```text
+NOT_READY_FOR_P3B_S4_ASTAP_FAMILY_HANDLING
+```
+
+---
+
+# 9. P3B-S4 — Accepter proprement une seule famille ASTAP
+
+## 9.1 Objectif
+
+La création d’une Bibliothèque ZeSolver depuis un dossier contenant uniquement
+D50 doit se terminer comme un succès complet pour D50.
+
+L’absence de D05, D20, D80, V50, G05 ou d’autres familles supportées ne doit pas
+être une erreur si elles n’ont pas été sélectionnées et ne sont pas présentes.
+
+## 9.2 Fichiers à inspecter
+
+```text
+zesolver/catalog_library/management.py
+zesolver/catalog_library/adoption.py
+zesolver/catalog_library/validation.py
+zesolver.py
+zewcs290/catalog290.py
+zeblindsolver/astap_db_reader.py
+```
+
+Inspecter séparément :
+
+- la détection ;
+- la sélection GUI ;
+- le calcul du nombre total d’étapes ;
+- la construction ;
+- la validation finale ;
+- les messages utilisateur.
+
+## 9.3 Travail obligatoire
+
+### A. Détection réelle
+
+La liste des familles à construire doit provenir des fichiers réellement
+détectés sous la racine choisie.
+
+Cas attendu pour une racine ne contenant que D50 :
+
+```text
+families = ("d50",)
+```
+
+Ne pas initialiser une attente sur toutes les entrées de `FAMILY_SPECS`.
+
+### B. Sélection explicite
+
+Si le GUI permet une sélection personnalisée :
+
+- afficher uniquement les familles détectées ;
+- une famille demandée mais absente produit une erreur claire avant le build ;
+- une famille non demandée et absente ne produit aucune erreur ;
+- le mode Standard sélectionne toutes les familles détectées, pas toutes les
+  familles théoriquement supportées.
+
+### C. Progression exacte
+
+Le dénominateur de progression doit être fondé sur le nombre de familles
+sélectionnées et les étapes réellement exécutées.
+
+Pour D50 seule :
+
+- aucune étape fantôme pour D05/D20/D80/V50/G05 ;
+- pas d’attente terminale après la fin de D50 ;
+- pas de progression bloquée sous 100 % ;
+- pas d’erreur finale après publication réussie.
+
+### D. Statut et message final
+
+Une bibliothèque D50 valide doit produire :
+
+- résultat `LibraryOperationResult` réussi ;
+- `catalog.json` cohérent ;
+- source Near D50 disponible ;
+- index Blind D50 publié ;
+- couverture annoncée selon le contenu réel ;
+- sélection automatique de la bibliothèque ;
+- message utilisateur de succès.
+
+Les familles absentes peuvent apparaître en log DEBUG/INFO, mais pas sous forme
+d’erreur utilisateur.
+
+## 9.4 Tests ciblés obligatoires
+
+Couvrir au minimum :
+
+- D50 seule ;
+- deux familles présentes ;
+- racine contenant les familles directement ;
+- racine contenant des sous-dossiers D50/D20 ;
+- sélection personnalisée d’une famille présente ;
+- demande explicite d’une famille absente ;
+- aucune famille détectée ;
+- annulation pendant une famille ;
+- progression correcte ;
+- publication et validation finales ;
+- réparation d’une bibliothèque Near-only D50 ;
+- chemins avec espaces et caractères non ASCII.
+
+## 9.5 Validation graphique réelle
+
+Créer une nouvelle bibliothèque depuis une installation ASTAP ne contenant que
+D50 et vérifier :
+
+- détection immédiate de D50 ;
+- aucune attente pour d’autres familles ;
+- progression cohérente ;
+- aucune erreur terminale ;
+- bibliothèque automatiquement sélectionnée ;
+- vérification `READY_FULL` ou `READY_PARTIAL` cohérente ;
+- run Near ;
+- run Blind après S2.
+
+## 9.6 Critères de sortie
+
+S4 est terminée seulement si :
+
+- D50 seule est un parcours pleinement supporté ;
+- aucune famille absente non demandée ne provoque d’erreur ;
+- la progression reflète les familles réellement traitées ;
+- le message final correspond au résultat réel ;
+- la bibliothèque produite fonctionne avec Near et Blind ;
+- les tests ciblés et barrières générales sont verts.
+
+Gate attendu :
+
+```text
+READY_FOR_P3B1E_LIBRARY_DISTRIBUTION_INTEGRATION
+```
+
+Sinon :
+
+```text
+NOT_READY_FOR_P3B1E_LIBRARY_DISTRIBUTION_INTEGRATION
+```
+
+---
+
+## 10. Barrières générales obligatoires
+
+Après chaque mission S1, S2, S3 et S4 :
 
 ```bash
 .venv/bin/python tools/check_core_boundaries.py
@@ -471,101 +882,27 @@ git diff --check
 git status --short --branch
 ```
 
-Tout skip externe doit être explicite et mentionné dans le rapport.
+Pour les surfaces GUI :
 
-Aucune nouvelle catégorie de warning sans justification.
+```bash
+QT_QPA_PLATFORM=offscreen \
+.venv/bin/python -m pytest tests/test_gui_* -q
+```
 
-### 8.3 Validation graphique réelle
+Tout skip externe doit être explicite dans le rapport.
 
-Avant de fermer une sous-phase GUI, tester dans une session graphique réelle :
+Ne jamais présenter :
 
-1. FITS forcé en pipeline ;
-2. AUTO avec route réellement sélectionnée ;
-3. raster et sidecar ;
-4. nettoyage WCS intégré ;
-5. progression en temps réel ;
-6. Stop puis relance ;
-7. fermeture pendant un run ;
-8. journal et résumé ;
-9. langue, si la zone est traduite.
-
-Ne jamais présenter un test offscreen comme un test graphique réel.
-
-Toute modification d’écriture impose aussi un contrôle d’intégrité des pixels.
+- un test non exécuté comme réussi ;
+- un test offscreen comme une validation graphique réelle ;
+- un micro-benchmark comme preuve suffisante pour un batch de 100 fichiers ;
+- une bibliothèque validée Near comme preuve que Blind fonctionne.
 
 ---
 
-## 9. Travaux restant après P1D/P3B
+## 11. Méthode Git
 
-### 9.1 Couverture 4D
-
-Avant une promesse générale :
-
-- compléter la couverture ;
-- ou publier une bêta explicitement limitée ;
-- versionner le manifeste de couverture ;
-- tester les zones hors couverture ;
-- documenter le fallback.
-
-### 9.2 P4 — Packaging
-
-P4 doit traiter :
-
-- nom de distribution cohérent avec ZeSolver ;
-- version de publication cohérente ;
-- section `[build-system]` ;
-- wheel et sdist ;
-- points d’entrée GUI et CLI ;
-- ressources embarquées ;
-- extras `gui`, `gpu` et `dev` ;
-- dépendances GPU réellement facultatives ;
-- fonctionnement CPU sans CUDA ;
-- installation editable et depuis wheel ;
-- machine vierge ;
-- premier lancement ;
-- chemins avec espaces et caractères non ASCII ;
-- mise à jour et désinstallation.
-
-La version inscrite dans `pyproject.toml` ne constitue pas une preuve de maturité.
-
-### 9.3 Documentation
-
-Avant publication :
-
-- README utilisateur ;
-- guide d’installation ;
-- guide de bibliothèque ;
-- guide rapide ;
-- limites connues ;
-- politique WCS et sauvegardes ;
-- FAQ ;
-- guide contributeur ;
-- changelog ;
-- crédits et licences.
-
-### 9.4 P5
-
-Les optimisations GPU, nouvelles projections et nouveaux profils restent différés
-jusqu’à la fermeture de P4.
-
----
-
-## 10. Dépendances
-
-- Conserver un chemin CPU fonctionnel.
-- PySide6 reste une dépendance GUI isolable.
-- Les dépendances GPU doivent être facultatives.
-- Ne pas imposer CUDA à un utilisateur CPU.
-- Documenter toute nouvelle dépendance.
-- Éviter les API privées non testées.
-- Ne pas annoncer une plateforme non validée.
-- Ne pas ajouter une dépendance lourde pour un simple effet visuel.
-
----
-
-## 11. Git et fichiers volumineux
-
-Avant et après chaque mission :
+Avant toute modification :
 
 ```bash
 git status --short --branch
@@ -574,131 +911,87 @@ git diff --check
 
 Règles :
 
-- aucun push sans autorisation explicite ;
-- ne pas restaurer un changement utilisateur sans demande ;
-- commits locaux seulement lorsque la mission le prévoit ;
-- rollback clair pendant P1D/P3B ;
-- ZIP de transmission non suivis par Git ;
-- ne pas ajouter catalogues, index, corpus, logs, venv ou caches ;
-- utiliser manifestes, checksums, téléchargements ou artefacts de release.
+- ne pas restaurer les changements utilisateur ;
+- ne pas supprimer les travaux P3B-1A à P3B-1D ;
+- séparer S1, S2, S3 et S4 en changements distincts ;
+- ne pas pousser sans autorisation explicite ;
+- ne pas ajouter les catalogues, index, FITS de test volumineux, logs, venv,
+  caches ou ZIP au dépôt ;
+- préférer des fixtures synthétiques/hermétiques pour les tests automatisés ;
+- conserver un rollback clair.
 
 ---
 
-## 12. Rapport attendu
+## 12. Rapport attendu après chaque mission
 
-Chaque mission importante doit produire :
+Créer un rapport dédié dans `docs/stabilization/` contenant :
 
 1. objectif ;
-2. état initial observé ;
-3. fichiers modifiés ;
-4. comportement avant/après ;
-5. tests ciblés ;
-6. non-régression ;
-7. tests manuels réels ;
-8. warnings ;
-9. tests non exécutés et raison ;
-10. état Git ;
-11. limites ;
-12. une seule prochaine étape ;
-13. décision de gate.
+2. état Git initial ;
+3. reproduction avant correction ;
+4. diagnostic confirmé ou infirmé ;
+5. architecture choisie et raison ;
+6. fichiers modifiés ;
+7. comportement avant/après ;
+8. tests ajoutés ;
+9. tests ciblés exécutés ;
+10. barrières générales ;
+11. validation manuelle réelle ;
+12. mesures de temps et mémoire lorsque pertinent ;
+13. résultats WCS avant/après ;
+14. warnings et limites ;
+15. tests non exécutés et raison ;
+16. état Git final ;
+17. une seule prochaine étape ;
+18. gate exact.
 
-Ne jamais prétendre qu’un test a été exécuté s’il ne l’a pas été.
+Nommage recommandé :
+
+```text
+docs/stabilization/p3b_s1_batch_runtime_memory_report_20260723.md
+docs/stabilization/p3b_s2_blind4d_library_view_report_20260723.md
+docs/stabilization/p3b_s3_async_wcs_cleaner_report_20260723.md
+docs/stabilization/p3b_s4_astap_family_handling_report_20260723.md
+```
 
 ---
 
-## 13. Gates
+## 13. Reprise de P3B-1E
 
-### Sortie P1D-0
-
-Conclure :
+P3B-1E ne peut reprendre qu’après obtention du gate :
 
 ```text
-READY_FOR_P1D1_ASTAP_RUNTIME_UNIFICATION
+READY_FOR_P3B1E_LIBRARY_DISTRIBUTION_INTEGRATION
 ```
 
-uniquement si l’audit localise les dépendances historiques, compare les
-stratégies A/B, choisit une seule prochaine étape et ne modifie que la
-documentation.
+À ce moment seulement, mettre à jour ce fichier avec la mission de distribution
+officielle des bibliothèques.
 
-Sinon :
+Ne pas profiter de S1–S4 pour ajouter :
 
-```text
-NOT_READY_FOR_P1D1_ASTAP_RUNTIME_UNIFICATION
-```
-
-### Sortie P1D-1B
-
-Conclure :
-
-```text
-READY_FOR_P1D2_CATALOG_PROVENANCE_AND_ADOPTION
-```
-
-uniquement si :
-
-- une `CatalogLibrary` valide suffit à lancer ZeNear sans ancien index ;
-- ASTAP-native est le provider effectif avec une bibliothèque ;
-- PIPELINE et LEGACY utilisent la même politique centrale ;
-- aucun manifeste historique ou `tiles/*.npz` n'est consulté en mode natif ;
-- aucun fallback silencieux vers le provider legacy n'existe ;
-- le rollback `legacy-index` explicite fonctionne ;
-- la télémétrie annonce le provider réel et les fallbacks réels ;
-- la comparaison externe ne montre aucune régression inexpliquée ;
-- l'intégrité FITS et catalogue est préservée ;
-- les barrières automatisées sont vertes.
-
-Sinon :
-
-```text
-NOT_READY_FOR_P1D2_CATALOG_PROVENANCE_AND_ADOPTION
-```
-
-### Sortie P3B
-
-Conclure :
-
-```text
-READY_FOR_P4_PACKAGING
-```
-
-uniquement si :
-
-- le parcours principal est simple ;
-- `CatalogLibrary` est la ressource produit visible ;
-- les outils avancés sont séparés ;
-- FITS et rasters fonctionnent ;
-- progression, Stop, relance et fermeture fonctionnent ;
-- l’ancien GUI peut être retiré sans perte essentielle ;
-- les tests automatisés sont verts ;
-- la validation graphique réelle est positive ;
-- les limites de couverture sont visibles.
-
-Sinon :
-
-```text
-NOT_READY_FOR_P4_PACKAGING
-```
-
-### Publication
-
-ZeSolver ne peut être déclaré publiable qu’après P4 :
-
-```text
-READY_FOR_PUBLIC_BETA
-```
+- téléchargement officiel ;
+- URLs de release ;
+- packaging ;
+- installateur ;
+- nouvelle projection ;
+- nouveau profil astrométrique ;
+- optimisation GPU non liée au défaut reproduit ;
+- refonte graphique supplémentaire.
 
 ---
 
 ## 14. Principe final
 
-La priorité de ZeSolver est la confiance :
+La priorité immédiate n’est pas d’ajouter des fonctions.
 
-- confiance dans le WCS ;
-- confiance dans les fichiers ;
-- confiance dans le cycle GUI ;
-- confiance dans la reproductibilité ;
-- confiance dans les limites annoncées ;
-- confiance dans l’installation.
+Elle est de garantir que :
 
-**Protéger les résultats acquis. Simplifier le produit. Publier seulement ce qui
-est démontré.**
+- un gros batch reste rapide et borné en mémoire ;
+- Near ne paie pas le coût de Blind lorsqu’il réussit ;
+- une bibliothèque valide est réellement utilisable par Blind ;
+- le nettoyage WCS ne bloque pas l’interface ;
+- une installation ASTAP D50 seule est un parcours normal ;
+- les résultats WCS et les fichiers restent dignes de confiance.
+
+**Mesurer. Corriger une cause à la fois. Préserver les résultats. Ne reprendre la
+simplification et la distribution qu’après démonstration.**

@@ -89,10 +89,23 @@ def _discover_astap_families(root: Path | None) -> tuple[str, ...]:
     if root is None or not root.exists() or not root.is_dir():
         return ()
     found: list[str] = []
+    candidates = [root]
+    candidates.extend(path for path in sorted(root.iterdir()) if path.is_dir())
     for family, spec in sorted(FAMILY_SPECS.items()):
-        if any(root.glob(spec.glob_pattern())):
+        if any(_has_family_files(candidate, spec) for candidate in candidates):
             found.append(family)
     return tuple(found)
+
+
+def _has_family_files(root: Path, spec) -> bool:
+    expected_prefix = f"{spec.prefix}_".lower()
+    expected_suffix = f".{spec.extension}".lower()
+    return any(
+        path.is_file()
+        and path.name.lower().startswith(expected_prefix)
+        and path.name.lower().endswith(expected_suffix)
+        for path in root.iterdir()
+    )
 
 
 def _discover_4d_indexes(

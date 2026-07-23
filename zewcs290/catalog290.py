@@ -109,6 +109,19 @@ def _build_family_specs() -> Dict[str, CatalogFamilySpec]:
 FAMILY_SPECS: Dict[str, CatalogFamilySpec] = _build_family_specs()
 
 
+def _glob_family_files(root: Path, spec: CatalogFamilySpec) -> Tuple[Path, ...]:
+    expected_prefix = f"{spec.prefix}_".lower()
+    expected_suffix = f".{spec.extension}".lower()
+    matches = [
+        path
+        for path in root.iterdir()
+        if path.is_file()
+        and path.name.lower().startswith(expected_prefix)
+        and path.name.lower().endswith(expected_suffix)
+    ]
+    return tuple(sorted(matches, key=lambda item: item.name.lower()))
+
+
 @dataclass(frozen=True)
 class SkyBox:
     ra_segments: Tuple[Tuple[float, float], ...]
@@ -276,7 +289,7 @@ class CatalogDB:
                 raise KeyError(f"unknown family {key!r}")
             pattern = spec.glob_pattern()
             ring_files: Dict[int, List[Tuple[int, Path]]] = defaultdict(list)
-            for path in sorted(self.root.glob(pattern)):
+            for path in _glob_family_files(self.root, spec):
                 tile_code = path.stem.split("_", 1)[1]
                 ring_index = int(tile_code[:2])
                 tile_index = int(tile_code[2:])

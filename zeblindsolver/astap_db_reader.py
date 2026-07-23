@@ -56,12 +56,19 @@ class TileMeta:
     tile_index: int
 
 
-def _catalog_for_root(db_root: Path | str) -> CatalogDB:
+def _normalize_families(families: tuple[str, ...] | list[str] | None) -> tuple[str, ...] | None:
+    values = tuple(dict.fromkeys(str(family).strip().lower() for family in families or () if str(family).strip()))
+    return values or None
+
+
+def _catalog_for_root(db_root: Path | str, families: tuple[str, ...] | list[str] | None = None) -> CatalogDB:
     root = Path(db_root).expanduser().resolve()
-    if root in _TileCache:
-        return _TileCache[root]
-    catalog = CatalogDB(root)
-    _TileCache[root] = catalog
+    normalized = _normalize_families(families)
+    cache_key = (root, normalized)
+    if cache_key in _TileCache:
+        return _TileCache[cache_key]
+    catalog = CatalogDB(root, families=normalized)
+    _TileCache[cache_key] = catalog
     logger.debug("ASTAP catalog loaded: %s (%d tiles)", root, len(catalog.tiles))
     return catalog
 
@@ -90,9 +97,9 @@ def _ra_center_from_segments(bounds: SkyBox) -> float:
     return angle % 360.0
 
 
-def iter_tiles(db_root: Path | str) -> Iterator[TileMeta]:
+def iter_tiles(db_root: Path | str, families: tuple[str, ...] | list[str] | None = None) -> Iterator[TileMeta]:
     """Yield metadata for every ASTAP tile found under *db_root*."""
-    catalog = _catalog_for_root(db_root)
+    catalog = _catalog_for_root(db_root, families=families)
     for tile in catalog.tiles:
         center_ra = _ra_center_from_segments(tile.bounds)
         center_dec = tile.bounds.dec_center
@@ -116,7 +123,7 @@ def load_tile_stars(db_root: Path | str, tile_meta: TileMeta) -> np.ndarray:
     the rows are sorted as they appear on disk, and ``mag`` is Gaia BP/Johnson-V.
 
     """
-    catalog = _catalog_for_root(db_root)
+    catalog = _catalog_for_root(db_root, families=(tile_meta.family,))
     target = str(tile_meta.path)
     for tile in catalog.tiles:
         if str(tile.path) == target:

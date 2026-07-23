@@ -216,6 +216,12 @@ from zesolver.catalog_resources import (
 from zesolver.catalog_library import (
     CatalogLibrary,
     CatalogLibraryError,
+    CatalogLibraryManagementCancelled,
+    CatalogLibraryManagementError,
+    CatalogLibraryManagementService,
+    LibraryCreateOptions,
+    LibraryInstallOptions,
+    LibraryRepairPlan,
     CatalogStatus,
     IssueSeverity,
 )
@@ -265,7 +271,6 @@ from zeblindsolver.db_convert import (
 from zeblindsolver.zeblindsolver import SolveConfig as BlindSolveConfig, solve_blind as python_solve_blind
 from zeblindsolver.quad_index_builder import quad_table_metadata, validate_index as validate_zeblind_index
 from zeblindsolver import presets as preset_utils
-from tools import benchmark_solver as bench
 
 
 FITS_EXTENSIONS = {".fit", ".fits", ".fts"}
@@ -345,11 +350,57 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_level_debug": "Debug",
         "log_level_warning": "Warning",
         "interface_menu": "Interface",
+        "advanced_tools_menu": "Outils avancés",
+        "historical_index_maintenance_action": "Maintenance des index historiques",
+        "historical_index_maintenance_title": "Maintenance des index historiques",
+        "historical_index_maintenance_warning": "Cette fenêtre reconstruit des artefacts historiques à partir des anciens chemins database/index. Elle ne fait pas partie d'un run normal, peut être longue et modifie des fichiers d'index sur disque.",
+        "library_manager_action": "Gestionnaire de Bibliothèques ZeSolver…",
+        "library_manager_title": "Gestionnaire de Bibliothèques ZeSolver",
+        "library_manager_open": "Gérer les bibliothèques…",
+        "library_manager_install_title": "Installer une bibliothèque prête à l’emploi",
+        "library_manager_install_desc": "Télécharger ou ouvrir un paquet ZeSolver déjà préparé, le vérifier puis l’installer automatiquement.",
+        "library_manager_create_title": "Créer depuis une base ASTAP existante",
+        "library_manager_create_desc": "Détecter les bases disponibles et préparer automatiquement ZeNear et ZeBlind 4D.",
+        "library_manager_repair_title": "Vérifier ou réparer une bibliothèque",
+        "library_manager_repair_desc": "Analyser une bibliothèque existante et reconstruire uniquement les éléments manquants ou invalides.",
+        "library_manager_package_label": "Paquet Bibliothèque ZeSolver",
+        "library_manager_destination_label": "Destination",
+        "library_manager_source_label": "Dossier contenant les bases ASTAP",
+        "library_manager_existing_label": "Bibliothèque ZeSolver",
+        "library_manager_install_button": "Installer",
+        "library_manager_create_button": "Créer la bibliothèque",
+        "library_manager_analyze_button": "Analyser",
+        "library_manager_repair_button": "Réparer les éléments manquants",
+        "library_manager_cancel_button": "Annuler",
+        "library_manager_back_button": "Retour",
+        "library_manager_reference_policy": "Référencer les bases ASTAP existantes — recommandé",
+        "library_manager_copy_policy": "Copier les bases dans la Bibliothèque ZeSolver",
+        "library_manager_standard_mode": "Standard — recommandé",
+        "library_manager_custom_mode": "Personnalisé",
+        "library_manager_advanced_toggle": "Afficher les paramètres avancés",
+        "library_manager_detected_bases": "Bases détectées",
+        "library_manager_log": "Journal",
+        "library_manager_stage": "Étape en cours",
+        "library_manager_elapsed": "Temps écoulé",
+        "library_manager_progress": "Progression globale",
+        "library_manager_no_worker_on_open": "Aucune opération en cours.",
+        "library_manager_success": "Bibliothèque prête : {path}",
+        "library_manager_failed": "Opération échouée : {error}",
+        "library_manager_cancelled": "Construction annulée",
+        "library_manager_confirm_cancel_title": "Annuler l’opération ?",
+        "library_manager_confirm_cancel_body": "Une écriture est en cours. Annuler maintenant arrêtera proprement le worker et le staging ne sera pas présenté comme valide.",
+        "library_manager_credits": "Crédits : ASTAP par Han Kleijn ; Astrometry.net par ses auteurs. Conservez les notices de licence lors de toute redistribution.",
+        "library_manager_disk_required": "Espace disque requis",
+        "library_manager_partial_coverage": "Couverture Blind 4D partielle",
+        "library_manager_ready": "Bibliothèque prête",
+        "library_manager_repair_plan": "Actions prévues",
+        "library_manager_no_families": "Aucune famille ASTAP prise en charge détectée. Choisissez une racine contenant au moins une base ASTAP installée.",
         "interface_mode_expert": "Expert",
         "interface_mode_easy": "Easy",
         "interface_mode_wizard": "Wizard",
         "window_title": "ZeSolver – Traitement par lot",
         "browse_button": "Parcourir…",
+        "close_button": "Fermer",
         "input_label": "Dossier d'images",
         "scan_button": "Analyser les fichiers",
         "options_box": "Paramètres solveur",
@@ -384,6 +435,10 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "simple_clean_wcs_label": "Nettoyer WCS avant run (FITS, via zewcscleaner)",
         "simple_clean_failed": "Nettoyage WCS impossible: {error}",
         "simple_clean_done": "Nettoyage WCS: {files} fichier(s) modifié(s), {cards} carte(s) supprimée(s).",
+        "simple_clean_started": "Nettoyage WCS démarré: {files} fichier(s).",
+        "simple_clean_progress": "Nettoyage WCS: {done} / {total} — {remaining} restant(s)",
+        "simple_clean_cancelled": "Nettoyage WCS annulé: {done} traité(s), {remaining} restant(s).",
+        "simple_clean_summary": "Nettoyage WCS terminé: prévus={planned}, traités={processed}, modifiés={changed}, cartes={cards}, erreurs={errors}, restants={remaining}, durée={duration}s, statut={status}.",
         "simple_wizard_done": "Assistant terminé. Tu peux lancer un run quand tu veux.",
         "files_header": "Fichier",
         "status_header": "Statut",
@@ -391,26 +446,24 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_box": "Journal",
         "run_button": "Résoudre",
         "stop_button": "Stop",
-        "dev_tab": "Développement",
-        "dev_bucket_label": "Limite max. paires/quads",
+        "dev_bucket_label": "Limite paires/quads historique",
         "dev_bucket_hint": "0 = auto (recommandé)",
-        "dev_vote_label": "Percentile votes (quads)",
-        "dev_detect_sigma_label": "Sigma détection (k·σ)",
-        "dev_detect_sigma_hint": "Multiplier l'écart-type du bruit (défaut 3.0)",
-        "dev_detect_area_label": "Surface min. (px)",
-        "dev_detect_area_hint": "Ignorer les blobs sous ce seuil (défaut 5)",
-        "dev_bucket_cap_s_label": "Cap niveau S",
-        "dev_bucket_cap_m_label": "Cap niveau M",
-        "dev_bucket_cap_l_label": "Cap niveau L",
-        "dev_workers_label": "Threads (solveur)",
+        "dev_vote_label": "Percentile votes historique",
+        "dev_detect_sigma_label": "Sigma détection Blind historique",
+        "dev_detect_sigma_hint": "Agit uniquement sur le backend Blind historique (défaut 3.0).",
+        "dev_detect_area_label": "Surface min. Blind historique (px)",
+        "dev_detect_area_hint": "Agit uniquement sur le backend Blind historique (défaut 5).",
+        "dev_bucket_cap_s_label": "Cap historique niveau S",
+        "dev_bucket_cap_m_label": "Cap historique niveau M",
+        "dev_bucket_cap_l_label": "Cap historique niveau L",
         "dev_workers_auto": "Auto (0 — recommandé)",
-        "dev_workers_hint": "Auto adapte les threads selon la machine (CPU/RAM). Le mode manuel peut être plus rapide mais moins stable.",
-        "dev_family_group": "Bases supplémentaires",
+        "dev_workers_hint": "Auto adapte les threads selon la machine (CPU/RAM).",
+        "dev_family_group": "Familles historiques",
         "dev_family_auto": "Auto (toutes les bases disponibles)",
-        "dev_family_hint": "Décoche Auto pour choisir quelles bases utiliser quand le solveur est en mode Auto.",
+        "dev_family_hint": "Décoche Auto pour choisir quelles familles legacy utiliser quand le solveur reste en mode Auto.",
         "dev_family_missing": "Aucune base détectée (index absent).",
         "dev_family_none_error": "Sélectionne au moins une base quand Auto est désactivé.",
-        "dev_hash_group": "Reconstruction des hashes",
+        "dev_hash_group": "Maintenance des index historiques",
         "dev_hash_button": "Recréer hash {level}",
         "dev_hash_value_hint": "Nombre max de quads par tuile utilisé pendant la reconstruction.",
         "dev_hash_started": "Recréation hash {level} démarrée.",
@@ -545,6 +598,51 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
     },
         "en": {
         "language_menu": "Language",
+        "advanced_tools_menu": "Advanced tools",
+        "historical_index_maintenance_action": "Historical index maintenance",
+        "historical_index_maintenance_title": "Historical index maintenance",
+        "historical_index_maintenance_warning": "This window rebuilds historical artifacts from the legacy database/index paths. It is not part of a normal solve run, can be long-running, and modifies index files on disk.",
+        "library_manager_action": "ZeSolver Library Manager…",
+        "library_manager_title": "ZeSolver Library Manager",
+        "library_manager_open": "Manage libraries…",
+        "library_manager_install_title": "Install a ready-to-use library",
+        "library_manager_install_desc": "Open a prepared ZeSolver package, verify it, then install it automatically.",
+        "library_manager_create_title": "Create from an existing ASTAP database",
+        "library_manager_create_desc": "Detect available databases and prepare ZeNear and ZeBlind 4D automatically.",
+        "library_manager_repair_title": "Verify or repair a library",
+        "library_manager_repair_desc": "Analyze an existing library and rebuild only missing or invalid elements.",
+        "library_manager_package_label": "ZeSolver library package",
+        "library_manager_destination_label": "Destination",
+        "library_manager_source_label": "Folder containing ASTAP databases",
+        "library_manager_existing_label": "ZeSolver library",
+        "library_manager_install_button": "Install",
+        "library_manager_create_button": "Create library",
+        "library_manager_analyze_button": "Analyze",
+        "library_manager_repair_button": "Repair missing elements",
+        "library_manager_cancel_button": "Cancel",
+        "library_manager_back_button": "Back",
+        "library_manager_reference_policy": "Reference existing ASTAP databases — recommended",
+        "library_manager_copy_policy": "Copy databases into the ZeSolver library",
+        "library_manager_standard_mode": "Standard — recommended",
+        "library_manager_custom_mode": "Custom",
+        "library_manager_advanced_toggle": "Show advanced settings",
+        "library_manager_detected_bases": "Detected databases",
+        "library_manager_log": "Log",
+        "library_manager_stage": "Current step",
+        "library_manager_elapsed": "Elapsed time",
+        "library_manager_progress": "Global progress",
+        "library_manager_no_worker_on_open": "No operation running.",
+        "library_manager_success": "Library ready: {path}",
+        "library_manager_failed": "Operation failed: {error}",
+        "library_manager_cancelled": "Build cancelled",
+        "library_manager_confirm_cancel_title": "Cancel operation?",
+        "library_manager_confirm_cancel_body": "A write is in progress. Cancelling now will stop the worker cleanly and the staging area will not be presented as valid.",
+        "library_manager_credits": "Credits: ASTAP by Han Kleijn; Astrometry.net by its authors. Preserve licence notices when redistributing.",
+        "library_manager_disk_required": "Required disk space",
+        "library_manager_partial_coverage": "Partial Blind 4D coverage",
+        "library_manager_ready": "Library ready",
+        "library_manager_repair_plan": "Planned actions",
+        "library_manager_no_families": "No supported ASTAP family detected. Choose a root containing at least one installed ASTAP database.",
         "language_action_fr": "French",
         "language_action_en": "English",
         "log_menu": "Log Level",
@@ -557,6 +655,7 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "interface_mode_wizard": "Wizard",
         "window_title": "ZeSolver – Batch Solver",
         "browse_button": "Browse…",
+        "close_button": "Close",
         "input_label": "Image folder",
         "scan_button": "Scan files",
         "options_box": "Solver settings",
@@ -591,6 +690,10 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "simple_clean_wcs_label": "Clean WCS before run (FITS, via zewcscleaner)",
         "simple_clean_failed": "WCS cleanup failed: {error}",
         "simple_clean_done": "WCS cleanup: {files} file(s) changed, {cards} card(s) removed.",
+        "simple_clean_started": "WCS cleanup started: {files} file(s).",
+        "simple_clean_progress": "WCS cleanup: {done} / {total} — {remaining} remaining",
+        "simple_clean_cancelled": "WCS cleanup cancelled: {done} processed, {remaining} remaining.",
+        "simple_clean_summary": "WCS cleanup completed: planned={planned}, processed={processed}, changed={changed}, cards={cards}, errors={errors}, remaining={remaining}, duration={duration}s, status={status}.",
         "simple_wizard_done": "Wizard completed. You can start a run whenever you want.",
         "files_header": "File",
         "status_header": "Status",
@@ -598,26 +701,24 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_box": "Log",
         "run_button": "Solve",
         "stop_button": "Stop",
-        "dev_tab": "Development",
-        "dev_bucket_label": "Max quad pairs per bucket",
+        "dev_bucket_label": "Historical max quad pairs",
         "dev_bucket_hint": "0 = auto (recommended)",
-        "dev_vote_label": "Vote percentile (quads)",
-        "dev_detect_sigma_label": "Detection sigma (k·σ)",
-        "dev_detect_sigma_hint": "Multiplier applied to noise sigma (default 3.0)",
-        "dev_detect_area_label": "Min blob area (px)",
-        "dev_detect_area_hint": "Reject detections smaller than N pixels (default 5)",
-        "dev_bucket_cap_s_label": "Bucket cap (S)",
-        "dev_bucket_cap_m_label": "Bucket cap (M)",
-        "dev_bucket_cap_l_label": "Bucket cap (L)",
-        "dev_workers_label": "Worker threads",
+        "dev_vote_label": "Historical vote percentile",
+        "dev_detect_sigma_label": "Historical Blind detection sigma",
+        "dev_detect_sigma_hint": "Only affects the historical Blind backend (default 3.0).",
+        "dev_detect_area_label": "Historical Blind min area (px)",
+        "dev_detect_area_hint": "Only affects the historical Blind backend (default 5).",
+        "dev_bucket_cap_s_label": "Historical bucket cap S",
+        "dev_bucket_cap_m_label": "Historical bucket cap M",
+        "dev_bucket_cap_l_label": "Historical bucket cap L",
         "dev_workers_auto": "Auto (0 — recommended)",
-        "dev_workers_hint": "Auto adapts worker threads to the machine (CPU/RAM). Manual mode can be faster but less stable.",
-        "dev_family_group": "Additional catalogs",
+        "dev_workers_hint": "Auto adapts worker threads to the machine (CPU/RAM).",
+        "dev_family_group": "Historical families",
         "dev_family_auto": "Auto (use every available family)",
-        "dev_family_hint": "Uncheck Auto to pick which catalog families are used when the solver stays on Auto.",
+        "dev_family_hint": "Uncheck Auto to pick which legacy catalog families are used when the solver stays on Auto.",
         "dev_family_missing": "No catalog families detected (index missing).",
         "dev_family_none_error": "Select at least one catalog family when Auto is disabled.",
-        "dev_hash_group": "Hash tables",
+        "dev_hash_group": "Historical index maintenance",
         "dev_hash_button": "Rebuild hash {level}",
         "dev_hash_value_hint": "Maximum quads per tile used while rebuilding.",
         "dev_hash_started": "Hash rebuild {level} started.",
@@ -921,7 +1022,9 @@ _GUI_CATALOG_LIBRARY_I18N = {
         "simple_wizard_invalid_library": "La bibliothèque sélectionnée est invalide. Vérifiez-la ou choisissez une autre racine.",
         "simple_wizard_legacy_compat": "Configuration historique valide utilisée en compatibilité.",
         "catalog_compat_group_title": "Compatibilité historique et diagnostic",
-        "catalog_compat_warning": "Ces réglages servent au rollback, au diagnostic et aux anciennes installations. Ils ne sont pas nécessaires lorsque la Bibliothèque ZeSolver est valide.",
+        "catalog_compat_warning": "Ces paramètres concernent uniquement le backend historique et les anciens index S/M/L. Ils ne modifient pas la chaîne produit ZeBlind 4D actuelle.",
+        "legacy_blind_group_title": "Paramètres Blind historique S/M/L",
+        "legacy_blind_scope_warning": "Ces paramètres n'affectent pas ZeBlind 4D.",
         "catalog_compat_tools_title": "Outils avancés et maintenance des catalogues",
         "catalog_compat_tools_warning": "Ces actions peuvent construire ou vérifier des artefacts historiques. Elles ne sont pas utilisées par le parcours normal Bibliothèque ZeSolver.",
         "settings_legacy_astap_label": "Base ASTAP historique",
@@ -990,7 +1093,9 @@ _GUI_CATALOG_LIBRARY_I18N = {
         "simple_wizard_invalid_library": "The selected library is invalid. Verify it or choose another root.",
         "simple_wizard_legacy_compat": "Valid legacy configuration is being used for compatibility.",
         "catalog_compat_group_title": "Legacy compatibility and diagnostics",
-        "catalog_compat_warning": "These settings are for rollback, diagnostics, and older installations. They are not needed when the ZeSolver library is valid.",
+        "catalog_compat_warning": "These settings only affect the historical backend and legacy S/M/L indexes. They do not modify the current ZeBlind 4D product chain.",
+        "legacy_blind_group_title": "Historical S/M/L Blind settings",
+        "legacy_blind_scope_warning": "These settings do not affect ZeBlind 4D.",
         "catalog_compat_tools_title": "Advanced tools and catalog maintenance",
         "catalog_compat_tools_warning": "These actions can build or verify historical artifacts. They are not used by the normal ZeSolver library path.",
         "settings_legacy_astap_label": "Historical ASTAP source",
@@ -1033,162 +1138,6 @@ _GUI_CATALOG_LIBRARY_I18N = {
     },
 }
 for _lang, _mapping in _GUI_CATALOG_LIBRARY_I18N.items():
-    base = GUI_TRANSLATIONS.setdefault(_lang, {})
-    for _k, _v in _mapping.items():
-        if _k not in base:
-            base[_k] = _v
-
-_GUI_BENCHMARK_I18N = {
-    "fr": {
-        "benchmark_tab": "Benchmark",
-        "benchmark_sources_group": "Sources d'entrée",
-        "benchmark_inputs_hint": "Un chemin, motif glob ou fichier @liste par ligne.",
-        "benchmark_inputs_placeholder": "D:\\captures\\*.fit\n@liste.txt\nC:\\session",
-        "benchmark_add_file_btn": "Ajouter fichiers…",
-        "benchmark_add_dir_btn": "Ajouter dossier…",
-        "benchmark_add_list_btn": "Ajouter fichier liste…",
-        "benchmark_browse_file_btn": "Parcourir…",
-        "benchmark_save_file_btn": "Enregistrer…",
-        "benchmark_index_label": "Index ZeBlind",
-        "benchmark_grid_label": "Fichier de grille (JSON)",
-        "benchmark_output_json_label": "Rapport JSON",
-        "benchmark_output_csv_label": "Rapport CSV",
-        "benchmark_options_group": "Options générales",
-        "benchmark_limit_label": "Limite d'entrées",
-        "benchmark_log_level_label": "Niveau de log",
-        "benchmark_allow_write_label": "Écrire le WCS dans les fichiers d'origine",
-        "benchmark_continue_label": "Essayer toutes les variantes même après un succès",
-        "benchmark_tile_cache_label": "Cache tuiles (0 = auto)",
-        "benchmark_sip_label": "Ordre SIP",
-        "benchmark_parity_label": "Tester l'inversion de parité",
-        "benchmark_full_mode_label": "Mode complet (désactive Fast)",
-        "benchmark_base_group": "Paramètres SolveConfig",
-        "benchmark_max_candidates_label": "Candidats max",
-        "benchmark_max_stars_label": "Étoiles image max",
-        "benchmark_max_quads_label": "Quads max",
-        "benchmark_detect_sigma_label": "Detection k-sigma",
-        "benchmark_detect_area_label": "Surface mini détectée",
-        "benchmark_bucket_cap_s_label": "Limite seau S",
-        "benchmark_bucket_cap_m_label": "Limite seau M",
-        "benchmark_bucket_cap_l_label": "Limite seau L",
-        "benchmark_bucket_override_label": "Limite globale seaux",
-        "benchmark_vote_label": "Percentile de vote",
-        "benchmark_downsample_label": "Downsample",
-        "benchmark_quality_rms_label": "Qualité RMS (px)",
-        "benchmark_quality_inliers_label": "Qualité inliers",
-        "benchmark_pixel_tol_label": "Tolérance pixel",
-        "benchmark_hints_group": "Indices (optionnel)",
-        "benchmark_ra_label": "Indice RA (°)",
-        "benchmark_dec_label": "Indice Dec (°)",
-        "benchmark_radius_label": "Indice rayon (°)",
-        "benchmark_focal_label": "Indice focale (mm)",
-        "benchmark_pixel_label": "Indice taille pixel (µm)",
-        "benchmark_scale_label": "Indice résolution (\"/px)",
-        "benchmark_scale_min_label": "Résolution mini",
-        "benchmark_scale_max_label": "Résolution maxi",
-        "benchmark_hint_placeholder": "Auto",
-        "benchmark_log_placeholder": "Les journaux du benchmark s'affichent ici.",
-        "benchmark_run_button": "Lancer le benchmark",
-        "benchmark_stop_button": "Stop",
-        "benchmark_status_idle": "En attente",
-        "benchmark_status_starting": "Initialisation du benchmark…",
-        "benchmark_status_running": "{done}/{total} — {name}",
-        "benchmark_status_done": "Terminé : {summary}",
-        "benchmark_status_cancelled": "Benchmark interrompu",
-        "benchmark_status_failed": "Échec : {error}",
-        "benchmark_log_done": "Benchmark terminé : {summary}",
-        "benchmark_log_cancelled": "Benchmark interrompu par l'utilisateur",
-        "benchmark_log_failed": "Erreur benchmark : {error}",
-        "benchmark_dialog_open_file": "Choisir un fichier",
-        "benchmark_dialog_save_file": "Enregistrer sous",
-        "benchmark_dialog_filter_all": "Tous les fichiers (*)",
-        "benchmark_dialog_filter_json": "Fichiers {ext} (*.{ext_lower})",
-        "benchmark_dialog_filter_csv": "Fichiers {ext} (*.{ext_lower})",
-        "benchmark_dialog_add_files": "Sélectionner des fichiers FITS",
-        "benchmark_dialog_add_directory": "Sélectionner un dossier",
-        "benchmark_dialog_add_list": "Sélectionner un fichier liste",
-        "benchmark_error_inputs": "Ajoutez au moins une source (fichier, dossier, glob ou fichier @liste).",
-        "benchmark_error_index": "Sélectionnez un dossier d'index.",
-        "benchmark_error_index_missing": "Dossier d'index introuvable : {path}",
-        "benchmark_error_grid_missing": "Fichier de grille introuvable : {path}",
-        "benchmark_error_number": "Valeur invalide pour {field}.",
-    },
-    "en": {
-        "benchmark_tab": "Benchmark",
-        "benchmark_sources_group": "Input sources",
-        "benchmark_inputs_hint": "One path, glob, or @list file per line.",
-        "benchmark_inputs_placeholder": "D:\\captures\\*.fit\n@night1.lst\nC:\\session",
-        "benchmark_add_file_btn": "Add files…",
-        "benchmark_add_dir_btn": "Add folder…",
-        "benchmark_add_list_btn": "Add list file…",
-        "benchmark_browse_file_btn": "Browse…",
-        "benchmark_save_file_btn": "Save as…",
-        "benchmark_index_label": "Index root",
-        "benchmark_grid_label": "Sweep grid (JSON)",
-        "benchmark_output_json_label": "Output JSON",
-        "benchmark_output_csv_label": "Output CSV",
-        "benchmark_options_group": "General options",
-        "benchmark_limit_label": "Input limit",
-        "benchmark_log_level_label": "Log level",
-        "benchmark_allow_write_label": "Write WCS into originals",
-        "benchmark_continue_label": "Try all sweeps even after success",
-        "benchmark_tile_cache_label": "Tile cache size (0 = auto)",
-        "benchmark_sip_label": "SIP order",
-        "benchmark_parity_label": "Allow parity flip",
-        "benchmark_full_mode_label": "Full mode (disable fast heuristics)",
-        "benchmark_base_group": "SolveConfig overrides",
-        "benchmark_max_candidates_label": "Max candidates",
-        "benchmark_max_stars_label": "Max image stars",
-        "benchmark_max_quads_label": "Max quads",
-        "benchmark_detect_sigma_label": "Detect k-sigma",
-        "benchmark_detect_area_label": "Detect min area",
-        "benchmark_bucket_cap_s_label": "Bucket cap S",
-        "benchmark_bucket_cap_m_label": "Bucket cap M",
-        "benchmark_bucket_cap_l_label": "Bucket cap L",
-        "benchmark_bucket_override_label": "Bucket limit override",
-        "benchmark_vote_label": "Vote percentile",
-        "benchmark_downsample_label": "Downsample",
-        "benchmark_quality_rms_label": "Quality RMS (px)",
-        "benchmark_quality_inliers_label": "Quality inliers",
-        "benchmark_pixel_tol_label": "Pixel tolerance",
-        "benchmark_hints_group": "Hints (optional)",
-        "benchmark_ra_label": "RA hint (deg)",
-        "benchmark_dec_label": "Dec hint (deg)",
-        "benchmark_radius_label": "Radius hint (deg)",
-        "benchmark_focal_label": "Focal length (mm)",
-        "benchmark_pixel_label": "Pixel size (µm)",
-        "benchmark_scale_label": "Pixel scale (arcsec/px)",
-        "benchmark_scale_min_label": "Pixel scale min",
-        "benchmark_scale_max_label": "Pixel scale max",
-        "benchmark_hint_placeholder": "Auto",
-        "benchmark_log_placeholder": "Benchmark logs will appear here.",
-        "benchmark_run_button": "Run benchmark",
-        "benchmark_stop_button": "Stop",
-        "benchmark_status_idle": "Idle",
-        "benchmark_status_starting": "Preparing benchmark…",
-        "benchmark_status_running": "{done}/{total} — {name}",
-        "benchmark_status_done": "Done: {summary}",
-        "benchmark_status_cancelled": "Benchmark cancelled",
-        "benchmark_status_failed": "Failed: {error}",
-        "benchmark_log_done": "Benchmark complete: {summary}",
-        "benchmark_log_cancelled": "Benchmark cancelled by user",
-        "benchmark_log_failed": "Benchmark error: {error}",
-        "benchmark_dialog_open_file": "Select file",
-        "benchmark_dialog_save_file": "Save file",
-        "benchmark_dialog_filter_all": "All files (*)",
-        "benchmark_dialog_filter_json": "{ext} files (*.{ext_lower})",
-        "benchmark_dialog_filter_csv": "{ext} files (*.{ext_lower})",
-        "benchmark_dialog_add_files": "Select FITS files",
-        "benchmark_dialog_add_directory": "Select folder",
-        "benchmark_dialog_add_list": "Select list file",
-        "benchmark_error_inputs": "Add at least one input source (file, folder, glob, or @list).",
-        "benchmark_error_index": "Select an index directory.",
-        "benchmark_error_index_missing": "Index directory not found: {path}",
-        "benchmark_error_grid_missing": "Grid file not found: {path}",
-        "benchmark_error_number": "Invalid value for {field}.",
-    },
-}
-for _lang, _mapping in _GUI_BENCHMARK_I18N.items():
     base = GUI_TRANSLATIONS.setdefault(_lang, {})
     for _k, _v in _mapping.items():
         if _k not in base:
@@ -5551,6 +5500,7 @@ def launch_gui(args: argparse.Namespace) -> int:
         from PySide6 import QtCore, QtGui, QtWidgets
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise SystemExit("PySide6>=6 is required for the GUI. Install it and retry.") from exc
+    from zesolver.gui_wcs_cleanup import WcsCleanupConfig, WcsCleanupRunner
     prefill_families = _normalize_family_args(args.family)
     persistent_settings = load_persistent_settings()
     stored_level = str(getattr(persistent_settings, "log_level", args.log_level) or "INFO").upper()
@@ -5997,59 +5947,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                 except Exception:
                     pass
 
-    class BenchmarkRunner(QtCore.QThread):
-        log = QtCore.Signal(str)
-        progress = QtCore.Signal(int, int, str)
-        finished = QtCore.Signal(bool, str)
-
-        def __init__(self, inputs: list[str], args: argparse.Namespace) -> None:
-            super().__init__()
-            self._inputs = list(inputs)
-            self._args = args
-            self._cancel = threading.Event()
-
-        def cancel(self) -> None:
-            self._cancel.set()
-
-        def _emit_progress(self, done: int, total: int, attempt: bench.AttemptResult) -> None:
-            name = Path(attempt.image).name if attempt and attempt.image else ""
-            try:
-                self.progress.emit(done, total, name)
-            except Exception:
-                pass
-
-        def run(self) -> None:
-            try:
-                sweeps = bench.load_sweeps(self._args.grid)
-                images = bench.resolve_inputs(self._inputs, self._args.limit)
-            except Exception as exc:
-                self.finished.emit(False, str(exc))
-                return
-            if not images:
-                self.finished.emit(False, "no inputs matched the provided sources")
-                return
-            base_config = bench.build_base_config(self._args)
-            try:
-                results = bench.run_benchmark(
-                    images,
-                    sweeps,
-                    base_config,
-                    self._args,
-                    log=self.log.emit,
-                    cancel_check=self._cancel.is_set,
-                    progress=self._emit_progress,
-                )
-                bench.write_outputs(results, sweeps, base_config, self._args)
-            except Exception as exc:
-                self.finished.emit(False, str(exc))
-                return
-            if self._cancel.is_set():
-                self.finished.emit(False, "cancelled")
-                return
-            solved_images = {entry.image for entry in results if entry.success}
-            summary = f"{len(results)} attempts, {len(solved_images)} successes"
-            self.finished.emit(True, summary)
-
     class NearRunner(QtCore.QThread):
         log = QtCore.Signal(str)
         finished = QtCore.Signal(bool, str)
@@ -6194,12 +6091,520 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception as exc:
                 self.error.emit(str(exc))
 
+    class CatalogLibraryManagementWorker(QtCore.QThread):
+        progress = QtCore.Signal(object)
+        finished = QtCore.Signal(bool, object, str)
+
+        def __init__(self, operation: str, payload: object) -> None:
+            super().__init__()
+            self.operation = operation
+            self.payload = payload
+            self._cancel_event = threading.Event()
+
+        def request_cancel(self) -> None:
+            self._cancel_event.set()
+
+        def run(self) -> None:
+            service = CatalogLibraryManagementService(
+                progress_callback=self.progress.emit,
+                cancel_callback=self._cancel_event.is_set,
+            )
+            try:
+                if self.operation == "create":
+                    result = service.create_from_astap(self.payload)  # type: ignore[arg-type]
+                elif self.operation == "install":
+                    result = service.install_package(self.payload)  # type: ignore[arg-type]
+                elif self.operation == "repair":
+                    result = service.repair_library(self.payload)  # type: ignore[arg-type]
+                else:
+                    raise CatalogLibraryManagementError(f"UNKNOWN_LIBRARY_OPERATION: {self.operation}")
+                self.finished.emit(True, result, "")
+            except CatalogLibraryManagementCancelled as exc:
+                self.finished.emit(False, None, str(exc))
+            except Exception as exc:
+                self.finished.emit(False, None, str(exc))
+
+    class LibraryManagerWindow(QtWidgets.QDialog):
+        librarySelected = QtCore.Signal(str)
+
+        def __init__(self, parent, translator: Callable[..., str]) -> None:
+            super().__init__(parent)
+            self._text = translator
+            self._service_factory = CatalogLibraryManagementService
+            self._worker: CatalogLibraryManagementWorker | None = None
+            self._repair_plan: LibraryRepairPlan | None = None
+            self._started_at: float | None = None
+            self.setModal(False)
+            self.resize(920, 680)
+            self._build_ui()
+            self.apply_language()
+
+        def apply_language(self) -> None:
+            self.setWindowTitle(self._text("library_manager_title"))
+            self.home_install_btn.setText(self._text("library_manager_install_title"))
+            self.home_install_desc.setText(self._text("library_manager_install_desc"))
+            self.home_create_btn.setText(self._text("library_manager_create_title"))
+            self.home_create_desc.setText(self._text("library_manager_create_desc"))
+            self.home_repair_btn.setText(self._text("library_manager_repair_title"))
+            self.home_repair_desc.setText(self._text("library_manager_repair_desc"))
+            self.install_group.setTitle(self._text("library_manager_install_title"))
+            self.create_group.setTitle(self._text("library_manager_create_title"))
+            self.repair_group.setTitle(self._text("library_manager_repair_title"))
+            self.install_package_label.setText(self._text("library_manager_package_label"))
+            self.install_destination_label.setText(self._text("library_manager_destination_label"))
+            self.create_source_label.setText(self._text("library_manager_source_label"))
+            self.create_destination_label.setText(self._text("library_manager_destination_label"))
+            self.repair_library_label.setText(self._text("library_manager_existing_label"))
+            for button in self._browse_buttons:
+                button.setText(self._text("browse_button"))
+            self.install_btn.setText(self._text("library_manager_install_button"))
+            self.create_btn.setText(self._text("library_manager_create_button"))
+            self.analyze_btn.setText(self._text("library_manager_analyze_button"))
+            self.repair_btn.setText(self._text("library_manager_repair_button"))
+            self.cancel_btn.setText(self._text("library_manager_cancel_button"))
+            self.back_install_btn.setText(self._text("library_manager_back_button"))
+            self.back_create_btn.setText(self._text("library_manager_back_button"))
+            self.back_repair_btn.setText(self._text("library_manager_back_button"))
+            self.reference_radio.setText(self._text("library_manager_reference_policy"))
+            self.copy_radio.setText(self._text("library_manager_copy_policy"))
+            self.standard_radio.setText(self._text("library_manager_standard_mode"))
+            self.custom_radio.setText(self._text("library_manager_custom_mode"))
+            self.advanced_toggle.setText(self._text("library_manager_advanced_toggle"))
+            self.detected_group.setTitle(self._text("library_manager_detected_bases"))
+            self.stage_label_title.setText(self._text("library_manager_stage"))
+            self.elapsed_label_title.setText(self._text("library_manager_elapsed"))
+            self.progress_label_title.setText(self._text("library_manager_progress"))
+            self.log_group.setTitle(self._text("library_manager_log"))
+            self.credits_label.setText(self._text("library_manager_credits"))
+            self.close_btn.setText(self._text("close_button"))
+            if self.stage_value.text() == "":
+                self.stage_value.setText(self._text("library_manager_no_worker_on_open"))
+
+        def _build_ui(self) -> None:
+            layout = QtWidgets.QVBoxLayout(self)
+            self.stack = QtWidgets.QStackedWidget()
+            layout.addWidget(self.stack, 1)
+            self._browse_buttons: list[QtWidgets.QPushButton] = []
+
+            self.home_page = QtWidgets.QWidget()
+            home_layout = QtWidgets.QVBoxLayout(self.home_page)
+            self.home_install_btn, self.home_install_desc = self._home_card(home_layout, self._show_install)
+            self.home_create_btn, self.home_create_desc = self._home_card(home_layout, self._show_create)
+            self.home_repair_btn, self.home_repair_desc = self._home_card(home_layout, self._show_repair)
+            home_layout.addStretch(1)
+            self.stack.addWidget(self.home_page)
+
+            self.install_page = QtWidgets.QWidget()
+            install_layout = QtWidgets.QVBoxLayout(self.install_page)
+            self.install_group = QtWidgets.QGroupBox()
+            install_form = QtWidgets.QFormLayout(self.install_group)
+            self.install_package_label = QtWidgets.QLabel()
+            self.install_package_edit = QtWidgets.QLineEdit()
+            install_package_browse = self._browse_button(lambda: self._pick_path(self.install_package_edit, directory=False))
+            install_form.addRow(self.install_package_label, self._path_row(self.install_package_edit, install_package_browse))
+            self.install_destination_label = QtWidgets.QLabel()
+            self.install_destination_edit = QtWidgets.QLineEdit()
+            install_dest_browse = self._browse_button(lambda: self._pick_path(self.install_destination_edit, directory=True))
+            install_form.addRow(self.install_destination_label, self._path_row(self.install_destination_edit, install_dest_browse))
+            install_layout.addWidget(self.install_group)
+            install_buttons = QtWidgets.QHBoxLayout()
+            self.back_install_btn = QtWidgets.QPushButton()
+            self.back_install_btn.clicked.connect(self._show_home)
+            self.install_btn = QtWidgets.QPushButton()
+            self.install_btn.clicked.connect(self._start_install)
+            install_buttons.addWidget(self.back_install_btn)
+            install_buttons.addStretch(1)
+            install_buttons.addWidget(self.install_btn)
+            install_layout.addLayout(install_buttons)
+            self.stack.addWidget(self.install_page)
+
+            self.create_page = QtWidgets.QWidget()
+            create_layout = QtWidgets.QVBoxLayout(self.create_page)
+            self.create_group = QtWidgets.QGroupBox()
+            create_form = QtWidgets.QFormLayout(self.create_group)
+            self.create_source_label = QtWidgets.QLabel()
+            self.create_source_edit = QtWidgets.QLineEdit()
+            self.create_source_edit.textChanged.connect(lambda _text: self._refresh_detected_families())
+            create_source_browse = self._browse_button(lambda: self._pick_path(self.create_source_edit, directory=True))
+            create_form.addRow(self.create_source_label, self._path_row(self.create_source_edit, create_source_browse))
+            self.detected_group = QtWidgets.QGroupBox()
+            detected_layout = QtWidgets.QVBoxLayout(self.detected_group)
+            self.family_list = QtWidgets.QListWidget()
+            self.family_list.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+            detected_layout.addWidget(self.family_list)
+            create_form.addRow(self.detected_group)
+            self.create_destination_label = QtWidgets.QLabel()
+            self.create_destination_edit = QtWidgets.QLineEdit()
+            create_dest_browse = self._browse_button(lambda: self._pick_path(self.create_destination_edit, directory=True))
+            create_form.addRow(self.create_destination_label, self._path_row(self.create_destination_edit, create_dest_browse))
+            self.reference_radio = QtWidgets.QRadioButton()
+            self.copy_radio = QtWidgets.QRadioButton()
+            self.reference_radio.setChecked(True)
+            storage_box = QtWidgets.QWidget()
+            storage_layout = QtWidgets.QVBoxLayout(storage_box)
+            storage_layout.setContentsMargins(0, 0, 0, 0)
+            storage_layout.addWidget(self.reference_radio)
+            storage_layout.addWidget(self.copy_radio)
+            create_form.addRow(storage_box)
+            self.standard_radio = QtWidgets.QRadioButton()
+            self.custom_radio = QtWidgets.QRadioButton()
+            self.standard_radio.setChecked(True)
+            mode_box = QtWidgets.QWidget()
+            mode_layout = QtWidgets.QHBoxLayout(mode_box)
+            mode_layout.setContentsMargins(0, 0, 0, 0)
+            mode_layout.addWidget(self.standard_radio)
+            mode_layout.addWidget(self.custom_radio)
+            create_form.addRow(mode_box)
+            self.advanced_toggle = QtWidgets.QCheckBox()
+            self.advanced_toggle.toggled.connect(lambda checked: self.advanced_box.setVisible(bool(checked)))
+            create_form.addRow(self.advanced_toggle)
+            self.advanced_box = QtWidgets.QWidget()
+            advanced_form = QtWidgets.QFormLayout(self.advanced_box)
+            self.custom_mag_spin = QtWidgets.QDoubleSpinBox()
+            self.custom_mag_spin.setRange(0.0, 25.0)
+            self.custom_mag_spin.setDecimals(2)
+            self.custom_mag_spin.setSpecialValueText(self._text("special_auto"))
+            self.custom_max_stars_spin = QtWidgets.QSpinBox()
+            self.custom_max_stars_spin.setRange(0, 20000)
+            self.custom_max_stars_spin.setSpecialValueText(self._text("special_auto"))
+            self.custom_max_quads_spin = QtWidgets.QSpinBox()
+            self.custom_max_quads_spin.setRange(0, 100000)
+            self.custom_max_quads_spin.setSpecialValueText(self._text("special_auto"))
+            self.custom_workers_spin = QtWidgets.QSpinBox()
+            self.custom_workers_spin.setRange(0, max(64, os.cpu_count() or 1))
+            self.custom_workers_spin.setSpecialValueText(self._text("special_auto"))
+            advanced_form.addRow("Magnitude max", self.custom_mag_spin)
+            advanced_form.addRow("Étoiles max", self.custom_max_stars_spin)
+            advanced_form.addRow("Quads max", self.custom_max_quads_spin)
+            advanced_form.addRow("Workers", self.custom_workers_spin)
+            self.advanced_box.setVisible(False)
+            create_form.addRow(self.advanced_box)
+            create_layout.addWidget(self.create_group)
+            create_buttons = QtWidgets.QHBoxLayout()
+            self.back_create_btn = QtWidgets.QPushButton()
+            self.back_create_btn.clicked.connect(self._show_home)
+            self.create_btn = QtWidgets.QPushButton()
+            self.create_btn.clicked.connect(self._start_create)
+            create_buttons.addWidget(self.back_create_btn)
+            create_buttons.addStretch(1)
+            create_buttons.addWidget(self.create_btn)
+            create_layout.addLayout(create_buttons)
+            self.stack.addWidget(self.create_page)
+
+            self.repair_page = QtWidgets.QWidget()
+            repair_layout = QtWidgets.QVBoxLayout(self.repair_page)
+            self.repair_group = QtWidgets.QGroupBox()
+            repair_form = QtWidgets.QFormLayout(self.repair_group)
+            self.repair_library_label = QtWidgets.QLabel()
+            self.repair_library_edit = QtWidgets.QLineEdit()
+            repair_browse = self._browse_button(lambda: self._pick_path(self.repair_library_edit, directory=True))
+            repair_form.addRow(self.repair_library_label, self._path_row(self.repair_library_edit, repair_browse))
+            repair_buttons_top = QtWidgets.QHBoxLayout()
+            self.analyze_btn = QtWidgets.QPushButton()
+            self.analyze_btn.clicked.connect(self._analyze_library)
+            self.repair_btn = QtWidgets.QPushButton()
+            self.repair_btn.clicked.connect(self._start_repair)
+            self.repair_btn.setEnabled(False)
+            repair_buttons_top.addWidget(self.analyze_btn)
+            repair_buttons_top.addWidget(self.repair_btn)
+            repair_buttons_top.addStretch(1)
+            repair_form.addRow(repair_buttons_top)
+            self.diagnostic_table = QtWidgets.QTableWidget(0, 3)
+            self.diagnostic_table.setHorizontalHeaderLabels(["Élément", "État", "Détail"])
+            self.diagnostic_table.horizontalHeader().setStretchLastSection(True)
+            repair_layout.addWidget(self.repair_group)
+            repair_layout.addWidget(self.diagnostic_table)
+            self.repair_plan_label = QtWidgets.QLabel()
+            self.repair_plan_label.setWordWrap(True)
+            repair_layout.addWidget(self.repair_plan_label)
+            repair_buttons = QtWidgets.QHBoxLayout()
+            self.back_repair_btn = QtWidgets.QPushButton()
+            self.back_repair_btn.clicked.connect(self._show_home)
+            repair_buttons.addWidget(self.back_repair_btn)
+            repair_buttons.addStretch(1)
+            repair_layout.addLayout(repair_buttons)
+            self.stack.addWidget(self.repair_page)
+
+            status_grid = QtWidgets.QGridLayout()
+            self.stage_label_title = QtWidgets.QLabel()
+            self.stage_value = QtWidgets.QLabel("")
+            self.elapsed_label_title = QtWidgets.QLabel()
+            self.elapsed_value = QtWidgets.QLabel("0s")
+            self.progress_label_title = QtWidgets.QLabel()
+            self.progress = QtWidgets.QProgressBar()
+            self.progress.setRange(0, 100)
+            self.progress.setValue(0)
+            status_grid.addWidget(self.stage_label_title, 0, 0)
+            status_grid.addWidget(self.stage_value, 0, 1)
+            status_grid.addWidget(self.elapsed_label_title, 1, 0)
+            status_grid.addWidget(self.elapsed_value, 1, 1)
+            status_grid.addWidget(self.progress_label_title, 2, 0)
+            status_grid.addWidget(self.progress, 2, 1)
+            layout.addLayout(status_grid)
+            self.log_group = QtWidgets.QGroupBox()
+            log_layout = QtWidgets.QVBoxLayout(self.log_group)
+            self.operation_log = QtWidgets.QPlainTextEdit()
+            self.operation_log.setReadOnly(True)
+            self.operation_log.document().setMaximumBlockCount(1000)
+            log_layout.addWidget(self.operation_log)
+            layout.addWidget(self.log_group)
+            self.credits_label = QtWidgets.QLabel()
+            self.credits_label.setWordWrap(True)
+            layout.addWidget(self.credits_label)
+            bottom = QtWidgets.QHBoxLayout()
+            bottom.addStretch(1)
+            self.cancel_btn = QtWidgets.QPushButton()
+            self.cancel_btn.setEnabled(False)
+            self.cancel_btn.clicked.connect(self._cancel_worker)
+            bottom.addWidget(self.cancel_btn)
+            close_btn = QtWidgets.QPushButton()
+            close_btn.setText(self._text("close_button"))
+            close_btn.clicked.connect(self.close)
+            self.close_btn = close_btn
+            bottom.addWidget(close_btn)
+            layout.addLayout(bottom)
+            self._timer = QtCore.QTimer(self)
+            self._timer.setInterval(500)
+            self._timer.timeout.connect(self._refresh_elapsed)
+
+        def _home_card(self, layout, callback):
+            box = QtWidgets.QGroupBox()
+            card_layout = QtWidgets.QVBoxLayout(box)
+            button = QtWidgets.QPushButton()
+            button.clicked.connect(callback)
+            desc = QtWidgets.QLabel()
+            desc.setWordWrap(True)
+            card_layout.addWidget(button)
+            card_layout.addWidget(desc)
+            layout.addWidget(box)
+            return button, desc
+
+        def _browse_button(self, callback):
+            button = QtWidgets.QPushButton()
+            button.clicked.connect(callback)
+            self._browse_buttons.append(button)
+            return button
+
+        def _path_row(self, edit, button):
+            row = QtWidgets.QWidget()
+            layout = QtWidgets.QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(edit, 1)
+            layout.addWidget(button)
+            return row
+
+        def _pick_path(self, edit, *, directory: bool) -> None:
+            if directory:
+                value = QtWidgets.QFileDialog.getExistingDirectory(self, self._text("browse_button"), edit.text().strip() or "")
+            else:
+                value, _filter = QtWidgets.QFileDialog.getOpenFileName(self, self._text("browse_button"), edit.text().strip() or "")
+            if value:
+                edit.setText(value)
+
+        def _show_home(self) -> None:
+            self.stack.setCurrentWidget(self.home_page)
+
+        def _show_install(self) -> None:
+            self.stack.setCurrentWidget(self.install_page)
+
+        def _show_create(self) -> None:
+            self.stack.setCurrentWidget(self.create_page)
+            self._refresh_detected_families()
+
+        def _show_repair(self) -> None:
+            self.stack.setCurrentWidget(self.repair_page)
+
+        def _refresh_detected_families(self) -> None:
+            self.family_list.clear()
+            text = self.create_source_edit.text().strip()
+            if not text:
+                self.create_btn.setEnabled(False)
+                return
+            try:
+                service = self._service_factory()
+                families = service.detect_astap_families(text)
+            except Exception as exc:
+                item = QtWidgets.QListWidgetItem(str(exc))
+                item.setFlags(item.flags() & ~QtCore.Qt.ItemIsUserCheckable)
+                self.family_list.addItem(item)
+                self.create_btn.setEnabled(False)
+                return
+            if not families:
+                item = QtWidgets.QListWidgetItem(self._text("library_manager_no_families"))
+                item.setFlags(item.flags() & ~QtCore.Qt.ItemIsUserCheckable)
+                self.family_list.addItem(item)
+                self.create_btn.setEnabled(False)
+                return
+            for info in families:
+                item = QtWidgets.QListWidgetItem(f"{info.family.upper()} — {info.shard_count} shards — {info.size_bytes} bytes")
+                item.setData(QtCore.Qt.UserRole, info.family)
+                item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+                item.setCheckState(QtCore.Qt.Checked)
+                self.family_list.addItem(item)
+            self.create_btn.setEnabled(True)
+
+        def _detected_family_values(self) -> tuple[str, ...]:
+            values: list[str] = []
+            for row in range(self.family_list.count()):
+                item = self.family_list.item(row)
+                data = item.data(QtCore.Qt.UserRole)
+                if data:
+                    values.append(str(data).strip().lower())
+            return tuple(dict.fromkeys(value for value in values if value))
+
+        def _selected_families(self) -> tuple[str, ...]:
+            detected = self._detected_family_values()
+            if self.standard_radio.isChecked():
+                return detected
+            values: list[str] = []
+            for row in range(self.family_list.count()):
+                item = self.family_list.item(row)
+                data = item.data(QtCore.Qt.UserRole)
+                if data and item.checkState() == QtCore.Qt.Checked:
+                    values.append(str(data).strip().lower())
+            return tuple(values)
+
+        def _start_install(self) -> None:
+            options = LibraryInstallOptions(
+                package_path=Path(self.install_package_edit.text().strip()),
+                destination=Path(self.install_destination_edit.text().strip()),
+            )
+            self._start_worker("install", options)
+
+        def _start_create(self) -> None:
+            custom = bool(self.custom_radio.isChecked() and self.advanced_toggle.isChecked())
+            families = self._selected_families()
+            if not families:
+                self._append_log(self._text("library_manager_no_families"))
+                return
+            options = LibraryCreateOptions(
+                astap_root=Path(self.create_source_edit.text().strip()),
+                destination=Path(self.create_destination_edit.text().strip()),
+                families=families,
+                storage_policy="copy" if self.copy_radio.isChecked() else "reference",
+                mode="custom" if self.custom_radio.isChecked() else "standard",
+                mag_cap=(float(self.custom_mag_spin.value()) if custom and self.custom_mag_spin.value() > 0 else None),
+                source_max_stars=(int(self.custom_max_stars_spin.value()) if custom and self.custom_max_stars_spin.value() > 0 else None),
+                max_quads_per_tile=(int(self.custom_max_quads_spin.value()) if custom and self.custom_max_quads_spin.value() > 0 else None),
+                workers=(int(self.custom_workers_spin.value()) if custom and self.custom_workers_spin.value() > 0 else None),
+            )
+            self._start_worker("create", options)
+
+        def _analyze_library(self) -> None:
+            try:
+                service = self._service_factory()
+                analysis = service.analyze_library(Path(self.repair_library_edit.text().strip()))
+            except Exception as exc:
+                self._append_log(self._text("library_manager_failed", error=str(exc)))
+                return
+            self._repair_plan = analysis.repair_plan
+            self._populate_diagnostics(analysis.items)
+            actions = list(analysis.repair_plan.actions)
+            self.repair_plan_label.setText(
+                self._text("library_manager_repair_plan") + ":\n" + ("\n".join(f"- {item}" for item in actions) if actions else "-")
+            )
+            self.repair_btn.setEnabled(bool(actions))
+
+        def _populate_diagnostics(self, items) -> None:
+            self.diagnostic_table.setRowCount(0)
+            for item in items:
+                row = self.diagnostic_table.rowCount()
+                self.diagnostic_table.insertRow(row)
+                self.diagnostic_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(item.element)))
+                self.diagnostic_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(item.state)))
+                self.diagnostic_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(item.detail)))
+
+        def _start_repair(self) -> None:
+            if self._repair_plan is None:
+                self._analyze_library()
+            if self._repair_plan is not None:
+                self._start_worker("repair", self._repair_plan)
+
+        def _start_worker(self, operation: str, payload: object) -> None:
+            if self._worker is not None and self._worker.isRunning():
+                return
+            self._worker = CatalogLibraryManagementWorker(operation, payload)
+            self._worker.progress.connect(self._on_progress)
+            self._worker.finished.connect(self._on_finished)
+            self._set_busy(True)
+            self._started_at = time.monotonic()
+            self._timer.start()
+            self.operation_log.clear()
+            self._append_log(operation)
+            self._worker.start()
+
+        def _set_busy(self, busy: bool) -> None:
+            for widget in (self.install_btn, self.create_btn, self.analyze_btn, self.repair_btn, self.back_install_btn, self.back_create_btn, self.back_repair_btn):
+                widget.setEnabled(not busy)
+            self.cancel_btn.setEnabled(busy)
+
+        def _on_progress(self, progress) -> None:
+            self.stage_value.setText(str(getattr(progress, "message", "") or getattr(progress, "stage", "")))
+            total = int(getattr(progress, "overall_total", 0) or 0)
+            current = int(getattr(progress, "overall_current", 0) or 0)
+            if total > 0:
+                self.progress.setValue(max(0, min(100, int((current / total) * 100))))
+            family = getattr(progress, "family", None)
+            if family:
+                self._append_log(f"{family}: {getattr(progress, 'message', '')}")
+
+        def _on_finished(self, ok: bool, result: object, error: str) -> None:
+            self._timer.stop()
+            self._set_busy(False)
+            self._worker = None
+            if ok and result is not None:
+                path = str(getattr(result, "library_root", ""))
+                self.stage_value.setText(self._text("library_manager_ready"))
+                self.progress.setValue(100)
+                self._append_log(self._text("library_manager_success", path=path))
+                if path:
+                    self.librarySelected.emit(path)
+            elif "CANCELLED" in str(error).upper() or "CANCEL" in str(error).upper():
+                self.stage_value.setText(self._text("library_manager_cancelled"))
+                self._append_log(self._text("library_manager_cancelled"))
+            else:
+                self.stage_value.setText(self._text("library_manager_failed", error=error))
+                self._append_log(self._text("library_manager_failed", error=error))
+
+        def _cancel_worker(self) -> None:
+            if self._worker is None or not self._worker.isRunning():
+                return
+            answer = QtWidgets.QMessageBox.question(
+                self,
+                self._text("library_manager_confirm_cancel_title"),
+                self._text("library_manager_confirm_cancel_body"),
+            )
+            if answer != QtWidgets.QMessageBox.Yes:
+                return
+            self._worker.request_cancel()
+            self.cancel_btn.setEnabled(False)
+
+        def _refresh_elapsed(self) -> None:
+            if self._started_at is None:
+                return
+            self.elapsed_value.setText(f"{int(time.monotonic() - self._started_at)}s")
+
+        def _append_log(self, text: str) -> None:
+            self.operation_log.appendPlainText(str(text))
+
+        def closeEvent(self, event) -> None:
+            if self._worker is not None and self._worker.isRunning():
+                self._worker.request_cancel()
+                self._worker.wait(5000)
+            super().closeEvent(event)
+
     class ZeSolverWindow(QtWidgets.QMainWindow):
         def __init__(self, settings: PersistentSettings) -> None:
             super().__init__()
             self._language = GUI_DEFAULT_LANGUAGE
             self.resize(1280, 760)
             self._worker: Optional[SolveRunner] = None
+            self._wcs_cleanup_worker: Optional[WcsCleanupRunner] = None
+            self._wcs_cleanup_run_seq = 0
+            self._wcs_cleanup_active_id: Optional[int] = None
+            self._wcs_cleanup_terminal: Optional[str] = None
+            self._wcs_cleanup_terminal_payload: object | None = None
+            self._resume_after_wcs_cleanup = False
             self._pending_files: List[Path] = []
             self._item_by_path: dict[Path, QtWidgets.QTreeWidgetItem] = {}
             self._dev_family_checks: dict[str, QtWidgets.QCheckBox] = {}
@@ -6220,6 +6625,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._run_lifecycle = RunLifecycle()
             self._active_run_failed = False
             self._active_run_error_message: Optional[str] = None
+            self._closing = False
             self._language_actions: dict[str, QtGui.QAction] = {}
             self._interface_actions: dict[str, QtGui.QAction] = {}
             self._interface_mode = str(getattr(settings, "interface_mode", "easy") or "easy").strip().lower()
@@ -6230,6 +6636,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._syncing_blind_profile_gui = False
             self._blind_4d_verified_manifest: Loaded4DManifest | None = None
             self._blind_4d_manifest_state = "not_verified"
+            self._hash_maintenance_dialog: Optional[QtWidgets.QDialog] = None
+            self._catalog_library_manager_dialog: Optional[QtWidgets.QDialog] = None
             self._catalog_library_state = "AUCUNE_BIBLIOTHEQUE"
             self._catalog_library_validated_path: Optional[str] = None
             self._catalog_library_validated_resources: SolverCatalogResources | None = None
@@ -6238,7 +6646,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._index_worker: Optional[IndexBuilder] = None
             self._blind_worker: Optional[BlindRunner] = None
             self._near_worker: Optional[NearRunner] = None
-            self._benchmark_worker: Optional[BenchmarkRunner] = None
             self._scanner: Optional[FileScanner] = None
             self._scan_buffer: list[tuple[Path, str, str]] = []
             self._scan_flush_threshold = 250
@@ -6283,9 +6690,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.database_tab = self._build_database_tab()
             self.database_scroll = self._wrap_scroll_area(self.database_tab)
             self.tabs.addTab(self.database_scroll, self._text("database_tab"))
-            self.dev_tab = self._build_dev_tab()
-            self.dev_scroll = self._wrap_scroll_area(self.dev_tab)
-            self.tabs.addTab(self.dev_scroll, self._text("dev_tab"))
             self.settings_tab = self._build_settings_tab()
             self.settings_scroll = self._wrap_scroll_area(self.settings_tab)
             self.tabs.addTab(self.settings_scroll, self._text("settings_tab"))
@@ -6293,9 +6697,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.performance_tab = self._build_performance_tab()
             self.performance_scroll = self._wrap_scroll_area(self.performance_tab)
             self.tabs.addTab(self.performance_scroll, self._text("performance_tab"))
-            self.benchmark_tab = self._build_benchmark_tab()
-            self.benchmark_scroll = self._wrap_scroll_area(self.benchmark_tab)
-            self.tabs.addTab(self.benchmark_scroll, self._text("benchmark_tab"))
             # Add Fast solver (near) tab for quality/tolerance settings
             try:
                 self.fast_tab = self._build_fast_solver_tab()
@@ -6365,6 +6766,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.interface_wizard_action.triggered.connect(self._run_startup_wizard_from_menu)
             self.interface_menu.addAction(self.interface_wizard_action)
 
+            self.tools_menu = menu_bar.addMenu("")
+            self.catalog_library_manager_action = QtGui.QAction(self)
+            self.catalog_library_manager_action.triggered.connect(self._open_catalog_library_manager)
+            self.tools_menu.addAction(self.catalog_library_manager_action)
+            self.historical_index_maintenance_action = QtGui.QAction(self)
+            self.historical_index_maintenance_action.triggered.connect(self._open_historical_index_maintenance_dialog)
+            self.tools_menu.addAction(self.historical_index_maintenance_action)
+
             self.log_menu = menu_bar.addMenu("")
             self._log_level_actions.clear()
             for level in ("INFO", "DEBUG", "WARNING"):
@@ -6412,14 +6821,23 @@ def launch_gui(args: argparse.Namespace) -> int:
             if hasattr(self, "settings_scroll"):
                 self._set_tab_visible(self.settings_scroll, True)
             # Advanced tabs hidden in easy mode
-            for name in ("dev_scroll", "performance_scroll", "benchmark_scroll", "fast_scroll", "astrometry_scroll"):
+            for name in ("performance_scroll", "fast_scroll", "astrometry_scroll"):
                 tab = getattr(self, name, None)
                 if tab is not None:
                     self._set_tab_visible(tab, expert)
+            for name in ("catalog_compat_group", "blind_group", "catalog_maintenance_group"):
+                widget = getattr(self, name, None)
+                if widget is not None:
+                    widget.setVisible(expert)
+            if hasattr(self, "tools_menu"):
+                try:
+                    self.tools_menu.menuAction().setVisible(expert)
+                except Exception:
+                    pass
             if not expert and hasattr(self, "solver_scroll"):
                 try:
                     current = self.tabs.currentWidget()
-                    hidden_tabs = [getattr(self, n, None) for n in ("database_scroll", "dev_scroll", "performance_scroll", "benchmark_scroll", "fast_scroll", "astrometry_scroll")]
+                    hidden_tabs = [getattr(self, n, None) for n in ("database_scroll", "performance_scroll", "fast_scroll", "astrometry_scroll")]
                     if current in hidden_tabs:
                         self._activate_tab(self.solver_scroll)
                 except Exception:
@@ -7098,163 +7516,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             if reply == QtWidgets.QMessageBox.Yes:
                 self._on_build_index_clicked()
 
-        def _build_dev_tab(self) -> QtWidgets.QWidget:
-            widget = QtWidgets.QWidget()
-            form = QtWidgets.QFormLayout(widget)
-            self.dev_bucket_label = QtWidgets.QLabel()
-            self.dev_bucket_spin = QtWidgets.QSpinBox()
-            self.dev_bucket_spin.setRange(0, 20000)
-            self.dev_bucket_spin.setSingleStep(256)
-            self.dev_bucket_spin.setAccelerated(True)
-            self.dev_bucket_spin.setValue(int(self._settings.dev_bucket_limit_override or 0))
-            self.dev_bucket_spin.setSpecialValueText("")
-            form.addRow(self.dev_bucket_label, self.dev_bucket_spin)
-            self.dev_vote_label = QtWidgets.QLabel()
-            self.dev_vote_spin = QtWidgets.QSpinBox()
-            self.dev_vote_spin.setRange(5, 95)
-            self.dev_vote_spin.setSingleStep(5)
-            self.dev_vote_spin.setValue(int(self._settings.dev_vote_percentile or 40))
-            form.addRow(self.dev_vote_label, self.dev_vote_spin)
-            self.dev_cap_s_label = QtWidgets.QLabel()
-            self.dev_cap_s_spin = QtWidgets.QSpinBox()
-            self.dev_cap_s_spin.setRange(512, 20000)
-            self.dev_cap_s_spin.setSingleStep(256)
-            self.dev_cap_s_spin.setValue(int(self._settings.dev_bucket_cap_S or 6000))
-            form.addRow(self.dev_cap_s_label, self.dev_cap_s_spin)
-            self.dev_cap_s_spin.valueChanged.connect(lambda _: self._update_hash_button_labels())
-            self.dev_cap_m_label = QtWidgets.QLabel()
-            self.dev_cap_m_spin = QtWidgets.QSpinBox()
-            self.dev_cap_m_spin.setRange(256, 20000)
-            self.dev_cap_m_spin.setSingleStep(256)
-            self.dev_cap_m_spin.setValue(int(self._settings.dev_bucket_cap_M or 4096))
-            form.addRow(self.dev_cap_m_label, self.dev_cap_m_spin)
-            self.dev_cap_m_spin.valueChanged.connect(lambda _: self._update_hash_button_labels())
-            self.dev_cap_l_label = QtWidgets.QLabel()
-            self.dev_cap_l_spin = QtWidgets.QSpinBox()
-            self.dev_cap_l_spin.setRange(1024, 40000)
-            self.dev_cap_l_spin.setSingleStep(512)
-            self.dev_cap_l_spin.setValue(int(self._settings.dev_bucket_cap_L or 8192))
-            form.addRow(self.dev_cap_l_label, self.dev_cap_l_spin)
-            self.dev_cap_l_spin.valueChanged.connect(lambda _: self._update_hash_button_labels())
-            self.dev_sigma_label = QtWidgets.QLabel()
-            self.dev_sigma_spin = QtWidgets.QDoubleSpinBox()
-            self.dev_sigma_spin.setRange(0.5, 10.0)
-            self.dev_sigma_spin.setDecimals(2)
-            self.dev_sigma_spin.setSingleStep(0.1)
-            self.dev_sigma_spin.setValue(float(self._settings.dev_detect_k_sigma or 3.0))
-            form.addRow(self.dev_sigma_label, self.dev_sigma_spin)
-            self.dev_area_label = QtWidgets.QLabel()
-            self.dev_area_spin = QtWidgets.QSpinBox()
-            self.dev_area_spin.setRange(1, 100)
-            self.dev_area_spin.setValue(int(self._settings.dev_detect_min_area or 5))
-            form.addRow(self.dev_area_label, self.dev_area_spin)
-            self.downsample_label_widget = QtWidgets.QLabel()
-            self.downsample_spin = QtWidgets.QSpinBox()
-            self.downsample_spin.setRange(1, 4)
-            self.downsample_spin.setValue(int(self._settings.solver_downsample or args.downsample or 1))
-            form.addRow(self.downsample_label_widget, self.downsample_spin)
-            self.cache_label_widget = QtWidgets.QLabel()
-            self.cache_spin = QtWidgets.QSpinBox()
-            self.cache_spin.setRange(2, 64)
-            self.cache_spin.setValue(int(self._settings.solver_cache_size or args.cache_size or 12))
-            form.addRow(self.cache_label_widget, self.cache_spin)
-            self.dev_workers_label = QtWidgets.QLabel()
-            self.dev_workers_combo = QtWidgets.QComboBox()
-            self._populate_dev_workers_combo()
-            form.addRow(self.dev_workers_label, self.dev_workers_combo)
-            self.dev_workers_hint_label = QtWidgets.QLabel()
-            self.dev_workers_hint_label.setWordWrap(True)
-            form.addRow(self.dev_workers_hint_label)
-            # Catalog family overrides (auto/custom)
-            self.dev_family_group = QtWidgets.QGroupBox()
-            self.dev_family_group.setTitle(self._text("dev_family_group"))
-            family_layout = QtWidgets.QVBoxLayout(self.dev_family_group)
-            self.dev_family_auto_check = QtWidgets.QCheckBox()
-            self.dev_family_auto_check.setChecked(bool(self._settings.dev_family_auto))
-            self.dev_family_auto_check.setText(self._text("dev_family_auto"))
-            self.dev_family_auto_check.toggled.connect(self._update_dev_family_box_enabled)
-            family_layout.addWidget(self.dev_family_auto_check)
-            self.dev_family_hint = QtWidgets.QLabel()
-            self.dev_family_hint.setWordWrap(True)
-            self.dev_family_hint.setText(self._text("dev_family_hint"))
-            family_layout.addWidget(self.dev_family_hint)
-            self.dev_family_box = QtWidgets.QWidget()
-            self.dev_family_box_layout = QtWidgets.QVBoxLayout(self.dev_family_box)
-            self.dev_family_box_layout.setContentsMargins(0, 0, 0, 0)
-            family_layout.addWidget(self.dev_family_box)
-            form.addRow(self.dev_family_group)
-            self._refresh_dev_family_choices([])
-            # Hash rebuild shortcuts
-            self.dev_hash_group = QtWidgets.QGroupBox()
-            self.dev_hash_group.setTitle(self._text("dev_hash_group"))
-            hash_layout = QtWidgets.QVBoxLayout(self.dev_hash_group)
-            self.dev_hash_buttons: dict[str, QtWidgets.QPushButton] = {}
-            self.dev_hash_quads_spin: dict[str, QtWidgets.QSpinBox] = {}
-            for level in ("S", "M", "L"):
-                row = QtWidgets.QHBoxLayout()
-                btn = QtWidgets.QPushButton()
-                btn.clicked.connect(lambda _, lvl=level: self._rebuild_hash_level(lvl))
-                row.addWidget(btn)
-                spin = QtWidgets.QSpinBox()
-                spin.setRange(100, 100000)
-                default_quads = getattr(self._settings, f"dev_hash_quads_{level}", None)
-                if not default_quads:
-                    default_quads = self._settings.max_quads_per_tile or DEFAULT_MAX_QUADS_PER_TILE
-                spin.setValue(int(default_quads))
-                spin.setSuffix(" quads")
-                spin.setToolTip(self._text("dev_hash_value_hint"))
-                row.addWidget(spin)
-                row.addStretch(1)
-                hash_layout.addLayout(row)
-                self.dev_hash_buttons[level] = btn
-                self.dev_hash_quads_spin[level] = spin
-            form.addRow(self.dev_hash_group)
-            self.dev_save_btn = QtWidgets.QPushButton(self._text("settings_save_btn"))
-            form.addRow(self.dev_save_btn)
-            self.dev_save_btn.clicked.connect(self._save_dev_settings)
-            form.addItem(QtWidgets.QSpacerItem(20, 20, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding))
-            self._update_hash_button_labels()
-            self._update_dev_family_box_enabled()
-            return widget
-
-        def _save_dev_settings(self) -> None:
-            try:
-                self._settings.dev_bucket_limit_override = int(self.dev_bucket_spin.value())
-                self._settings.dev_vote_percentile = int(self.dev_vote_spin.value())
-                self._settings.dev_bucket_cap_S = int(self.dev_cap_s_spin.value())
-                self._settings.dev_bucket_cap_M = int(self.dev_cap_m_spin.value())
-                self._settings.dev_bucket_cap_L = int(self.dev_cap_l_spin.value())
-                self._settings.dev_detect_k_sigma = float(self.dev_sigma_spin.value())
-                self._settings.dev_detect_min_area = int(self.dev_area_spin.value())
-                self._settings.solver_downsample = int(self.downsample_spin.value())
-                self._settings.solver_cache_size = int(self.cache_spin.value())
-                auto_mode = bool(self.dev_family_auto_check.isChecked())
-                self._settings.dev_family_auto = auto_mode
-                if auto_mode:
-                    self._settings.dev_family_selection = None
-                else:
-                    selection = self._selected_dev_families()
-                    if not selection:
-                        QtWidgets.QMessageBox.warning(
-                            self,
-                            self._text("dialog_config_title"),
-                            self._text("dev_family_none_error"),
-                        )
-                        return
-                    self._settings.dev_family_selection = selection
-                if hasattr(self, "dev_hash_quads_spin"):
-                    for level, spin in self.dev_hash_quads_spin.items():
-                        try:
-                            value = max(100, int(spin.value()))
-                        except Exception:
-                            value = DEFAULT_MAX_QUADS_PER_TILE
-                        setattr(self._settings, f"dev_hash_quads_{level}", value)
-                self._settings.solver_workers = self._clamp_worker_choice(self._dev_workers_choice)
-                save_persistent_settings(self._settings)
-                self._log(self._text("settings.saved"))
-            except Exception as exc:
-                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
-
         def _refresh_dev_family_choices(self, families: Sequence[str]) -> None:
             if not hasattr(self, "dev_family_box_layout"):
                 return
@@ -7346,60 +7607,17 @@ def launch_gui(args: argparse.Namespace) -> int:
             return min(cap, max(1, effective))
 
         def _selected_worker_value(self) -> int:
-            if hasattr(self, "_dev_workers_choice"):
-                return int(self._dev_workers_choice)
             try:
-                return int(self.workers_spin.value())
+                if hasattr(self, "workers_spin"):
+                    return int(self.workers_spin.value())
             except Exception:
-                return 0
+                pass
+            return int(getattr(self, "_dev_workers_choice", 0) or 0)
 
         def _effective_workers_for_run(self) -> int:
             return self._effective_workers_for_choice(self._selected_worker_value())
 
-        def _populate_dev_workers_combo(self) -> None:
-            if not hasattr(self, "dev_workers_combo"):
-                return
-            combo = self.dev_workers_combo
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItem(self._text("dev_workers_auto"), 0)
-            cap = self._max_worker_cap()
-            for value in range(1, cap + 1):
-                combo.addItem(str(value), value)
-            choice = self._clamp_worker_choice(self._dev_workers_choice)
-            self._dev_workers_choice = choice
-            idx = combo.findData(choice)
-            if idx < 0:
-                idx = 0
-            combo.setCurrentIndex(idx)
-            if not getattr(self, "_dev_workers_combo_connected", False):
-                combo.currentIndexChanged.connect(self._on_dev_workers_changed)
-                self._dev_workers_combo_connected = True
-            combo.blockSignals(False)
-            self._sync_workers_spin_from_dev_choice()
-
-        def _select_dev_workers_combo_value(self, value: int) -> None:
-            if not hasattr(self, "dev_workers_combo"):
-                return
-            combo = self.dev_workers_combo
-            idx = combo.findData(value)
-            if idx < 0:
-                return
-            combo.blockSignals(True)
-            combo.setCurrentIndex(idx)
-            combo.blockSignals(False)
-
-        def _on_dev_workers_changed(self) -> None:
-            if not hasattr(self, "dev_workers_combo"):
-                return
-            data = self.dev_workers_combo.currentData()
-            if data is None:
-                return
-            self._dev_workers_choice = self._clamp_worker_choice(data)
-            self._settings.solver_workers = self._dev_workers_choice
-            self._sync_workers_spin_from_dev_choice()
-
-        def _sync_workers_spin_from_dev_choice(self) -> None:
+        def _sync_workers_spin_from_settings(self) -> None:
             if not hasattr(self, "workers_spin"):
                 return
             value = self._clamp_worker_choice(self._dev_workers_choice)
@@ -7414,7 +7632,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                 return
             value = max(0, min(self._max_worker_cap(), int(value)))
             self._dev_workers_choice = value
-            self._select_dev_workers_combo_value(value)
             self._settings.solver_workers = self._dev_workers_choice
 
         def _level_quads_from_settings(self, settings: Optional[PersistentSettings] = None) -> dict[str, int]:
@@ -7436,6 +7653,100 @@ def launch_gui(args: argparse.Namespace) -> int:
             for level, button in self.dev_hash_buttons.items():
                 button.setText(self._text("dev_hash_button", level=level))
 
+        def _open_historical_index_maintenance_dialog(self) -> None:
+            if self._hash_maintenance_dialog is None:
+                self._hash_maintenance_dialog = self._build_historical_index_maintenance_dialog()
+            dialog = self._hash_maintenance_dialog
+            dialog.setWindowTitle(self._text("historical_index_maintenance_title"))
+            self._update_hash_button_labels()
+            dialog.show()
+            try:
+                dialog.raise_()
+                dialog.activateWindow()
+            except Exception:
+                pass
+
+        def _open_catalog_library_manager(self) -> None:
+            if self._catalog_library_manager_dialog is None:
+                dialog = LibraryManagerWindow(self, self._text)
+                dialog.librarySelected.connect(self._on_catalog_library_manager_selected)
+                self._catalog_library_manager_dialog = dialog
+            dialog = self._catalog_library_manager_dialog
+            if hasattr(dialog, "apply_language"):
+                dialog.apply_language()
+            if hasattr(self, "settings_catalog_library_edit") and hasattr(dialog, "repair_library_edit"):
+                current = self.settings_catalog_library_edit.text().strip()
+                if current:
+                    dialog.repair_library_edit.setText(current)
+            dialog.show()
+            try:
+                dialog.raise_()
+                dialog.activateWindow()
+            except Exception:
+                pass
+
+        def _on_catalog_library_manager_selected(self, path: str) -> None:
+            value = str(path or "").strip()
+            if not value:
+                return
+            if hasattr(self, "settings_catalog_library_edit"):
+                self.settings_catalog_library_edit.setText(value)
+            resources = self._validate_catalog_library_from_gui(show_error=True)
+            if resources is None:
+                return
+            self._settings.catalog_library_path = value
+            try:
+                self._settings = self._read_settings_from_ui()
+                save_persistent_settings(self._settings)
+            except Exception as exc:
+                self._log_settings(self._text("library_manager_failed", error=str(exc)))
+
+        def _build_historical_index_maintenance_dialog(self) -> QtWidgets.QDialog:
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle(self._text("historical_index_maintenance_title"))
+            dialog.setModal(False)
+            layout = QtWidgets.QVBoxLayout(dialog)
+            warning = QtWidgets.QLabel(self._text("historical_index_maintenance_warning"))
+            warning.setWordWrap(True)
+            warning.setStyleSheet("color: #8a6d3b;")
+            layout.addWidget(warning)
+            self.historical_index_maintenance_warning_label = warning
+            self.dev_hash_group = QtWidgets.QGroupBox()
+            self.dev_hash_group.setTitle(self._text("dev_hash_group"))
+            hash_layout = QtWidgets.QVBoxLayout(self.dev_hash_group)
+            self.dev_hash_buttons: dict[str, QtWidgets.QPushButton] = {}
+            self.dev_hash_quads_spin: dict[str, QtWidgets.QSpinBox] = {}
+            for level in ("S", "M", "L"):
+                row = QtWidgets.QHBoxLayout()
+                btn = QtWidgets.QPushButton()
+                btn.clicked.connect(lambda _checked=False, lvl=level: self._rebuild_hash_level(lvl))
+                row.addWidget(btn)
+                spin = QtWidgets.QSpinBox()
+                spin.setRange(100, 100000)
+                default_quads = getattr(self._settings, f"dev_hash_quads_{level}", None)
+                if not default_quads:
+                    default_quads = self._settings.max_quads_per_tile or DEFAULT_MAX_QUADS_PER_TILE
+                spin.setValue(int(default_quads))
+                spin.setSuffix(" quads")
+                spin.setToolTip(self._text("dev_hash_value_hint"))
+                row.addWidget(spin)
+                row.addStretch(1)
+                hash_layout.addLayout(row)
+                self.dev_hash_buttons[level] = btn
+                self.dev_hash_quads_spin[level] = spin
+            layout.addWidget(self.dev_hash_group)
+            button_row = QtWidgets.QHBoxLayout()
+            button_row.addStretch(1)
+            self.hash_maintenance_save_btn = QtWidgets.QPushButton(self._text("settings_save_btn"))
+            self.hash_maintenance_save_btn.clicked.connect(self._on_save_settings_clicked)
+            self.hash_maintenance_close_btn = QtWidgets.QPushButton(self._text("close_button"))
+            self.hash_maintenance_close_btn.clicked.connect(dialog.close)
+            button_row.addWidget(self.hash_maintenance_save_btn)
+            button_row.addWidget(self.hash_maintenance_close_btn)
+            layout.addLayout(button_row)
+            self._update_hash_button_labels()
+            return dialog
+
         def _rebuild_hash_level(self, level: str) -> None:
             level_key = str(level).strip().upper()
             if level_key not in {"S", "M", "L"}:
@@ -7446,6 +7757,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self._text("dialog_config_title"),
                     self._text("dev_hash_busy"),
                 )
+                return
+            try:
+                self._settings = self._read_settings_from_ui()
+                save_persistent_settings(self._settings)
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
             if not self._settings.index_root:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("settings_index_missing"))
@@ -7686,12 +8003,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.scale_max_hint_spin.setSingleStep(0.1)
             self.scale_max_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
             self.scale_max_hint_spin.setValue(self._settings.solver_hint_resolution_max_arcsec or 0.0)
-            self.workers_spin = QtWidgets.QSpinBox()
-            cap_workers = self._max_worker_cap()
-            self.workers_spin.setRange(0, cap_workers)
-            self.workers_spin.setSpecialValueText(self._text("dev_workers_auto"))
-            self.workers_spin.setValue(self._clamp_worker_choice(self._dev_workers_choice))
-            self.workers_spin.valueChanged.connect(self._on_workers_spin_changed)
+            self.downsample_label_widget = QtWidgets.QLabel()
+            self.downsample_spin = QtWidgets.QSpinBox()
+            self.downsample_spin.setRange(1, 4)
+            self.downsample_spin.setValue(int(self._settings.solver_downsample or args.downsample or 1))
             self.max_files_spin = QtWidgets.QSpinBox()
             self.max_files_spin.setRange(0, 10000)
             self.max_files_spin.setValue(self._settings.solver_max_files or args.max_files or 0)
@@ -7759,7 +8074,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.scale_hint_label_widget = QtWidgets.QLabel()
             self.scale_min_hint_label_widget = QtWidgets.QLabel()
             self.scale_max_hint_label_widget = QtWidgets.QLabel()
-            self.workers_label_widget = QtWidgets.QLabel()
             self.max_files_label_widget = QtWidgets.QLabel()
             self.formats_label_widget = QtWidgets.QLabel()
             self.families_label_widget = QtWidgets.QLabel()
@@ -7775,7 +8089,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.scale_hint_label_widget, self.scale_hint_spin)
             form.addRow(self.scale_min_hint_label_widget, self.scale_min_hint_spin)
             form.addRow(self.scale_max_hint_label_widget, self.scale_max_hint_spin)
-            form.addRow(self.workers_label_widget, self.workers_spin)
+            form.addRow(self.downsample_label_widget, self.downsample_spin)
             form.addRow(self.max_files_label_widget, self.max_files_spin)
             form.addRow(self.formats_label_widget, self.formats_edit)
             form.addRow(self.families_label_widget, self.families_combo)
@@ -7853,6 +8167,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.settings_catalog_library_validate_btn.clicked.connect(lambda: self._validate_catalog_library_from_gui(show_error=True))
             self.settings_catalog_library_clear_btn = QtWidgets.QPushButton()
             self.settings_catalog_library_clear_btn.clicked.connect(self._clear_catalog_library_selection)
+            self.settings_catalog_library_manage_btn = QtWidgets.QPushButton()
+            self.settings_catalog_library_manage_btn.clicked.connect(self._open_catalog_library_manager)
             catalog_row = QtWidgets.QWidget()
             catalog_layout = QtWidgets.QHBoxLayout(catalog_row)
             catalog_layout.setContentsMargins(0, 0, 0, 0)
@@ -7860,6 +8176,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             catalog_layout.addWidget(self.settings_catalog_library_browse)
             catalog_layout.addWidget(self.settings_catalog_library_validate_btn)
             catalog_layout.addWidget(self.settings_catalog_library_clear_btn)
+            catalog_layout.addWidget(self.settings_catalog_library_manage_btn)
             form.addRow(self.settings_catalog_library_label, catalog_row)
             self.settings_catalog_library_status_label = QtWidgets.QLabel()
             self.settings_catalog_library_status_label.setWordWrap(True)
@@ -8004,6 +8321,94 @@ def launch_gui(args: argparse.Namespace) -> int:
             sample_layout.addWidget(self.settings_sample_edit)
             sample_layout.addWidget(self.settings_sample_browse)
             legacy_form.addRow(self.settings_sample_label, sample_row)
+
+            self.legacy_blind_group = QtWidgets.QGroupBox(self._text("legacy_blind_group_title"))
+            legacy_blind_layout = QtWidgets.QVBoxLayout(self.legacy_blind_group)
+            self.legacy_blind_scope_label = QtWidgets.QLabel(self._text("legacy_blind_scope_warning"))
+            self.legacy_blind_scope_label.setWordWrap(True)
+            self.legacy_blind_scope_label.setStyleSheet("color: #8a6d3b;")
+            legacy_blind_layout.addWidget(self.legacy_blind_scope_label)
+            legacy_blind_form = QtWidgets.QFormLayout()
+            legacy_blind_layout.addLayout(legacy_blind_form)
+
+            self.cache_label_widget = QtWidgets.QLabel()
+            self.cache_spin = QtWidgets.QSpinBox()
+            self.cache_spin.setRange(2, 64)
+            self.cache_spin.setValue(int(self._settings.solver_cache_size or args.cache_size or 12))
+            legacy_blind_form.addRow(self.cache_label_widget, self.cache_spin)
+
+            self.dev_bucket_label = QtWidgets.QLabel()
+            self.dev_bucket_spin = QtWidgets.QSpinBox()
+            self.dev_bucket_spin.setRange(0, 20000)
+            self.dev_bucket_spin.setSingleStep(256)
+            self.dev_bucket_spin.setAccelerated(True)
+            self.dev_bucket_spin.setValue(int(self._settings.dev_bucket_limit_override or 0))
+            self.dev_bucket_spin.setSpecialValueText("")
+            legacy_blind_form.addRow(self.dev_bucket_label, self.dev_bucket_spin)
+
+            self.dev_vote_label = QtWidgets.QLabel()
+            self.dev_vote_spin = QtWidgets.QSpinBox()
+            self.dev_vote_spin.setRange(5, 95)
+            self.dev_vote_spin.setSingleStep(5)
+            self.dev_vote_spin.setValue(int(self._settings.dev_vote_percentile or 40))
+            legacy_blind_form.addRow(self.dev_vote_label, self.dev_vote_spin)
+
+            self.dev_cap_s_label = QtWidgets.QLabel()
+            self.dev_cap_s_spin = QtWidgets.QSpinBox()
+            self.dev_cap_s_spin.setRange(512, 20000)
+            self.dev_cap_s_spin.setSingleStep(256)
+            self.dev_cap_s_spin.setValue(int(self._settings.dev_bucket_cap_S or 6000))
+            legacy_blind_form.addRow(self.dev_cap_s_label, self.dev_cap_s_spin)
+
+            self.dev_cap_m_label = QtWidgets.QLabel()
+            self.dev_cap_m_spin = QtWidgets.QSpinBox()
+            self.dev_cap_m_spin.setRange(256, 20000)
+            self.dev_cap_m_spin.setSingleStep(256)
+            self.dev_cap_m_spin.setValue(int(self._settings.dev_bucket_cap_M or 4096))
+            legacy_blind_form.addRow(self.dev_cap_m_label, self.dev_cap_m_spin)
+
+            self.dev_cap_l_label = QtWidgets.QLabel()
+            self.dev_cap_l_spin = QtWidgets.QSpinBox()
+            self.dev_cap_l_spin.setRange(1024, 40000)
+            self.dev_cap_l_spin.setSingleStep(512)
+            self.dev_cap_l_spin.setValue(int(self._settings.dev_bucket_cap_L or 8192))
+            legacy_blind_form.addRow(self.dev_cap_l_label, self.dev_cap_l_spin)
+
+            self.dev_sigma_label = QtWidgets.QLabel()
+            self.dev_sigma_spin = QtWidgets.QDoubleSpinBox()
+            self.dev_sigma_spin.setRange(0.5, 10.0)
+            self.dev_sigma_spin.setDecimals(2)
+            self.dev_sigma_spin.setSingleStep(0.1)
+            self.dev_sigma_spin.setValue(float(self._settings.dev_detect_k_sigma or 3.0))
+            legacy_blind_form.addRow(self.dev_sigma_label, self.dev_sigma_spin)
+
+            self.dev_area_label = QtWidgets.QLabel()
+            self.dev_area_spin = QtWidgets.QSpinBox()
+            self.dev_area_spin.setRange(1, 100)
+            self.dev_area_spin.setValue(int(self._settings.dev_detect_min_area or 5))
+            legacy_blind_form.addRow(self.dev_area_label, self.dev_area_spin)
+
+            self.dev_family_group = QtWidgets.QGroupBox()
+            self.dev_family_group.setTitle(self._text("dev_family_group"))
+            family_layout = QtWidgets.QVBoxLayout(self.dev_family_group)
+            self.dev_family_auto_check = QtWidgets.QCheckBox()
+            self.dev_family_auto_check.setChecked(bool(self._settings.dev_family_auto))
+            self.dev_family_auto_check.setText(self._text("dev_family_auto"))
+            self.dev_family_auto_check.toggled.connect(self._update_dev_family_box_enabled)
+            family_layout.addWidget(self.dev_family_auto_check)
+            self.dev_family_hint = QtWidgets.QLabel()
+            self.dev_family_hint.setWordWrap(True)
+            self.dev_family_hint.setText(self._text("dev_family_hint"))
+            family_layout.addWidget(self.dev_family_hint)
+            self.dev_family_box = QtWidgets.QWidget()
+            self.dev_family_box_layout = QtWidgets.QVBoxLayout(self.dev_family_box)
+            self.dev_family_box_layout.setContentsMargins(0, 0, 0, 0)
+            family_layout.addWidget(self.dev_family_box)
+            legacy_blind_layout.addWidget(self.dev_family_group)
+            self._refresh_dev_family_choices([])
+            self._update_dev_family_box_enabled()
+
+            compat_body_layout.addWidget(self.legacy_blind_group)
             compat_layout.addWidget(self.catalog_compat_body)
             self.catalog_compat_group.toggled.connect(self.catalog_compat_body.setVisible)
             self.catalog_compat_body.setVisible(False)
@@ -8063,6 +8468,17 @@ def launch_gui(args: argparse.Namespace) -> int:
             widget = QtWidgets.QWidget()
             column = QtWidgets.QVBoxLayout(widget)
             form = QtWidgets.QFormLayout()
+            self.workers_label_widget = QtWidgets.QLabel()
+            self.workers_spin = QtWidgets.QSpinBox()
+            cap_workers = self._max_worker_cap()
+            self.workers_spin.setRange(0, cap_workers)
+            self.workers_spin.setSpecialValueText(self._text("dev_workers_auto"))
+            self.workers_spin.setValue(self._clamp_worker_choice(self._dev_workers_choice))
+            self.workers_spin.valueChanged.connect(self._on_workers_spin_changed)
+            form.addRow(self.workers_label_widget, self.workers_spin)
+            self.workers_hint_label = QtWidgets.QLabel()
+            self.workers_hint_label.setWordWrap(True)
+            form.addRow(self.workers_hint_label)
             # Near tile cache size
             self.perf_near_cache_label = QtWidgets.QLabel()
             self.perf_near_cache_spin = QtWidgets.QSpinBox()
@@ -8100,221 +8516,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             btn_row.addWidget(self.performance_save_btn)
             column.addLayout(form)
             column.addLayout(btn_row)
-            return widget
-
-        def _build_benchmark_tab(self) -> QtWidgets.QWidget:
-            widget = QtWidgets.QWidget()
-            layout = QtWidgets.QVBoxLayout(widget)
-
-            # Input sources group
-            self.bench_sources_group = QtWidgets.QGroupBox(self._text("benchmark_sources_group"))
-            sources_layout = QtWidgets.QVBoxLayout(self.bench_sources_group)
-            self.bench_inputs_label = QtWidgets.QLabel(self._text("benchmark_inputs_hint"))
-            self.bench_inputs_edit = QtWidgets.QPlainTextEdit()
-            self.bench_inputs_edit.setPlaceholderText(self._text("benchmark_inputs_placeholder"))
-            self.bench_inputs_edit.setTabChangesFocus(True)
-            sources_layout.addWidget(self.bench_inputs_label)
-            sources_layout.addWidget(self.bench_inputs_edit)
-            btn_row = QtWidgets.QHBoxLayout()
-            self.bench_add_file_btn = QtWidgets.QPushButton(self._text("benchmark_add_file_btn"))
-            self.bench_add_dir_btn = QtWidgets.QPushButton(self._text("benchmark_add_dir_btn"))
-            self.bench_add_list_btn = QtWidgets.QPushButton(self._text("benchmark_add_list_btn"))
-            self.bench_add_file_btn.clicked.connect(self._on_benchmark_add_files_clicked)
-            self.bench_add_dir_btn.clicked.connect(self._on_benchmark_add_directory_clicked)
-            self.bench_add_list_btn.clicked.connect(self._on_benchmark_add_list_clicked)
-            btn_row.addWidget(self.bench_add_file_btn)
-            btn_row.addWidget(self.bench_add_dir_btn)
-            btn_row.addWidget(self.bench_add_list_btn)
-            btn_row.addStretch(1)
-            sources_layout.addLayout(btn_row)
-
-            def _wrap_path_row(line_edit: QtWidgets.QLineEdit, button: QtWidgets.QPushButton) -> QtWidgets.QWidget:
-                container = QtWidgets.QWidget()
-                row = QtWidgets.QHBoxLayout(container)
-                row.setContentsMargins(0, 0, 0, 0)
-                row.addWidget(line_edit)
-                row.addWidget(button)
-                return container
-
-            path_form = QtWidgets.QFormLayout()
-            self.bench_path_form = path_form
-
-            self.bench_index_edit = QtWidgets.QLineEdit()
-            self.bench_index_btn = QtWidgets.QPushButton(self._text("browse_button"))
-            self.bench_index_btn.clicked.connect(lambda: self._pick_directory(self.bench_index_edit))
-            self.bench_index_row = _wrap_path_row(self.bench_index_edit, self.bench_index_btn)
-            path_form.addRow(self._text("benchmark_index_label"), self.bench_index_row)
-
-            self.bench_grid_edit = QtWidgets.QLineEdit()
-            self.bench_grid_btn = QtWidgets.QPushButton(self._text("benchmark_browse_file_btn"))
-            self.bench_grid_btn.clicked.connect(lambda: self._benchmark_pick_file(self.bench_grid_edit, save=False))
-            self.bench_grid_row = _wrap_path_row(self.bench_grid_edit, self.bench_grid_btn)
-            path_form.addRow(self._text("benchmark_grid_label"), self.bench_grid_row)
-
-            self.bench_output_json_edit = QtWidgets.QLineEdit()
-            self.bench_output_json_btn = QtWidgets.QPushButton(self._text("benchmark_save_file_btn"))
-            self.bench_output_json_btn.clicked.connect(lambda: self._benchmark_pick_file(self.bench_output_json_edit, save=True, suffix="json"))
-            self.bench_output_json_row = _wrap_path_row(self.bench_output_json_edit, self.bench_output_json_btn)
-            path_form.addRow(
-                self._text("benchmark_output_json_label"),
-                self.bench_output_json_row,
-            )
-
-            self.bench_output_csv_edit = QtWidgets.QLineEdit()
-            self.bench_output_csv_btn = QtWidgets.QPushButton(self._text("benchmark_save_file_btn"))
-            self.bench_output_csv_btn.clicked.connect(lambda: self._benchmark_pick_file(self.bench_output_csv_edit, save=True, suffix="csv"))
-            self.bench_output_csv_row = _wrap_path_row(self.bench_output_csv_edit, self.bench_output_csv_btn)
-            path_form.addRow(
-                self._text("benchmark_output_csv_label"),
-                self.bench_output_csv_row,
-            )
-            sources_layout.addLayout(path_form)
-            layout.addWidget(self.bench_sources_group)
-
-            # General options
-            self.bench_options_group = QtWidgets.QGroupBox(self._text("benchmark_options_group"))
-            options_form = QtWidgets.QFormLayout(self.bench_options_group)
-            self.bench_options_form = options_form
-            self.bench_limit_spin = QtWidgets.QSpinBox()
-            self.bench_limit_spin.setRange(0, 10000)
-            self.bench_limit_spin.setSpecialValueText(self._text("special_auto"))
-            options_form.addRow(self._text("benchmark_limit_label"), self.bench_limit_spin)
-            self.bench_log_combo = QtWidgets.QComboBox()
-            self.bench_log_combo.addItem(self._text("log_level_info"), "INFO")
-            self.bench_log_combo.addItem(self._text("log_level_debug"), "DEBUG")
-            self.bench_log_combo.addItem(self._text("log_level_warning"), "WARNING")
-            options_form.addRow(self._text("benchmark_log_level_label"), self.bench_log_combo)
-            self.bench_allow_write_check = QtWidgets.QCheckBox(self._text("benchmark_allow_write_label"))
-            options_form.addRow(QtWidgets.QLabel(""), self.bench_allow_write_check)
-            self.bench_continue_check = QtWidgets.QCheckBox(self._text("benchmark_continue_label"))
-            options_form.addRow(QtWidgets.QLabel(""), self.bench_continue_check)
-            self.bench_tile_cache_spin = QtWidgets.QSpinBox()
-            self.bench_tile_cache_spin.setRange(0, 4096)
-            self.bench_tile_cache_spin.setSpecialValueText(self._text("special_auto"))
-            options_form.addRow(self._text("benchmark_tile_cache_label"), self.bench_tile_cache_spin)
-            self.bench_sip_combo = QtWidgets.QComboBox()
-            self.bench_sip_combo.addItem("2", 2)
-            self.bench_sip_combo.addItem("3", 3)
-            options_form.addRow(self._text("benchmark_sip_label"), self.bench_sip_combo)
-            self.bench_parity_check = QtWidgets.QCheckBox(self._text("benchmark_parity_label"))
-            options_form.addRow(QtWidgets.QLabel(""), self.bench_parity_check)
-            self.bench_full_mode_check = QtWidgets.QCheckBox(self._text("benchmark_full_mode_label"))
-            options_form.addRow(QtWidgets.QLabel(""), self.bench_full_mode_check)
-            layout.addWidget(self.bench_options_group)
-
-            # Base SolveConfig overrides
-            self.bench_base_group = QtWidgets.QGroupBox(self._text("benchmark_base_group"))
-            base_form = QtWidgets.QFormLayout(self.bench_base_group)
-            self.bench_base_form = base_form
-            self.bench_max_candidates_spin = QtWidgets.QSpinBox()
-            self.bench_max_candidates_spin.setRange(1, 100)
-            base_form.addRow(self._text("benchmark_max_candidates_label"), self.bench_max_candidates_spin)
-            self.bench_max_stars_spin = QtWidgets.QSpinBox()
-            self.bench_max_stars_spin.setRange(100, 5000)
-            base_form.addRow(self._text("benchmark_max_stars_label"), self.bench_max_stars_spin)
-            self.bench_max_quads_spin = QtWidgets.QSpinBox()
-            self.bench_max_quads_spin.setRange(1000, 40000)
-            self.bench_max_quads_spin.setSingleStep(500)
-            base_form.addRow(self._text("benchmark_max_quads_label"), self.bench_max_quads_spin)
-            self.bench_detect_sigma_spin = QtWidgets.QDoubleSpinBox()
-            self.bench_detect_sigma_spin.setRange(0.5, 10.0)
-            self.bench_detect_sigma_spin.setSingleStep(0.1)
-            base_form.addRow(self._text("benchmark_detect_sigma_label"), self.bench_detect_sigma_spin)
-            self.bench_detect_area_spin = QtWidgets.QSpinBox()
-            self.bench_detect_area_spin.setRange(1, 100)
-            base_form.addRow(self._text("benchmark_detect_area_label"), self.bench_detect_area_spin)
-            self.bench_bucket_cap_s_spin = QtWidgets.QSpinBox()
-            self.bench_bucket_cap_s_spin.setRange(0, 50000)
-            base_form.addRow(self._text("benchmark_bucket_cap_s_label"), self.bench_bucket_cap_s_spin)
-            self.bench_bucket_cap_m_spin = QtWidgets.QSpinBox()
-            self.bench_bucket_cap_m_spin.setRange(0, 50000)
-            base_form.addRow(self._text("benchmark_bucket_cap_m_label"), self.bench_bucket_cap_m_spin)
-            self.bench_bucket_cap_l_spin = QtWidgets.QSpinBox()
-            self.bench_bucket_cap_l_spin.setRange(0, 50000)
-            base_form.addRow(self._text("benchmark_bucket_cap_l_label"), self.bench_bucket_cap_l_spin)
-            self.bench_bucket_override_spin = QtWidgets.QSpinBox()
-            self.bench_bucket_override_spin.setRange(0, 10000)
-            base_form.addRow(self._text("benchmark_bucket_override_label"), self.bench_bucket_override_spin)
-            self.bench_vote_spin = QtWidgets.QSpinBox()
-            self.bench_vote_spin.setRange(5, 95)
-            base_form.addRow(self._text("benchmark_vote_label"), self.bench_vote_spin)
-            self.bench_downsample_spin = QtWidgets.QSpinBox()
-            self.bench_downsample_spin.setRange(1, 4)
-            base_form.addRow(self._text("benchmark_downsample_label"), self.bench_downsample_spin)
-            self.bench_quality_rms_spin = QtWidgets.QDoubleSpinBox()
-            self.bench_quality_rms_spin.setRange(0.1, 5.0)
-            self.bench_quality_rms_spin.setSingleStep(0.1)
-            base_form.addRow(self._text("benchmark_quality_rms_label"), self.bench_quality_rms_spin)
-            self.bench_quality_inliers_spin = QtWidgets.QSpinBox()
-            self.bench_quality_inliers_spin.setRange(10, 500)
-            base_form.addRow(self._text("benchmark_quality_inliers_label"), self.bench_quality_inliers_spin)
-            self.bench_pixel_tol_spin = QtWidgets.QDoubleSpinBox()
-            self.bench_pixel_tol_spin.setRange(0.5, 10.0)
-            self.bench_pixel_tol_spin.setSingleStep(0.1)
-            base_form.addRow(self._text("benchmark_pixel_tol_label"), self.bench_pixel_tol_spin)
-            layout.addWidget(self.bench_base_group)
-
-            # Hints group
-            self.bench_hints_group = QtWidgets.QGroupBox(self._text("benchmark_hints_group"))
-            hints_form = QtWidgets.QFormLayout(self.bench_hints_group)
-            self.bench_hints_form = hints_form
-            self.bench_ra_edit = QtWidgets.QLineEdit()
-            self.bench_ra_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_ra_label"), self.bench_ra_edit)
-            self.bench_dec_edit = QtWidgets.QLineEdit()
-            self.bench_dec_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_dec_label"), self.bench_dec_edit)
-            self.bench_radius_edit = QtWidgets.QLineEdit()
-            self.bench_radius_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_radius_label"), self.bench_radius_edit)
-            self.bench_focal_edit = QtWidgets.QLineEdit()
-            self.bench_focal_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_focal_label"), self.bench_focal_edit)
-            self.bench_pixel_edit = QtWidgets.QLineEdit()
-            self.bench_pixel_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_pixel_label"), self.bench_pixel_edit)
-            self.bench_scale_edit = QtWidgets.QLineEdit()
-            self.bench_scale_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_scale_label"), self.bench_scale_edit)
-            self.bench_scale_min_edit = QtWidgets.QLineEdit()
-            self.bench_scale_min_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_scale_min_label"), self.bench_scale_min_edit)
-            self.bench_scale_max_edit = QtWidgets.QLineEdit()
-            self.bench_scale_max_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_scale_max_label"), self.bench_scale_max_edit)
-            layout.addWidget(self.bench_hints_group)
-
-            # Progress + controls
-            self.bench_progress = QtWidgets.QProgressBar()
-            self.bench_progress.setRange(0, 1)
-            self.bench_progress.setValue(0)
-            self.bench_status_label = QtWidgets.QLabel(self._text("benchmark_status_idle"))
-            status_row = QtWidgets.QHBoxLayout()
-            status_row.addWidget(self.bench_progress, stretch=1)
-            status_row.addWidget(self.bench_status_label)
-            layout.addLayout(status_row)
-
-            self.bench_log_edit = QtWidgets.QPlainTextEdit()
-            self.bench_log_edit.setReadOnly(True)
-            self.bench_log_edit.setPlaceholderText(self._text("benchmark_log_placeholder"))
-            try:
-                self.bench_log_edit.document().setMaximumBlockCount(2000)
-            except Exception:
-                pass
-            layout.addWidget(self.bench_log_edit)
-
-            btns = QtWidgets.QHBoxLayout()
-            btns.addStretch(1)
-            self.bench_run_btn = QtWidgets.QPushButton(self._text("benchmark_run_button"))
-            self.bench_run_btn.clicked.connect(self._on_benchmark_run_clicked)
-            self.bench_stop_btn = QtWidgets.QPushButton(self._text("benchmark_stop_button"))
-            self.bench_stop_btn.setEnabled(False)
-            self.bench_stop_btn.clicked.connect(self._on_benchmark_stop_clicked)
-            btns.addWidget(self.bench_run_btn)
-            btns.addWidget(self.bench_stop_btn)
-            layout.addLayout(btns)
-
-            layout.addStretch(1)
             return widget
 
         def _build_fast_solver_tab(self) -> QtWidgets.QWidget:
@@ -8772,6 +8973,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                     TILE_COMPRESSION_CHOICES[0],
                 )
             self.settings_sample_edit.setText(settings.sample_fits or "")
+            if hasattr(self, "downsample_spin"):
+                self.downsample_spin.setValue(int(settings.solver_downsample or 1))
+            if hasattr(self, "cache_spin"):
+                self.cache_spin.setValue(int(settings.solver_cache_size or 12))
             # Blind group
             if hasattr(self, 'settings_blind_max_stars_spin'):
                 self.settings_blind_max_stars_spin.setValue(settings.blind_max_stars)
@@ -8835,13 +9040,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.dev_sigma_spin.setValue(float(settings.dev_detect_k_sigma or 3.0))
             if hasattr(self, "dev_area_spin"):
                 self.dev_area_spin.setValue(int(settings.dev_detect_min_area or 5))
-            if hasattr(self, "dev_workers_label"):
-                self.dev_workers_label.setText(self._text("dev_workers_label"))
-            if hasattr(self, "dev_workers_hint_label"):
-                self.dev_workers_hint_label.setText(self._text("dev_workers_hint"))
             self._dev_workers_choice = self._clamp_worker_choice(settings.solver_workers or 0)
-            if hasattr(self, "dev_workers_combo"):
-                self._populate_dev_workers_combo()
+            self._sync_workers_spin_from_settings()
             if hasattr(self, "dev_family_auto_check"):
                 self.dev_family_auto_check.setChecked(bool(getattr(settings, "dev_family_auto", True)))
             if hasattr(self, "dev_family_hint"):
@@ -8897,56 +9097,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.fast_detect_max_labels_spin.setValue(int(getattr(settings, 'near_detect_max_labels', 1200) or 1200))
             except Exception:
                 pass
-            self._populate_benchmark_tab_from_settings()
-
-        def _populate_benchmark_tab_from_settings(self) -> None:
-            if not hasattr(self, "bench_inputs_edit"):
-                return
-            settings = self._settings
-            self.bench_inputs_edit.setPlainText(settings.benchmark_inputs or "")
-            self.bench_index_edit.setText(settings.benchmark_index_root or settings.index_root or "")
-            self.bench_grid_edit.setText(settings.benchmark_grid_path or "")
-            self.bench_output_json_edit.setText(settings.benchmark_output_json or "")
-            self.bench_output_csv_edit.setText(settings.benchmark_output_csv or "")
-            self.bench_allow_write_check.setChecked(bool(settings.benchmark_allow_write))
-            self.bench_continue_check.setChecked(bool(settings.benchmark_continue_all))
-            self.bench_limit_spin.setValue(max(0, int(settings.benchmark_limit or 0)))
-            log_value = (settings.benchmark_log_level or "INFO").upper()
-            idx = self.bench_log_combo.findData(log_value)
-            if idx >= 0:
-                self.bench_log_combo.setCurrentIndex(idx)
-            self.bench_tile_cache_spin.setValue(max(0, int(settings.benchmark_tile_cache_size or 0)))
-            sip = settings.benchmark_sip_order if settings.benchmark_sip_order in (2, 3) else 2
-            sip_idx = self.bench_sip_combo.findData(sip)
-            if sip_idx >= 0:
-                self.bench_sip_combo.setCurrentIndex(sip_idx)
-            self.bench_parity_check.setChecked(bool(settings.benchmark_try_parity))
-            self.bench_full_mode_check.setChecked(bool(settings.benchmark_full_mode))
-            self.bench_max_candidates_spin.setValue(int(settings.blind_max_candidates or 10))
-            self.bench_max_stars_spin.setValue(int(settings.blind_max_stars or 500))
-            self.bench_max_quads_spin.setValue(int(settings.blind_max_quads or 8000))
-            self.bench_detect_sigma_spin.setValue(float(settings.dev_detect_k_sigma or 3.0))
-            self.bench_detect_area_spin.setValue(int(settings.dev_detect_min_area or 5))
-            self.bench_bucket_cap_s_spin.setValue(int(settings.dev_bucket_cap_S or 6000))
-            self.bench_bucket_cap_m_spin.setValue(int(settings.dev_bucket_cap_M or 4096))
-            self.bench_bucket_cap_l_spin.setValue(int(settings.dev_bucket_cap_L or 8192))
-            self.bench_bucket_override_spin.setValue(int(settings.dev_bucket_limit_override or 0))
-            self.bench_vote_spin.setValue(int(settings.dev_vote_percentile or 40))
-            self.bench_downsample_spin.setValue(int(settings.solver_downsample or 1))
-            self.bench_quality_rms_spin.setValue(float(settings.blind_quality_rms or 1.2))
-            self.bench_quality_inliers_spin.setValue(int(settings.blind_quality_inliers or 40))
-            self.bench_pixel_tol_spin.setValue(float(settings.blind_pixel_tolerance or 2.5))
-            def _fmt(value: Optional[float]) -> str:
-                return "" if value is None else f"{value}"
-            self.bench_ra_edit.setText(_fmt(settings.solver_hint_ra_deg))
-            self.bench_dec_edit.setText(_fmt(settings.solver_hint_dec_deg))
-            self.bench_radius_edit.setText(_fmt(settings.solver_hint_radius_deg))
-            self.bench_focal_edit.setText(_fmt(settings.solver_hint_focal_mm))
-            self.bench_pixel_edit.setText(_fmt(settings.solver_hint_pixel_um))
-            self.bench_scale_edit.setText(_fmt(settings.solver_hint_resolution_arcsec))
-            self.bench_scale_min_edit.setText(_fmt(settings.solver_hint_resolution_min_arcsec))
-            self.bench_scale_max_edit.setText(_fmt(settings.solver_hint_resolution_max_arcsec))
-
         def _set_combo_current_data(self, combo: QtWidgets.QComboBox, value: str, default: str) -> None:
             target = (value or default or "").strip().lower()
             idx = combo.findData(target)
@@ -9047,6 +9197,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                 data = self.settings_tile_compression_combo.currentData()
                 if isinstance(data, str) and data.strip():
                     tile_compression_value = data.strip().lower()
+            dev_family_auto = bool(self.dev_family_auto_check.isChecked()) if hasattr(self, "dev_family_auto_check") else bool(getattr(self._settings, "dev_family_auto", True))
+            dev_family_selection = None
+            if not dev_family_auto:
+                dev_family_selection = self._selected_dev_families()
+                if not dev_family_selection:
+                    raise ValueError(self._text("dev_family_none_error"))
 
             return PersistentSettings(
                 catalog_library_path=catalog_library_path,
@@ -9108,24 +9264,34 @@ def launch_gui(args: argparse.Namespace) -> int:
                 astrometry_timeout_s=int(self.ast_timeout_spin.value()) if hasattr(self, 'ast_timeout_spin') else 600,
                 astrometry_use_hints=bool(self.ast_use_hints_check.isChecked()) if hasattr(self, 'ast_use_hints_check') else True,
                 astrometry_fallback_local=bool(self.ast_fallback_local_check.isChecked()) if hasattr(self, 'ast_fallback_local_check') else True,
+                solver_downsample=int(self.downsample_spin.value()) if hasattr(self, "downsample_spin") else int(getattr(self._settings, "solver_downsample", 1) or 1),
+                solver_workers=self._selected_worker_value(),
+                solver_cache_size=int(self.cache_spin.value()) if hasattr(self, "cache_spin") else int(getattr(self._settings, "solver_cache_size", 12) or 12),
                 dev_bucket_limit_override=int(self.dev_bucket_spin.value()) if hasattr(self, "dev_bucket_spin") else 0,
                 dev_vote_percentile=int(self.dev_vote_spin.value()) if hasattr(self, "dev_vote_spin") else 40,
+                dev_bucket_cap_S=int(self.dev_cap_s_spin.value()) if hasattr(self, "dev_cap_s_spin") else int(getattr(self._settings, "dev_bucket_cap_S", 0) or 0),
+                dev_bucket_cap_M=int(self.dev_cap_m_spin.value()) if hasattr(self, "dev_cap_m_spin") else int(getattr(self._settings, "dev_bucket_cap_M", 0) or 0),
+                dev_bucket_cap_L=int(self.dev_cap_l_spin.value()) if hasattr(self, "dev_cap_l_spin") else int(getattr(self._settings, "dev_bucket_cap_L", 0) or 0),
                 dev_detect_k_sigma=float(self.dev_sigma_spin.value()) if hasattr(self, "dev_sigma_spin") else 3.0,
                 dev_detect_min_area=int(self.dev_area_spin.value()) if hasattr(self, "dev_area_spin") else 5,
+                dev_hash_quads_S=(
+                    int(self.dev_hash_quads_spin["S"].value())
+                    if hasattr(self, "dev_hash_quads_spin") and "S" in self.dev_hash_quads_spin
+                    else getattr(self._settings, "dev_hash_quads_S", None)
+                ),
+                dev_hash_quads_M=(
+                    int(self.dev_hash_quads_spin["M"].value())
+                    if hasattr(self, "dev_hash_quads_spin") and "M" in self.dev_hash_quads_spin
+                    else getattr(self._settings, "dev_hash_quads_M", None)
+                ),
+                dev_hash_quads_L=(
+                    int(self.dev_hash_quads_spin["L"].value())
+                    if hasattr(self, "dev_hash_quads_spin") and "L" in self.dev_hash_quads_spin
+                    else getattr(self._settings, "dev_hash_quads_L", None)
+                ),
+                dev_family_auto=dev_family_auto,
+                dev_family_selection=dev_family_selection,
                 db_family_cache=list(self._settings.db_family_cache or []) if getattr(self._settings, "db_family_cache", None) else None,
-                benchmark_inputs=self.bench_inputs_edit.toPlainText().strip() or None,
-                benchmark_index_root=self.bench_index_edit.text().strip() or None,
-                benchmark_grid_path=self.bench_grid_edit.text().strip() or None,
-                benchmark_output_json=self.bench_output_json_edit.text().strip() or None,
-                benchmark_output_csv=self.bench_output_csv_edit.text().strip() or None,
-                benchmark_allow_write=bool(self.bench_allow_write_check.isChecked()),
-                benchmark_continue_all=bool(self.bench_continue_check.isChecked()),
-                benchmark_limit=int(self.bench_limit_spin.value() or 0),
-                benchmark_log_level=str(self.bench_log_combo.currentData() or "INFO").upper(),
-                benchmark_tile_cache_size=int(self.bench_tile_cache_spin.value() or 0),
-                benchmark_sip_order=int(self.bench_sip_combo.currentData() or 2),
-                benchmark_full_mode=bool(self.bench_full_mode_check.isChecked()),
-                benchmark_try_parity=bool(self.bench_parity_check.isChecked()),
             )
 
         def _apply_solver_hints_from_optics(
@@ -9604,10 +9770,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                     label_key = f"language_action_{code}"
                     action.setText(self._text(label_key))
                     action.setChecked(code == self._language)
-            if hasattr(self, "dev_scroll"):
-                idx = self.tabs.indexOf(self.dev_scroll)
-                if idx >= 0:
-                    self.tabs.setTabText(idx, self._text("dev_tab"))
             if hasattr(self, "interface_menu"):
                 self.interface_menu.setTitle(self._text("interface_menu"))
                 if "expert" in self._interface_actions:
@@ -9622,6 +9784,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                     label_key = f"log_level_{level.lower()}"
                     action.setText(self._text(label_key))
                 self._sync_log_level_actions()
+            if hasattr(self, "tools_menu"):
+                self.tools_menu.setTitle(self._text("advanced_tools_menu"))
+            if hasattr(self, "catalog_library_manager_action"):
+                self.catalog_library_manager_action.setText(self._text("library_manager_action"))
+            if hasattr(self, "historical_index_maintenance_action"):
+                self.historical_index_maintenance_action.setText(self._text("historical_index_maintenance_action"))
+            if self._catalog_library_manager_dialog is not None and hasattr(self._catalog_library_manager_dialog, "apply_language"):
+                self._catalog_library_manager_dialog.apply_language()
             self._apply_interface_mode()
             if hasattr(self, "dev_bucket_label"):
                 self.dev_bucket_label.setText(self._text("dev_bucket_label"))
@@ -9643,12 +9813,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.dev_area_label.setText(self._text("dev_detect_area_label"))
             if hasattr(self, "dev_area_spin"):
                 self.dev_area_spin.setToolTip(self._text("dev_detect_area_hint"))
-            if hasattr(self, "dev_workers_label"):
-                self.dev_workers_label.setText(self._text("dev_workers_label"))
-            if hasattr(self, "dev_workers_hint_label"):
-                self.dev_workers_hint_label.setText(self._text("dev_workers_hint"))
-            if hasattr(self, "dev_workers_combo"):
-                self.dev_workers_combo.setItemText(0, self._text("dev_workers_auto"))
             if hasattr(self, "dev_family_group"):
                 self.dev_family_group.setTitle(self._text("dev_family_group"))
             if hasattr(self, "dev_family_auto_check"):
@@ -9657,9 +9821,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.dev_family_hint.setText(self._text("dev_family_hint"))
             if hasattr(self, "dev_hash_group"):
                 self.dev_hash_group.setTitle(self._text("dev_hash_group"))
+            if hasattr(self, "historical_index_maintenance_warning_label"):
+                self.historical_index_maintenance_warning_label.setText(self._text("historical_index_maintenance_warning"))
+            if hasattr(self, "hash_maintenance_save_btn"):
+                self.hash_maintenance_save_btn.setText(self._text("settings_save_btn"))
+            if hasattr(self, "hash_maintenance_close_btn"):
+                self.hash_maintenance_close_btn.setText(self._text("close_button"))
             self._update_hash_button_labels()
-            if hasattr(self, "dev_save_btn"):
-                self.dev_save_btn.setText(self._text("settings_save_btn"))
             browse_label = self._text("browse_button")
             self.browse_in_btn.setText(browse_label)
             self.input_label.setText(self._text("input_label"))
@@ -9682,8 +9850,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.scale_min_hint_label_widget.setText(self._text("scale_min_hint_label"))
             self.scale_max_hint_label_widget.setText(self._text("scale_max_hint_label"))
             self.downsample_label_widget.setText(self._text("downsample_label"))
-            self.workers_label_widget.setText(self._text("threads_label"))
-            self.cache_label_widget.setText(self._text("cache_label"))
+            if hasattr(self, "workers_label_widget"):
+                self.workers_label_widget.setText(self._text("threads_label"))
+            if hasattr(self, "workers_spin"):
+                self.workers_spin.setSpecialValueText(self._text("dev_workers_auto"))
+            if hasattr(self, "workers_hint_label"):
+                self.workers_hint_label.setText(self._text("dev_workers_hint"))
+            if hasattr(self, "cache_label_widget"):
+                self.cache_label_widget.setText(self._text("cache_label"))
             self.max_files_label_widget.setText(self._text("max_files_label"))
             self.formats_label_widget.setText(self._text("formats_label"))
             self.families_label_widget.setText(self._text("families_label"))
@@ -9762,10 +9936,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                         idx = self.tabs.indexOf(self.performance_scroll)
                         if idx >= 0:
                             self.tabs.setTabText(idx, self._text("performance_tab"))
-                    if hasattr(self, "benchmark_scroll"):
-                        idx = self.tabs.indexOf(self.benchmark_scroll)
-                        if idx >= 0:
-                            self.tabs.setTabText(idx, self._text("benchmark_tab"))
                     if hasattr(self, "fast_scroll"):
                         idx = self.tabs.indexOf(self.fast_scroll)
                         if idx >= 0:
@@ -9785,6 +9955,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_catalog_library_validate_btn.setText(self._text("settings_catalog_library_validate"))
             if hasattr(self, "settings_catalog_library_clear_btn"):
                 self.settings_catalog_library_clear_btn.setText(self._text("settings_catalog_library_clear"))
+            if hasattr(self, "settings_catalog_library_manage_btn"):
+                self.settings_catalog_library_manage_btn.setText(self._text("library_manager_open"))
             if hasattr(self, "settings_catalog_library_edit"):
                 self.settings_catalog_library_edit.setToolTip(self._text("settings_catalog_library_tooltip"))
             if hasattr(self, "settings_catalog_library_help_label"):
@@ -9813,6 +9985,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.catalog_compat_group.setTitle(self._text("catalog_compat_group_title"))
             if hasattr(self, "catalog_compat_warning_label"):
                 self.catalog_compat_warning_label.setText(self._text("catalog_compat_warning"))
+            if hasattr(self, "legacy_blind_group"):
+                self.legacy_blind_group.setTitle(self._text("legacy_blind_group_title"))
+            if hasattr(self, "legacy_blind_scope_label"):
+                self.legacy_blind_scope_label.setText(self._text("legacy_blind_scope_warning"))
             if hasattr(self, "catalog_maintenance_group"):
                 self.catalog_maintenance_group.setTitle(self._text("catalog_compat_tools_title"))
             if hasattr(self, "catalog_maintenance_warning_label"):
@@ -9996,86 +10172,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.fast_detect_max_labels_label.setText(self._text("fast_detect_max_labels_label"))
             if hasattr(self, "fast_save_btn"):
                 self.fast_save_btn.setText(self._text("fast_save_btn"))
-            if hasattr(self, "bench_sources_group"):
-                self.bench_sources_group.setTitle(self._text("benchmark_sources_group"))
-                self.bench_inputs_label.setText(self._text("benchmark_inputs_hint"))
-                self.bench_inputs_edit.setPlaceholderText(self._text("benchmark_inputs_placeholder"))
-                self.bench_add_file_btn.setText(self._text("benchmark_add_file_btn"))
-                self.bench_add_dir_btn.setText(self._text("benchmark_add_dir_btn"))
-                self.bench_add_list_btn.setText(self._text("benchmark_add_list_btn"))
-                self.bench_index_btn.setText(self._text("browse_button"))
-                self.bench_grid_btn.setText(self._text("benchmark_browse_file_btn"))
-                self.bench_output_json_btn.setText(self._text("benchmark_save_file_btn"))
-                self.bench_output_csv_btn.setText(self._text("benchmark_save_file_btn"))
-                if hasattr(self, "bench_path_form"):
-                    label = self.bench_path_form.labelForField(self.bench_index_row)
-                    if label:
-                        label.setText(self._text("benchmark_index_label"))
-                    label = self.bench_path_form.labelForField(self.bench_grid_row)
-                    if label:
-                        label.setText(self._text("benchmark_grid_label"))
-                    label = self.bench_path_form.labelForField(self.bench_output_json_row)
-                    if label:
-                        label.setText(self._text("benchmark_output_json_label"))
-                    label = self.bench_path_form.labelForField(self.bench_output_csv_row)
-                    if label:
-                        label.setText(self._text("benchmark_output_csv_label"))
-                self.bench_options_group.setTitle(self._text("benchmark_options_group"))
-                if hasattr(self, "bench_options_form"):
-                    label = self.bench_options_form.labelForField(self.bench_limit_spin)
-                    if label:
-                        label.setText(self._text("benchmark_limit_label"))
-                    label = self.bench_options_form.labelForField(self.bench_log_combo)
-                    if label:
-                        label.setText(self._text("benchmark_log_level_label"))
-                    label = self.bench_options_form.labelForField(self.bench_tile_cache_spin)
-                    if label:
-                        label.setText(self._text("benchmark_tile_cache_label"))
-                    label = self.bench_options_form.labelForField(self.bench_sip_combo)
-                    if label:
-                        label.setText(self._text("benchmark_sip_label"))
-                self.bench_allow_write_check.setText(self._text("benchmark_allow_write_label"))
-                self.bench_continue_check.setText(self._text("benchmark_continue_label"))
-                self.bench_parity_check.setText(self._text("benchmark_parity_label"))
-                self.bench_full_mode_check.setText(self._text("benchmark_full_mode_label"))
-                self.bench_base_group.setTitle(self._text("benchmark_base_group"))
-                if hasattr(self, "bench_base_form"):
-                    def _set_base_label(widget: QtWidgets.QWidget, key: str) -> None:
-                        label = self.bench_base_form.labelForField(widget)
-                        if label:
-                            label.setText(self._text(key))
-                    _set_base_label(self.bench_max_candidates_spin, "benchmark_max_candidates_label")
-                    _set_base_label(self.bench_max_stars_spin, "benchmark_max_stars_label")
-                    _set_base_label(self.bench_max_quads_spin, "benchmark_max_quads_label")
-                    _set_base_label(self.bench_detect_sigma_spin, "benchmark_detect_sigma_label")
-                    _set_base_label(self.bench_detect_area_spin, "benchmark_detect_area_label")
-                    _set_base_label(self.bench_bucket_cap_s_spin, "benchmark_bucket_cap_s_label")
-                    _set_base_label(self.bench_bucket_cap_m_spin, "benchmark_bucket_cap_m_label")
-                    _set_base_label(self.bench_bucket_cap_l_spin, "benchmark_bucket_cap_l_label")
-                    _set_base_label(self.bench_bucket_override_spin, "benchmark_bucket_override_label")
-                    _set_base_label(self.bench_vote_spin, "benchmark_vote_label")
-                    _set_base_label(self.bench_downsample_spin, "benchmark_downsample_label")
-                    _set_base_label(self.bench_quality_rms_spin, "benchmark_quality_rms_label")
-                    _set_base_label(self.bench_quality_inliers_spin, "benchmark_quality_inliers_label")
-                    _set_base_label(self.bench_pixel_tol_spin, "benchmark_pixel_tol_label")
-                self.bench_hints_group.setTitle(self._text("benchmark_hints_group"))
-                if hasattr(self, "bench_hints_form"):
-                    def _set_hint_label(widget: QtWidgets.QWidget, key: str) -> None:
-                        label = self.bench_hints_form.labelForField(widget)
-                        if label:
-                            label.setText(self._text(key))
-                        widget.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-                    _set_hint_label(self.bench_ra_edit, "benchmark_ra_label")
-                    _set_hint_label(self.bench_dec_edit, "benchmark_dec_label")
-                    _set_hint_label(self.bench_radius_edit, "benchmark_radius_label")
-                    _set_hint_label(self.bench_focal_edit, "benchmark_focal_label")
-                    _set_hint_label(self.bench_pixel_edit, "benchmark_pixel_label")
-                    _set_hint_label(self.bench_scale_edit, "benchmark_scale_label")
-                    _set_hint_label(self.bench_scale_min_edit, "benchmark_scale_min_label")
-                    _set_hint_label(self.bench_scale_max_edit, "benchmark_scale_max_label")
-                self.bench_log_edit.setPlaceholderText(self._text("benchmark_log_placeholder"))
-                self.bench_run_btn.setText(self._text("benchmark_run_button"))
-                self.bench_stop_btn.setText(self._text("benchmark_stop_button"))
             self._retranslate_status_items()
 
         def _retranslate_status_items(self) -> None:
@@ -10152,211 +10248,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                 line_edit.setText(directory)
                 if trigger_scan:
                     self.scan_files()
-
-        def _benchmark_pick_file(
-            self,
-            line_edit: QtWidgets.QLineEdit,
-            *,
-            save: bool,
-            suffix: str | None = None,
-        ) -> None:
-            start = line_edit.text().strip() or str(Path.home())
-            caption = self._text("benchmark_dialog_save_file") if save else self._text("benchmark_dialog_open_file")
-            filters: list[str] = [self._text("benchmark_dialog_filter_all")]
-            if suffix:
-                key = f"benchmark_dialog_filter_{suffix.lower()}"
-                filters.insert(0, self._text(key, ext=suffix.upper(), ext_lower=suffix.lower()))
-            filter_text = ";;".join(filters)
-            if save:
-                path, _ = QtWidgets.QFileDialog.getSaveFileName(self, caption, start, filter_text)
-            else:
-                path, _ = QtWidgets.QFileDialog.getOpenFileName(self, caption, start, filter_text)
-            if path:
-                line_edit.setText(path)
-
-        def _append_benchmark_input(self, entry: str) -> None:
-            entry = entry.strip()
-            if not entry:
-                return
-            current = self.bench_inputs_edit.toPlainText().splitlines()
-            current = [line.strip() for line in current if line.strip()]
-            if entry not in current:
-                current.append(entry)
-            self.bench_inputs_edit.setPlainText("\n".join(current))
-
-        def _on_benchmark_add_files_clicked(self) -> None:
-            files, _ = QtWidgets.QFileDialog.getOpenFileNames(
-                self,
-                self._text("benchmark_dialog_add_files"),
-                self.bench_index_edit.text().strip() or str(Path.home()),
-                "FITS (*.fit *.fits *.fts *.fit.gz *.fits.gz *.fts.gz);;All Files (*)",
-            )
-            for path in files:
-                self._append_benchmark_input(path)
-
-        def _on_benchmark_add_directory_clicked(self) -> None:
-            directory = QtWidgets.QFileDialog.getExistingDirectory(
-                self,
-                self._text("benchmark_dialog_add_directory"),
-                self.bench_index_edit.text().strip() or str(Path.home()),
-            )
-            if directory:
-                self._append_benchmark_input(directory)
-
-        def _on_benchmark_add_list_clicked(self) -> None:
-            path, _ = QtWidgets.QFileDialog.getOpenFileName(
-                self,
-                self._text("benchmark_dialog_add_list"),
-                self.bench_index_edit.text().strip() or str(Path.home()),
-                "Text (*.txt *.lst);;All Files (*)",
-            )
-            if path:
-                self._append_benchmark_input(f"@{path}")
-
-        def _on_benchmark_run_clicked(self) -> None:
-            if self._benchmark_worker:
-                return
-            try:
-                inputs, args = self._collect_benchmark_job()
-            except ValueError as exc:
-                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
-                return
-            self.bench_log_edit.clear()
-            self.bench_progress.setMaximum(1)
-            self.bench_progress.setValue(0)
-            self.bench_status_label.setText(self._text("benchmark_status_starting"))
-            self._benchmark_worker = BenchmarkRunner(inputs, args)
-            self._benchmark_worker.log.connect(self._append_benchmark_log)
-            self._benchmark_worker.progress.connect(self._on_benchmark_progress)
-            self._benchmark_worker.finished.connect(self._on_benchmark_finished)
-            self._set_benchmark_running(True)
-            self._benchmark_worker.start()
-
-        def _on_benchmark_stop_clicked(self) -> None:
-            if not self._benchmark_worker:
-                return
-            try:
-                self._benchmark_worker.cancel()
-            except Exception:
-                pass
-            self.bench_stop_btn.setEnabled(False)
-
-        def _append_benchmark_log(self, message: str) -> None:
-            self.bench_log_edit.appendPlainText(message)
-
-        def _benchmark_inputs_from_ui(self) -> list[str]:
-            return [line.strip() for line in self.bench_inputs_edit.toPlainText().splitlines() if line.strip()]
-
-        def _parse_optional_float(self, text: str, *, label_key: str) -> float | None:
-            value = text.strip()
-            if not value:
-                return None
-            try:
-                return float(value)
-            except ValueError:
-                raise ValueError(self._text("benchmark_error_number", field=self._text(label_key)))
-
-        def _collect_benchmark_job(self) -> tuple[list[str], argparse.Namespace]:
-            entries = self._benchmark_inputs_from_ui()
-            if not entries:
-                raise ValueError(self._text("benchmark_error_inputs"))
-            index_root = self.bench_index_edit.text().strip() or (self._settings.index_root or "")
-            if not index_root:
-                raise ValueError(self._text("benchmark_error_index"))
-            index_path = Path(index_root).expanduser()
-            if not index_path.exists():
-                raise ValueError(self._text("benchmark_error_index_missing", path=index_path))
-            grid_text = self.bench_grid_edit.text().strip()
-            grid_path = Path(grid_text).expanduser() if grid_text else None
-            if grid_path and not grid_path.exists():
-                raise ValueError(self._text("benchmark_error_grid_missing", path=grid_path))
-            out_json = Path(self.bench_output_json_edit.text().strip()).expanduser() if self.bench_output_json_edit.text().strip() else None
-            out_csv = Path(self.bench_output_csv_edit.text().strip()).expanduser() if self.bench_output_csv_edit.text().strip() else None
-            limit_value = self.bench_limit_spin.value()
-            limit = limit_value if limit_value > 0 else None
-            tile_cache = self.bench_tile_cache_spin.value()
-            tile_cache_value = tile_cache if tile_cache > 0 else None
-            log_level = str(self.bench_log_combo.currentData() or "INFO").upper()
-            sip_order = int(self.bench_sip_combo.currentData() or 2)
-            ra_hint = self._parse_optional_float(self.bench_ra_edit.text(), label_key="benchmark_ra_label")
-            dec_hint = self._parse_optional_float(self.bench_dec_edit.text(), label_key="benchmark_dec_label")
-            radius_hint = self._parse_optional_float(self.bench_radius_edit.text(), label_key="benchmark_radius_label")
-            focal_hint = self._parse_optional_float(self.bench_focal_edit.text(), label_key="benchmark_focal_label")
-            pixel_hint = self._parse_optional_float(self.bench_pixel_edit.text(), label_key="benchmark_pixel_label")
-            scale_hint = self._parse_optional_float(self.bench_scale_edit.text(), label_key="benchmark_scale_label")
-            scale_min_hint = self._parse_optional_float(self.bench_scale_min_edit.text(), label_key="benchmark_scale_min_label")
-            scale_max_hint = self._parse_optional_float(self.bench_scale_max_edit.text(), label_key="benchmark_scale_max_label")
-            args = argparse.Namespace(
-                inputs=entries,
-                index_root=index_path,
-                grid=grid_path,
-                continue_after_success=self.bench_continue_check.isChecked(),
-                allow_write=self.bench_allow_write_check.isChecked(),
-                limit=limit,
-                output_json=out_json,
-                output_csv=out_csv,
-                log_level=log_level,
-                max_candidates=self.bench_max_candidates_spin.value(),
-                max_stars=self.bench_max_stars_spin.value(),
-                max_quads=self.bench_max_quads_spin.value(),
-                detect_k_sigma=self.bench_detect_sigma_spin.value(),
-                detect_min_area=self.bench_detect_area_spin.value(),
-                bucket_cap_s=self.bench_bucket_cap_s_spin.value(),
-                bucket_cap_m=self.bench_bucket_cap_m_spin.value(),
-                bucket_cap_l=self.bench_bucket_cap_l_spin.value(),
-                sip_order=sip_order,
-                quality_rms=self.bench_quality_rms_spin.value(),
-                quality_inliers=self.bench_quality_inliers_spin.value(),
-                pixel_tolerance=self.bench_pixel_tol_spin.value(),
-                downsample=self.bench_downsample_spin.value(),
-                vote_percentile=self.bench_vote_spin.value(),
-                bucket_limit_override=self.bench_bucket_override_spin.value(),
-                tile_cache_size=tile_cache_value,
-                focal_length_mm=focal_hint,
-                pixel_size_um=pixel_hint,
-                pixel_scale_arcsec=scale_hint,
-                pixel_scale_min_arcsec=scale_min_hint,
-                pixel_scale_max_arcsec=scale_max_hint,
-                ra_hint_deg=ra_hint,
-                dec_hint_deg=dec_hint,
-                radius_hint_deg=radius_hint,
-                no_parity_flip=not self.bench_parity_check.isChecked(),
-                full_mode=self.bench_full_mode_check.isChecked(),
-            )
-            return entries, args
-
-        def _set_benchmark_running(self, running: bool) -> None:
-            self.bench_run_btn.setEnabled(not running)
-            self.bench_stop_btn.setEnabled(running)
-            self.bench_sources_group.setEnabled(not running)
-            self.bench_options_group.setEnabled(not running)
-            self.bench_base_group.setEnabled(not running)
-            self.bench_hints_group.setEnabled(not running)
-
-        def _on_benchmark_progress(self, done: int, total: int, name: str) -> None:
-            total = max(1, total)
-            self.bench_progress.setMaximum(total)
-            self.bench_progress.setValue(min(done, total))
-            self.bench_status_label.setText(
-                self._text("benchmark_status_running", done=done, total=total, name=name or "")
-            )
-
-        def _on_benchmark_finished(self, success: bool, message: str) -> None:
-            self._set_benchmark_running(False)
-            self.bench_progress.setValue(self.bench_progress.maximum())
-            if self._benchmark_worker:
-                self._benchmark_worker.deleteLater()
-            self._benchmark_worker = None
-            if success:
-                self.bench_status_label.setText(self._text("benchmark_status_done", summary=message))
-                self._append_benchmark_log(self._text("benchmark_log_done", summary=message))
-            else:
-                if message.strip().lower() == "cancelled":
-                    self.bench_status_label.setText(self._text("benchmark_status_cancelled"))
-                    self._append_benchmark_log(self._text("benchmark_log_cancelled"))
-                else:
-                    self.bench_status_label.setText(self._text("benchmark_status_failed", error=message))
-                    self._append_benchmark_log(self._text("benchmark_log_failed", error=message))
 
         def scan_files(self) -> None:
             # Cancel previous scan if any
@@ -10758,73 +10649,202 @@ def launch_gui(args: argparse.Namespace) -> int:
             )
             return answer == QtWidgets.QMessageBox.Yes
 
-        def _run_simple_mode_wcs_cleaning(self, files: Sequence[Path]) -> bool:
+        def _run_simple_mode_wcs_cleaning(self, files: Sequence[Path]) -> str:
             if not (hasattr(self, "simple_mode_check") and self.simple_mode_check.isChecked()):
-                return True
+                return "skip"
             if not (hasattr(self, "simple_clean_wcs_check") and self.simple_clean_wcs_check.isChecked()):
-                return True
+                return "skip"
 
             fit_ext = {".fit", ".fits", ".fts"}
             targets = [p for p in files if str(p.suffix).lower() in fit_ext]
             if not targets:
-                return True
+                return "skip"
 
             try:
-                from zewcscleaner import process_fits
+                config = WcsCleanupConfig.from_files(
+                    targets,
+                    dry_run=False,
+                    backup=False,
+                    only_if_wcs=True,
+                    all_hdus=False,
+                )
             except Exception as exc:
                 QtWidgets.QMessageBox.warning(
                     self,
                     self._text("simple_wizard_title"),
                     self._text("simple_clean_failed", error=str(exc)),
                 )
+                return "failed"
+
+            self._wcs_cleanup_run_seq += 1
+            cleanup_id = self._wcs_cleanup_run_seq
+            worker = WcsCleanupRunner(config)
+            setattr(worker, "_gui_cleanup_id", cleanup_id)
+            self._wcs_cleanup_worker = worker
+            self._wcs_cleanup_active_id = cleanup_id
+            self._wcs_cleanup_terminal = None
+            self._wcs_cleanup_terminal_payload = None
+            self._progress_total = len(config.files)
+            self._progress_completed = 0
+            self.progress_bar.setMaximum(max(1, len(config.files)))
+            self.progress_bar.setValue(0)
+            self.status_label.setText(
+                self._text("simple_clean_progress", done=0, total=len(config.files), remaining=len(config.files))
+            )
+            self._set_running(True)
+            self._log(self._text("simple_clean_started", files=len(config.files)))
+            worker.cleanup_started.connect(self._on_wcs_cleanup_started)
+            worker.file_result.connect(self._on_wcs_cleanup_file_result)
+            worker.progress.connect(self._on_wcs_cleanup_progress)
+            worker.file_error.connect(self._on_wcs_cleanup_file_error)
+            worker.fatal_error.connect(self._on_wcs_cleanup_fatal_error)
+            worker.completed.connect(self._on_wcs_cleanup_completed)
+            worker.cancelled.connect(self._on_wcs_cleanup_cancelled)
+            worker.finished.connect(self._on_wcs_cleanup_thread_finished)
+            worker.start()
+            return "started"
+
+        def _wcs_cleanup_callback_current(self) -> bool:
+            sender = self.sender()
+            cleanup_id = getattr(sender, "_gui_cleanup_id", self._wcs_cleanup_active_id)
+            if cleanup_id != self._wcs_cleanup_active_id:
+                logging.info(
+                    "WCS cleanup stale callback ignored cleanup_id=%s active_cleanup_id=%s",
+                    cleanup_id,
+                    self._wcs_cleanup_active_id,
+                )
                 return False
-
-            total_cards = 0
-            changed_files = 0
-            refreshed = 0
-            self.files_view.setUpdatesEnabled(False)
-            for path in targets:
-                try:
-                    deleted, edited_hdus = process_fits(
-                        str(path),
-                        dry_run=False,
-                        backup=False,
-                        only_if_wcs=True,
-                        all_hdus=False,
-                    )
-                    total_cards += int(deleted)
-                    if int(edited_hdus) > 0:
-                        changed_files += 1
-                        state = inspect_effective_wcs_state(path)
-                        detail = "WCS nettoyé"
-                        if state.other_hdus_have_wcs and not state.primary_has_wcs:
-                            detail = "WCS nettoyé du PRIMARY ; WCS secondaire présent"
-                        elif state.detail:
-                            detail = state.detail
-                        key = self._normalize_progress_path(path)
-                        item = self._item_by_path.get(key)
-                        if item is not None:
-                            self._apply_item_status(item, state.status, detail)
-                            refreshed += 1
-                        if refreshed and refreshed % 250 == 0:
-                            self.files_view.setUpdatesEnabled(True)
-                            QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
-                            self.files_view.setUpdatesEnabled(False)
-                except Exception as exc:
-                    self.files_view.setUpdatesEnabled(True)
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        self._text("simple_wizard_title"),
-                        self._text("simple_clean_failed", error=f"{path.name}: {exc}"),
-                    )
-                    return False
-            self.files_view.setUpdatesEnabled(True)
-
-            self._log(self._text("simple_clean_done", files=changed_files, cards=total_cards))
             return True
 
+        def _on_wcs_cleanup_started(self, progress) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            self.progress_bar.setMaximum(max(1, int(getattr(progress, "total", 0) or 0)))
+            self.progress_bar.setValue(0)
+
+        def _refresh_wcs_cleanup_status(self, path: Path) -> None:
+            state = inspect_effective_wcs_state(path)
+            detail = "WCS nettoyé"
+            if state.other_hdus_have_wcs and not state.primary_has_wcs:
+                detail = "WCS nettoyé du PRIMARY ; WCS secondaire présent"
+            elif state.detail:
+                detail = state.detail
+            key = self._normalize_progress_path(path)
+            item = self._item_by_path.get(key)
+            if item is not None:
+                self._apply_item_status(item, state.status, detail)
+
+        def _on_wcs_cleanup_file_result(self, result) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            path = Path(getattr(result, "path"))
+            self._refresh_wcs_cleanup_status(path)
+            deleted = int(getattr(result, "deleted_cards", 0) or 0)
+            edited_hdus = int(getattr(result, "edited_hdus", 0) or 0)
+            self._log(f"WCS cleanup file result: {path} cards={deleted} hdus={edited_hdus}")
+
+        def _on_wcs_cleanup_progress(self, progress) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            total = max(0, int(getattr(progress, "total", 0) or 0))
+            done = max(0, int(getattr(progress, "completed", 0) or 0))
+            remaining = max(0, int(getattr(progress, "remaining", max(0, total - done)) or 0))
+            self._progress_completed = done
+            self.progress_bar.setMaximum(max(1, total))
+            self.progress_bar.setValue(min(done, self.progress_bar.maximum()))
+            self.status_label.setText(self._text("simple_clean_progress", done=done, total=total, remaining=remaining))
+
+        def _on_wcs_cleanup_file_error(self, error) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            self._log(
+                "WCS cleanup file failed: path={path} operation={operation} error={message} status={status}".format(
+                    path=getattr(error, "path", None),
+                    operation=getattr(error, "operation", "process_fits"),
+                    message=getattr(error, "message", ""),
+                    status=getattr(error, "final_status", "failed"),
+                )
+            )
+
+        def _on_wcs_cleanup_fatal_error(self, error) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            self._wcs_cleanup_terminal = "failed"
+            self._wcs_cleanup_terminal_payload = error
+            message = "{path}: {message}".format(path=getattr(error, "path", "-"), message=getattr(error, "message", error))
+            QtWidgets.QMessageBox.warning(
+                self,
+                self._text("simple_wizard_title"),
+                self._text("simple_clean_failed", error=message),
+            )
+            self._log(self._text("simple_clean_failed", error=message))
+
+        def _on_wcs_cleanup_completed(self, summary) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            self._wcs_cleanup_terminal = "completed"
+            self._wcs_cleanup_terminal_payload = summary
+            self._log(
+                self._text(
+                    "simple_clean_summary",
+                    planned=getattr(summary, "planned", 0),
+                    processed=getattr(summary, "processed", 0),
+                    changed=getattr(summary, "changed_files", 0),
+                    cards=getattr(summary, "deleted_cards", 0),
+                    errors=getattr(summary, "errors", 0),
+                    remaining=getattr(summary, "remaining", 0),
+                    duration=f"{float(getattr(summary, 'duration_s', 0.0)):.2f}",
+                    status=getattr(summary, "terminal_status", "completed"),
+                )
+            )
+
+        def _on_wcs_cleanup_cancelled(self, summary) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            self._wcs_cleanup_terminal = "cancelled"
+            self._wcs_cleanup_terminal_payload = summary
+            self._log(
+                self._text(
+                    "simple_clean_cancelled",
+                    done=getattr(summary, "processed", 0),
+                    remaining=getattr(summary, "remaining", 0),
+                )
+            )
+
+        def _on_wcs_cleanup_thread_finished(self) -> None:
+            sender = self.sender()
+            worker = sender if sender is not None else self._wcs_cleanup_worker
+            cleanup_id = getattr(worker, "_gui_cleanup_id", self._wcs_cleanup_active_id)
+            if cleanup_id != self._wcs_cleanup_active_id:
+                if worker is not None:
+                    worker.deleteLater()
+                return
+            terminal = self._wcs_cleanup_terminal or ("cancelled" if self._worker_cancelled(worker) else "failed")
+            if worker is not None:
+                try:
+                    worker.finished.disconnect(self._on_wcs_cleanup_thread_finished)
+                except Exception:
+                    pass
+                worker.deleteLater()
+            if self._wcs_cleanup_worker is worker:
+                self._wcs_cleanup_worker = None
+            self._wcs_cleanup_active_id = None
+            payload = self._wcs_cleanup_terminal_payload
+            self._wcs_cleanup_terminal_payload = None
+            self._wcs_cleanup_terminal = None
+            self._set_running(False)
+            if terminal == "completed" and not self._closing:
+                self._resume_after_wcs_cleanup = True
+                QtCore.QTimer.singleShot(0, self._start_solving)
+            elif terminal == "cancelled":
+                processed = int(getattr(payload, "processed", self._progress_completed) or 0)
+                remaining = int(getattr(payload, "remaining", max(0, self._progress_total - processed)) or 0)
+                self.status_label.setText(self._text("simple_clean_cancelled", done=processed, remaining=remaining))
+            else:
+                self.status_label.setText(self._text("status_ready"))
+
         def _start_solving(self) -> None:
-            if self._worker is not None:
+            if self._worker is not None or self._wcs_cleanup_worker is not None:
                 return
             if not self._pending_files:
                 self.scan_files()
@@ -10835,10 +10855,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self._text("dialog_no_files"),
                     )
                     return
-            if not self._run_simple_mode_assistant(len(self._pending_files)):
-                return
-            if not self._run_simple_mode_wcs_cleaning(self._pending_files):
-                return
+            if self._resume_after_wcs_cleanup:
+                self._resume_after_wcs_cleanup = False
+            else:
+                if not self._run_simple_mode_assistant(len(self._pending_files)):
+                    return
+                cleanup_state = self._run_simple_mode_wcs_cleaning(self._pending_files)
+                if cleanup_state in {"started", "failed"}:
+                    return
             preflight_started = time.perf_counter()
             preflight_timings: dict[str, float] = {}
             near_runtime: NearCatalogRuntime | None = None
@@ -11028,6 +11052,15 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._worker.start()
 
         def _stop_solving(self) -> None:
+            if self._wcs_cleanup_worker:
+                logging.info("STOP_UI_CLICKED_WCS_CLEANUP")
+                self.status_label.setText(self._text("status_stopping"))
+                self.stop_btn.setEnabled(False)
+                self.stop_btn.setText(self._text("status_stopping"))
+                self.start_btn.setEnabled(False)
+                self._wcs_cleanup_worker.request_cancel()
+                self._log(self._text("log_stop_requested"))
+                return
             if self._worker:
                 logging.info("STOP_UI_CLICKED")
                 self.status_label.setText(self._text("status_stopping"))
@@ -11383,6 +11416,20 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
 
         def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # pragma: no cover - GUI hook
+            self._closing = True
+            cleanup_worker = self._wcs_cleanup_worker
+            self._shutdown_thread(cleanup_worker, cancel_method="request_cancel")
+            try:
+                if cleanup_worker is not None and cleanup_worker.isRunning():
+                    event.ignore()
+                    self._closing = False
+                    self.status_label.setText(self._text("status_stopping"))
+                    return
+            except Exception:
+                pass
+            if self._wcs_cleanup_worker is cleanup_worker:
+                self._wcs_cleanup_worker = None
+                self._wcs_cleanup_active_id = None
             active_worker = self._worker
             self._shutdown_thread(active_worker, cancel_method="request_cancel")
             try:
@@ -11400,8 +11447,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._blind_worker = None
             self._shutdown_thread(self._near_worker)
             self._near_worker = None
-            self._shutdown_thread(self._benchmark_worker, cancel_method="cancel")
-            self._benchmark_worker = None
             try:
                 self._progress_timer.stop()
             except Exception:

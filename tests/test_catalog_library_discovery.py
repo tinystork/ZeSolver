@@ -3,9 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
-from zesolver.catalog_library import CatalogStatus, discover_existing
+from near_catalog_provider_helpers import write_astap_1476_tile
+from zesolver.catalog_library.discovery import discover_existing
+from zesolver.catalog_library.models import CatalogStatus
 
 
 def _write_manifest(root: Path) -> Path:
@@ -33,6 +36,13 @@ def _write_manifest(root: Path) -> Path:
         encoding="utf-8",
     )
     return manifest
+
+
+def _write_astap(root: Path, *, family: str, tile: str = "1501") -> Path:
+    ra = np.asarray([12.00, 12.03, 12.06, 12.10], dtype=np.float64)
+    dec = np.asarray([1.00, 1.06, 0.98, 1.12], dtype=np.float64)
+    write_astap_1476_tile(root, family=family, tile_code=tile, ra_deg=ra, dec_deg=dec)
+    return root / f"{family}_{tile}.1476"
 
 
 def test_discovery_with_no_paths_is_missing() -> None:
@@ -109,3 +119,30 @@ def test_discovery_current_bundled_4d_manifest_is_partial_blind4d_only() -> None
     assert len(result.blind4d_indexes) == 6
     assert result.blind4d_indexes[0].coverage.total_tiles == 1476
     assert result.blind4d_indexes[0].coverage.all_sky is False
+
+
+def test_discovery_detects_only_installed_astap_families_case_insensitive(tmp_path: Path) -> None:
+    astap = tmp_path / "astap"
+    path = _write_astap(astap, family="d50")
+    path.rename(astap / "D50_1501.1476")
+    _write_astap(astap, family="d20")
+    (astap / "notes.txt").write_text("ignore", encoding="utf-8")
+
+    discovery = discover_existing(astap_root=astap)
+
+    assert discovery.status == CatalogStatus.NEAR_ONLY
+    assert discovery.families == ("d20", "d50")
+    assert [source["family"] for source in discovery.candidate_manifest["sources"]] == ["d20", "d50"]
+
+
+def test_discovery_d50_subdirectory_does_not_require_absent_families(tmp_path: Path) -> None:
+    astap = tmp_path / "program-files-astap"
+    d50_dir = astap / "D50"
+    path = _write_astap(d50_dir, family="d50")
+    path.rename(d50_dir / "D50_1501.1476")
+
+    discovery = discover_existing(astap_root=astap)
+
+    assert discovery.status == CatalogStatus.NEAR_ONLY
+    assert discovery.families == ("d50",)
+    assert not discovery.issues
