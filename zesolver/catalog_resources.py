@@ -32,6 +32,7 @@ from .catalog_library import (
     discover_existing,
 )
 from .catalog_library.models import CatalogCoverage
+from .resource_telemetry import increment_batch_counter
 
 
 ENVIRONMENT_CATALOG_KEYS = (
@@ -226,6 +227,7 @@ def build_near_catalog_provider(resources: "SolverCatalogResources") -> AstapNea
 
     if resources.near is None:
         raise CatalogResourceResolutionError("near_catalog_provider_unavailable")
+    increment_batch_counter("catalog_provider_constructor_count")
     return AstapNearCatalogProvider(resources.near.root, families=resources.near.families)
 
 
@@ -237,6 +239,7 @@ def resolve_near_catalog_runtime(
     blind_only: bool = False,
     legacy_cache_size: int = 128,
 ) -> NearCatalogRuntime:
+    increment_batch_counter("near_runtime_resolution_count")
     requested = NearCatalogMode.normalize(mode)
     legacy_root = Path(legacy_index_root).expanduser() if legacy_index_root is not None else resources.legacy_index_root
     if blind_only:
@@ -313,6 +316,7 @@ def _astap_runtime(resources: "SolverCatalogResources", requested: NearCatalogMo
 
 def _legacy_runtime(requested: NearCatalogMode, legacy_root: Path, *, cache_size: int) -> NearCatalogRuntime:
     try:
+        increment_batch_counter("catalog_provider_constructor_count")
         provider = LegacyIndexNearCatalogProvider(legacy_root, cache_size=cache_size)
     except Exception as exc:
         raise NearCatalogRuntimeError(LEGACY_NEAR_INDEX_INVALID, f"{LEGACY_NEAR_INDEX_INVALID}: {exc}") from exc
@@ -334,6 +338,7 @@ def resolve_blind4d_runtime(
     mode: Blind4DCatalogMode | str = Blind4DCatalogMode.AUTO,
     external_manifest_path: str | Path | None = None,
 ) -> Blind4DRuntimeSelection:
+    increment_batch_counter("blind_runtime_resolution_count")
     requested = Blind4DCatalogMode.normalize(mode)
     external_path = Path(external_manifest_path).expanduser() if external_manifest_path is not None else resources.blind4d_manifest_path
     has_explicit_library = resources.source == "library"
@@ -399,7 +404,7 @@ def _blind4d_library_selection(
         )
     try:
         manifest_path = (resources.library_path / "catalog.json") if resources.library_path is not None else None
-        loaded = load_4d_index_manifest_payload(view.payload, manifest_path=manifest_path)
+        loaded = load_4d_index_manifest_payload(view.payload, manifest_path=manifest_path, validate_indexes=False)
     except IndexManifestError as exc:
         return _blind4d_library_failure(
             requested,
@@ -456,7 +461,7 @@ def _blind4d_external_selection(
     raise_on_error: bool = True,
 ) -> Blind4DRuntimeSelection:
     try:
-        loaded = load_4d_index_manifest(manifest_path)
+        loaded = load_4d_index_manifest(manifest_path, validate_indexes=False)
     except IndexManifestError as exc:
         if raise_on_error:
             raise Blind4DRuntimeError(BLIND4D_EXTERNAL_MANIFEST_INVALID, f"{BLIND4D_EXTERNAL_MANIFEST_INVALID}: {exc}") from exc
@@ -565,6 +570,7 @@ def resolve_catalog_resources(
 ) -> SolverCatalogResources:
     """Resolve catalogue resources in the P1C priority order."""
 
+    increment_batch_counter("catalog_resource_resolution_count")
     if catalog_library is not None:
         try:
             library = _coerce_library(catalog_library)
@@ -612,6 +618,7 @@ def resolve_catalog_resources(
 def _coerce_library(value: CatalogLibrary | str | Path) -> CatalogLibrary:
     if isinstance(value, CatalogLibrary):
         return value
+    increment_batch_counter("catalog_library_open_count")
     return CatalogLibrary.open(value)
 
 
@@ -706,7 +713,7 @@ def _resources_from_legacy(
     warnings: list[str] = []
     if manifest_path is not None:
         try:
-            loaded = load_4d_index_manifest(manifest_path)
+            loaded = load_4d_index_manifest(manifest_path, validate_indexes=False)
         except IndexManifestError as exc:
             raise CatalogResourceResolutionError(f"legacy_blind4d_manifest_invalid: {exc}") from exc
         blind_indexes = tuple(

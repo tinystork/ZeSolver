@@ -119,6 +119,87 @@ class Quad4DIndex:
                     return hits
         return hits
 
+    def search_records_diversified(
+        self,
+        image_records: Iterable[Any],
+        *,
+        code_tol: float | None = None,
+        max_hits: int = 2000,
+        max_hits_per_image_quad: int = 8,
+        max_hits_per_tile: int = 64,
+        max_hits_per_image_quad_tile: int = 2,
+    ) -> list[Quad4DSearchHit]:
+        """Search with deterministic tile/image-quad quotas before global truncation."""
+
+        if self.tree is None:
+            return []
+        tol = float(self.metadata.get("code_tol_recommended", ASTROMETRY_AB_CODE_4D_DEFAULT_TOL) if code_tol is None else code_tol)
+        max_hits = max(1, int(max_hits))
+        max_hits_per_image_quad = max(1, int(max_hits_per_image_quad))
+        max_hits_per_tile = max(1, int(max_hits_per_tile))
+        max_hits_per_image_quad_tile = max(1, int(max_hits_per_image_quad_tile))
+        seen: set[tuple[int, int]] = set()
+        by_tile: dict[str, list[Quad4DSearchHit]] = {}
+        tile_image_quad_counts: dict[tuple[str, int], int] = {}
+
+        for image_record_index, image_record in enumerate(image_records):
+            code = np.asarray(image_record.code, dtype=np.float64)
+            neighbor_ids = self.tree.query_ball_point(code, r=tol)
+            if not neighbor_ids:
+                continue
+            ranked = sorted(
+                ((int(idx), float(np.linalg.norm(code - self.codes_4d[int(idx)]))) for idx in neighbor_ids),
+                key=lambda item: item[1],
+            )
+            accepted_for_image_quad = 0
+            for catalog_record_index, distance in ranked:
+                key = (int(image_record.source_quad_index), int(catalog_record_index))
+                if key in seen:
+                    continue
+                tile_idx = int(self.tile_key_indices[catalog_record_index])
+                tile_key = self.tile_keys[tile_idx] if 0 <= tile_idx < len(self.tile_keys) else ""
+                bucket = by_tile.setdefault(str(tile_key), [])
+                if len(bucket) >= max_hits_per_tile:
+                    continue
+                quad_tile_key = (str(tile_key), int(image_record.source_quad_index))
+                if tile_image_quad_counts.get(quad_tile_key, 0) >= max_hits_per_image_quad_tile:
+                    continue
+                seen.add(key)
+                bucket.append(
+                    Quad4DSearchHit(
+                        image_record_index=int(image_record_index),
+                        catalog_record_index=int(catalog_record_index),
+                        code_distance=float(distance),
+                        image_quad_indices=tuple(int(v) for v in image_record.ordered_indices),
+                        catalog_quad_indices=tuple(int(v) for v in self.quad_star_indices[catalog_record_index]),
+                        tile_key=str(tile_key),
+                    )
+                )
+                tile_image_quad_counts[quad_tile_key] = int(tile_image_quad_counts.get(quad_tile_key, 0) + 1)
+                accepted_for_image_quad += 1
+                if accepted_for_image_quad >= max_hits_per_image_quad:
+                    break
+
+        for bucket in by_tile.values():
+            bucket.sort(key=lambda hit: (float(hit.code_distance), int(hit.image_record_index), int(hit.catalog_record_index)))
+
+        hits: list[Quad4DSearchHit] = []
+        tile_order = sorted(by_tile)
+        local_rank = 0
+        while len(hits) < max_hits:
+            progressed = False
+            for tile_key in tile_order:
+                bucket = by_tile[tile_key]
+                if local_rank < len(bucket):
+                    hits.append(bucket[local_rank])
+                    progressed = True
+                    if len(hits) >= max_hits:
+                        break
+            if not progressed:
+                break
+            local_rank += 1
+        return hits
+
 
 @dataclass(frozen=True, slots=True)
 class Quad4DPayloadTile:

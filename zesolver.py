@@ -224,6 +224,7 @@ from zesolver.catalog_library import (
     LibraryRepairPlan,
     CatalogStatus,
     IssueSeverity,
+    build_blind4d_manifest_view,
 )
 from zesolver.cancellation import (
     CompositeCancellationToken,
@@ -256,6 +257,7 @@ from zeblindsolver.index_manifest_4d import (
     IndexManifestError,
     Loaded4DManifest,
     load_4d_index_manifest,
+    load_4d_index_manifest_payload,
 )
 from zeblindsolver.profiles import (
     HISTORICAL_PROFILE,
@@ -1414,18 +1416,21 @@ def apply_catalog_resources_to_config(config: SolveConfig) -> tuple[SolveConfig,
     if resources.source in {"library", "environment"} and resources.near is not None:
         updates["db_root"] = resources.near.root
         updates["families"] = resources.near.families or None
-    if config.blind_backend_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
-        try:
-            blind4d_runtime = resolve_blind4d_runtime(
-                resources,
-                mode=getattr(config, "blind4d_catalog_mode", "auto"),
-                external_manifest_path=config.blind_4d_manifest_path,
+    if (
+        resources.source == "library"
+        and resources.catalog_library is not None
+        and resources.blind4d_indexes
+        and config.blind_backend_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE
+    ):
+        view = build_blind4d_manifest_view(resources.catalog_library)
+        if not view.errors:
+            manifest_path = (resources.library_path / "catalog.json") if resources.library_path is not None else None
+            updates["blind_4d_manifest_path"] = manifest_path
+            updates["blind_4d_loaded_manifest"] = load_4d_index_manifest_payload(
+                view.payload,
+                manifest_path=manifest_path,
+                validate_indexes=False,
             )
-        except Blind4DRuntimeError:
-            blind4d_runtime = None
-        if blind4d_runtime is not None and blind4d_runtime.available and blind4d_runtime.loaded_manifest is not None:
-            updates["blind_4d_manifest_path"] = blind4d_runtime.loaded_manifest.manifest_path
-            updates["blind_4d_loaded_manifest"] = blind4d_runtime.loaded_manifest
     resolved = replace(config, **updates) if updates else config
     return resolved, resources
 
@@ -5600,7 +5605,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                     yield from batch.run(cancel_event=cancel_event, on_result=_on_result)
 
                 controller = GuiSolveController(
-                    pipeline_runner_factory=lambda: PipelineGuiRunner(result_callback=self.progress.emit),
+                    pipeline_runner_factory=lambda: PipelineGuiRunner(
+                        result_callback=self.progress.emit,
+                        progress_callback=lambda progress: self.info.emit(str(getattr(progress, "current_phase", "") or "")),
+                    ),
                     legacy_runner_factory=lambda: LegacyGuiRunner(
                         run_legacy=_legacy_results,
                         result_callback=self.progress.emit,
@@ -10863,91 +10871,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                 cleanup_state = self._run_simple_mode_wcs_cleaning(self._pending_files)
                 if cleanup_state in {"started", "failed"}:
                     return
-            preflight_started = time.perf_counter()
-            preflight_timings: dict[str, float] = {}
-            near_runtime: NearCatalogRuntime | None = None
             try:
-                t0 = time.perf_counter()
                 config = self._build_config()
-                preflight_timings["catalog_library_open_s"] = time.perf_counter() - t0
-                t0 = time.perf_counter()
-                config, catalog_resources = apply_catalog_resources_to_config(config)
-                preflight_timings["catalog_resource_resolution_s"] = time.perf_counter() - t0
-                self._log("Catalog resources: " + json.dumps(catalog_resources.telemetry(include_paths=False), ensure_ascii=False))
-                if catalog_resources.source == "library":
-                    self._log(self._text("catalog_library_selected_log", library_id=catalog_resources.catalog_library_id or "-"))
-                    self._log(self._text("catalog_library_status_log", status=catalog_resources.library_status.value if catalog_resources.library_status else "-"))
-                t0 = time.perf_counter()
-                near_runtime = resolve_near_catalog_runtime(
-                    catalog_resources,
-                    mode=getattr(config, "near_catalog_mode", "auto"),
-                    legacy_index_root=config.blind_index_path,
-                    blind_only=bool(getattr(config, "blind_only", False)),
-                    legacy_cache_size=int(getattr(config, "near_tile_cache_size", 128) or 128),
-                )
-                preflight_timings["near_runtime_resolution_s"] = time.perf_counter() - t0
-                self._log("Near catalog preflight: " + json.dumps(near_runtime.telemetry(include_paths=False), ensure_ascii=False))
-            except (ValueError, CatalogResourceResolutionError) as exc:
+                catalog_resources = None
+            except ValueError as exc:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
-            if (
-                config.blind_enabled
-                and str(getattr(config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower()
-                == ZEBLIND_4D_EXPERIMENTAL_PROFILE
-            ):
-                try:
-                    t0 = time.perf_counter()
-                    requested_mode = Blind4DCatalogMode.normalize(getattr(config, "blind4d_catalog_mode", "auto"))
-                    external_manifest = config.blind_4d_manifest_path
-                    if catalog_resources.source != "library" and external_manifest is None:
-                        external_manifest = self._manifest_text_or_default()
-                    blind4d_runtime = resolve_blind4d_runtime(
-                        catalog_resources,
-                        mode=requested_mode,
-                        external_manifest_path=external_manifest,
-                    )
-                    preflight_timings["blind4d_runtime_resolution_s"] = time.perf_counter() - t0
-                    if blind4d_runtime.available and blind4d_runtime.loaded_manifest is not None:
-                        loaded_manifest = blind4d_runtime.loaded_manifest
-                        config = replace(
-                            config,
-                            blind_4d_manifest_path=loaded_manifest.manifest_path,
-                            blind_4d_loaded_manifest=loaded_manifest,
-                        )
-                        self._log(
-                            "ZeBlind 4D preflight: "
-                            + json.dumps(blind4d_runtime.telemetry(include_paths=False), ensure_ascii=False)
-                        )
-                    elif requested_mode is not Blind4DCatalogMode.AUTO:
-                        raise Blind4DRuntimeError(
-                            blind4d_runtime.error_code or "BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE",
-                            blind4d_runtime.error_message or "Blind 4D runtime unavailable",
-                        )
-                    else:
-                        self._log(
-                            "ZeBlind 4D unavailable: "
-                            + json.dumps(blind4d_runtime.telemetry(include_paths=False), ensure_ascii=False)
-                        )
-                except (Blind4DRuntimeError, IndexManifestError) as exc:
-                    message = self._text("blind_4d_preflight_failed", error=str(exc))
-                    self._log(message)
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        self._text("blind_4d_enable_failed_title"),
-                        self._text(
-                            "blind_4d_enable_failed_body",
-                            manifest=(config.blind_4d_manifest_path or "CatalogLibrary"),
-                            error=str(exc),
-                        ),
-                    )
-                    return
-            preflight_timings["catalog_preflight_total_s"] = time.perf_counter() - preflight_started
-            self._log(
-                self._text(
-                    "catalog_preflight_timings",
-                    payload=json.dumps({key: round(value, 4) for key, value in preflight_timings.items()}, ensure_ascii=False),
-                )
-            )
+            self.status_label.setText("Préparation de la bibliothèque")
             self._results_seen = 0
             try:
                 self._log(

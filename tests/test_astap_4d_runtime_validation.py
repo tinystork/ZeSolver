@@ -46,6 +46,18 @@ def test_p1d3b_build_config_is_explicit_and_matches_gate_values():
     assert cfg["dtype"] == "float32"
 
 
+def test_astap_4d_builder_defaults_match_p1d3b_qualified_product_density():
+    cfg = runtime.Astap4DBuildConfig()
+
+    assert cfg.mag_cap == 15.0
+    assert cfg.source_max_stars == 2000
+    assert cfg.source_star_truncation_mode == "native_prefix"
+    assert cfg.max_stars_per_tile == 2000
+    assert cfg.max_quads_per_tile == 40000
+    assert cfg.sampler_tag == "catalog_ring_coverage"
+    assert cfg.code_tol_recommended == 0.015
+
+
 def test_runtime_config_is_blind4d_isolated(tmp_path):
     index_path = tmp_path / "d50_2822.npz"
     cfg = runtime.build_runtime_config([index_path], accept_policy="best_within_budget")

@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 from astropy.io import fits
 
-from catalog_resource_helpers import strict_entry, write_catalog_library, write_fake_4d_index, write_strict_manifest
+from catalog_resource_helpers import sha256_file, strict_entry, write_catalog_library, write_fake_4d_index, write_strict_manifest
 from zesolver.catalog_resources import resolve_catalog_resources
 from zesolver.core.blind_port import ProductionBlindSolverPort
 from zesolver.core.models import EngineSolveResult, SolveRequest, SolveStatus
@@ -32,6 +32,140 @@ def _library_with_blind(tmp_path: Path) -> tuple[Path, Path]:
 def _fits(path: Path) -> Path:
     fits.PrimaryHDU(np.ones((8, 8), dtype=np.float32)).writeto(path, overwrite=True)
     return path
+
+
+def _full_sharded_library_with_compat_monolith(tmp_path: Path, *, shard_count: int = 47) -> tuple[Path, list[Path], Path]:
+    root = tmp_path / "library"
+    root.mkdir(parents=True, exist_ok=True)
+    source_dir = root / "sources" / "astap" / "d50"
+    source_dir.mkdir(parents=True, exist_ok=True)
+    (source_dir / "d50_0001.1476").write_bytes(b"fixture")
+    shards: list[Path] = []
+    indexes: list[dict[str, object]] = []
+    tile_keys: list[str] = []
+    for i in range(shard_count):
+        tile_key = f"d50_{i + 1:04d}"
+        index_path = write_fake_4d_index(root / "indexes" / f"direct-d50-fixed32-{i:03d}.npz", tile_key)
+        shards.append(index_path)
+        tile_keys.append(tile_key)
+        indexes.append(
+            {
+                "id": f"direct-d50-fixed32-{i:03d}",
+                "engine": "blind4d",
+                "schema": "zeblind.astrometry_4d_index_manifest.v1",
+                "algorithm_version": "astrometry_ab_code_4d_v1",
+                "path": {"kind": "external_reference", "value": str(index_path.resolve())},
+                "manifest_path": None,
+                "source_ids": ["astap-d50"],
+                "source_tiles": [tile_key],
+                "coverage": {
+                    "status": "PARTIAL",
+                    "all_sky": False,
+                    "families": ["d50"],
+                    "tile_keys": [tile_key],
+                    "covered_tiles": 1,
+                    "total_tiles": shard_count,
+                    "fraction": 1 / shard_count,
+                },
+                "integrity": {
+                    "files": [
+                        {
+                            "path": str(index_path.resolve()),
+                            "sha256": sha256_file(index_path),
+                            "size_bytes": index_path.stat().st_size,
+                        }
+                    ]
+                },
+                "status": "FULL_VERIFIED",
+                "category": "product",
+                "build_parameters": {
+                    "quad_schema": "astrometry_ab_code_4d_v1",
+                    "quad_version": 1,
+                    "level": "S",
+                    "sampler_tag": "catalog_ring_coverage",
+                    "code_tol_recommended": 0.015,
+                    "catalog_source": "unit-test",
+                },
+            }
+        )
+    monolith = write_fake_4d_index(root / "indexes" / "direct-d50.npz", "d50_9999")
+    indexes.append(
+        {
+            "id": "direct-d50",
+            "engine": "blind4d",
+            "schema": "zeblind.astrometry_4d_index_manifest.v1",
+            "algorithm_version": "astrometry_ab_code_4d_v1",
+            "path": {"kind": "external_reference", "value": str(monolith.resolve())},
+            "manifest_path": None,
+            "source_ids": ["astap-d50"],
+            "source_tiles": tile_keys,
+            "coverage": {
+                "status": "FULL",
+                "all_sky": True,
+                "families": ["d50"],
+                "tile_keys": tile_keys,
+                "covered_tiles": shard_count,
+                "total_tiles": shard_count,
+                "fraction": 1.0,
+            },
+            "integrity": {
+                "files": [
+                    {
+                        "path": str(monolith.resolve()),
+                        "sha256": sha256_file(monolith),
+                        "size_bytes": monolith.stat().st_size,
+                    }
+                ]
+            },
+            "status": "FULL_VERIFIED",
+            "category": "compatibility",
+        }
+    )
+    payload = {
+        "schema_version": 1,
+        "library_id": "s5d2-divergence",
+        "created_at": "2026-07-25T00:00:00Z",
+        "created_by": "tests",
+        "minimum_zesolver_version": None,
+        "status": "READY_FULL",
+        "sources": [
+            {
+                "id": "astap-d50",
+                "kind": "astap_hnsky",
+                "family": "d50",
+                "format": "1476-5",
+                "path": {"kind": "relative", "value": "sources/astap/d50"},
+                "tile_count": shard_count,
+                "layout": "hnsky_1476",
+                "coverage": {
+                    "status": "FULL",
+                    "all_sky": True,
+                    "families": ["d50"],
+                    "tile_keys": tile_keys,
+                    "covered_tiles": shard_count,
+                    "total_tiles": shard_count,
+                    "fraction": 1.0,
+                },
+                "integrity": {"files": []},
+                "status": "FAST_VERIFIED",
+            }
+        ],
+        "derived_indexes": indexes,
+        "coverage": {
+            "status": "FULL",
+            "all_sky": True,
+            "families": ["d50"],
+            "tile_keys": tile_keys,
+            "covered_tiles": shard_count,
+            "total_tiles": shard_count,
+            "fraction": 1.0,
+        },
+        "integrity": {"checksum_algorithm": "sha256"},
+        "provenance": {"notes": "s5d2 divergence fixture"},
+        "runtime_order": {"blind4d": [f"direct-d50-fixed32-{i:03d}" for i in range(shard_count)]},
+    }
+    (root / "catalog.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    return root, shards, monolith
 
 
 def test_blind_port_uses_library_view_and_ignores_invalid_external_manifest(tmp_path: Path, monkeypatch) -> None:
@@ -70,6 +204,50 @@ def test_blind_port_uses_library_view_and_ignores_invalid_external_manifest(tmp_
     assert result.raw["blind4d_catalog_mode_effective"] == "library-view"
     assert result.raw["blind4d_index_ids"] == ["blind4d-0"]
     assert result.raw["blind4d_external_fallback_used"] is False
+
+
+def test_s5d2_library_view_prefers_47_shards_over_compatibility_monolith(tmp_path: Path, monkeypatch) -> None:
+    library_root, shards, monolith = _full_sharded_library_with_compat_monolith(tmp_path)
+    resources = resolve_catalog_resources(catalog_library=library_root)
+    configuration = build_solver_configuration(
+        product_settings=ProductSettings(catalog_library_path=library_root, blind4d_catalog_mode="auto"),
+        runtime_options=RuntimeOptions(),
+    )
+    calls: list[tuple[str, ...]] = []
+
+    def fake_blind_solve(*, fits_path, index_root, config, **kwargs):
+        calls.append(tuple(str(path) for path in config.blind_astrometry_4d_index_paths))
+        return {
+            "success": False,
+            "message": "synthetic miss",
+            "elapsed_sec": 0.0,
+            "tried_dbs": [],
+            "used_db": None,
+            "wrote_wcs": False,
+            "updated_keywords": {},
+            "output_path": fits_path,
+            "stats": {"astrometry_4d_index_count": len(config.blind_astrometry_4d_index_paths)},
+        }
+
+    monkeypatch.setattr("zesolver.core.blind_port.blind_solve", fake_blind_solve)
+    result = ProductionBlindSolverPort().solve(
+        SolveRequest(_fits(tmp_path / "input.fit"), None, True),
+        resources=resources,
+        configuration=configuration,
+    )
+
+    assert result.status is SolveStatus.UNSOLVED
+    assert calls == [tuple(str(path.resolve()) for path in shards)]
+    assert str(monolith.resolve()) not in calls[0]
+    assert result.raw["blind4d_catalog_source"] == "catalog_library_view"
+    assert result.raw["blind4d_catalog_mode_effective"] == "library-view"
+    assert result.raw["blind4d_index_count"] == 47
+    assert result.raw["blind4d_covered_tiles"] == 47
+    assert result.raw["blind4d_total_tiles"] == 47
+    assert result.raw["blind4d_all_sky"] is True
+    assert result.raw["blind4d_external_fallback_used"] is False
+    assert result.raw["blind4d_runtime_order"] == [f"direct-d50-fixed32-{i:03d}" for i in range(47)]
+    assert "direct-d50" not in result.raw["blind4d_runtime_order"]
 
 
 def test_blind_port_forced_external_rollback_uses_external_manifest(tmp_path: Path, monkeypatch) -> None:
@@ -195,7 +373,7 @@ def test_blind_port_reuses_runtime_selection_for_same_context(tmp_path: Path, mo
     assert calls["resolve"] == 1
 
 
-def test_pipeline_reuses_runtime_selection_for_same_context(tmp_path: Path, monkeypatch) -> None:
+def test_pipeline_leaves_runtime_selection_to_blind_port(tmp_path: Path, monkeypatch) -> None:
     library_root, _index = _library_with_blind(tmp_path)
     resources = resolve_catalog_resources(catalog_library=library_root)
     calls = {"resolve": 0}
@@ -217,4 +395,4 @@ def test_pipeline_reuses_runtime_selection_for_same_context(tmp_path: Path, monk
         result = pipeline.solve(SolveRequest(_fits(tmp_path / f"pipeline-{idx}.fit"), None, True))
         assert result.status is SolveStatus.UNSOLVED
 
-    assert calls["resolve"] == 1
+    assert calls["resolve"] == 0

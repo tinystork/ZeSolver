@@ -3,19 +3,20 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
 import numpy as np
 
 from .astap_db_reader import TileMeta, iter_tiles, load_tile_stars
-from .db_convert import DEFAULT_MAG_CAP, DEFAULT_MAX_STARS
 from .projections import project_tan
+from .index_manifest_4d import MANIFEST_SCHEMA, MANIFEST_VERSION, sha256_file
 from .quad_index_4d import (
     ASTROMETRY_AB_CODE_4D_DEFAULT_TOL,
     ASTROMETRY_AB_CODE_4D_SCHEMA,
     ASTROMETRY_AB_CODE_4D_VERSION,
+    Quad4DIndex,
     Quad4DPayloadTile,
     build_4d_index_from_payload_tiles,
 )
@@ -26,15 +27,19 @@ PROJECTION_VERSION = "tan_v1"
 TAN_CENTER_POLICY = "cartesian_center_then_layout_fallback"
 QUAD_SCHEMA = ASTROMETRY_AB_CODE_4D_SCHEMA
 QUAD_VERSION = ASTROMETRY_AB_CODE_4D_VERSION
+QUALIFIED_SOURCE_MAX_STARS = 2000
+QUALIFIED_MAX_STARS_PER_TILE = 2000
+QUALIFIED_MAX_QUADS_PER_TILE = 40000
+QUALIFIED_MAG_CAP = 15.0
 
 
 @dataclass(frozen=True, slots=True)
 class AstapTileMaterializationConfig:
-    mag_cap: float | None = DEFAULT_MAG_CAP
-    source_max_stars: int = DEFAULT_MAX_STARS
+    mag_cap: float | None = QUALIFIED_MAG_CAP
+    source_max_stars: int = QUALIFIED_SOURCE_MAX_STARS
     source_star_truncation_mode: str = "native_prefix"
     tan_center_policy: str = TAN_CENTER_POLICY
-    max_stars_per_tile: int = 400
+    max_stars_per_tile: int = QUALIFIED_MAX_STARS_PER_TILE
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,12 +47,12 @@ class Astap4DBuildConfig:
     family: str = "d50"
     tile_keys: tuple[str, ...] = field(default_factory=tuple)
     level: str = "S"
-    mag_cap: float | None = DEFAULT_MAG_CAP
-    source_max_stars: int = DEFAULT_MAX_STARS
+    mag_cap: float | None = QUALIFIED_MAG_CAP
+    source_max_stars: int = QUALIFIED_SOURCE_MAX_STARS
     source_star_truncation_mode: str = "native_prefix"
     tan_center_policy: str = TAN_CENTER_POLICY
-    max_stars_per_tile: int = 400
-    max_quads_per_tile: int = 8000
+    max_stars_per_tile: int = QUALIFIED_MAX_STARS_PER_TILE
+    max_quads_per_tile: int = QUALIFIED_MAX_QUADS_PER_TILE
     sampler_tag: str = "catalog_ring_coverage"
     code_tol_recommended: float = ASTROMETRY_AB_CODE_4D_DEFAULT_TOL
     dtype: str = "float32"
@@ -96,6 +101,14 @@ class Quad4DSourceTile:
             x_deg=self.x_deg,
             y_deg=self.y_deg,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class Astap4DShardBuildResult:
+    manifest_path: Path
+    shard_paths: tuple[Path, ...]
+    repaired_shards: tuple[str, ...] = ()
+    skipped_shards: tuple[str, ...] = ()
 
 
 def _cartesian_center(ra_deg: np.ndarray, dec_deg: np.ndarray) -> tuple[float, float]:
@@ -248,6 +261,73 @@ def _select_tile_metas(db_root: Path | str, config: Astap4DBuildConfig) -> list[
     return [by_key[key] for key in wanted]
 
 
+def _select_sharded_tile_metas(db_root: Path | str, config: Astap4DBuildConfig) -> list[TileMeta]:
+    wanted = tuple(str(v) for v in config.tile_keys)
+    metas = [meta for meta in iter_tiles(db_root) if meta.family == str(config.family)]
+    by_key = {meta.key: meta for meta in metas}
+    if wanted:
+        missing = [key for key in wanted if key not in by_key]
+        if missing:
+            raise KeyError(f"tile(s) not found in ASTAP catalog: {missing}")
+        return [by_key[key] for key in wanted]
+    return [by_key[key] for key in sorted(by_key)]
+
+
+def _fixed_shard_groups(tile_keys: Iterable[str], *, tiles_per_shard: int) -> list[tuple[str, tuple[str, ...]]]:
+    keys = tuple(str(key) for key in tile_keys)
+    n = max(1, int(tiles_per_shard))
+    width = max(2, len(str(max(0, (len(keys) - 1) // n))))
+    return [
+        (f"direct-d50-fixed{n}-{shard_no:0{width}d}", tuple(keys[start : start + n]))
+        for shard_no, start in enumerate(range(0, len(keys), n))
+    ]
+
+
+def _read_index_manifest_entry(path: Path, *, shard_id: str, priority: int, config: Astap4DBuildConfig) -> dict[str, Any]:
+    index = Quad4DIndex.load(path)
+    metadata = dict(index.metadata)
+    tile_keys = [str(v) for v in index.tile_keys]
+    return {
+        "id": str(shard_id),
+        "filename": path.name,
+        "path": path.name,
+        "enabled": True,
+        "priority": int(priority),
+        "level": str(config.level),
+        "catalog_source": str(metadata.get("source_catalog", "astap_raw")),
+        "index_version": int(metadata.get("version", 1) or 1),
+        "quad_schema": str(metadata.get("schema", config.quad_schema)),
+        "sampler_tag": str(metadata.get("sampler_tag", config.sampler_tag)),
+        "code_tol_recommended": float(metadata.get("code_tol_recommended", config.code_tol_recommended)),
+        "tile_keys": tile_keys,
+        "tile_count": int(len(tile_keys)),
+        "star_count": int(index.catalog_ra_dec.shape[0]),
+        "quad_count": int(index.codes_4d.shape[0]),
+        "file_size_bytes": int(path.stat().st_size),
+        "sha256": sha256_file(path),
+        "metadata": {
+            **metadata,
+            "shard_id": str(shard_id),
+            "shard_topology": "fixed",
+            "shard_tile_keys": tile_keys,
+            "build_parameters": dict(metadata.get("build_parameters") or asdict(config)),
+        },
+    }
+
+
+def _write_manifest_atomic(path: Path, entries: list[dict[str, Any]], *, description: str) -> None:
+    payload = {
+        "schema": MANIFEST_SCHEMA,
+        "manifest_version": MANIFEST_VERSION,
+        "description": str(description),
+        "indexes": entries,
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    tmp.replace(path)
+
+
 def build_4d_index_from_astap(
     db_root: Path | str,
     out_path: Path | str,
@@ -339,11 +419,94 @@ def build_4d_index_from_astap(
     return result
 
 
+def build_sharded_4d_indexes_from_astap(
+    db_root: Path | str,
+    out_dir: Path | str,
+    *,
+    config: Astap4DBuildConfig,
+    tiles_per_shard: int = 32,
+    manifest_name: str = "blind4d_manifest.json",
+    overwrite: bool = False,
+    resume: bool = False,
+    repair_shards: Iterable[str] = (),
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
+    cancel_callback: Callable[[], bool] | None = None,
+) -> Astap4DShardBuildResult:
+    """Build native fixed-size Blind 4D shards without materializing all tiles at once."""
+
+    output_dir = Path(out_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    metas = _select_sharded_tile_metas(db_root, config)
+    groups = _fixed_shard_groups((meta.key for meta in metas), tiles_per_shard=tiles_per_shard)
+    repair = {str(value) for value in repair_shards}
+    entries: list[dict[str, Any]] = []
+    shard_paths: list[Path] = []
+    skipped: list[str] = []
+    repaired: list[str] = []
+    for priority, (shard_id, tile_keys) in enumerate(groups):
+        if cancel_callback is not None and bool(cancel_callback()):
+            raise RuntimeError("build_cancelled")
+        shard_path = output_dir / f"{shard_id}.npz"
+        should_repair = shard_id in repair or shard_path.name in repair
+        if shard_path.exists() and resume and not overwrite and not should_repair:
+            skipped.append(shard_id)
+            entries.append(_read_index_manifest_entry(shard_path, shard_id=shard_id, priority=priority, config=config))
+            shard_paths.append(shard_path)
+            if progress_callback is not None:
+                progress_callback({"stage": "resume_shard", "shard_id": shard_id, "ordinal": priority + 1, "total": len(groups)})
+            continue
+        if shard_path.exists() and not overwrite and not should_repair:
+            raise FileExistsError(shard_path)
+        shard_config = Astap4DBuildConfig(**{**asdict(config), "tile_keys": tuple(tile_keys)})
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    "stage": "build_shard",
+                    "shard_id": shard_id,
+                    "tile_keys": list(tile_keys),
+                    "ordinal": priority + 1,
+                    "total": len(groups),
+                }
+            )
+        build_4d_index_from_astap(
+            db_root,
+            shard_path,
+            config=shard_config,
+            overwrite=bool(overwrite or should_repair),
+            progress_callback=progress_callback,
+            cancel_callback=cancel_callback,
+        )
+        if should_repair:
+            repaired.append(shard_id)
+        entries.append(_read_index_manifest_entry(shard_path, shard_id=shard_id, priority=priority, config=config))
+        shard_paths.append(shard_path)
+    manifest_path = output_dir / manifest_name
+    _write_manifest_atomic(
+        manifest_path,
+        entries,
+        description=f"Native fixed{max(1, int(tiles_per_shard))} Blind 4D shards from ASTAP {config.family}",
+    )
+    if progress_callback is not None:
+        progress_callback({"stage": "manifest_written", "path": str(manifest_path), "shards": len(entries)})
+    return Astap4DShardBuildResult(
+        manifest_path=manifest_path,
+        shard_paths=tuple(shard_paths),
+        repaired_shards=tuple(repaired),
+        skipped_shards=tuple(skipped),
+    )
+
+
 __all__ = [
     "Astap4DBuildConfig",
+    "Astap4DShardBuildResult",
     "AstapTileMaterializationConfig",
     "BUILDER_VERSION",
+    "QUALIFIED_MAX_QUADS_PER_TILE",
+    "QUALIFIED_MAX_STARS_PER_TILE",
+    "QUALIFIED_MAG_CAP",
+    "QUALIFIED_SOURCE_MAX_STARS",
     "Quad4DSourceTile",
     "build_4d_index_from_astap",
+    "build_sharded_4d_indexes_from_astap",
     "materialize_astap_tile_for_4d",
 ]

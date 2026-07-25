@@ -3,11 +3,13 @@ from __future__ import annotations
 import logging
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 
 from zeblindsolver.index_manifest_4d import IndexManifestError, Loaded4DManifest
 
 from zesolver.catalog_resources import Blind4DRuntimeError, Blind4DRuntimeSelection, SolverCatalogResources, resolve_blind4d_runtime
+from zesolver.resource_telemetry import increment_batch_counter
 from zesolver.solver_config import build_blind_config_inputs, build_blind_solve_config
 from zesolver.zeblindsolver import BlindSolverRuntimeError, blind_solve
 
@@ -25,8 +27,12 @@ class ProductionBlindSolverPort:
     """
 
     def __init__(self) -> None:
+        increment_batch_counter("blind_port_constructor_count")
         self._runtime_cache_key: tuple[object, ...] | None = None
         self._runtime_cache_value: Blind4DRuntimeSelection | None = None
+        self._runtime_lock = threading.Lock()
+        self._solve_lock = threading.Lock()
+        self._prep_cache: dict[str, object] = {}
 
     def solve(self, request: SolveRequest, *, resources: SolverCatalogResources, configuration) -> EngineSolveResult:
         blind_request = BlindSolveRequest.from_solve_request(request, configuration=configuration)
@@ -45,65 +51,82 @@ class ProductionBlindSolverPort:
                 backend="BLIND4D",
                 error=f"unknown_or_unsupported_blind_profile: {configuration.blind_profile.profile_id}",
             )
-        try:
-            runtime = self._runtime_selection(resources, configuration)
-        except Blind4DRuntimeError as exc:
-            return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="BLIND4D", error=f"{exc.code}: {exc}", raw={"blind4d_runtime_error": exc.code})
-        if not runtime.available or runtime.loaded_manifest is None:
-            error = runtime.error_message or runtime.error_code or "BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE"
-            return EngineSolveResult(
-                status=SolveStatus.CATALOG_UNAVAILABLE,
-                backend="BLIND4D",
-                error=str(error),
-                raw=runtime.telemetry(include_paths=False),
-            )
-        loaded_manifest = runtime.loaded_manifest
-
-        try:
-            blind_cfg = self.build_config(request, resources=resources, configuration=configuration, loaded_manifest=loaded_manifest)
-        except Exception as exc:
-            return EngineSolveResult(status=SolveStatus.FAILED, backend="BLIND4D", error=f"blind_config_failed: {exc}")
-
-        index_root = loaded_manifest.manifest_path.parent
-        try:
-            with tempfile.TemporaryDirectory(prefix="zesolver-blind4d-") as tmp:
-                temp_path = Path(tmp) / request.input_path.name
-                shutil.copyfile(request.input_path, temp_path)
-                result = blind_solve(
-                    fits_path=str(temp_path),
-                    index_root=str(index_root),
-                    config=blind_cfg,
-                    log=logging.info,
-                    skip_if_valid=False,
-                    cancel_check=_cancel_check(configuration),
-                    prep_cache={},
+        with self._solve_lock:
+            try:
+                runtime = self._runtime_selection(resources, configuration)
+            except Blind4DRuntimeError as exc:
+                return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="BLIND4D", error=f"{exc.code}: {exc}", raw={"blind4d_runtime_error": exc.code})
+            if not runtime.available or runtime.loaded_manifest is None:
+                error = runtime.error_message or runtime.error_code or "BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE"
+                return EngineSolveResult(
+                    status=SolveStatus.CATALOG_UNAVAILABLE,
+                    backend="BLIND4D",
+                    error=str(error),
+                    raw=runtime.telemetry(include_paths=False),
                 )
-                engine = engine_result_from_blind_result(result, solved_path=temp_path)
-                if engine.raw:
-                    raw = dict(engine.raw)
-                    raw.update(runtime.telemetry(include_paths=False))
-                    raw["blind4d_index_count"] = len(loaded_manifest.entries)
-                    engine = EngineSolveResult(
-                        status=engine.status,
-                        backend=engine.backend,
-                        wcs=engine.wcs,
-                        wcs_written=engine.wcs_written,
-                        center_ra_deg=engine.center_ra_deg,
-                        center_dec_deg=engine.center_dec_deg,
-                        pixel_scale_arcsec=engine.pixel_scale_arcsec,
-                        orientation_deg=engine.orientation_deg,
-                        parity=engine.parity,
-                        inliers=engine.inliers,
-                        rms_px=engine.rms_px,
-                        warnings=engine.warnings,
-                        error=engine.error,
-                        raw=raw,
+            loaded_manifest = runtime.loaded_manifest
+
+            try:
+                blind_cfg = self.build_config(request, resources=resources, configuration=configuration, loaded_manifest=loaded_manifest)
+            except Exception as exc:
+                return EngineSolveResult(status=SolveStatus.FAILED, backend="BLIND4D", error=f"blind_config_failed: {exc}")
+            runtime_telemetry = runtime.telemetry(include_paths=False)
+            configured_index_paths = tuple(getattr(blind_cfg, "blind_astrometry_4d_index_paths", ()) or ())
+            configured_index_count = len(configured_index_paths) if configured_index_paths else len(loaded_manifest.entries)
+            runtime_order = tuple(getattr(runtime, "runtime_order", ()) or ())
+            logging.info(
+                "blind4d runtime selection: blind4d_catalog_mode_effective=%s blind4d_index_count=%d "
+                "blind4d_runtime_order=%s blind4d_covered_tiles=%s blind4d_total_tiles=%s "
+                "blind4d_all_sky=%s blind4d_external_fallback_used=%s",
+                runtime_telemetry.get("blind4d_catalog_mode_effective"),
+                configured_index_count,
+                list(runtime_order),
+                runtime_telemetry.get("blind4d_covered_tiles"),
+                runtime_telemetry.get("blind4d_total_tiles"),
+                runtime_telemetry.get("blind4d_all_sky"),
+                runtime_telemetry.get("blind4d_external_fallback_used"),
+            )
+
+            index_root = loaded_manifest.manifest_path.parent
+            try:
+                with tempfile.TemporaryDirectory(prefix="zesolver-blind4d-") as tmp:
+                    temp_path = Path(tmp) / request.input_path.name
+                    shutil.copyfile(request.input_path, temp_path)
+                    result = blind_solve(
+                        fits_path=str(temp_path),
+                        index_root=str(index_root),
+                        config=blind_cfg,
+                        log=logging.info,
+                        skip_if_valid=False,
+                        cancel_check=_cancel_check(configuration),
+                        prep_cache=self._prep_cache,
                     )
-                return engine
-        except BlindSolverRuntimeError as exc:
-            return EngineSolveResult(status=SolveStatus.FAILED, backend="BLIND4D", error=str(exc))
-        except Exception as exc:
-            return EngineSolveResult(status=SolveStatus.FAILED, backend="BLIND4D", error=f"blind_port_failed: {exc}")
+                    engine = engine_result_from_blind_result(result, solved_path=temp_path)
+                    if engine.raw:
+                        raw = dict(engine.raw)
+                        raw.update(runtime.telemetry(include_paths=False))
+                        raw["blind4d_index_count"] = len(loaded_manifest.entries)
+                        engine = EngineSolveResult(
+                            status=engine.status,
+                            backend=engine.backend,
+                            wcs=engine.wcs,
+                            wcs_written=engine.wcs_written,
+                            center_ra_deg=engine.center_ra_deg,
+                            center_dec_deg=engine.center_dec_deg,
+                            pixel_scale_arcsec=engine.pixel_scale_arcsec,
+                            orientation_deg=engine.orientation_deg,
+                            parity=engine.parity,
+                            inliers=engine.inliers,
+                            rms_px=engine.rms_px,
+                            warnings=engine.warnings,
+                            error=engine.error,
+                            raw=raw,
+                        )
+                    return engine
+            except BlindSolverRuntimeError as exc:
+                return EngineSolveResult(status=SolveStatus.FAILED, backend="BLIND4D", error=str(exc))
+            except Exception as exc:
+                return EngineSolveResult(status=SolveStatus.FAILED, backend="BLIND4D", error=f"blind_port_failed: {exc}")
 
     def build_config(
         self,
@@ -140,12 +163,13 @@ class ProductionBlindSolverPort:
             resources.catalog_library_id,
             tuple(index.sha256 for index in resources.blind4d_indexes),
         )
-        if key == self._runtime_cache_key and self._runtime_cache_value is not None:
-            return self._runtime_cache_value
-        selection = resolve_blind4d_runtime(resources, mode=mode, external_manifest_path=external)
-        self._runtime_cache_key = key
-        self._runtime_cache_value = selection
-        return selection
+        with self._runtime_lock:
+            if key == self._runtime_cache_key and self._runtime_cache_value is not None:
+                return self._runtime_cache_value
+            selection = resolve_blind4d_runtime(resources, mode=mode, external_manifest_path=external)
+            self._runtime_cache_key = key
+            self._runtime_cache_value = selection
+            return selection
 
 
 def _cancel_check(configuration):

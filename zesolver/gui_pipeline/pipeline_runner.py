@@ -4,9 +4,11 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-from zesolver.core import SolverPipeline
+from zesolver.catalog_resources import resolve_catalog_resources
+from zesolver.core import ProductionBlindSolverPort, SolverPipeline
 from zesolver.core.batch import BatchSolverPipeline, BatchSolveRequest
 from zesolver.core.models import SolveRequest, SolveResult
+from zesolver.resource_telemetry import BatchResourceTelemetry, reset_active_batch_telemetry, set_active_batch_telemetry
 
 from .progress_adapter import GuiProgress, gui_progress_from_batch
 from .requests import GuiFileResult, GuiRunSummary, GuiSolveRequest
@@ -37,6 +39,8 @@ class PipelineGuiRunner:
         self._running = True
         emitted: list[GuiFileResult] = []
         emitted_paths: set[Path] = set()
+        telemetry = BatchResourceTelemetry()
+        telemetry_token = set_active_batch_telemetry(telemetry)
         try:
             solve_requests = tuple(
                 SolveRequest(
@@ -48,15 +52,68 @@ class PipelineGuiRunner:
                 )
                 for idx, path in enumerate(request.input_paths)
             )
+            if self._progress_callback is not None:
+                self._progress_callback(
+                    GuiProgress(
+                        total=len(solve_requests),
+                        completed=0,
+                        solved=0,
+                        failed=0,
+                        skipped=0,
+                        cancelled=0,
+                        current_phase="Préparation de la bibliothèque",
+                    )
+                )
+
+            shared_catalog_resources = request.catalog_resources
+            shared_blind_solver = None
+            if self._solver_pipeline_factory is None:
+                if shared_catalog_resources is None:
+                    legacy = request.legacy_config
+                    shared_catalog_resources = resolve_catalog_resources(
+                        catalog_library=request.product_settings.catalog_library_path,
+                        legacy_db_root=getattr(legacy, "db_root", None) if legacy is not None else None,
+                        legacy_families=tuple(getattr(legacy, "families", ()) or ()) if legacy is not None else None,
+                        legacy_blind4d_manifest=getattr(legacy, "blind_4d_manifest_path", None) if legacy is not None else None,
+                        legacy_index_root=getattr(legacy, "blind_index_path", None) if legacy is not None else None,
+                        enable_environment_discovery=legacy is None,
+                    )
+                shared_blind_solver = ProductionBlindSolverPort()
+            telemetry.mark_rss("after_preflight")
 
             def make_pipeline(phase: str) -> SolverPipeline:
                 phase_request = request.for_phase(phase)
                 if self._solver_pipeline_factory is not None:
                     return self._solver_pipeline_factory(phase, phase_request)
+                if phase == "near" and self._progress_callback is not None:
+                    self._progress_callback(
+                        GuiProgress(
+                            total=len(solve_requests),
+                            completed=len(emitted_paths),
+                            solved=0,
+                            failed=0,
+                            skipped=0,
+                            cancelled=0,
+                            current_phase="Préparation de ZeNear",
+                        )
+                    )
+                if phase == "blind" and self._progress_callback is not None:
+                    self._progress_callback(
+                        GuiProgress(
+                            total=len(solve_requests),
+                            completed=len(emitted_paths),
+                            solved=0,
+                            failed=0,
+                            skipped=0,
+                            cancelled=0,
+                            current_phase="Préparation de ZeBlind",
+                        )
+                    )
                 return SolverPipeline(
                     product_settings=phase_request.product_settings,
                     runtime_options=phase_request.runtime_options,
-                    catalog_resources=phase_request.catalog_resources,
+                    catalog_resources=shared_catalog_resources,
+                    blind_solver=shared_blind_solver,
                 )
 
             def on_progress(result: SolveResult, progress) -> None:
@@ -81,6 +138,7 @@ class PipelineGuiRunner:
                     cancel_token=self._cancel_event,
                 )
             )
+            telemetry.event("batch_complete", telemetry=batch_result.telemetry or {})
             final = tuple(gui_result_from_solve_result(item, selected_engine=request.engine_mode) for item in batch_result.results)
             if len(emitted_paths) != len(final):
                 for item in final:
@@ -97,6 +155,8 @@ class PipelineGuiRunner:
                 results=final,
                 cancelled=batch_result.cancelled,
                 duration_s=batch_result.duration_s,
+                telemetry=batch_result.telemetry,
             )
         finally:
+            reset_active_batch_telemetry(telemetry_token)
             self._running = False

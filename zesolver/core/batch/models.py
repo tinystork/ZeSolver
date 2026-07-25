@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Mapping
 
 from zesolver.core.models import SolveRequest, SolveResult
 
@@ -32,3 +33,4 @@ class BatchSolveResult:
     progress: BatchProgress
     cancelled: bool
     duration_s: float
+    telemetry: Mapping[str, object] | None = None

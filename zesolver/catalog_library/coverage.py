@@ -45,18 +45,6 @@ def merge_coverages(coverages: Iterable[CatalogCoverage]) -> CatalogCoverage:
     tile_keys = tuple(sorted({tile for item in items for tile in item.tile_keys}))
     dec_values_min = [item.dec_min_deg for item in items if item.dec_min_deg is not None]
     dec_values_max = [item.dec_max_deg for item in items if item.dec_max_deg is not None]
-    if CoverageStatus.CORRUPT in statuses:
-        status = CoverageStatus.CORRUPT
-    elif CoverageStatus.INCOMPATIBLE in statuses:
-        status = CoverageStatus.INCOMPATIBLE
-    elif all_sky and statuses <= {CoverageStatus.FULL, CoverageStatus.PARTIAL}:
-        status = CoverageStatus.FULL
-    elif tile_keys or any(item.status is CoverageStatus.PARTIAL for item in items):
-        status = CoverageStatus.PARTIAL
-    elif any(item.status is CoverageStatus.UNKNOWN for item in items):
-        status = CoverageStatus.UNKNOWN
-    else:
-        status = CoverageStatus.MISSING
     by_family: dict[str, int] = defaultdict(int)
     total_by_family: dict[str, int] = {}
     for item in items:
@@ -69,6 +57,20 @@ def merge_coverages(coverages: Iterable[CatalogCoverage]) -> CatalogCoverage:
     total_tiles = sum(total_by_family.values()) or None
     covered_tiles = len(tile_keys) if tile_keys else sum(by_family.values())
     fraction = (covered_tiles / total_tiles) if total_tiles else None
+    collective_all_sky = bool(total_tiles and covered_tiles >= total_tiles)
+    all_sky = bool(all_sky or collective_all_sky)
+    if CoverageStatus.CORRUPT in statuses:
+        status = CoverageStatus.CORRUPT
+    elif CoverageStatus.INCOMPATIBLE in statuses:
+        status = CoverageStatus.INCOMPATIBLE
+    elif all_sky and statuses <= {CoverageStatus.FULL, CoverageStatus.PARTIAL}:
+        status = CoverageStatus.FULL
+    elif tile_keys or any(item.status is CoverageStatus.PARTIAL for item in items):
+        status = CoverageStatus.PARTIAL
+    elif any(item.status is CoverageStatus.UNKNOWN for item in items):
+        status = CoverageStatus.UNKNOWN
+    else:
+        status = CoverageStatus.MISSING
     return CatalogCoverage(
         status=status,
         all_sky=all_sky,

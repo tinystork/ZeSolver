@@ -72,7 +72,7 @@ class GuiSolveRequest:
             product = replace(self.product_settings, blind_enabled=True, blind_only=True)
             return replace(self, product_settings=product)
         if phase == "near":
-            product = replace(self.product_settings, blind_only=False)
+            product = replace(self.product_settings, blind_enabled=False, blind_only=False)
             return replace(self, product_settings=product)
         return self
 
@@ -115,3 +115,4 @@ class GuiRunSummary:
     duration_s: float
     warnings: tuple[str, ...] = ()
     selection: EngineSelection | None = None
+    telemetry: Mapping[str, object] | None = None

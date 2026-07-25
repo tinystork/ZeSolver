@@ -136,6 +136,7 @@ def load_4d_index_manifest_payload(
     *,
     manifest_path: Path | str | None = None,
     index_root: Path | str | None = None,
+    validate_indexes: bool = True,
 ) -> Loaded4DManifest:
     """Validate a strict 4D manifest payload without requiring JSON materialization."""
 
@@ -177,42 +178,51 @@ def load_4d_index_manifest_payload(
         if not index_path.exists():
             raise IndexManifestIntegrityError(f"manifest_index_absent: {index_path}")
         expected_sha = str(raw_entry.get("sha256") or "").strip().lower()
-        actual_sha = sha256_file(index_path).lower()
-        if expected_sha and expected_sha != actual_sha:
-            raise IndexManifestIntegrityError(f"manifest_sha256_mismatch: {entry_id}")
-        try:
-            index = Quad4DIndex.load(index_path)
-        except Exception as exc:
-            raise IndexManifestCompatibilityError(f"manifest_index_incompatible: {entry_id}: {exc}") from exc
-
-        metadata = dict(index.metadata)
+        actual_sha = expected_sha
         expected_schema = str(raw_entry.get("quad_schema") or "")
         if expected_schema != ASTROMETRY_AB_CODE_4D_SCHEMA:
             raise IndexManifestCompatibilityError(f"manifest_quad_schema_invalid: {entry_id}: {expected_schema!r}")
-        if str(metadata.get("schema") or "") != ASTROMETRY_AB_CODE_4D_SCHEMA:
-            raise IndexManifestCompatibilityError(f"manifest_index_schema_invalid: {entry_id}: {metadata.get('schema')!r}")
         expected_version = _as_int(raw_entry.get("index_version", -1), field="index_version", entry_id=entry_id)
-        actual_version = int(metadata.get("version", -1))
-        if actual_version != expected_version:
-            raise IndexManifestCompatibilityError(f"manifest_index_version_mismatch: {entry_id}")
         expected_tiles = _as_tile_tuple(raw_entry.get("tile_keys"), entry_id=entry_id)
-        actual_tiles = tuple(str(v) for v in index.tile_keys)
-        if expected_tiles != actual_tiles:
-            raise IndexManifestCompatibilityError(f"manifest_tile_keys_mismatch: {entry_id}")
+        actual_tiles = expected_tiles
+        metadata = dict(raw_entry.get("metadata") or {})
+        actual_version = expected_version
+        star_count = _as_int(raw_entry.get("star_count", -1), field="star_count", entry_id=entry_id)
+        quad_count = _as_int(raw_entry.get("quad_count", -1), field="quad_count", entry_id=entry_id)
+        actual_sampler = str(raw_entry.get("sampler_tag") or "")
+        if validate_indexes:
+            actual_sha = sha256_file(index_path).lower()
+            if expected_sha and expected_sha != actual_sha:
+                raise IndexManifestIntegrityError(f"manifest_sha256_mismatch: {entry_id}")
+            try:
+                index = Quad4DIndex.load(index_path)
+            except Exception as exc:
+                raise IndexManifestCompatibilityError(f"manifest_index_incompatible: {entry_id}: {exc}") from exc
+
+            metadata = dict(index.metadata)
+            if str(metadata.get("schema") or "") != ASTROMETRY_AB_CODE_4D_SCHEMA:
+                raise IndexManifestCompatibilityError(f"manifest_index_schema_invalid: {entry_id}: {metadata.get('schema')!r}")
+            actual_version = int(metadata.get("version", -1))
+            if actual_version != expected_version:
+                raise IndexManifestCompatibilityError(f"manifest_index_version_mismatch: {entry_id}")
+            actual_tiles = tuple(str(v) for v in index.tile_keys)
+            if expected_tiles != actual_tiles:
+                raise IndexManifestCompatibilityError(f"manifest_tile_keys_mismatch: {entry_id}")
+            star_count = int(index.catalog_ra_dec.shape[0])
+            quad_count = int(index.codes_4d.shape[0])
+            if _as_int(raw_entry.get("star_count", -1), field="star_count", entry_id=entry_id) != star_count:
+                raise IndexManifestCompatibilityError(f"manifest_star_count_mismatch: {entry_id}")
+            if _as_int(raw_entry.get("quad_count", -1), field="quad_count", entry_id=entry_id) != quad_count:
+                raise IndexManifestCompatibilityError(f"manifest_quad_count_mismatch: {entry_id}")
+            actual_sampler = str(metadata.get("sampler_tag") or "")
+            sampler = str(raw_entry.get("sampler_tag") or "")
+            if sampler != actual_sampler:
+                raise IndexManifestCompatibilityError(f"manifest_sampler_mismatch: {entry_id}")
+
         for tile in actual_tiles:
             if tile in seen_tiles:
                 raise IndexManifestIntegrityError(f"manifest_duplicate_tile: {tile}")
             seen_tiles.add(tile)
-        star_count = int(index.catalog_ra_dec.shape[0])
-        quad_count = int(index.codes_4d.shape[0])
-        if _as_int(raw_entry.get("star_count", -1), field="star_count", entry_id=entry_id) != star_count:
-            raise IndexManifestCompatibilityError(f"manifest_star_count_mismatch: {entry_id}")
-        if _as_int(raw_entry.get("quad_count", -1), field="quad_count", entry_id=entry_id) != quad_count:
-            raise IndexManifestCompatibilityError(f"manifest_quad_count_mismatch: {entry_id}")
-        sampler = str(raw_entry.get("sampler_tag") or "")
-        actual_sampler = str(metadata.get("sampler_tag") or "")
-        if sampler != actual_sampler:
-            raise IndexManifestCompatibilityError(f"manifest_sampler_mismatch: {entry_id}")
 
         manifest_entry = dict(raw_entry)
         manifest_entry["resolved_path"] = str(index_path)
@@ -249,10 +259,20 @@ def load_4d_index_manifest_payload(
     )
 
 
-def load_4d_index_manifest(path: Path | str, *, index_root: Path | str | None = None) -> Loaded4DManifest:
+def load_4d_index_manifest(
+    path: Path | str,
+    *,
+    index_root: Path | str | None = None,
+    validate_indexes: bool = True,
+) -> Loaded4DManifest:
     manifest_path = Path(path).expanduser().resolve()
     payload = _read_json(manifest_path)
-    return load_4d_index_manifest_payload(payload, manifest_path=manifest_path, index_root=index_root)
+    return load_4d_index_manifest_payload(
+        payload,
+        manifest_path=manifest_path,
+        index_root=index_root,
+        validate_indexes=validate_indexes,
+    )
 
 
 __all__ = [

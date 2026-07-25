@@ -18,6 +18,7 @@ from zesolver.catalog_library.management import (
     LibraryInstallOptions,
 )
 from zeblindsolver.index_manifest_4d import sha256_file
+from zeblindsolver.quad_index_4d import Quad4DPayloadTile, build_4d_index_from_payload_tiles
 
 
 def _write_astap(root: Path, *, subdir: str | None = None, family: str = "d50", tile: str = "1501") -> Path:
@@ -116,6 +117,54 @@ def test_standard_selection_with_d50_only_builds_only_d50_without_absent_family_
     assert {event.family for event in events if event.family} == {"d50"}
     assert all(event.overall_total in {0, 1, 7} for event in events)
     assert "no tiles matched" not in caplog.text
+
+
+def test_standard_build_uses_qualified_blind4d_density(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    astap = tmp_path / "astap"
+    _write_astap(astap, family="d50", tile="1501")
+    dest = tmp_path / "library"
+    captured = {}
+
+    def fake_build(_root, out_path, *, config, **_kwargs):
+        captured["config"] = config
+        ra = np.asarray([10.00, 10.05, 10.11, 10.16, 10.20, 10.24], dtype=np.float64)
+        dec = np.asarray([1.00, 1.04, 0.98, 1.07, 1.02, 1.10], dtype=np.float64)
+        mag = np.asarray([8.0, 9.0, 9.5, 10.0, 10.5, 11.0], dtype=np.float32)
+        x = np.asarray([-0.12, -0.07, -0.01, 0.04, 0.08, 0.13], dtype=np.float64)
+        y = np.asarray([-0.05, 0.02, -0.03, 0.06, 0.01, 0.08], dtype=np.float64)
+        return build_4d_index_from_payload_tiles(
+            out_path,
+            tiles=[Quad4DPayloadTile(tile_key="d50_1501", ra_deg=ra, dec_deg=dec, mag=mag, x_deg=x, y_deg=y)],
+            max_stars_per_tile=6,
+            max_quads_per_tile=4,
+            sampler_tag=config.sampler_tag,
+            code_tol_recommended=config.code_tol_recommended,
+            source_catalog="test",
+            metadata_extra={
+                "source_family": config.family,
+                "build_parameters": {
+                    "source_max_stars": config.source_max_stars,
+                    "max_stars_per_tile": config.max_stars_per_tile,
+                    "max_quads_per_tile": config.max_quads_per_tile,
+                    "mag_cap": config.mag_cap,
+                    "source_star_truncation_mode": config.source_star_truncation_mode,
+                },
+            },
+        )
+
+    import zesolver.catalog_library.management as management
+
+    monkeypatch.setattr(management, "build_4d_index_from_astap", fake_build)
+
+    CatalogLibraryManagementService().create_from_astap(
+        LibraryCreateOptions(astap_root=astap, destination=dest, families=("d50",), storage_policy="reference")
+    )
+
+    cfg = captured["config"]
+    assert cfg.source_max_stars == 2000
+    assert cfg.max_stars_per_tile == 2000
+    assert cfg.max_quads_per_tile == 40000
+    assert cfg.mag_cap == 15.0
 
 
 def test_d50_uppercase_filename_builds_with_canonical_family(tmp_path: Path) -> None:

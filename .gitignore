@@ -68,6 +68,7 @@ tools/*
 !tools/build_blind_index.py
 !tools/inspect_290.py
 !tools/astap_*.py
+!tools/shard_blind4d_index.py
 !tools/build_zn310b_gui_dataset.py
 !tools/diagnose_*.py
 !tools/compare_zenear_catalog_providers.py

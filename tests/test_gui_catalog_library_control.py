@@ -64,13 +64,10 @@ def test_gui_catalog_library_branch_does_not_require_legacy_paths_in_build_confi
 
 def test_gui_logs_catalog_library_preflight_and_runtime_sources() -> None:
     required = [
-        "Catalog resources: ",
-        "Near catalog preflight: ",
-        "ZeBlind 4D preflight: ",
-        "catalog_preflight_timings",
-        "catalog_library_selected_log",
-        "catalog_library_status_log",
-        "blind4d_runtime.telemetry(include_paths=False)",
+        "Préparation de la bibliothèque",
+        "PipelineGuiRunner(",
+        "progress_callback=lambda progress",
+        "current_phase",
     ]
     missing = [needle for needle in required if needle not in SOURCE]
     assert not missing

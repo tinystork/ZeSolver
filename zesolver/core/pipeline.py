@@ -22,6 +22,7 @@ from zesolver.catalog_resources import (
     resolve_blind4d_runtime,
     resolve_near_catalog_runtime,
 )
+from zesolver.resource_telemetry import increment_batch_counter
 from zesolver.settings import ProductSettings, RuntimeOptions, build_solver_configuration
 from zesolver.zeblindsolver import near_solve
 
@@ -45,6 +46,9 @@ class BlindSolverPort(Protocol):
 
 class ExistingNearSolverPort:
     """Thin adapter over the existing Near wrapper."""
+
+    def __init__(self) -> None:
+        increment_batch_counter("near_port_constructor_count")
 
     def solve(self, request: SolveRequest, *, resources: SolverCatalogResources, configuration) -> EngineSolveResult:
         values = configuration.legacy_solve_config_values
@@ -118,6 +122,9 @@ class ExistingNearSolverPort:
 
 
 class UnconfiguredBlindSolverPort:
+    def __init__(self) -> None:
+        increment_batch_counter("blind_port_constructor_count")
+
     def solve(self, request: SolveRequest, *, resources: SolverCatalogResources, configuration) -> EngineSolveResult:
         return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="BLIND4D", error="blind_port_unconfigured")
 
@@ -135,6 +142,7 @@ class SolverPipeline:
         near_solver: NearSolverPort | None = None,
         blind_solver: BlindSolverPort | None = None,
     ) -> None:
+        increment_batch_counter("solver_pipeline_constructor_count")
         self.configuration = build_solver_configuration(
             product_settings=product_settings,
             runtime_options=runtime_options,
@@ -170,10 +178,6 @@ class SolverPipeline:
         telemetry.catalog_coverage_fraction = resources.blind4d_coverage_fraction
         telemetry.warnings.extend(resources.warnings)
         catalog_status = telemetry.catalog_status
-        blind4d_runtime = self._blind4d_runtime(resources)
-        telemetry.blind4d_runtime.update(blind4d_runtime.telemetry(include_paths=False))
-        telemetry.warnings.extend(blind4d_runtime.warnings)
-
         if self._cancelled():
             return self._finish_failure(request, telemetry, SolveStatus.CANCELLED, catalog_status, "cancelled_before_near")
 
@@ -213,11 +217,16 @@ class SolverPipeline:
         if self._cancelled():
             return self._finish_failure(request, telemetry, SolveStatus.CANCELLED, catalog_status, "cancelled_between_near_and_blind")
 
-        requested_blind4d_mode = blind4d_runtime.mode_requested
+        try:
+            requested_blind4d_mode = Blind4DCatalogMode.normalize(
+                getattr(self.configuration.product_settings, "blind4d_catalog_mode", "auto")
+            )
+        except Exception:
+            requested_blind4d_mode = Blind4DCatalogMode.AUTO
         should_attempt_blind = bool(self.configuration.product_settings.blind_enabled) and (
-            blind4d_runtime.available
+            resources.blind4d_available
             or requested_blind4d_mode is not Blind4DCatalogMode.AUTO
-            or (resources.source == "library" and blind4d_runtime.error_code != BLIND4D_LIBRARY_NO_INDEXES)
+            or resources.source == "library"
         )
         if should_attempt_blind:
             telemetry.blind_attempted = True
@@ -226,6 +235,10 @@ class SolverPipeline:
             except Exception as exc:
                 blind_result = EngineSolveResult(status=SolveStatus.FAILED, backend="BLIND4D", error=str(exc))
             telemetry.blind_result = blind_result.status.value
+            if isinstance(blind_result.raw, dict):
+                telemetry.blind4d_runtime.update(
+                    {key: value for key, value in blind_result.raw.items() if str(key).startswith("blind4d_")}
+                )
             if blind_result.solved:
                 final = self._finalize_success(request, blind_result, resources, telemetry)
                 self.last_telemetry = dict(telemetry.finish(final_status=final.status.value, wcs_written=final.wcs_written))

@@ -46,6 +46,19 @@ class SolverProfile:
             blind_astrometry_4d_code_tol=float(self.parameters["code_tol"]),
             blind_astrometry_4d_max_hits=int(self.parameters["max_hits"]),
             blind_astrometry_4d_max_hits_per_image_quad=int(self.parameters["max_hits_per_image_quad"]),
+            blind_astrometry_4d_progressive_shards_enabled=bool(self.parameters.get("progressive_shards_enabled", True)),
+            blind_astrometry_4d_shard_cache_size=int(self.parameters.get("shard_cache_size", 1)),
+            blind_astrometry_4d_shard_order_policy=str(self.parameters.get("shard_order_policy", "north_rings")),
+            blind_astrometry_4d_shard_budget_s=float(self.parameters.get("shard_budget_s", 4.2)),
+            blind_astrometry_4d_shard_load_budget_s=float(self.parameters.get("shard_load_budget_s", 8.0)),
+            blind_astrometry_4d_shard_max_hypotheses=int(self.parameters.get("shard_max_hypotheses", 4)),
+            blind_astrometry_4d_min_hypotheses_per_nonempty_shard=int(
+                self.parameters.get("min_hypotheses_per_nonempty_shard", 1)
+            ),
+            blind_astrometry_4d_hit_quota_per_tile=int(self.parameters.get("hit_quota_per_tile", 64)),
+            blind_astrometry_4d_hit_quota_per_image_quad_tile=int(
+                self.parameters.get("hit_quota_per_image_quad_tile", 2)
+            ),
             blind_reuse_existing_solved_wcs=False,
             ra_hint_deg=None,
             dec_hint_deg=None,
@@ -80,6 +93,15 @@ _PROFILES: dict[str, SolverProfile] = {
             "code_tol": 0.015,
             "max_hits": 2000,
             "max_hits_per_image_quad": 8,
+            "progressive_shards_enabled": True,
+            "shard_cache_size": 1,
+            "shard_order_policy": "north_rings",
+            "shard_budget_s": 4.2,
+            "shard_load_budget_s": 8.0,
+            "shard_max_hypotheses": 4,
+            "min_hypotheses_per_nonempty_shard": 1,
+            "hit_quota_per_tile": 64,
+            "hit_quota_per_image_quad_tile": 2,
         },
     ),
 }
