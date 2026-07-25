@@ -629,9 +629,19 @@ def _resources_from_library(library: CatalogLibrary) -> SolverCatalogResources:
     near = library.near_source() if report.capabilities.near else None
     blind_indexes = library.blind4d_indexes() if report.capabilities.blind4d else ()
     manifest_path = _library_4d_manifest_path(library, blind_indexes)
+    coverage = report.coverage
+    all_sky_blind4d = bool(report.capabilities.all_sky_blind4d)
+    if report.capabilities.blind4d:
+        view_indexes, view_coverage, view_warnings = _library_blind4d_runtime_view_resources(library)
+        warnings.extend(view_warnings)
+        if view_indexes:
+            blind_indexes = view_indexes
+            manifest_path = _library_4d_manifest_path(library, blind_indexes)
+            coverage = view_coverage
+            all_sky_blind4d = bool(view_coverage.all_sky)
     if report.status is CatalogStatus.READY_PARTIAL:
         warnings.append("catalog_library_ready_partial")
-    if report.capabilities.blind4d and not report.capabilities.all_sky_blind4d:
+    if report.capabilities.blind4d and not all_sky_blind4d:
         warnings.append("blind4d_coverage_not_all_sky")
     return SolverCatalogResources(
         library_path=library.root,
@@ -645,10 +655,52 @@ def _resources_from_library(library: CatalogLibrary) -> SolverCatalogResources:
         warnings=tuple(dict.fromkeys(warnings)),
         catalog_library_id=library.manifest.library_id,
         catalog_manifest_fingerprint=_catalog_manifest_fingerprint(library),
-        coverage=report.coverage,
-        all_sky_blind4d=bool(report.capabilities.all_sky_blind4d),
+        coverage=coverage,
+        all_sky_blind4d=all_sky_blind4d,
         catalog_library=library,
     )
+
+
+def _library_blind4d_runtime_view_resources(
+    library: CatalogLibrary,
+) -> tuple[tuple[Blind4DIndexDescriptor, ...], CatalogCoverage, tuple[str, ...]]:
+    view = build_blind4d_manifest_view(library)
+    warnings = [issue.code for issue in view.warnings]
+    if view.errors:
+        warnings.extend(issue.code for issue in view.errors)
+        return (), view.coverage, tuple(dict.fromkeys(warnings))
+    try:
+        loaded = load_4d_index_manifest_payload(
+            view.payload,
+            manifest_path=library.root / "catalog.json",
+            validate_indexes=False,
+        )
+    except IndexManifestError as exc:
+        warnings.append(f"{BLIND4D_LIBRARY_VIEW_INVALID}: {exc}")
+        return (), view.coverage, tuple(dict.fromkeys(warnings))
+    descriptors = tuple(
+        Blind4DIndexDescriptor(
+            id=entry.id,
+            path=entry.path,
+            family=_family_from_tiles(entry.tile_keys),
+            tile_keys=entry.tile_keys,
+            sha256=entry.sha256,
+            coverage=CatalogCoverage(
+                status=CoverageStatus.PARTIAL,
+                all_sky=False,
+                families=tuple(filter(None, (_family_from_tiles(entry.tile_keys),))),
+                tile_keys=entry.tile_keys,
+                covered_tiles=len(entry.tile_keys),
+                total_tiles=view.coverage.total_tiles,
+                fraction=(len(entry.tile_keys) / view.coverage.total_tiles if view.coverage.total_tiles else None),
+                provenance="catalog_library_view",
+            ),
+            schema=entry.quad_schema,
+            enabled=True,
+        )
+        for entry in loaded.entries
+    )
+    return descriptors, view.coverage, tuple(dict.fromkeys(warnings))
 
 
 def _raise_if_library_unusable(report: CatalogValidationReport) -> None:

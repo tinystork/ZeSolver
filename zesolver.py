@@ -226,6 +226,14 @@ from zesolver.catalog_library import (
     IssueSeverity,
     build_blind4d_manifest_view,
 )
+from zesolver.catalog_library.verification_cache import (
+    FAST_LEVEL,
+    FULL_LEVEL,
+    STATUS_VALID,
+    build_lightweight_catalog_fingerprint,
+    catalog_verification_record,
+    restore_cached_catalog_verification,
+)
 from zesolver.cancellation import (
     CompositeCancellationToken,
     ProcessCancellationController,
@@ -6641,6 +6649,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._interface_mode = "easy"
             self._settings = settings
             self._settings.solver_workers = self._dev_workers_choice
+            self._instrument_initializing = False
+            self._instrument_applying_snapshot = False
+            self._instrument_preset_id = getattr(settings, "last_preset_id", None)
             self._syncing_blind_profile_gui = False
             self._blind_4d_verified_manifest: Loaded4DManifest | None = None
             self._blind_4d_manifest_state = "not_verified"
@@ -8701,6 +8712,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._catalog_library_validated_path = None
             self._catalog_library_validated_resources = None
             self._catalog_library_validation_error = None
+            current = str(getattr(self._settings, "catalog_library_path", "") or "").strip()
+            incoming = str(text or "").strip()
+            if incoming != current:
+                self._settings.catalog_library_verification = None
             if str(text or "").strip():
                 self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
             else:
@@ -8715,6 +8730,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             if hasattr(self, "settings_catalog_library_edit"):
                 self.settings_catalog_library_edit.setText("")
             self._settings.catalog_library_path = None
+            self._settings.catalog_library_verification = None
             self._catalog_library_validated_path = None
             self._catalog_library_validated_resources = None
             self._catalog_library_validation_error = None
@@ -8892,6 +8908,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             path_text = self._catalog_library_path_from_ui()
             if not path_text:
                 self._settings.catalog_library_path = None
+                self._settings.catalog_library_verification = None
                 self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
                 return None
             if hasattr(self, "settings_catalog_library_edit"):
@@ -8912,6 +8929,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     codes = ", ".join(issue.code for issue in hard) or report.status.value
                     raise CatalogLibraryError(f"CATALOG_LIBRARY_INVALID: {codes}")
                 resources = resolve_catalog_resources(catalog_library=library)
+                fingerprint = build_lightweight_catalog_fingerprint(path)
             except Exception as exc:
                 self._catalog_library_validated_path = None
                 self._catalog_library_validated_resources = None
@@ -8922,12 +8940,77 @@ def launch_gui(args: argparse.Namespace) -> int:
                     QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return None
             self._settings.catalog_library_path = path_text
+            if show_error:
+                self._settings.catalog_library_verification = catalog_verification_record(
+                    fingerprint=fingerprint,
+                    verification_level=FULL_LEVEL,
+                    verification_status=STATUS_VALID,
+                )
+                try:
+                    save_persistent_settings(self._settings)
+                except Exception:
+                    pass
             self._catalog_library_validated_path = path_text
             self._catalog_library_validated_resources = resources
             self._catalog_library_validation_error = None
             state = resources.library_status.value if resources.library_status else "INVALID"
             self._set_catalog_library_status(state, resources=resources)
             return resources
+
+        def _restore_catalog_library_verification_from_cache(self) -> None:
+            path_text = self._catalog_library_path_from_ui()
+            if not path_text:
+                self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
+                return
+            cached = getattr(self._settings, "catalog_library_verification", None)
+            if not isinstance(cached, dict):
+                try:
+                    fp = build_lightweight_catalog_fingerprint(path_text)
+                except Exception as exc:
+                    self._set_catalog_library_status("INVALID", message=f"Bibliothèque invalide: {exc}")
+                    return
+                self._set_catalog_library_status(
+                    "READY_FULL" if fp.all_sky else "READY_PARTIAL",
+                    message=(
+                        f"Vérification rapide réussie\n"
+                        f"Blind 4D : {fp.blind4d_index_count} index / {fp.total_tiles or 0} tuiles\n"
+                        f"Couverture globale Blind 4D : {'oui' if fp.all_sky else 'non'}\n"
+                        f"payload_hash_count={fp.payload_hash_count}"
+                    ),
+                )
+                return
+            state = restore_cached_catalog_verification(path_text, cached)
+            if state.status == STATUS_VALID and state.fingerprint is not None:
+                fp = state.fingerprint
+                message = (
+                    f"{state.message}\n"
+                    f"Blind 4D : {fp.blind4d_index_count} index / {fp.total_tiles or 0} tuiles\n"
+                    f"Couverture globale Blind 4D : {'oui' if fp.all_sky else 'non'}\n"
+                    f"payload_hash_count={fp.payload_hash_count}"
+                )
+                self._set_catalog_library_status("READY_FULL" if fp.all_sky else "READY_PARTIAL", message=message)
+                self._log_settings(
+                    "CatalogLibrary verification cache restored: "
+                    f"level={state.record.get('verification_level') if state.record else FAST_LEVEL} "
+                    f"indexes={fp.blind4d_index_count} coverage={fp.covered_tiles}/{fp.total_tiles} "
+                    f"all_sky={fp.all_sky} payload_hash_count={fp.payload_hash_count} "
+                    f"duration_s={state.duration_s:.3f}"
+                )
+                return
+            if state.fingerprint is not None and not cached:
+                fp = state.fingerprint
+                self._set_catalog_library_status(
+                    "READY_FULL" if fp.all_sky else "READY_PARTIAL",
+                    message=(
+                        f"Vérification rapide réussie\n"
+                        f"Blind 4D : {fp.blind4d_index_count} index / {fp.total_tiles or 0} tuiles\n"
+                        f"Couverture globale Blind 4D : {'oui' if fp.all_sky else 'non'}\n"
+                        f"payload_hash_count={fp.payload_hash_count}"
+                    ),
+                )
+                return
+            reason = state.invalidation_reason or state.message
+            self._set_catalog_library_status("INVALID", message=f"{state.message}: {reason}")
 
         def _pick_settings_sample(self) -> None:
             path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -8947,7 +9030,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 finally:
                     self.settings_catalog_library_edit.blockSignals(False)
                 if settings.catalog_library_path:
-                    self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
+                    self._restore_catalog_library_verification_from_cache()
                 else:
                     self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
             self.settings_db_edit.setText(settings.db_root or "")
@@ -9223,7 +9306,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 tile_compression=tile_compression_value,
                 log_level=self._current_log_level,
                 sample_fits=self.settings_sample_edit.text().strip() or None,
-                last_preset_id=(self.presets_combo.currentData() if hasattr(self, 'presets_combo') else None),
+                last_preset_id=(getattr(self, "_instrument_preset_id", None) if hasattr(self, 'presets_combo') else None),
                 last_fov_focal_mm=float(self.fov_focal_spin.value()) if hasattr(self, 'fov_focal_spin') else 0.0,
                 last_fov_pixel_um=float(self.fov_pixel_spin.value()) if hasattr(self, 'fov_pixel_spin') else 0.0,
                 last_fov_res_w=int(self.fov_res_w_spin.value()) if hasattr(self, 'fov_res_w_spin') else 0,
@@ -9300,7 +9383,29 @@ def launch_gui(args: argparse.Namespace) -> int:
                 dev_family_auto=dev_family_auto,
                 dev_family_selection=dev_family_selection,
                 db_family_cache=list(self._settings.db_family_cache or []) if getattr(self._settings, "db_family_cache", None) else None,
+                catalog_library_verification=dict(getattr(self._settings, "catalog_library_verification", None) or {}) or None,
             )
+
+        def _apply_instrument_snapshot_to_settings(self, settings: PersistentSettings) -> PersistentSettings:
+            if not hasattr(self, "fov_focal_spin"):
+                return settings
+            settings.last_preset_id = getattr(self, "_instrument_preset_id", None)
+            settings.last_fov_focal_mm = float(self.fov_focal_spin.value())
+            settings.last_fov_pixel_um = float(self.fov_pixel_spin.value())
+            settings.last_fov_res_w = int(self.fov_res_w_spin.value())
+            settings.last_fov_res_h = int(self.fov_res_h_spin.value())
+            settings.last_fov_reducer = float(self.fov_reducer_spin.value())
+            settings.last_fov_binning = int(self.fov_binning_spin.value())
+            return settings
+
+        def _persist_instrument_snapshot(self) -> None:
+            if getattr(self, "_instrument_initializing", False) or getattr(self, "_instrument_applying_snapshot", False):
+                return
+            try:
+                self._settings = self._apply_instrument_snapshot_to_settings(self._settings)
+                save_persistent_settings(self._settings)
+            except Exception:
+                pass
 
         def _apply_solver_hints_from_optics(
             self,
@@ -9978,7 +10083,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                         resources=self._catalog_library_validated_resources,
                     )
                 elif self.settings_catalog_library_edit.text().strip():
-                    self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
+                    self._restore_catalog_library_verification_from_cache()
                 else:
                     self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
             if hasattr(self, "settings_db_label"):
@@ -10582,6 +10687,58 @@ def launch_gui(args: argparse.Namespace) -> int:
                 dev_detect_min_area=int(self._settings.dev_detect_min_area or 5),
             )
 
+        def _fits_instrument_scale_arcsec(self, path: Path) -> float | None:
+            try:
+                header = fits.getheader(path, ext=0)
+            except Exception:
+                return None
+
+            def _header_float(key: str) -> float | None:
+                try:
+                    value = float(header.get(key))
+                except Exception:
+                    return None
+                return value if math.isfinite(value) and value > 0 else None
+
+            focal = _header_float("FOCALLEN")
+            xpix = _header_float("XPIXSZ")
+            ypix = _header_float("YPIXSZ")
+            xbin = _header_float("XBINNING") or 1.0
+            ybin = _header_float("YBINNING") or 1.0
+            if focal and xpix and ypix:
+                pixel = ((xpix * max(1.0, xbin)) + (ypix * max(1.0, ybin))) / 2.0
+                return 206.265 * (pixel / focal)
+            try:
+                from astropy.wcs import WCS
+                from astropy.wcs.utils import proj_plane_pixel_scales
+
+                wcs = WCS(header, naxis=2, relax=True)
+                if wcs.has_celestial:
+                    scales = proj_plane_pixel_scales(wcs)
+                    values = [abs(float(v)) * 3600.0 for v in scales if float(v) > 0]
+                    if values:
+                        return sum(values) / len(values)
+            except Exception:
+                return None
+            return None
+
+        def _log_instrument_consistency_warning(self, config: SolveConfig) -> None:
+            active_scale = config.hint_resolution_arcsec
+            if active_scale is None or active_scale <= 0:
+                return
+            for path in list(self._pending_files)[:5]:
+                image_scale = self._fits_instrument_scale_arcsec(path)
+                if image_scale is None or image_scale <= 0:
+                    continue
+                ratio = max(float(image_scale), float(active_scale)) / max(0.001, min(float(image_scale), float(active_scale)))
+                if ratio >= 1.6:
+                    self._log(
+                        "Avertissement instrument: le profil actif indique "
+                        f"{float(active_scale):.2f}\"/px, mais les métadonnées de l’image indiquent environ "
+                        f"{float(image_scale):.2f}\"/px. Vérifiez le profil instrument."
+                    )
+                    return
+
         def _activate_tab(self, tab_widget: QtWidgets.QWidget) -> None:
             try:
                 idx = self.tabs.indexOf(tab_widget)
@@ -10877,6 +11034,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             except ValueError as exc:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
+            self._log_instrument_consistency_warning(config)
             self.status_label.setText("Préparation de la bibliothèque")
             self._results_seen = 0
             try:
@@ -11389,6 +11547,11 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._db_family_scan_thread = None
             self._shutdown_thread(self._dl_worker, cancel_method="stop")
             self._dl_worker = None
+            try:
+                self._settings = self._apply_instrument_snapshot_to_settings(self._settings)
+                save_persistent_settings(self._settings)
+            except Exception:
+                pass
             super().closeEvent(event)
 
     QtWidgets.QApplication.setApplicationName(build_window_title("ZeSolver"))

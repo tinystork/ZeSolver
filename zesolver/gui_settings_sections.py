@@ -160,14 +160,35 @@ def apply_settings_preset(owner: Any, preset_utils: Any, preset_id: str | None) 
         preset = presets.get(preset_id)
         if not preset:
             return
+        owner._instrument_applying_snapshot = True
+        blockers = []
+        for widget_name in (
+            "fov_focal_spin",
+            "fov_pixel_spin",
+            "fov_res_w_spin",
+            "fov_res_h_spin",
+            "fov_reducer_spin",
+            "fov_binning_spin",
+        ):
+            widget = getattr(owner, widget_name, None)
+            if widget is not None and hasattr(widget, "blockSignals"):
+                blockers.append((widget, widget.blockSignals(True)))
         owner.fov_focal_spin.setValue(preset.focal_mm)
         owner.fov_pixel_spin.setValue(preset.pixel_um)
         owner.fov_res_w_spin.setValue(preset.res_w)
         owner.fov_res_h_spin.setValue(preset.res_h)
         owner.fov_reducer_spin.setValue(preset.reducer)
         owner.fov_binning_spin.setValue(1)
+        setattr(owner, "_instrument_preset_id", preset.id)
+        for widget, previous in reversed(blockers):
+            widget.blockSignals(previous)
+        owner._instrument_applying_snapshot = False
         owner._on_compute_fov_clicked()
     except Exception:
+        try:
+            owner._instrument_applying_snapshot = False
+        except Exception:
+            pass
         pass
 
 
@@ -197,15 +218,83 @@ def wire_settings_tab_callbacks(owner: Any, preset_utils: Any) -> None:
     )
     owner.settings_sample_browse.clicked.connect(owner._pick_settings_sample)
 
-    owner.presets_combo.currentIndexChanged.connect(
-        lambda idx: apply_settings_preset(owner, preset_utils, owner.presets_combo.itemData(idx))
-    )
-
+    owner._instrument_initializing = True
+    owner._instrument_applying_snapshot = False
+    owner._instrument_preset_id = None
     saved_preset = getattr(owner._settings, "last_preset_id", None)
     if saved_preset:
         idx = owner.presets_combo.findData(saved_preset)
         if idx >= 0:
+            previous = owner.presets_combo.blockSignals(True)
             owner.presets_combo.setCurrentIndex(idx)
+            owner.presets_combo.blockSignals(previous)
             apply_settings_preset(owner, preset_utils, saved_preset)
+    elif getattr(owner._settings, "last_fov_focal_mm", 0.0) and getattr(owner._settings, "last_fov_pixel_um", 0.0):
+        blockers = []
+        for widget_name in (
+            "fov_focal_spin",
+            "fov_pixel_spin",
+            "fov_res_w_spin",
+            "fov_res_h_spin",
+            "fov_reducer_spin",
+            "fov_binning_spin",
+        ):
+            widget = getattr(owner, widget_name, None)
+            if widget is not None and hasattr(widget, "blockSignals"):
+                blockers.append((widget, widget.blockSignals(True)))
+        owner.fov_focal_spin.setValue(float(owner._settings.last_fov_focal_mm))
+        owner.fov_pixel_spin.setValue(float(owner._settings.last_fov_pixel_um))
+        owner.fov_res_w_spin.setValue(int(owner._settings.last_fov_res_w or 1080))
+        owner.fov_res_h_spin.setValue(int(owner._settings.last_fov_res_h or 1920))
+        owner.fov_reducer_spin.setValue(float(owner._settings.last_fov_reducer or 1.0))
+        owner.fov_binning_spin.setValue(int(owner._settings.last_fov_binning or 1))
+        for widget, previous in reversed(blockers):
+            widget.blockSignals(previous)
+        owner._instrument_preset_id = None
+        owner._on_compute_fov_clicked()
+    else:
+        apply_settings_preset(owner, preset_utils, owner.presets_combo.currentData())
+    owner._instrument_initializing = False
+
+    def _preset_changed(idx: int) -> None:
+        if getattr(owner, "_instrument_initializing", False):
+            return
+        preset_id = owner.presets_combo.itemData(idx)
+        apply_settings_preset(owner, preset_utils, preset_id)
+        if hasattr(owner, "_persist_instrument_snapshot"):
+            owner._persist_instrument_snapshot()
+
+    owner.presets_combo.currentIndexChanged.connect(_preset_changed)
+
+    def _fov_field_changed() -> None:
+        if getattr(owner, "_instrument_initializing", False) or getattr(owner, "_instrument_applying_snapshot", False):
+            return
+        owner._instrument_preset_id = None
+
+    def _fov_edit_finished() -> None:
+        if getattr(owner, "_instrument_initializing", False) or getattr(owner, "_instrument_applying_snapshot", False):
+            return
+        if hasattr(owner, "_persist_instrument_snapshot"):
+            owner._persist_instrument_snapshot()
+
+    for widget_name in (
+        "fov_focal_spin",
+        "fov_pixel_spin",
+        "fov_res_w_spin",
+        "fov_res_h_spin",
+        "fov_reducer_spin",
+        "fov_binning_spin",
+    ):
+        widget = getattr(owner, widget_name, None)
+        if widget is None:
+            continue
+        try:
+            widget.valueChanged.connect(lambda _value=None: _fov_field_changed())
+        except Exception:
+            pass
+        try:
+            widget.editingFinished.connect(_fov_edit_finished)
+        except Exception:
+            pass
 
     owner.compute_button.clicked.connect(owner._on_compute_fov_clicked)

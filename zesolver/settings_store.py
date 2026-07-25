@@ -26,6 +26,8 @@
 
 from __future__ import annotations
 
+import logging
+import math
 import json
 import sys
 from dataclasses import asdict, dataclass
@@ -45,7 +47,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 11
+SETTINGS_SCHEMA_VERSION = 12
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -169,6 +171,7 @@ class PersistentSettings:
     benchmark_sip_order: int = 2
     benchmark_full_mode: bool = False
     benchmark_try_parity: bool = True
+    catalog_library_verification: Optional[dict[str, object]] = None
 
 
 def _resolve_settings_path() -> Path:
@@ -199,9 +202,51 @@ def load_persistent_settings() -> PersistentSettings:
         if value in (None, "", False):
             return None
         try:
-            return float(value)
+            result = float(value)
+            return result if math.isfinite(result) else None
         except (TypeError, ValueError):
             return None
+
+    def _float_value(value: object, default: float, *, minimum: float | None = None, maximum: float | None = None, field: str = "") -> float:
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            if field:
+                logging.warning("settings_field_invalid: %s", field)
+            return default
+        if not math.isfinite(result):
+            if field:
+                logging.warning("settings_field_invalid: %s", field)
+            return default
+        if minimum is not None and result < minimum:
+            if field:
+                logging.warning("settings_field_out_of_range: %s", field)
+            return default
+        if maximum is not None and result > maximum:
+            if field:
+                logging.warning("settings_field_out_of_range: %s", field)
+            return default
+        return result
+
+    def _int_value(value: object, default: int, *, minimum: int | None = None, maximum: int | None = None, field: str = "") -> int:
+        try:
+            result = int(value)
+        except (TypeError, ValueError):
+            if field:
+                logging.warning("settings_field_invalid: %s", field)
+            return default
+        if minimum is not None and result < minimum:
+            if field:
+                logging.warning("settings_field_out_of_range: %s", field)
+            return default
+        if maximum is not None and result > maximum:
+            if field:
+                logging.warning("settings_field_out_of_range: %s", field)
+            return default
+        return result
+
+    def _dict_or_none(value: object) -> Optional[dict[str, object]]:
+        return dict(value) if isinstance(value, dict) else None
 
     def _list_or_none(value: object) -> Optional[list[str]]:
         if isinstance(value, list):
@@ -229,7 +274,7 @@ def load_persistent_settings() -> PersistentSettings:
     bench_limit = int(payload.get("benchmark_limit", 0) or 0)
     bench_tile_cache = int(payload.get("benchmark_tile_cache_size", 128) or 128)
     settings = PersistentSettings(
-        schema_version=int(payload.get("schema_version", 1)),
+        schema_version=_int_value(payload.get("schema_version", 1), 1, minimum=1, field="schema_version"),
         catalog_library_path=(payload.get("catalog_library_path") or None),
         db_root=payload.get("db_root"),
         index_root=payload.get("index_root"),
@@ -241,12 +286,12 @@ def load_persistent_settings() -> PersistentSettings:
         log_level=str(payload.get("log_level", "INFO") or "INFO").upper(),
         sample_fits=payload.get("sample_fits"),
         last_preset_id=(payload.get("last_preset_id") or None),
-        last_fov_focal_mm=float(payload.get("last_fov_focal_mm", 0.0)),
-        last_fov_pixel_um=float(payload.get("last_fov_pixel_um", 0.0)),
-        last_fov_res_w=int(payload.get("last_fov_res_w", 0)),
-        last_fov_res_h=int(payload.get("last_fov_res_h", 0)),
-        last_fov_reducer=float(payload.get("last_fov_reducer", 1.0)),
-        last_fov_binning=int(payload.get("last_fov_binning", 1)),
+        last_fov_focal_mm=_float_value(payload.get("last_fov_focal_mm", 0.0), 0.0, minimum=0.0, maximum=10000.0, field="last_fov_focal_mm"),
+        last_fov_pixel_um=_float_value(payload.get("last_fov_pixel_um", 0.0), 0.0, minimum=0.0, maximum=100.0, field="last_fov_pixel_um"),
+        last_fov_res_w=_int_value(payload.get("last_fov_res_w", 0), 0, minimum=0, maximum=100000, field="last_fov_res_w"),
+        last_fov_res_h=_int_value(payload.get("last_fov_res_h", 0), 0, minimum=0, maximum=100000, field="last_fov_res_h"),
+        last_fov_reducer=_float_value(payload.get("last_fov_reducer", 1.0), 1.0, minimum=0.01, maximum=10.0, field="last_fov_reducer"),
+        last_fov_binning=_int_value(payload.get("last_fov_binning", 1), 1, minimum=1, maximum=16, field="last_fov_binning"),
         blind_max_stars=int(payload.get("blind_max_stars", 500)),
         blind_max_quads=int(payload.get("blind_max_quads", 8000)),
         blind_max_candidates=int(payload.get("blind_max_candidates", 10)),
@@ -339,6 +384,7 @@ def load_persistent_settings() -> PersistentSettings:
         benchmark_sip_order=bench_sip,
         benchmark_full_mode=bool(payload.get("benchmark_full_mode", False)),
         benchmark_try_parity=bool(payload.get("benchmark_try_parity", True)),
+        catalog_library_verification=_dict_or_none(payload.get("catalog_library_verification")),
     )
     migrated, updated = _migrate_settings_if_needed(settings)
     if updated:

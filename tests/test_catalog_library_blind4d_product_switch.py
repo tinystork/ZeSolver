@@ -250,6 +250,21 @@ def test_s5d2_library_view_prefers_47_shards_over_compatibility_monolith(tmp_pat
     assert "direct-d50" not in result.raw["blind4d_runtime_order"]
 
 
+def test_s5f_catalog_resources_publish_final_library_view_coverage_without_compat_warning(tmp_path: Path) -> None:
+    library_root, shards, monolith = _full_sharded_library_with_compat_monolith(tmp_path)
+    resources = resolve_catalog_resources(catalog_library=library_root)
+
+    assert resources.source == "library"
+    assert resources.blind4d_index_count == 47
+    assert tuple(path.resolve() for path in resources.blind4d_runtime_paths) == tuple(path.resolve() for path in shards)
+    assert monolith.resolve() not in {path.resolve() for path in resources.blind4d_runtime_paths}
+    assert resources.coverage is not None
+    assert resources.coverage.covered_tiles == 47
+    assert resources.coverage.total_tiles == 47
+    assert resources.all_sky_blind4d is True
+    assert "blind4d_coverage_not_all_sky" not in resources.warnings
+
+
 def test_blind_port_forced_external_rollback_uses_external_manifest(tmp_path: Path, monkeypatch) -> None:
     library_root, _index = _library_with_blind(tmp_path)
     external_index = write_fake_4d_index(tmp_path / "external" / "d50_2822_S_q.npz", "d50_2822")

@@ -53,8 +53,18 @@ class BatchSolverPipeline:
             total = len(requests)
             final: dict[int, SolveResult] = {}
             emitted: list[tuple[int, SolveResult]] = []
+            emitted_indices: set[int] = set()
             unresolved: dict[int, SolveRequest] = {}
             cancelled = self._cancelled(batch_request)
+
+            def _record_terminal(idx: int, result: SolveResult) -> bool:
+                if idx in emitted_indices:
+                    return False
+                final[idx] = result
+                emitted.append((idx, result))
+                emitted_indices.add(idx)
+                self._emit(result, total=total, final=tuple(final.values()))
+                return True
 
             if total == 0:
                 return BatchSolveResult(
@@ -68,9 +78,7 @@ class BatchSolverPipeline:
             if cancelled:
                 for idx, request in enumerate(requests):
                     result = _synthetic_failure(request, SolveStatus.CANCELLED, "CANCELLED")
-                    final[idx] = result
-                    emitted.append((idx, result))
-                    self._emit(result, total=total, final=tuple(final.values()))
+                    _record_terminal(idx, result)
                 return self._finish(batch_request, started, final, emitted, cancelled=True, telemetry=telemetry)
 
             telemetry.mark_rss("before_near")
@@ -78,14 +86,10 @@ class BatchSolverPipeline:
             def _near_completed(idx: int, result: SolveResult) -> None:
                 nonlocal cancelled
                 if result.status is SolveStatus.SOLVED and result.backend == "NEAR":
-                    final[idx] = result
-                    emitted.append((idx, result))
-                    self._emit(result, total=total, final=tuple(final.values()))
+                    _record_terminal(idx, result)
                 elif result.status is SolveStatus.CANCELLED:
-                    final[idx] = result
-                    emitted.append((idx, result))
+                    _record_terminal(idx, result)
                     cancelled = True
-                    self._emit(result, total=total, final=tuple(final.values()))
                 else:
                     unresolved[idx] = requests[idx]
 
@@ -101,21 +105,42 @@ class BatchSolverPipeline:
                 cancelled = True
                 for idx, request in unresolved.items():
                     result = _synthetic_failure(request, SolveStatus.CANCELLED, "CANCELLED_BEFORE_BLIND")
-                    final[idx] = result
-                    emitted.append((idx, result))
-                    self._emit(result, total=total, final=tuple(final.values()))
+                    _record_terminal(idx, result)
                 return self._finish(batch_request, started, final, emitted, cancelled=True, telemetry=telemetry)
 
             if unresolved and not cancelled:
                 telemetry.mark_rss("before_blind")
-                blind_phase = self._run_phase("blind", requests_by_index=unresolved, batch_request=batch_request)
+                blind_phase: dict[int, SolveResult] = {}
+
+                def _blind_completed(idx: int, result: SolveResult) -> None:
+                    nonlocal cancelled
+                    unresolved.pop(idx, None)
+                    if _record_terminal(idx, result):
+                        if result.status is SolveStatus.CANCELLED:
+                            cancelled = True
+                        if batch_request.stop_on_error and result.status is not SolveStatus.SOLVED:
+                            cancelled = True
+
+                blind_phase = self._run_phase(
+                    "blind",
+                    requests_by_index=unresolved,
+                    batch_request=batch_request,
+                    on_result=_blind_completed,
+                )
                 for idx in tuple(unresolved):
+                    if idx in emitted_indices:
+                        continue
                     result = blind_phase.get(idx)
                     if result is None:
-                        result = _synthetic_failure(unresolved[idx], SolveStatus.FAILED, "WORKER_FAILED_TO_RETURN_RESULT")
-                    final[idx] = result
-                    emitted.append((idx, result))
-                    self._emit(result, total=total, final=tuple(final.values()))
+                        if cancelled or self._cancelled(batch_request):
+                            result = _synthetic_failure(unresolved[idx], SolveStatus.CANCELLED, "CANCELLED_DURING_BLIND")
+                        else:
+                            result = _synthetic_failure(
+                                unresolved[idx],
+                                SolveStatus.FAILED,
+                                "WORKER_FAILED_TO_RETURN_RESULT",
+                            )
+                    _record_terminal(idx, result)
                     if batch_request.stop_on_error and result.status is not SolveStatus.SOLVED:
                         cancelled = True
                         break
@@ -126,9 +151,7 @@ class BatchSolverPipeline:
                     if idx in final:
                         continue
                     result = _synthetic_failure(request, SolveStatus.CANCELLED, "CANCELLED_AFTER_ERROR")
-                    final[idx] = result
-                    emitted.append((idx, result))
-                    self._emit(result, total=total, final=tuple(final.values()))
+                    _record_terminal(idx, result)
 
             return self._finish(batch_request, started, final, emitted, cancelled=cancelled, telemetry=telemetry)
         finally:
@@ -182,8 +205,24 @@ class BatchSolverPipeline:
                     result_idx = idx
                     result = _synthetic_failure(request, SolveStatus.FAILED, f"WORKER_CRASHED: {exc}")
                 results[result_idx] = result
+                ready_at = time.perf_counter()
+                if telemetry is not None and phase == "blind":
+                    telemetry.event(
+                        "blind_result_ready",
+                        index=result_idx,
+                        request_id=result.request_id,
+                        status=result.status.name,
+                    )
                 if on_result is not None:
                     on_result(result_idx, result)
+                if telemetry is not None and phase == "blind":
+                    telemetry.event(
+                        "blind_result_emitted",
+                        index=result_idx,
+                        request_id=result.request_id,
+                        status=result.status.name,
+                        emit_lag_s=round(time.perf_counter() - ready_at, 6),
+                    )
                 if batch_request.stop_on_error and result.status is not SolveStatus.SOLVED:
                     for pending in future_map:
                         pending.cancel()

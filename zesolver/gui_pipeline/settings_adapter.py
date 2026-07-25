@@ -115,7 +115,7 @@ def build_gui_solve_request_from_legacy_config(
         worker_strategy=_worker_strategy_from_environment(paths),
         requires_raster_sidecar=_has_raster(paths),
         requires_adaptive_hints=False,
-        blind4d_all_sky=False,
+        blind4d_all_sky=bool(getattr(catalog_resources, "all_sky_blind4d", False)),
         log_level=str(getattr(config, "log_level", "INFO") or "INFO"),
         fov_deg=float(getattr(config, "fov_deg", 1.5) or 1.5),
         downsample=int(getattr(config, "downsample", 1) or 1),
