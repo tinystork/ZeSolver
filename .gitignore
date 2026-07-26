@@ -72,6 +72,9 @@ tools/*
 !tools/build_zn310b_gui_dataset.py
 !tools/diagnose_*.py
 !tools/compare_zenear_catalog_providers.py
+!tools/measure_s6a1_near_runtime.py
+!tools/measure_s6a1b_near_scheduling.py
+!tools/measure_s6a1c_native_threading.py
 !tools/run_regression_suite.py
 !tools/audit_catalog_library.py
 !tools/adopt_catalog_library.py

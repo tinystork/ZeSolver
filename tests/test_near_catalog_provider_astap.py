@@ -89,16 +89,18 @@ def test_astap_provider_limits_deterministically_and_rejects_missing_family(tmp_
         AstapNearCatalogProvider(tmp_path, families=("g05",))
 
 
-def test_astap_provider_is_read_only_and_cache_returns_copies(tmp_path: Path) -> None:
+def test_astap_provider_is_read_only_and_cache_returns_immutable_payload(tmp_path: Path) -> None:
     _write_probe_db(tmp_path)
     before = {path: path.stat().st_mtime_ns for path in tmp_path.iterdir()}
     provider = AstapNearCatalogProvider(tmp_path, families=("d50",))
     tile = provider.select_tiles(1.0, -18.0, 2.0, 1)[0]
 
     first = provider.load_stars(tile)
-    first.ra_deg[0] = 123.0
+    with pytest.raises(ValueError):
+        first.ra_deg[0] = 123.0
     second = provider.load_stars(tile)
     after = {path: path.stat().st_mtime_ns for path in tmp_path.iterdir()}
 
-    assert second.ra_deg[0] != pytest.approx(123.0)
+    assert second.ra_deg is first.ra_deg
+    assert not second.ra_deg.flags.writeable
     assert before == after

@@ -80,6 +80,7 @@ def build_gui_solve_request(
         product_settings=product,
         runtime_options=runtime,
         worker_strategy=state.worker_strategy,
+        startup_stagger_ms=max(0, int(getattr(state, "startup_stagger_ms", 0) or 0)),
         requires_raster_sidecar=state.requires_raster_sidecar,
         requires_adaptive_hints=state.requires_adaptive_hints,
         blind4d_all_sky=state.blind4d_all_sky,

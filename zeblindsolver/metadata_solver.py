@@ -3606,6 +3606,15 @@ def solve_near(
     strict_db_target_stars: int | None = None
     logger.info("near detect start")
     t_detect0 = time.perf_counter()
+    _telemetry = None
+    try:
+        from zesolver.resource_telemetry import active_batch_telemetry
+
+        _telemetry = active_batch_telemetry()
+        if _telemetry is not None:
+            _telemetry.mark_near_detect_started()
+    except Exception:
+        _telemetry = None
     detect_backend = str(getattr(cfg, "detect_backend", "auto") or "auto").lower()
     work_image = image
     if detect_backend != "astap" and not strict_astap_iso:
@@ -3779,6 +3788,11 @@ def solve_near(
         stars["y"] = np.asarray(y_full, dtype=np.float32)
 
     t_detect_s = time.perf_counter() - t_detect0
+    if _telemetry is not None:
+        try:
+            _telemetry.mark_near_detect_finished()
+        except Exception:
+            pass
     if stars.size == 0:
         return _failure("no stars detected in the frame")
     logger.info("near detected stars: %d", int(stars.size))
@@ -5746,6 +5760,16 @@ def solve_near(
     except Exception as exc:
         return _failure(f"unable to write WCS to FITS: {exc}")
     t_write_s = time.perf_counter() - t_write0
+    final_stats.update(
+        {
+            "near_timing_detect_s": float(t_detect_s),
+            "near_timing_pair_s": float(t_pair_s),
+            "near_timing_ransac_s": float(t_ransac_s),
+            "near_timing_fit_s": float(t_fit_s),
+            "near_timing_write_s": float(t_write_s),
+            "near_timing_total_s": float(elapsed),
+        }
+    )
     logger.info(
         "near solve succeeded for %s (rms=%.3f px, inliers=%d, %.1fs)",
         fits_path.name,

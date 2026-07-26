@@ -4,11 +4,13 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-from zesolver.catalog_resources import resolve_catalog_resources
+from zesolver.catalog_resources import NearBatchRuntime, resolve_catalog_resources
 from zesolver.core import ProductionBlindSolverPort, SolverPipeline
 from zesolver.core.batch import BatchSolverPipeline, BatchSolveRequest
 from zesolver.core.models import SolveRequest, SolveResult
+from zesolver.core.pipeline import ExistingNearSolverPort
 from zesolver.resource_telemetry import BatchResourceTelemetry, reset_active_batch_telemetry, set_active_batch_telemetry
+from zesolver.settings import build_solver_configuration
 
 from .progress_adapter import GuiProgress, gui_progress_from_batch
 from .requests import GuiFileResult, GuiRunSummary, GuiSolveRequest
@@ -67,6 +69,8 @@ class PipelineGuiRunner:
 
             shared_catalog_resources = request.catalog_resources
             shared_blind_solver = None
+            shared_near_runtime = None
+            shared_near_solver = None
             if self._solver_pipeline_factory is None:
                 if shared_catalog_resources is None:
                     legacy = request.legacy_config
@@ -78,25 +82,48 @@ class PipelineGuiRunner:
                         legacy_index_root=getattr(legacy, "blind_index_path", None) if legacy is not None else None,
                         enable_environment_discovery=legacy is None,
                     )
+                near_request = request.for_phase("near")
+                near_configuration = build_solver_configuration(
+                    product_settings=near_request.product_settings,
+                    runtime_options=near_request.runtime_options,
+                )
+                near_values = near_configuration.legacy_solve_config_values
+                shared_near_runtime = NearBatchRuntime(
+                    shared_catalog_resources,
+                    mode=str(near_values.get("near_catalog_mode", "auto") or "auto"),
+                    legacy_index_root=shared_catalog_resources.legacy_index_root,
+                    blind_only=bool(near_configuration.product_settings.blind_only),
+                    legacy_cache_size=int(near_values.get("near_tile_cache_size", 128) or 128),
+                )
+                shared_near_solver = ExistingNearSolverPort(shared_near_runtime)
                 shared_blind_solver = ProductionBlindSolverPort()
             telemetry.mark_rss("after_preflight")
+            near_preparation_announced = False
+            phase_progress_lock = threading.Lock()
 
             def make_pipeline(phase: str) -> SolverPipeline:
+                nonlocal near_preparation_announced
                 phase_request = request.for_phase(phase)
                 if self._solver_pipeline_factory is not None:
                     return self._solver_pipeline_factory(phase, phase_request)
                 if phase == "near" and self._progress_callback is not None:
-                    self._progress_callback(
-                        GuiProgress(
-                            total=len(solve_requests),
-                            completed=len(emitted_paths),
-                            solved=0,
-                            failed=0,
-                            skipped=0,
-                            cancelled=0,
-                            current_phase="Préparation de ZeNear",
+                    should_emit_near_preparation = False
+                    with phase_progress_lock:
+                        if not near_preparation_announced:
+                            near_preparation_announced = True
+                            should_emit_near_preparation = True
+                    if should_emit_near_preparation:
+                        self._progress_callback(
+                            GuiProgress(
+                                total=len(solve_requests),
+                                completed=len(emitted_paths),
+                                solved=0,
+                                failed=0,
+                                skipped=0,
+                                cancelled=0,
+                                current_phase="Préparation de ZeNear",
+                            )
                         )
-                    )
                 if phase == "blind" and self._progress_callback is not None:
                     self._progress_callback(
                         GuiProgress(
@@ -113,6 +140,7 @@ class PipelineGuiRunner:
                     product_settings=phase_request.product_settings,
                     runtime_options=phase_request.runtime_options,
                     catalog_resources=shared_catalog_resources,
+                    near_solver=shared_near_solver,
                     blind_solver=shared_blind_solver,
                 )
 
@@ -136,6 +164,7 @@ class PipelineGuiRunner:
                     workers=max(1, int(request.workers or 1)),
                     preserve_order=request.preserve_order,
                     cancel_token=self._cancel_event,
+                    startup_stagger_ms=max(0, int(getattr(request, "startup_stagger_ms", 0) or 0)),
                 )
             )
             telemetry.event("batch_complete", telemetry=batch_result.telemetry or {})
@@ -149,14 +178,20 @@ class PipelineGuiRunner:
                     if self._result_callback is not None and key not in emitted_paths:
                         emitted_paths.add(key)
                         self._result_callback(item)
+            if shared_near_runtime is not None:
+                shared_near_runtime.close()
+                shared_near_runtime = None
             return GuiRunSummary(
                 selected_engine=request.engine_mode,
                 selection_reason="pipeline_runner",
                 results=final,
                 cancelled=batch_result.cancelled,
                 duration_s=batch_result.duration_s,
-                telemetry=batch_result.telemetry,
+                telemetry=telemetry.snapshot(),
             )
         finally:
+            shared_near_runtime = locals().get("shared_near_runtime")
+            if shared_near_runtime is not None:
+                shared_near_runtime.close()
             reset_active_batch_telemetry(telemetry_token)
             self._running = False

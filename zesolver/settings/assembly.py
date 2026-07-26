@@ -43,6 +43,7 @@ def build_solver_configuration(
             "downsample": product_settings.downsample,
             "overwrite": product_settings.overwrite_wcs,
             "workers": runtime_options.worker_count_resolved if runtime_options.worker_count_resolved is not None else product_settings.workers,
+            "near_detect_backend": product_settings.gpu_mode,
             "formats": product_settings.input_formats,
             "blind_enabled": product_settings.blind_enabled,
             "blind_only": product_settings.blind_only,

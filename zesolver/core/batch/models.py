@@ -14,6 +14,7 @@ class BatchSolveRequest:
     preserve_order: bool = True
     stop_on_error: bool = False
     cancel_token: object | None = None
+    startup_stagger_ms: int = 0
 
 
 @dataclass(frozen=True, slots=True)

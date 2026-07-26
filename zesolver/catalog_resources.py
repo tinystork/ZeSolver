@@ -7,6 +7,7 @@ own solver thresholds, candidate limits, quad parameters or GUI options.
 from __future__ import annotations
 
 import hashlib
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -32,7 +33,7 @@ from .catalog_library import (
     discover_existing,
 )
 from .catalog_library.models import CatalogCoverage
-from .resource_telemetry import increment_batch_counter
+from .resource_telemetry import increment_batch_counter, record_batch_event
 
 
 ENVIRONMENT_CATALOG_KEYS = (
@@ -142,6 +143,29 @@ class NearCatalogRuntime:
     error_code: str | None = None
     error_message: str | None = None
 
+    def __post_init__(self) -> None:
+        increment_batch_counter("near_catalog_runtime_created")
+        provider = self.provider
+        provider_id = id(provider) if provider is not None else None
+        inventory_id = None
+        cache_id = None
+        if provider is not None:
+            try:
+                provider_telemetry = provider.telemetry()
+                inventory_id = provider_telemetry.get("near_catalog_inventory_id")
+                cache_id = provider_telemetry.get("near_catalog_payload_cache_id")
+            except Exception:
+                pass
+        record_batch_event(
+            "near_catalog_runtime_created",
+            runtime_id=id(self),
+            provider_id=provider_id,
+            inventory_id=inventory_id,
+            payload_cache_id=cache_id,
+            source=self.source,
+            effective_mode=self.effective_mode.value if self.effective_mode else None,
+        )
+
     @property
     def available(self) -> bool:
         return self.provider is not None
@@ -169,6 +193,85 @@ class NearCatalogRuntime:
         if include_paths:
             data["legacy_index_root"] = str(self.legacy_index_root) if self.legacy_index_root else None
         return data
+
+
+class NearBatchRuntime:
+    """Batch-owned ZeNear catalog runtime shared by worker-local pipelines."""
+
+    def __init__(
+        self,
+        resources: "SolverCatalogResources",
+        *,
+        mode: NearCatalogMode | str = NearCatalogMode.AUTO,
+        legacy_index_root: str | Path | None = None,
+        blind_only: bool = False,
+        legacy_cache_size: int = 128,
+    ) -> None:
+        normalized_mode = NearCatalogMode.normalize(mode)
+        self.resources = resources
+        self.identity = (
+            str(resources.library_path.resolve()) if resources.library_path is not None else None,
+            resources.source,
+            tuple(resources.near.families if resources.near is not None else ()),
+            normalized_mode.value,
+            str(Path(legacy_index_root).expanduser().resolve()) if legacy_index_root is not None else None,
+            bool(blind_only),
+        )
+        self._mode = normalized_mode
+        self._legacy_index_root = legacy_index_root
+        self._blind_only = bool(blind_only)
+        self._legacy_cache_size = int(legacy_cache_size)
+        self._runtime: NearCatalogRuntime | None = None
+        self._lock = threading.Lock()
+        self._closed = False
+        record_batch_event(
+            "near_batch_runtime_created",
+            batch_runtime_id=id(self),
+            identity=self.identity,
+        )
+
+    def acquire(self) -> NearCatalogRuntime:
+        with self._lock:
+            if self._closed:
+                raise NearCatalogRuntimeError("NEAR_BATCH_RUNTIME_CLOSED", "NEAR_BATCH_RUNTIME_CLOSED")
+            if self._runtime is None:
+                self._runtime = resolve_near_catalog_runtime(
+                    self.resources,
+                    mode=self._mode,
+                    legacy_index_root=self._legacy_index_root,
+                    blind_only=self._blind_only,
+                    legacy_cache_size=self._legacy_cache_size,
+                )
+                record_batch_event(
+                    "near_batch_runtime_ready",
+                    batch_runtime_id=id(self),
+                    runtime_id=id(self._runtime),
+                    identity=self.identity,
+                )
+            runtime = self._runtime
+        increment_batch_counter("near_catalog_runtime_reused")
+        provider = runtime.provider
+        if provider is not None:
+            increment_batch_counter("near_catalog_provider_reused")
+        return runtime
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            runtime = self._runtime
+        provider = runtime.provider if runtime is not None else None
+        close = getattr(provider, "close", None)
+        if callable(close):
+            close()
+        increment_batch_counter("near_catalog_runtime_closed")
+        record_batch_event(
+            "near_catalog_runtime_closed",
+            batch_runtime_id=id(self),
+            runtime_id=id(runtime) if runtime is not None else None,
+            provider_id=id(provider) if provider is not None else None,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -228,7 +331,11 @@ def build_near_catalog_provider(resources: "SolverCatalogResources") -> AstapNea
     if resources.near is None:
         raise CatalogResourceResolutionError("near_catalog_provider_unavailable")
     increment_batch_counter("catalog_provider_constructor_count")
-    return AstapNearCatalogProvider(resources.near.root, families=resources.near.families)
+    return AstapNearCatalogProvider(
+        resources.near.root,
+        families=resources.near.families,
+        metrics_callback=increment_batch_counter,
+    )
 
 
 def resolve_near_catalog_runtime(
@@ -317,7 +424,11 @@ def _astap_runtime(resources: "SolverCatalogResources", requested: NearCatalogMo
 def _legacy_runtime(requested: NearCatalogMode, legacy_root: Path, *, cache_size: int) -> NearCatalogRuntime:
     try:
         increment_batch_counter("catalog_provider_constructor_count")
-        provider = LegacyIndexNearCatalogProvider(legacy_root, cache_size=cache_size)
+        provider = LegacyIndexNearCatalogProvider(
+            legacy_root,
+            cache_size=cache_size,
+            metrics_callback=increment_batch_counter,
+        )
     except Exception as exc:
         raise NearCatalogRuntimeError(LEGACY_NEAR_INDEX_INVALID, f"{LEGACY_NEAR_INDEX_INVALID}: {exc}") from exc
     warnings = ("legacy_near_catalog_runtime_selected",) if requested is NearCatalogMode.LEGACY_INDEX else ()
@@ -926,6 +1037,7 @@ __all__ = [
     "Blind4DCatalogMode",
     "Blind4DRuntimeError",
     "Blind4DRuntimeSelection",
+    "NearBatchRuntime",
     "NearCatalogMode",
     "NearCatalogRuntime",
     "NearCatalogRuntimeError",

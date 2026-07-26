@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import math
 import threading
 import time
 from collections.abc import Callable
@@ -103,7 +104,9 @@ class BatchSolverPipeline:
 
             if self._cancelled(batch_request):
                 cancelled = True
-                for idx, request in unresolved.items():
+                for idx, request in enumerate(requests):
+                    if idx in final:
+                        continue
                     result = _synthetic_failure(request, SolveStatus.CANCELLED, "CANCELLED_BEFORE_BLIND")
                     _record_terminal(idx, result)
                 return self._finish(batch_request, started, final, emitted, cancelled=True, telemetry=telemetry)
@@ -171,6 +174,102 @@ class BatchSolverPipeline:
         results: dict[int, SolveResult] = {}
         local = threading.local()
         telemetry = active_batch_telemetry()
+        items = tuple(requests_by_index.items())
+        total_items = len(items)
+        ranks = {idx: pos for pos, (idx, _request) in enumerate(items)}
+        records: dict[int, dict[str, object]] = {
+            idx: {
+                "request_index": idx,
+                "request_id": request.request_id,
+                "path": str(request.input_path),
+                "phase": phase,
+            }
+            for idx, request in items
+        }
+        phase_started_at = time.perf_counter()
+        state_lock = threading.Lock()
+        started_count = 0
+        finished_count = 0
+        active_count = 0
+        max_active = 0
+        active_area_s = 0.0
+        full_occupancy_s = 0.0
+        workers_minus_one_s = 0.0
+        last_active_change = phase_started_at
+        last_finish_by_thread: dict[int, tuple[float, bool]] = {}
+        handoff_gaps_s: list[float] = []
+
+        def _update_active_integral(now: float) -> None:
+            nonlocal active_area_s, full_occupancy_s, workers_minus_one_s, last_active_change
+            delta = max(0.0, now - last_active_change)
+            active_area_s += delta * active_count
+            if active_count >= workers:
+                full_occupancy_s += delta
+            if active_count >= max(1, workers - 1):
+                workers_minus_one_s += delta
+            last_active_change = now
+
+        def _wait_initial_stagger(rank: int) -> None:
+            delay_ms = max(0, int(getattr(batch_request, "startup_stagger_ms", 0) or 0))
+            if phase != "near" or delay_ms <= 0 or rank >= workers:
+                return
+            deadline = phase_started_at + (float(delay_ms) / 1000.0) * float(rank)
+            while True:
+                if self._cancelled(batch_request):
+                    return
+                remaining = deadline - time.perf_counter()
+                if remaining <= 0.0:
+                    return
+                time.sleep(min(0.02, remaining))
+
+        def _mark_task_started(idx: int, request: SolveRequest, pipeline: object) -> None:
+            nonlocal started_count, active_count, max_active
+            now = time.perf_counter()
+            ident = threading.get_ident()
+            with state_lock:
+                _update_active_integral(now)
+                started_count += 1
+                active_count += 1
+                max_active = max(max_active, active_count)
+                previous = last_finish_by_thread.get(ident)
+                if previous is not None:
+                    previous_finished_at, queue_was_nonempty = previous
+                    if queue_was_nonempty:
+                        gap = max(0.0, now - previous_finished_at)
+                        handoff_gaps_s.append(gap)
+                        records[idx]["worker_handoff_gap_ms"] = round(gap * 1000.0, 3)
+                identity = _pipeline_identity(pipeline)
+                records[idx].update(
+                    {
+                        "task_started_at": now,
+                        "thread_ident": ident,
+                        "thread_name": threading.current_thread().name,
+                        "pipeline_id": id(pipeline),
+                        **identity,
+                    }
+                )
+            if telemetry is not None:
+                telemetry.bind_scheduler_task(phase, idx, ident=ident)
+
+        def _mark_task_finished(idx: int) -> None:
+            nonlocal finished_count, active_count
+            now = time.perf_counter()
+            ident = threading.get_ident()
+            detect_window = telemetry.detect_window(phase, idx) if telemetry is not None else {}
+            with state_lock:
+                _update_active_integral(now)
+                active_count = max(0, active_count - 1)
+                finished_count += 1
+                last_finish_by_thread[ident] = (now, started_count < total_items)
+                records[idx].update(
+                    {
+                        "task_finished_at": now,
+                        "near_detect_started_at": detect_window.get("near_detect_started_at"),
+                        "near_detect_finished_at": detect_window.get("near_detect_finished_at"),
+                    }
+                )
+            if telemetry is not None:
+                telemetry.unbind_scheduler_task(ident=ident)
 
         def _task(item: tuple[int, SolveRequest]) -> tuple[int, SolveResult]:
             idx, request = item
@@ -178,6 +277,7 @@ class BatchSolverPipeline:
             if telemetry is not None:
                 telemetry.note_worker_thread()
             try:
+                _wait_initial_stagger(ranks.get(idx, 0))
                 if self._cancelled(batch_request):
                     return idx, _synthetic_failure(request, SolveStatus.CANCELLED, f"CANCELLED_BEFORE_{phase.upper()}")
                 self.execution_order.append(f"{phase}:{request.request_id or request.input_path.name}")
@@ -186,16 +286,26 @@ class BatchSolverPipeline:
                     if pipeline is None:
                         pipeline = self._new_pipeline(phase)
                         local.pipeline = pipeline
+                    _mark_task_started(idx, request, pipeline)
+                    records[idx]["near_solve_started_at"] = time.perf_counter() if phase == "near" else None
                     result = pipeline.solve(request)
+                    records[idx].update(_pipeline_identity(pipeline))
+                    records[idx]["near_solve_finished_at"] = time.perf_counter() if phase == "near" else None
                 except Exception as exc:
                     result = _synthetic_failure(request, SolveStatus.FAILED, f"ENGINE_FAILED: {exc}")
                 return idx, result
             finally:
+                if "task_started_at" in records[idx]:
+                    _mark_task_finished(idx)
                 if token is not None:
                     reset_active_batch_telemetry(token)
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            future_map = {pool.submit(_task, item): item[0] for item in requests_by_index.items()}
+            future_map = {}
+            for item in items:
+                idx = item[0]
+                records[idx]["future_submitted_at"] = time.perf_counter()
+                future_map[pool.submit(_task, item)] = idx
             for future in concurrent.futures.as_completed(future_map):
                 idx = future_map[future]
                 try:
@@ -215,6 +325,12 @@ class BatchSolverPipeline:
                     )
                 if on_result is not None:
                     on_result(result_idx, result)
+                emitted_at = time.perf_counter()
+                if result_idx in records:
+                    records[result_idx]["result_emitted_at"] = emitted_at
+                    finished_at = records[result_idx].get("task_finished_at")
+                    if isinstance(finished_at, (int, float)):
+                        records[result_idx]["result_emit_delay_ms"] = round(max(0.0, emitted_at - float(finished_at)) * 1000.0, 3)
                 if telemetry is not None and phase == "blind":
                     telemetry.event(
                         "blind_result_emitted",
@@ -231,6 +347,25 @@ class BatchSolverPipeline:
                     for pending in future_map:
                         pending.cancel()
                     break
+        phase_finished_at = time.perf_counter()
+        with state_lock:
+            _update_active_integral(phase_finished_at)
+            phase_summary = _scheduler_summary(
+                phase=phase,
+                workers=workers,
+                total_items=total_items,
+                phase_started_at=phase_started_at,
+                phase_finished_at=phase_finished_at,
+                records=records,
+                max_active=max_active,
+                active_area_s=active_area_s,
+                full_occupancy_s=full_occupancy_s,
+                workers_minus_one_s=workers_minus_one_s,
+                handoff_gaps_s=handoff_gaps_s,
+            )
+            task_trace = tuple(_finalize_task_record(record) for _idx, record in sorted(records.items()))
+        if telemetry is not None:
+            telemetry.scheduler_phase(phase, summary=phase_summary, tasks=task_trace)
         return results
 
     def _new_pipeline(self, phase: str):
@@ -306,3 +441,152 @@ def _synthetic_failure(request: SolveRequest, status: SolveStatus, error: str) -
         catalog_status=None,
         error=error,
     )
+
+
+def _pipeline_identity(pipeline: object) -> dict[str, object]:
+    near_solver = getattr(pipeline, "near_solver", None)
+    near_runtime_holder = getattr(near_solver, "_near_runtime", None)
+    batch_runtime_id = None
+    if near_runtime_holder is not None and hasattr(near_runtime_holder, "_runtime"):
+        batch_runtime_id = id(near_runtime_holder)
+        runtime = getattr(near_runtime_holder, "_runtime", None)
+    else:
+        runtime = near_runtime_holder
+    provider = getattr(runtime, "provider", None)
+    return {
+        "near_port_id": getattr(near_solver, "near_port_id", id(near_solver) if near_solver is not None else None),
+        "near_batch_runtime_id": batch_runtime_id,
+        "runtime_id": getattr(runtime, "runtime_id", id(runtime) if runtime is not None else None),
+        "provider_id": getattr(provider, "provider_id", id(provider) if provider is not None else None),
+    }
+
+
+def _finalize_task_record(record: dict[str, object]) -> dict[str, object]:
+    out = dict(record)
+    submitted = _float_or_none(out.get("future_submitted_at"))
+    started = _float_or_none(out.get("task_started_at"))
+    near_started = _float_or_none(out.get("near_solve_started_at"))
+    near_finished = _float_or_none(out.get("near_solve_finished_at"))
+    detect_started = _float_or_none(out.get("near_detect_started_at"))
+    detect_finished = _float_or_none(out.get("near_detect_finished_at"))
+    finished = _float_or_none(out.get("task_finished_at"))
+    emitted = _float_or_none(out.get("result_emitted_at"))
+    if submitted is not None and started is not None:
+        out["queue_wait_ms"] = round(max(0.0, started - submitted) * 1000.0, 3)
+    if near_started is not None and near_finished is not None:
+        out["near_duration_ms"] = round(max(0.0, near_finished - near_started) * 1000.0, 3)
+    if detect_started is not None and detect_finished is not None:
+        out["detect_duration_ms"] = round(max(0.0, detect_finished - detect_started) * 1000.0, 3)
+    if started is not None and finished is not None:
+        out["task_duration_ms"] = round(max(0.0, finished - started) * 1000.0, 3)
+    if finished is not None and emitted is not None:
+        out["result_emit_delay_ms"] = round(max(0.0, emitted - finished) * 1000.0, 3)
+    return out
+
+
+def _scheduler_summary(
+    *,
+    phase: str,
+    workers: int,
+    total_items: int,
+    phase_started_at: float,
+    phase_finished_at: float,
+    records: dict[int, dict[str, object]],
+    max_active: int,
+    active_area_s: float,
+    full_occupancy_s: float,
+    workers_minus_one_s: float,
+    handoff_gaps_s: list[float],
+) -> dict[str, object]:
+    duration_s = max(0.0, phase_finished_at - phase_started_at)
+    finalized = tuple(_finalize_task_record(record) for record in records.values())
+    thread_ids = {record.get("thread_ident") for record in finalized if record.get("thread_ident") is not None}
+    pipeline_ids = {record.get("pipeline_id") for record in finalized if record.get("pipeline_id") is not None}
+    near_port_ids = {record.get("near_port_id") for record in finalized if record.get("near_port_id") is not None}
+    runtime_ids = {record.get("runtime_id") for record in finalized if record.get("runtime_id") is not None}
+    provider_ids = {record.get("provider_id") for record in finalized if record.get("provider_id") is not None}
+    batch_runtime_ids = {record.get("near_batch_runtime_id") for record in finalized if record.get("near_batch_runtime_id") is not None}
+    tasks_per_thread: dict[str, int] = {}
+    for record in finalized:
+        ident = record.get("thread_ident")
+        if ident is not None:
+            key = str(ident)
+            tasks_per_thread[key] = tasks_per_thread.get(key, 0) + 1
+    result_times = sorted(
+        value
+        for value in (_float_or_none(record.get("result_emitted_at")) for record in finalized)
+        if value is not None
+    )
+    intervals_ms = [
+        max(0.0, (result_times[pos] - result_times[pos - 1]) * 1000.0)
+        for pos in range(1, len(result_times))
+    ]
+    task_durations = _numbers(finalized, "task_duration_ms")
+    near_durations = _numbers(finalized, "near_duration_ms")
+    detect_durations = _numbers(finalized, "detect_duration_ms")
+    handoff_ms = [value * 1000.0 for value in handoff_gaps_s]
+    return {
+        "phase": phase,
+        "workers_requested": workers,
+        "task_count": total_items,
+        "worker_threads_unique": len(thread_ids),
+        "solver_pipelines_unique": len(pipeline_ids),
+        "near_port_ids_unique": len(near_port_ids),
+        "near_batch_runtime_ids_unique": len(batch_runtime_ids),
+        "runtime_ids_unique": len(runtime_ids),
+        "provider_ids_unique": len(provider_ids),
+        "tasks_per_thread": tasks_per_thread,
+        "max_tasks_active": max_active,
+        "average_tasks_active": round(active_area_s / duration_s, 3) if duration_s > 0.0 else 0.0,
+        "time_at_full_occupancy_s": round(full_occupancy_s, 6),
+        "time_at_workers_minus_one_or_more_s": round(workers_minus_one_s, 6),
+        "median_worker_handoff_gap_ms": _percentile(handoff_ms, 50),
+        "p95_worker_handoff_gap_ms": _percentile(handoff_ms, 95),
+        "max_worker_handoff_gap_ms": round(max(handoff_ms), 3) if handoff_ms else None,
+        "idle_time_while_queue_nonempty_s": round(sum(handoff_gaps_s), 6),
+        "median_task_duration_ms": _percentile(task_durations, 50),
+        "p95_task_duration_ms": _percentile(task_durations, 95),
+        "median_near_duration_ms": _percentile(near_durations, 50),
+        "p95_near_duration_ms": _percentile(near_durations, 95),
+        "median_detect_duration_ms": _percentile(detect_durations, 50),
+        "p95_detect_duration_ms": _percentile(detect_durations, 95),
+        "median_result_interval_ms": _percentile(intervals_ms, 50),
+        "p90_result_interval_ms": _percentile(intervals_ms, 90),
+        "result_intervals_lt_250ms": sum(1 for item in intervals_ms if item < 250.0),
+        "result_pauses_gt_1s": sum(1 for item in intervals_ms if item > 1000.0),
+        "result_pauses_gt_2s": sum(1 for item in intervals_ms if item > 2000.0),
+        "duration_s": round(duration_s, 6),
+    }
+
+
+def _numbers(records: tuple[dict[str, object], ...], key: str) -> list[float]:
+    values: list[float] = []
+    for record in records:
+        value = _float_or_none(record.get(key))
+        if value is not None:
+            values.append(value)
+    return values
+
+
+def _float_or_none(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        result = float(value)
+        return result if math.isfinite(result) else None
+    return None
+
+
+def _percentile(values: list[float], pct: float) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(float(value) for value in values)
+    if len(ordered) == 1:
+        return round(ordered[0], 3)
+    rank = (len(ordered) - 1) * max(0.0, min(100.0, float(pct))) / 100.0
+    low = int(math.floor(rank))
+    high = int(math.ceil(rank))
+    if low == high:
+        return round(ordered[low], 3)
+    weight = rank - low
+    return round(ordered[low] * (1.0 - weight) + ordered[high] * weight, 3)

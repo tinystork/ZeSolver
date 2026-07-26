@@ -15,7 +15,9 @@ from zesolver.catalog_resources import (
     Blind4DRuntimeError,
     Blind4DRuntimeSelection,
     CatalogResourceResolutionError,
+    NearBatchRuntime,
     NearCatalogMode,
+    NearCatalogRuntime,
     NearCatalogRuntimeError,
     SolverCatalogResources,
     resolve_catalog_resources,
@@ -47,19 +49,24 @@ class BlindSolverPort(Protocol):
 class ExistingNearSolverPort:
     """Thin adapter over the existing Near wrapper."""
 
-    def __init__(self) -> None:
+    def __init__(self, near_runtime: NearCatalogRuntime | NearBatchRuntime | None = None) -> None:
         increment_batch_counter("near_port_constructor_count")
+        self._near_runtime = near_runtime
 
     def solve(self, request: SolveRequest, *, resources: SolverCatalogResources, configuration) -> EngineSolveResult:
         values = configuration.legacy_solve_config_values
         try:
-            runtime = resolve_near_catalog_runtime(
-                resources,
-                mode=str(values.get("near_catalog_mode", "auto") or "auto"),
-                legacy_index_root=resources.legacy_index_root,
-                blind_only=bool(configuration.product_settings.blind_only),
-                legacy_cache_size=int(values.get("near_tile_cache_size", 128) or 128),
-            )
+            if self._near_runtime is None:
+                runtime = resolve_near_catalog_runtime(
+                    resources,
+                    mode=str(values.get("near_catalog_mode", "auto") or "auto"),
+                    legacy_index_root=resources.legacy_index_root,
+                    blind_only=bool(configuration.product_settings.blind_only),
+                    legacy_cache_size=int(values.get("near_tile_cache_size", 128) or 128),
+                )
+            else:
+                acquire = getattr(self._near_runtime, "acquire", None)
+                runtime = acquire() if callable(acquire) else self._near_runtime
         except NearCatalogRuntimeError as exc:
             return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="NEAR", error=f"{exc.code}: {exc}")
         if runtime.provider is None:

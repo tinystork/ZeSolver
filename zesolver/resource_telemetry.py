@@ -19,7 +19,30 @@ BATCH_COUNTER_KEYS = (
     "blind_port_constructor_count",
     "catalog_provider_constructor_count",
     "worker_thread_count",
+    "near_catalog_runtime_created",
+    "near_catalog_runtime_reused",
+    "near_catalog_runtime_closed",
+    "near_catalog_inventory_load_count",
+    "near_catalog_provider_created",
+    "near_catalog_provider_reused",
+    "near_catalog_db_created",
+    "near_catalog_db_reused",
+    "near_catalog_payload_cache_hits",
+    "near_catalog_payload_cache_misses",
+    "near_catalog_payload_cache_evictions",
+    "near_catalog_payload_physical_loads",
+    "near_catalog_payload_duplicate_loads",
+    "near_catalog_payload_singleflight_waiters",
 )
+
+
+IMPORTANT_EVENT_PHASES = {
+    "near_batch_runtime_created",
+    "near_catalog_runtime_created",
+    "near_batch_runtime_ready",
+    "near_catalog_runtime_closed",
+    "batch_complete",
+}
 
 
 _active_batch_telemetry: contextvars.ContextVar["BatchResourceTelemetry | None"] = contextvars.ContextVar(
@@ -33,7 +56,10 @@ class BatchResourceTelemetry:
     counters: dict[str, int] = field(default_factory=lambda: {key: 0 for key in BATCH_COUNTER_KEYS})
     rss_kib: dict[str, int | None] = field(default_factory=dict)
     events: list[dict[str, object]] = field(default_factory=list)
+    scheduler: dict[str, dict[str, object]] = field(default_factory=dict)
     _worker_threads: set[int] = field(default_factory=set)
+    _current_tasks: dict[int, tuple[str, int]] = field(default_factory=dict)
+    _detect_windows: dict[tuple[str, int], dict[str, float]] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
 
     def increment(self, key: str, amount: int = 1) -> None:
@@ -64,6 +90,48 @@ class BatchResourceTelemetry:
         with self._lock:
             if len(self.events) < 128:
                 self.events.append(item)
+            elif str(phase) in IMPORTANT_EVENT_PHASES:
+                for pos, existing in enumerate(self.events):
+                    if str(existing.get("phase")) not in IMPORTANT_EVENT_PHASES:
+                        self.events[pos] = item
+                        break
+
+    def scheduler_phase(self, phase: str, *, summary: dict[str, object], tasks: tuple[dict[str, object], ...]) -> None:
+        with self._lock:
+            self.scheduler[str(phase)] = {
+                "summary": dict(summary),
+                "tasks": tuple(dict(item) for item in tasks),
+            }
+
+    def bind_scheduler_task(self, phase: str, index: int, ident: int | None = None) -> None:
+        value = int(ident if ident is not None else threading.get_ident())
+        with self._lock:
+            self._current_tasks[value] = (str(phase), int(index))
+
+    def unbind_scheduler_task(self, ident: int | None = None) -> None:
+        value = int(ident if ident is not None else threading.get_ident())
+        with self._lock:
+            self._current_tasks.pop(value, None)
+
+    def mark_near_detect_started(self, ident: int | None = None) -> None:
+        value = int(ident if ident is not None else threading.get_ident())
+        now = time.perf_counter()
+        with self._lock:
+            key = self._current_tasks.get(value)
+            if key is not None:
+                self._detect_windows.setdefault(key, {})["near_detect_started_at"] = now
+
+    def mark_near_detect_finished(self, ident: int | None = None) -> None:
+        value = int(ident if ident is not None else threading.get_ident())
+        now = time.perf_counter()
+        with self._lock:
+            key = self._current_tasks.get(value)
+            if key is not None:
+                self._detect_windows.setdefault(key, {})["near_detect_finished_at"] = now
+
+    def detect_window(self, phase: str, index: int) -> dict[str, float]:
+        with self._lock:
+            return dict(self._detect_windows.get((str(phase), int(index)), {}))
 
     def snapshot(self) -> dict[str, object]:
         with self._lock:
@@ -71,6 +139,7 @@ class BatchResourceTelemetry:
                 "counters": dict(self.counters),
                 "rss_kib": dict(self.rss_kib),
                 "events": tuple(dict(item) for item in self.events),
+                "scheduler": {key: dict(value) for key, value in self.scheduler.items()},
             }
 
 
@@ -105,3 +174,9 @@ def increment_batch_counter(key: str, amount: int = 1) -> None:
     telemetry = active_batch_telemetry()
     if telemetry is not None:
         telemetry.increment(key, amount)
+
+
+def record_batch_event(phase: str, **payload: object) -> None:
+    telemetry = active_batch_telemetry()
+    if telemetry is not None:
+        telemetry.event(phase, **payload)

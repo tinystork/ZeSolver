@@ -23,6 +23,7 @@ class GuiSettingsState:
     formats: tuple[str, ...] = ()
     max_files: int | None = None
     worker_strategy: str = "threads"
+    startup_stagger_ms: int = 0
     requires_raster_sidecar: bool = False
     requires_adaptive_hints: bool = False
     blind4d_all_sky: bool = False
@@ -60,6 +61,7 @@ class GuiSolveRequest:
     product_settings: ProductSettings
     runtime_options: RuntimeOptions
     worker_strategy: str = "threads"
+    startup_stagger_ms: int = 0
     requires_raster_sidecar: bool = False
     requires_adaptive_hints: bool = False
     blind4d_all_sky: bool = False

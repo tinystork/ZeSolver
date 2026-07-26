@@ -204,6 +204,10 @@ class _TileCache:
                 store.popitem(last=False)
         return value
 
+    def clear(self) -> None:
+        with self._lock:
+            self._store.clear()
+
 
 def _normalize_ra(value):
     if isinstance(value, np.ndarray):
@@ -418,6 +422,11 @@ class CatalogDB:
         for tile in self._tiles:
             summary[tile.spec.key] = summary.get(tile.spec.key, 0) + 1
         return summary
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
+        with self._prefetch_lock:
+            self._prefetched.clear()
 
     def _iter_candidate_tiles(
         self,
