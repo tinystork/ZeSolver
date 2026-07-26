@@ -166,9 +166,8 @@ Historical fields remain available, but no longer in the normal path:
 ```text
 Historical ASTAP source
 Historical Near index
-External Blind 4D manifest
 Near rollback mode
-Blind 4D rollback mode
+Blind 4D source: Auto - active library / External manifest
 ```
 
 They are grouped under:
@@ -186,8 +185,13 @@ Compatibilite historique et diagnostic
 The group is hidden in Easy mode and closed by default in Expert mode.  Opening
 it does not activate rollback.
 
-The normal CatalogLibrary run ignores invalid historical sentinels while modes
-remain `auto`.  Historical paths are consulted only for explicit rollback:
+In the Blind 4D source selector, `Auto - active library` hides the external
+manifest path, Browse, Verify and status controls.  `External manifest` shows
+them immediately and is the only mode where the saved external path is used.
+
+The normal CatalogLibrary run ignores invalid historical sentinels and stale
+external manifest paths while modes remain `auto`.  Historical paths are
+consulted only for explicit rollback:
 
 ```text
 near_catalog_mode = legacy-index

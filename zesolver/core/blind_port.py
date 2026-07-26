@@ -75,10 +75,14 @@ class ProductionBlindSolverPort:
             configured_index_count = len(configured_index_paths) if configured_index_paths else len(loaded_manifest.entries)
             runtime_order = tuple(getattr(runtime, "runtime_order", ()) or ())
             logging.info(
-                "blind4d runtime selection: blind4d_catalog_mode_effective=%s blind4d_index_count=%d "
+                "blind4d runtime selection: blind4d_source_requested=%s blind4d_source_used=%s "
+                "blind4d_library=%s blind4d_manifest=%s blind4d_index_count=%d "
                 "blind4d_runtime_order=%s blind4d_covered_tiles=%s blind4d_total_tiles=%s "
                 "blind4d_all_sky=%s blind4d_external_fallback_used=%s",
+                runtime_telemetry.get("blind4d_catalog_mode_requested"),
                 runtime_telemetry.get("blind4d_catalog_mode_effective"),
+                runtime_telemetry.get("catalog_library_id"),
+                str(getattr(loaded_manifest, "manifest_path", "")),
                 configured_index_count,
                 list(runtime_order),
                 runtime_telemetry.get("blind4d_covered_tiles"),

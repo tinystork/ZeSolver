@@ -17,8 +17,9 @@ Near     -> astap-native
 Blind 4D -> catalog_library_view
 ```
 
-Historical ASTAP, Near index and external Blind 4D manifest fields remain
-available only in an explicit advanced surface.
+Historical ASTAP and Near index fields remain available only in an explicit
+advanced surface.  The external Blind 4D manifest remains available there too,
+but only after the user explicitly selects it as the Blind 4D source.
 
 ## Normal Surface
 
@@ -74,11 +75,19 @@ It contains:
 ```text
 Historical ASTAP source
 Historical Near index
-External Blind 4D manifest
 Near mode: auto / astap-native / legacy-index
-Blind 4D mode: auto / library-view / external-manifest
+Blind 4D index source: Auto - active library / External manifest
 Restore recommended automatic mode
 ```
+
+When `Auto - active library` is selected, the external Blind 4D manifest path,
+Browse, Verify and verification status controls are hidden.  Auto uses the
+active ZeSolver library and ignores any stale external path that remains saved
+for future diagnostic use.
+
+When `External manifest` is selected, the path, Browse, Verify and status
+controls appear immediately.  This is an explicit advanced override for
+diagnostics, benchmarks, hand-built libraries and rollback investigations.
 
 The restore action sets:
 
@@ -104,7 +113,7 @@ The GUI uses typed validators rather than one generic directory check:
 CatalogLibrary root       -> catalog.json + CatalogLibrary.open/validate
 Historical ASTAP source   -> *.1476 or *.290 family files
 Historical Near index     -> manifest.json + legacy index validator
-External Blind 4D manifest -> strict JSON manifest loader
+External Blind 4D manifest -> strict JSON manifest loader, only in explicit external source mode
 ```
 
 Inactive legacy fields do not block a normal CatalogLibrary run.  They are
@@ -175,4 +184,3 @@ QLayout::addChildLayout: layout QFormLayout "" already has a parent
 The cause was duplicate insertion of form layouts during tab construction, not
 the CatalogLibrary selector itself.  The fix removes the duplicate additions
 instead of suppressing Qt warnings globally.
-

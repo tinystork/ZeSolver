@@ -1041,6 +1041,10 @@ _GUI_CATALOG_LIBRARY_I18N = {
         "settings_legacy_astap_tooltip": "Dossier contenant des fichiers *.1476 ou *.290.",
         "settings_legacy_index_label": "Index Near historique",
         "settings_legacy_index_tooltip": "Dossier contenant manifest.json et les artefacts Near historiques.",
+        "settings_blind4d_source_label": "Source des index Blind 4D",
+        "settings_blind4d_source_auto": "Auto — bibliothèque active",
+        "settings_blind4d_source_external": "Manifeste externe",
+        "settings_blind4d_source_help": "Le mode Auto utilise la bibliothèque ZeSolver active. Le manifeste externe est réservé au diagnostic et aux configurations avancées.",
         "settings_blind4d_external_label": "Manifeste Blind 4D externe",
         "settings_blind4d_external_tooltip": "Fichier JSON strict utilisé uniquement en rollback external-manifest.",
         "settings_near_mode_label": "Near",
@@ -1112,6 +1116,10 @@ _GUI_CATALOG_LIBRARY_I18N = {
         "settings_legacy_astap_tooltip": "Folder containing *.1476 or *.290 files.",
         "settings_legacy_index_label": "Historical Near index",
         "settings_legacy_index_tooltip": "Folder containing manifest.json and historical Near artifacts.",
+        "settings_blind4d_source_label": "Blind 4D index source",
+        "settings_blind4d_source_auto": "Auto — active library",
+        "settings_blind4d_source_external": "External manifest",
+        "settings_blind4d_source_help": "Auto uses the active ZeSolver library. External manifests are reserved for diagnostics and advanced configurations.",
         "settings_blind4d_external_label": "External Blind 4D manifest",
         "settings_blind4d_external_tooltip": "Strict JSON file used only for explicit external-manifest rollback.",
         "settings_near_mode_label": "Near",
@@ -6923,24 +6931,36 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _set_manifest_status(self, key: str, *, manifest: Loaded4DManifest | None = None, error: Exception | str | None = None) -> None:
             self._blind_4d_manifest_state = key
-            label = getattr(self, "blind_4d_manifest_status_label", None)
-            if label is None:
+            labels = tuple(
+                dict.fromkeys(
+                    label
+                    for label in (
+                        getattr(self, "blind_4d_manifest_status_label", None),
+                        getattr(self, "settings_blind_4d_manifest_status_label", None),
+                    )
+                    if label is not None
+                )
+            )
+            if not labels:
                 return
             if key == "valid" and manifest is not None:
                 tiles = ", ".join(manifest.tile_keys)
                 if len(tiles) > 80:
                     tiles = tiles[:77] + "..."
-                label.setText(self._text("blind_4d_indexes_verified", count=len(manifest.entries), tiles=tiles))
-                label.setStyleSheet("color: #2b8a3e;")
+                text = self._text("blind_4d_indexes_verified", count=len(manifest.entries), tiles=tiles)
+                style = "color: #2b8a3e;"
             elif key == "invalid":
-                label.setText(f"{self._text('blind_4d_manifest_invalid')}: {error}")
-                label.setStyleSheet("color: #c92a2a;")
+                text = f"{self._text('blind_4d_manifest_invalid')}: {error}"
+                style = "color: #c92a2a;"
             elif key == "verifying":
-                label.setText(self._text("blind_4d_verifying"))
-                label.setStyleSheet("color: #5c7cfa;")
+                text = self._text("blind_4d_verifying")
+                style = "color: #5c7cfa;"
             else:
-                label.setText(self._text("blind_4d_not_verified"))
-                label.setStyleSheet("color: #6c757d;")
+                text = self._text("blind_4d_not_verified")
+                style = "color: #6c757d;"
+            for label in labels:
+                label.setText(text)
+                label.setStyleSheet(style)
 
         def _sync_blind_profile_controls(self) -> None:
             if self._syncing_blind_profile_gui:
@@ -6971,11 +6991,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.blind_4d_profile_combo.setCurrentIndex(max(0, idx))
                     self.blind_4d_profile_combo.setEnabled(blind_enabled)
                     self.blind_4d_profile_combo.blockSignals(False)
-                manifest_enabled = blind_enabled and is_4d and expert
-                for name in ("blind_4d_manifest_label", "blind_4d_manifest_edit", "blind_4d_manifest_browse_btn", "blind_4d_manifest_verify_btn", "blind_4d_manifest_status_label"):
+                external_enabled = blind_enabled and is_4d and expert and self._current_blind4d_catalog_mode_from_ui() == "external-manifest"
+                for name in ("settings_blind_4d_manifest_edit", "settings_blind_4d_manifest_browse_btn", "settings_blind_4d_manifest_verify_btn"):
                     widget = getattr(self, name, None)
                     if widget is not None:
-                        widget.setEnabled(manifest_enabled)
+                        widget.setEnabled(external_enabled)
+                self._update_blind4d_source_visibility()
                 if hasattr(self, "effective_chain_label"):
                     chain_key = "solver.chain.4d" if is_4d else "solver.chain.historical"
                     self.effective_chain_label.setText(self._text(chain_key))
@@ -6987,11 +7008,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             if normalized not in {HISTORICAL_PROFILE, ZEBLIND_4D_EXPERIMENTAL_PROFILE}:
                 normalized = ZEBLIND_4D_EXPERIMENTAL_PROFILE
             if normalized == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
-                manifest_path = self._manifest_text_or_default()
-                if hasattr(self, "blind_4d_manifest_edit") and not self.blind_4d_manifest_edit.text().strip():
-                    self.blind_4d_manifest_edit.setText(manifest_path)
-                self._settings.blind_4d_manifest_path = manifest_path
-                if self.blind_check.isChecked():
+                if self._current_blind4d_catalog_mode_from_ui() == "external-manifest" and self.blind_check.isChecked():
+                    manifest_path = self._manifest_text_or_default()
+                    self._settings.blind_4d_manifest_path = manifest_path
                     loaded = self._verify_4d_manifest_from_gui(show_error=(source == "easy"), rollback_on_failure=(source == "easy"))
                     if loaded is None and source == "easy":
                         return
@@ -7023,7 +7042,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._set_blind_profile_from_gui(str(data or ZEBLIND_4D_EXPERIMENTAL_PROFILE), source="expert")
 
         def _pick_4d_manifest_file(self) -> None:
-            start = self.blind_4d_manifest_edit.text().strip() or str(resolve_default_4d_manifest_path())
+            start = self._manifest_text_or_default()
             path, _ = QtWidgets.QFileDialog.getOpenFileName(
                 self,
                 self._text("blind_4d_manifest_label"),
@@ -8070,27 +8089,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.blind_4d_profile_combo.addItem(self._text("blind_4d_profile_historical"), HISTORICAL_PROFILE)
             self.blind_4d_profile_combo.addItem(self._text("blind_4d_profile_experimental"), ZEBLIND_4D_EXPERIMENTAL_PROFILE)
             self.blind_4d_profile_combo.currentIndexChanged.connect(self._on_blind_profile_combo_changed)
-            self.blind_4d_manifest_label = QtWidgets.QLabel()
-            self.blind_4d_manifest_edit = QtWidgets.QLineEdit(str(resolve_default_4d_manifest_path(getattr(self._settings, "blind_4d_manifest_path", None))))
-            self.blind_4d_manifest_edit.textChanged.connect(lambda _text: self._set_manifest_status("not_verified"))
-            self.blind_4d_manifest_browse_btn = QtWidgets.QPushButton()
-            self.blind_4d_manifest_browse_btn.clicked.connect(self._pick_4d_manifest_file)
-            self.blind_4d_manifest_verify_btn = QtWidgets.QPushButton()
-            self.blind_4d_manifest_verify_btn.clicked.connect(lambda: self._verify_4d_manifest_from_gui(show_error=True, rollback_on_failure=False))
-            manifest_row = QtWidgets.QWidget()
-            manifest_layout = QtWidgets.QHBoxLayout(manifest_row)
-            manifest_layout.setContentsMargins(0, 0, 0, 0)
-            manifest_layout.addWidget(self.blind_4d_manifest_edit, 1)
-            manifest_layout.addWidget(self.blind_4d_manifest_browse_btn)
-            manifest_layout.addWidget(self.blind_4d_manifest_verify_btn)
-            self.blind_4d_manifest_status_label = QtWidgets.QLabel()
-            self.blind_4d_manifest_status_label.setWordWrap(True)
             self.blind_4d_expert_container = QtWidgets.QWidget()
             expert_layout = QtWidgets.QFormLayout(self.blind_4d_expert_container)
             expert_layout.setContentsMargins(0, 0, 0, 0)
             expert_layout.addRow(self.blind_4d_profile_label, self.blind_4d_profile_combo)
-            expert_layout.addRow(self.blind_4d_manifest_label, manifest_row)
-            expert_layout.addRow(self.blind_4d_manifest_status_label)
             self.simple_mode_check = QtWidgets.QCheckBox()
             self.simple_mode_check.setChecked(True)
             self.simple_mode_check.toggled.connect(lambda _checked: self._apply_simple_mode_visibility())
@@ -8271,11 +8273,14 @@ def launch_gui(args: argparse.Namespace) -> int:
 
             self.blind4d_catalog_mode_label = QtWidgets.QLabel()
             self.blind4d_catalog_mode_combo = QtWidgets.QComboBox()
-            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_auto"), "auto")
-            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_library_view"), "library-view")
-            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_external_manifest"), "external-manifest")
+            self.blind4d_catalog_mode_combo.addItem(self._text("settings_blind4d_source_auto"), "auto")
+            self.blind4d_catalog_mode_combo.addItem(self._text("settings_blind4d_source_external"), "external-manifest")
             self.blind4d_catalog_mode_combo.currentIndexChanged.connect(lambda _idx: self._on_catalog_mode_combo_changed())
             legacy_form.addRow(self.blind4d_catalog_mode_label, self.blind4d_catalog_mode_combo)
+            self.blind4d_source_help_label = QtWidgets.QLabel(self._text("settings_blind4d_source_help"))
+            self.blind4d_source_help_label.setWordWrap(True)
+            self.blind4d_source_help_label.setStyleSheet("color: #6c757d;")
+            legacy_form.addRow(self.blind4d_source_help_label)
 
             self.settings_blind_4d_manifest_label = QtWidgets.QLabel()
             self.settings_blind_4d_manifest_edit = QtWidgets.QLineEdit(str(resolve_default_4d_manifest_path(getattr(self._settings, "blind_4d_manifest_path", None))))
@@ -8291,7 +8296,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_edit, 1)
             compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_browse_btn)
             compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_verify_btn)
-            legacy_form.addRow(self.settings_blind_4d_manifest_label, compat_manifest_row)
+            self.settings_blind_4d_manifest_row = compat_manifest_row
+            legacy_form.addRow(self.settings_blind_4d_manifest_label, self.settings_blind_4d_manifest_row)
+            self.settings_blind_4d_manifest_status_label = QtWidgets.QLabel()
+            self.settings_blind_4d_manifest_status_label.setWordWrap(True)
+            legacy_form.addRow(self.settings_blind_4d_manifest_status_label)
+            self.blind_4d_manifest_status_label = self.settings_blind_4d_manifest_status_label
 
             self.settings_restore_auto_modes_btn = QtWidgets.QPushButton(self._text("settings_restore_auto_modes"))
             self.settings_restore_auto_modes_btn.clicked.connect(self._restore_catalog_auto_modes)
@@ -8765,12 +8775,16 @@ def launch_gui(args: argparse.Namespace) -> int:
             if combo is not None:
                 value = combo.currentData()
                 if isinstance(value, str) and value.strip():
-                    return value.strip().lower()
+                    normalized = value.strip().lower().replace("_", "-")
+                    return "external-manifest" if normalized == "external-manifest" else "auto"
             return str(getattr(self._settings, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-")
 
         def _on_catalog_mode_combo_changed(self) -> None:
             self._settings.near_catalog_mode = self._current_near_catalog_mode_from_ui()
             self._settings.blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
+            if self._settings.blind4d_catalog_mode == "external-manifest":
+                self._set_manifest_status("not_verified")
+            self._update_blind4d_source_visibility()
             self._update_catalog_rollback_status()
 
         def _restore_catalog_auto_modes(self) -> None:
@@ -8780,8 +8794,23 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._set_combo_current_data(self.blind4d_catalog_mode_combo, "auto", "auto")
             self._settings.near_catalog_mode = "auto"
             self._settings.blind4d_catalog_mode = "auto"
+            self._update_blind4d_source_visibility()
             self._update_catalog_rollback_status()
             self._log_settings(self._text("settings_restore_auto_modes"))
+
+        def _update_blind4d_source_visibility(self) -> None:
+            external = self._current_blind4d_catalog_mode_from_ui() == "external-manifest"
+            for name in (
+                "settings_blind_4d_manifest_label",
+                "settings_blind_4d_manifest_row",
+                "settings_blind_4d_manifest_edit",
+                "settings_blind_4d_manifest_browse_btn",
+                "settings_blind_4d_manifest_verify_btn",
+                "settings_blind_4d_manifest_status_label",
+            ):
+                widget = getattr(self, name, None)
+                if widget is not None:
+                    widget.setVisible(external)
 
         def _update_catalog_rollback_status(self) -> None:
             label = getattr(self, "catalog_rollback_status_label", None)
@@ -9107,13 +9136,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception:
                 pass
             try:
+                manifest_text = str(resolve_default_4d_manifest_path(getattr(settings, "blind_4d_manifest_path", None)))
                 if hasattr(self, "blind_4d_manifest_edit"):
-                    manifest_text = str(resolve_default_4d_manifest_path(getattr(settings, "blind_4d_manifest_path", None)))
                     self.blind_4d_manifest_edit.setText(manifest_text)
-                    if hasattr(self, "settings_blind_4d_manifest_edit"):
-                        self.settings_blind_4d_manifest_edit.setText(manifest_text)
+                if hasattr(self, "settings_blind_4d_manifest_edit"):
+                    self.settings_blind_4d_manifest_edit.setText(manifest_text)
                 self._set_manifest_status("not_verified")
                 self._sync_blind_profile_controls()
+                self._update_blind4d_source_visibility()
             except Exception:
                 pass
             # Astrometry tab fields
@@ -10126,7 +10156,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             if hasattr(self, "near_catalog_mode_label"):
                 self.near_catalog_mode_label.setText(self._text("settings_near_mode_label"))
             if hasattr(self, "blind4d_catalog_mode_label"):
-                self.blind4d_catalog_mode_label.setText(self._text("settings_blind4d_mode_label"))
+                self.blind4d_catalog_mode_label.setText(self._text("settings_blind4d_source_label"))
+            if hasattr(self, "blind4d_source_help_label"):
+                self.blind4d_source_help_label.setText(self._text("settings_blind4d_source_help"))
             if hasattr(self, "settings_blind_4d_manifest_label"):
                 self.settings_blind_4d_manifest_label.setText(self._text("settings_blind4d_external_label"))
             if hasattr(self, "settings_blind_4d_manifest_edit"):
@@ -10146,13 +10178,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self.near_catalog_mode_combo.setItemText(idx, self._text(key))
             if hasattr(self, "blind4d_catalog_mode_combo"):
                 for value, key in (
-                    ("auto", "settings_mode_auto"),
-                    ("library-view", "settings_mode_library_view"),
-                    ("external-manifest", "settings_mode_external_manifest"),
+                    ("auto", "settings_blind4d_source_auto"),
+                    ("external-manifest", "settings_blind4d_source_external"),
                 ):
                     idx = self.blind4d_catalog_mode_combo.findData(value)
                     if idx >= 0:
                         self.blind4d_catalog_mode_combo.setItemText(idx, self._text(key))
+                self._update_blind4d_source_visibility()
             if hasattr(self, "settings_restore_auto_modes_btn"):
                 self.settings_restore_auto_modes_btn.setText(self._text("settings_restore_auto_modes"))
             self._update_catalog_rollback_status()
