@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import logging
 import math
 import threading
 import time
@@ -46,6 +47,9 @@ class BatchSolverPipeline:
 
     def solve(self, batch_request: BatchSolveRequest) -> BatchSolveResult:
         started = time.perf_counter()
+        from zeblindsolver.metadata_solver import reset_zenear_gpu_runtime_state
+
+        reset_zenear_gpu_runtime_state()
         telemetry = active_batch_telemetry() or BatchResourceTelemetry()
         telemetry_token = set_active_batch_telemetry(telemetry)
         telemetry.mark_rss("batch_start")
@@ -382,8 +386,14 @@ class BatchSolverPipeline:
             return bool(token())
         is_set = getattr(token, "is_set", None)
         if callable(is_set):
-            return bool(is_set())
-        return bool(token)
+            cancelled = bool(is_set())
+        else:
+            cancelled = bool(token)
+        if cancelled:
+            telemetry = active_batch_telemetry()
+            if telemetry is not None:
+                telemetry.mark_cancel_requested(source="batch_cancel_token")
+        return cancelled
 
     def _emit(self, result: SolveResult, *, total: int, final: tuple[SolveResult, ...]) -> None:
         if self.progress_sink is None:
@@ -408,6 +418,8 @@ class BatchSolverPipeline:
         if telemetry is not None:
             telemetry.mark_rss("batch_end")
             telemetry.diagnostic_gc()
+            terminal = "cancelled" if cancelled else ("failed" if _progress(total=total, final=tuple(final.values())).failed else "completed")
+            _log_near_detection_summary(telemetry, terminal_status=terminal)
         return BatchSolveResult(
             results=ordered,
             progress=_progress(total=total, final=tuple(final.values())),
@@ -441,6 +453,30 @@ def _synthetic_failure(request: SolveRequest, status: SolveStatus, error: str) -
         catalog_status=None,
         error=error,
     )
+
+
+def _log_near_detection_summary(telemetry: BatchResourceTelemetry, *, terminal_status: str) -> None:
+    try:
+        summary = telemetry.near_detection_summary(terminal_status=terminal_status)
+        detect = summary.get("detect_duration_ms") if isinstance(summary.get("detect_duration_ms"), dict) else {}
+        slot = summary.get("gpu_slot_wait_ms") if isinstance(summary.get("gpu_slot_wait_ms"), dict) else {}
+        logging.info(
+            "ZeNear detection summary: requested=%s cuda_images=%d cpu_images=%d fallbacks=%d gpu_errors=%d gpu_oom=%d device=%s detect_median_ms=%s detect_p95_ms=%s gpu_slot_wait_p95_ms=%s vram_peak=%s terminal=%s",
+            summary.get("requested"),
+            int(summary.get("images_cuda", 0) or 0),
+            int(summary.get("images_cpu", 0) or 0),
+            int(summary.get("fallbacks", 0) or 0),
+            int(summary.get("gpu_errors", 0) or 0),
+            int(summary.get("gpu_oom", 0) or 0),
+            ",".join(str(item) for item in summary.get("devices_used", []) or []) or "-",
+            detect.get("median"),
+            detect.get("p95"),
+            slot.get("p95"),
+            summary.get("vram_peak_bytes"),
+            terminal_status,
+        )
+    except Exception:
+        pass
 
 
 def _pipeline_identity(pipeline: object) -> dict[str, object]:

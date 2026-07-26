@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from pathlib import Path
 from typing import Callable
@@ -66,6 +67,11 @@ class PipelineGuiRunner:
                         current_phase="Préparation de la bibliothèque",
                     )
                 )
+            logging.info(
+                "ZeNear detection requested: backend=%s gpu_slots=%s",
+                getattr(request.product_settings, "near_detect_backend", "auto"),
+                getattr(request.product_settings, "near_detect_gpu_slots", 1),
+            )
 
             shared_catalog_resources = request.catalog_resources
             shared_blind_solver = None
@@ -100,6 +106,7 @@ class PipelineGuiRunner:
             telemetry.mark_rss("after_preflight")
             near_preparation_announced = False
             phase_progress_lock = threading.Lock()
+            near_backend_indicator: str | None = None
 
             def make_pipeline(phase: str) -> SolverPipeline:
                 nonlocal near_preparation_announced
@@ -145,6 +152,7 @@ class PipelineGuiRunner:
                 )
 
             def on_progress(result: SolveResult, progress) -> None:
+                nonlocal near_backend_indicator
                 gui_result = gui_result_from_solve_result(result, selected_engine=request.engine_mode)
                 emitted.append(gui_result)
                 try:
@@ -155,6 +163,20 @@ class PipelineGuiRunner:
                     emitted_paths.add(key)
                     self._result_callback(gui_result)
                 if self._progress_callback is not None:
+                    indicator = _near_backend_indicator_from_telemetry(telemetry.snapshot())
+                    if indicator and indicator != near_backend_indicator:
+                        near_backend_indicator = indicator
+                        self._progress_callback(
+                            GuiProgress(
+                                total=len(solve_requests),
+                                completed=len(emitted_paths),
+                                solved=progress.solved,
+                                failed=progress.failed,
+                                skipped=progress.skipped,
+                                cancelled=progress.cancelled,
+                                current_phase=indicator,
+                            )
+                        )
                     self._progress_callback(gui_progress_from_batch(result, progress))
 
             batch = BatchSolverPipeline(solver_pipeline_factory=make_pipeline, progress_sink=on_progress)
@@ -195,3 +217,42 @@ class PipelineGuiRunner:
                 shared_near_runtime.close()
             reset_active_batch_telemetry(telemetry_token)
             self._running = False
+
+
+def _near_backend_indicator_from_telemetry(snapshot: object) -> str | None:
+    if not isinstance(snapshot, dict):
+        return None
+    near = snapshot.get("near_detection")
+    if not isinstance(near, dict):
+        return None
+    requested = str(near.get("requested") or "").strip().lower()
+    used = str(near.get("used_last") or "").strip().lower()
+    backends = near.get("backends_used")
+    if not used and isinstance(backends, (list, tuple)) and backends:
+        used = str(backends[-1]).strip().lower()
+    selected = str(near.get("selected_last") or near.get("selected_initial") or "").strip().lower()
+    if not used:
+        return None
+    devices = near.get("devices_used")
+    device = None
+    device_last = near.get("device_last")
+    if device_last is not None:
+        device = device_last
+    elif isinstance(devices, (list, tuple)) and devices:
+        device = devices[0]
+    fallback = int(near.get("fallbacks", 0) or 0) > 0
+    left = requested.upper() if requested else "AUTO"
+    right = used.upper()
+    if requested == "auto" and used:
+        text = f"ZeNear : Auto -> {right}"
+    elif requested:
+        text = f"ZeNear : {left}"
+        if selected and selected != requested:
+            text = f"{text} -> {right}"
+    else:
+        text = f"ZeNear : {right}"
+    if used == "cuda" and device is not None:
+        text += f" - GPU {device}"
+    if fallback:
+        text += " - fallback CUDA"
+    return text

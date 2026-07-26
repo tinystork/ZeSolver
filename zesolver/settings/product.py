@@ -22,6 +22,8 @@ class ProductSettings:
     overwrite_wcs: bool = True
     workers: int | str = "auto"
     gpu_mode: str = "auto"
+    near_detect_device: int | None = None
+    near_detect_gpu_slots: int = 1
     web_fallback: bool = True
     language: str = "auto"
     log_level: str = "INFO"
@@ -56,6 +58,8 @@ class ProductSettings:
                 "overwrite_wcs": self.overwrite_wcs,
                 "workers": self.workers,
                 "gpu_mode": self.gpu_mode,
+                "near_detect_device": self.near_detect_device,
+                "near_detect_gpu_slots": self.near_detect_gpu_slots,
                 "web_fallback": self.web_fallback,
                 "language": self.language,
                 "log_level": self.log_level,

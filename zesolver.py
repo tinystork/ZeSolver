@@ -1527,9 +1527,12 @@ def _near_worker_init(config: SolveConfig, cancel_token: Optional[ProcessCancell
         if backend in {"auto", "cuda"}:
             ndev, _names, _err = _cuda_runtime_summary()
             if ndev <= 0:
-                # GPU is optional: enforce CPU fallback at worker level when CUDA is unavailable.
-                cfg = replace(config, near_detect_backend="cpu")
-                _PROC_NEAR_WORKER_BACKEND = "cpu"
+                # GPU is optional. Auto may be resolved to CPU here, but an
+                # explicit CUDA request must reach the detector so telemetry can
+                # report requested=cuda, selected=cuda, used=cpu fallback.
+                if backend == "auto":
+                    cfg = replace(config, near_detect_backend="cpu")
+                    _PROC_NEAR_WORKER_BACKEND = "cpu"
             elif backend == "auto":
                 # In hybrid mode, prefer explicit CUDA when available.
                 cfg = replace(config, near_detect_backend="cuda")
@@ -4763,6 +4766,14 @@ class BatchSolver:
                 mode = "process" if fits_only and workers_base > 1 else "thread"
             if env_mode == "auto" and fits_only and workers_base > 2 and cuda_devices > 0:
                 mode = "hybrid"
+            if env_mode == "auto" and fits_only and cuda_devices > 0 and requested_detect_backend in {"cuda", "auto"}:
+                # CUDA contexts and forked process pools are a bad mix on the
+                # Linux qualification host: workers can hit
+                # cudaErrorInitializationError and silently fall back.  Keep
+                # GPU detection in the thread scheduler so the announced backend
+                # can be the backend actually used.
+                mode = "thread"
+                source = "gpu-detect-thread"
 
             eff = workers_base
             cur_cpu = int(os.cpu_count() or 1)
@@ -4843,6 +4854,9 @@ class BatchSolver:
             if mode == "process" and sys.platform == "darwin":
                 # Keep macOS spawn overhead reasonable in default auto mode.
                 eff = min(eff, 6)
+            if env_mode == "auto" and fits_only and cuda_devices > 0 and requested_detect_backend in {"cuda", "auto"}:
+                mode = "thread"
+                source = "gpu-detect-thread"
             eff = min(int(eff), int(max_workers_cap))
             eff = max(1, int(eff))
             if eff <= 1:
@@ -5541,6 +5555,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._cancel_event = threading.Event()
             self._translate = translator
             self._controller: Optional[GuiSolveController] = None
+            self._last_summary = None
 
         def request_cancel(self) -> None:
             self.info.emit("STOP_RUNNER_RECEIVED")
@@ -5624,7 +5639,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     selection_logger=_selection_log,
                 )
                 self._controller = controller
-                controller.run(gui_request)
+                self._last_summary = controller.run(gui_request)
                 if self._cancel_event.is_set():
                     self.info.emit(self._translate("runner_stop_wait"))
             except GuiEngineSelectionError as exc:
@@ -9860,10 +9875,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.progress_bar.setMinimum(0)
             self.progress_bar.setValue(0)
             self.status_label = QtWidgets.QLabel("")
+            self.near_backend_label = QtWidgets.QLabel("")
             row.addWidget(self.start_btn)
             row.addWidget(self.stop_btn)
             row.addWidget(self.progress_bar, 1)
             row.addWidget(self.status_label)
+            row.addWidget(self.near_backend_label)
             return row
 
         def _switch_language(self, code: str) -> None:
@@ -11060,6 +11077,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._progress_completed = 0
             self._progress_seen_paths = set()
             self._progress_run_id = None
+            if hasattr(self, "near_backend_label"):
+                self.near_backend_label.setText("ZeNear : préparation…")
             self.status_label.setText(
                 self._text(
                     "progress_status",
@@ -11073,6 +11092,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._active_run_failed = False
             self._active_run_error_message = None
             logging.info("GUI_RUN_BEGIN run_id=%s", run_id)
+            self._active_run_started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
             self._run_started_ts = time.perf_counter()
             self._last_result_ts = self._run_started_ts
             self._progress_timer.start()
@@ -11385,7 +11405,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
             self._run_started_ts = None
             self._last_result_ts = None
-            self._copy_runtime_log_to_output(run_id=run_id)
+            self._copy_runtime_log_to_output(run_id=run_id, worker=worker, terminal_cancelled=terminal_cancelled)
             try:
                 if worker is not None:
                     worker.finished.disconnect(self._on_worker_finished)
@@ -11431,7 +11451,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             if target > int(self.progress_bar.value()):
                 self.progress_bar.setValue(target)
 
-        def _copy_runtime_log_to_output(self, *, run_id: int | None = None) -> None:
+        def _copy_runtime_log_to_output(self, *, run_id: int | None = None, worker: object | None = None, terminal_cancelled: bool = False) -> None:
             if not self._run_lifecycle.mark_log_copy_once(run_id):
                 logging.warning("Duplicate runtime log copy ignored run_id=%s", run_id)
                 return
@@ -11457,6 +11477,35 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._log(f"Log copied to output folder: {dst}")
             except Exception as exc:
                 self._log(f"Log copy skipped: {exc}")
+                return
+            try:
+                from zesolver.resource_telemetry import build_run_telemetry_payload, write_run_telemetry_sidecar
+
+                summary = getattr(worker, "_last_summary", None)
+                results = tuple(getattr(summary, "results", ()) or ())
+                solved = sum(1 for item in results if str(getattr(item, "status", "")).upper() == "SOLVED")
+                cancelled = sum(1 for item in results if str(getattr(item, "status", "")).upper() == "CANCELLED")
+                skipped = sum(1 for item in results if str(getattr(item, "status", "")).upper() == "SKIPPED")
+                failed = max(0, len(results) - solved - cancelled - skipped)
+                terminal = "cancelled" if terminal_cancelled else ("failed" if self._active_run_failed else "completed")
+                payload = build_run_telemetry_payload(
+                    run_id=run_id,
+                    started_at=getattr(self, "_active_run_started_at", None),
+                    finished_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    duration_s=(float(getattr(summary, "duration_s", 0.0)) if summary is not None else None),
+                    terminal_status=terminal,
+                    planned=int(self._progress_total or len(self._pending_files) or len(results)),
+                    solved=solved,
+                    failed=failed,
+                    cancelled=cancelled,
+                    skipped=skipped,
+                    telemetry=(getattr(summary, "telemetry", None) if summary is not None else None),
+                )
+                sidecar = write_run_telemetry_sidecar(dst, payload)
+                self._log(f"Telemetry copied to output folder: {sidecar}")
+            except Exception as exc:
+                logging.warning("Run telemetry sidecar skipped: %s", exc)
+                self._log(f"Telemetry copy skipped: {exc}")
 
         def _on_worker_stage(self, index: int, message: str) -> None:
             try:
@@ -11484,6 +11533,11 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _log(self, message: str) -> None:
             logging.info(message)
+            if str(message).startswith("ZeNear :") and hasattr(self, "near_backend_label"):
+                try:
+                    self.near_backend_label.setText(str(message))
+                except Exception:
+                    pass
             timestamp = time.strftime("%H:%M:%S")
             self.log_view.appendPlainText(f"[{timestamp}] {message}")
             self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())

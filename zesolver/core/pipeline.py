@@ -82,9 +82,15 @@ class ExistingNearSolverPort:
             max_tile_candidates=int(values.get("near_max_tile_candidates", 48) or 48),
             tile_cache_size=int(values.get("near_tile_cache_size", 128) or 128),
             detect_backend=str(values.get("near_detect_backend") or "auto"),
+            detect_device=(
+                int(values["near_detect_device"])
+                if values.get("near_detect_device") is not None
+                else None
+            ),
             detect_k_sigma=float(values.get("near_detect_k_sigma", 4.5) or 4.5),
             detect_min_area=int(values.get("near_detect_min_area", 8) or 8),
             detect_max_labels=int(values.get("near_detect_max_labels", 1200) or 1200),
+            detect_gpu_slots=int(values.get("near_detect_gpu_slots", 1) or 1),
             ransac_trials=int(values.get("near_ransac_trials", 1200) or 1200),
             search_margin=float(values.get("near_search_margin", 1.2) or 1.2),
             pixel_tolerance=float(values.get("near_pixel_tolerance", 3.0) or 3.0),
@@ -95,14 +101,22 @@ class ExistingNearSolverPort:
             try_parity_flip=bool(values.get("near_try_parity_flip", True)),
             astap_iso_strict=bool(values.get("near_astap_iso_strict", True)),
         )
-        result = near_solve(
-            str(target),
-            str(index_root) if index_root is not None else None,
-            catalog_provider=runtime.provider,
-            config=near_cfg,
-            skip_if_valid=False,
-            fallback_to_blind=False,
-        )
+        try:
+            result = near_solve(
+                str(target),
+                str(index_root) if index_root is not None else None,
+                catalog_provider=runtime.provider,
+                config=near_cfg,
+                skip_if_valid=False,
+                fallback_to_blind=False,
+                cancel_check=_cancel_check(configuration),
+            )
+        except Exception as exc:
+            if "cancelled" in str(exc).lower():
+                return EngineSolveResult(status=SolveStatus.CANCELLED, backend="NEAR", error="cancelled")
+            raise
+        if str(result.get("message") or "").strip().lower() == "cancelled":
+            return EngineSolveResult(status=SolveStatus.CANCELLED, backend="NEAR", error="cancelled")
         stats = result.get("stats") if isinstance(result, dict) else {}
         stats = stats if isinstance(stats, dict) else {}
         stats.update(runtime.telemetry(include_paths=False))
@@ -214,7 +228,8 @@ class SolverPipeline:
             try:
                 near_result = self.near_solver.solve(request, resources=resources, configuration=self.configuration)
             except Exception as exc:
-                near_result = EngineSolveResult(status=SolveStatus.FAILED, backend="NEAR", error=str(exc))
+                status = SolveStatus.CANCELLED if "cancelled" in str(exc).lower() else SolveStatus.FAILED
+                near_result = EngineSolveResult(status=status, backend="NEAR", error=str(exc))
             telemetry.near_result = near_result.status.value
             if near_result.solved:
                 final = self._finalize_success(request, near_result, resources, telemetry)
@@ -399,3 +414,19 @@ def _header_updates_from_engine(engine_result: EngineSolveResult) -> dict[str, o
     if isinstance(value, dict):
         return dict(value)
     return None
+
+
+def _cancel_check(configuration):
+    token = configuration.runtime_options.cancel_token
+    if token is None:
+        return None
+
+    def _check() -> bool:
+        if callable(token):
+            return bool(token())
+        is_set = getattr(token, "is_set", None)
+        if callable(is_set):
+            return bool(is_set())
+        return bool(token)
+
+    return _check
