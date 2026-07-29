@@ -227,7 +227,6 @@ class CatalogLibraryManagementService:
         destination = Path(options.destination).expanduser().resolve()
         if not package_path.exists():
             raise CatalogLibraryManagementError(f"PACKAGE_MISSING: {package_path}")
-        self._ensure_destination_available(destination)
         staging = self._staging_path(destination)
         if staging.exists():
             shutil.rmtree(staging)
@@ -235,30 +234,8 @@ class CatalogLibraryManagementService:
         try:
             self._emit("read_package", "Reading package metadata", overall_current=1, overall_total=6)
             extracted = staging / "package"
-            metadata, library_root = self._materialize_package(package_path, extracted)
-            self._check_package_metadata(metadata)
-            self._check_free_space(destination, int(metadata.get("installed_size_bytes") or _directory_size(library_root)))
-            self._emit("verify_hashes", "Verifying package hashes", overall_current=3, overall_total=6)
-            self._verify_package_hashes(library_root, metadata)
-            self._emit("validate_library", "Validating package library", overall_current=4, overall_total=6)
-            library = CatalogLibrary.open(library_root)
-            report = library.validate()
-            if report.status in {CatalogStatus.CORRUPT, CatalogStatus.INCOMPATIBLE, CatalogStatus.MISSING}:
-                raise CatalogLibraryManagementError(f"PACKAGE_LIBRARY_INVALID: {report.status.value}")
-            try:
-                if report.capabilities.blind4d:
-                    view = build_blind4d_manifest_view(library)
-                    if not view.valid:
-                        raise CatalogLibraryManagementError(
-                            "PACKAGE_BLIND4D_VIEW_INVALID: "
-                            + ", ".join(issue.code for issue in view.errors)
-                        )
-            except Exception as exc:
-                raise CatalogLibraryManagementError(f"PACKAGE_BLIND4D_VIEW_INVALID: {exc}") from exc
-            self._emit("publish", "Installing library", overall_current=5, overall_total=6)
-            self._publish_staging(library_root, destination)
-            result = self._validate_result(destination, None, metadata=metadata)
-            self._emit("complete", "Library installed", overall_current=6, overall_total=6)
+            package_root = self._materialize_package(package_path, extracted)
+            result = self.install_materialized_package(package_root, destination)
             return result
         except Exception as exc:
             if staging.exists():
@@ -269,6 +246,46 @@ class CatalogLibraryManagementService:
         finally:
             if staging.exists():
                 shutil.rmtree(staging, ignore_errors=True)
+
+    def install_materialized_package(self, package_root: str | Path, destination: str | Path) -> LibraryOperationResult:
+        """Install an already materialized package root through the common path.
+
+        The package root must contain package metadata plus a `library/` directory
+        or directly contain `catalog.json`.  This is shared by local ZIP/folder
+        installation and by the official multi-asset distribution assembler.
+        """
+
+        root = Path(package_root).expanduser().resolve()
+        destination = Path(destination).expanduser().resolve()
+        if not root.exists() or not root.is_dir():
+            raise CatalogLibraryManagementError(f"PACKAGE_MISSING: {root}")
+        self._ensure_destination_available(destination)
+        metadata = self._read_package_metadata(root)
+        library_root = self._package_library_root(root)
+        self._check_package_metadata(metadata)
+        self._check_free_space(destination, int(metadata.get("installed_size_bytes") or _directory_size(library_root)))
+        self._emit("verify_hashes", "Verifying package hashes", overall_current=3, overall_total=6)
+        self._verify_package_hashes(library_root, metadata)
+        self._emit("validate_library", "Validating package library", overall_current=4, overall_total=6)
+        library = CatalogLibrary.open(library_root)
+        report = library.validate()
+        if report.status in {CatalogStatus.CORRUPT, CatalogStatus.INCOMPATIBLE, CatalogStatus.MISSING}:
+            raise CatalogLibraryManagementError(f"PACKAGE_LIBRARY_INVALID: {report.status.value}")
+        try:
+            if report.capabilities.blind4d:
+                view = build_blind4d_manifest_view(library)
+                if not view.valid:
+                    raise CatalogLibraryManagementError(
+                        "PACKAGE_BLIND4D_VIEW_INVALID: "
+                        + ", ".join(issue.code for issue in view.errors)
+                    )
+        except Exception as exc:
+            raise CatalogLibraryManagementError(f"PACKAGE_BLIND4D_VIEW_INVALID: {exc}") from exc
+        self._emit("publish", "Installing library", overall_current=5, overall_total=6)
+        self._publish_staging(library_root, destination)
+        result = self._validate_result(destination, None, metadata=metadata)
+        self._emit("complete", "Library installed", overall_current=6, overall_total=6)
+        return result
 
     def analyze_library(self, library_root: str | Path) -> LibraryAnalysisResult:
         root = Path(library_root).expanduser().resolve()
@@ -535,13 +552,27 @@ class CatalogLibraryManagementService:
             metadata=dict(metadata or {}),
         )
 
-    def _materialize_package(self, package_path: Path, target: Path) -> tuple[dict[str, Any], Path]:
+    def _materialize_package(self, package_path: Path, target: Path) -> Path:
         if package_path.is_dir():
             metadata = self._read_package_metadata(package_path)
             library_root = self._package_library_root(package_path)
+            self._check_package_metadata(metadata)
+            target.mkdir(parents=True, exist_ok=True)
+            for name in PACKAGE_METADATA_NAMES:
+                source = package_path / name
+                if source.is_file():
+                    shutil.copy2(source, target / name)
+                    break
+            for extra_name in ("NOTICE.md", "legal"):
+                source = package_path / extra_name
+                dest = target / extra_name
+                if source.is_file():
+                    shutil.copy2(source, dest)
+                elif source.is_dir():
+                    shutil.copytree(source, dest, symlinks=False, dirs_exist_ok=True)
             copied = target / "library"
             shutil.copytree(library_root, copied, symlinks=False)
-            return metadata, copied
+            return target
         target.mkdir(parents=True, exist_ok=True)
         if zipfile.is_zipfile(package_path):
             self._extract_zip(package_path, target)
@@ -549,8 +580,9 @@ class CatalogLibraryManagementService:
             self._extract_tar(package_path, target)
         else:
             raise CatalogLibraryManagementError("PACKAGE_ARCHIVE_UNSUPPORTED")
-        metadata = self._read_package_metadata(target)
-        return metadata, self._package_library_root(target)
+        self._read_package_metadata(target)
+        self._package_library_root(target)
+        return target
 
     def _read_package_metadata(self, root: Path) -> dict[str, Any]:
         for name in PACKAGE_METADATA_NAMES:

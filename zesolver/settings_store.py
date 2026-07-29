@@ -47,7 +47,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 12
+SETTINGS_SCHEMA_VERSION = 13
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -67,6 +67,7 @@ class PersistentSettings:
     log_level: str = "INFO"
     sample_fits: Optional[str] = None
     # Preset/FOV persistence
+    instrument_mode: str = "auto"  # auto|preset|custom
     last_preset_id: Optional[str] = None
     last_fov_focal_mm: float = 0.0
     last_fov_pixel_um: float = 0.0
@@ -138,6 +139,7 @@ class PersistentSettings:
     solver_family: Optional[str] = None  # lower-case key, None = Auto
     solver_blind_enabled: bool = True
     solver_overwrite: bool = True
+    move_unresolved_files: bool = False
     interface_mode: str = "easy"
     blind_backend_profile: str = "zeblind_4d_experimental"
     blind_4d_manifest_path: Optional[str] = None
@@ -273,6 +275,17 @@ def load_persistent_settings() -> PersistentSettings:
         bench_sip = 2
     bench_limit = int(payload.get("benchmark_limit", 0) or 0)
     bench_tile_cache = int(payload.get("benchmark_tile_cache_size", 128) or 128)
+    if "instrument_mode" in payload:
+        instrument_mode = str(payload.get("instrument_mode", "auto") or "auto").strip().lower()
+        if instrument_mode not in {"auto", "preset", "custom"}:
+            instrument_mode = "auto"
+    elif payload.get("last_preset_id"):
+        instrument_mode = "preset"
+    elif payload.get("last_fov_focal_mm") or payload.get("last_fov_pixel_um"):
+        instrument_mode = "custom"
+    else:
+        instrument_mode = "auto"
+
     settings = PersistentSettings(
         schema_version=_int_value(payload.get("schema_version", 1), 1, minimum=1, field="schema_version"),
         catalog_library_path=(payload.get("catalog_library_path") or None),
@@ -285,6 +298,7 @@ def load_persistent_settings() -> PersistentSettings:
         tile_compression=_normalize_choice(payload.get("tile_compression"), TILE_COMPRESSION_CHOICES, TILE_COMPRESSION_CHOICES[0]),
         log_level=str(payload.get("log_level", "INFO") or "INFO").upper(),
         sample_fits=payload.get("sample_fits"),
+        instrument_mode=instrument_mode,
         last_preset_id=(payload.get("last_preset_id") or None),
         last_fov_focal_mm=_float_value(payload.get("last_fov_focal_mm", 0.0), 0.0, minimum=0.0, maximum=10000.0, field="last_fov_focal_mm"),
         last_fov_pixel_um=_float_value(payload.get("last_fov_pixel_um", 0.0), 0.0, minimum=0.0, maximum=100.0, field="last_fov_pixel_um"),
@@ -352,6 +366,7 @@ def load_persistent_settings() -> PersistentSettings:
         solver_family=(payload.get("solver_family") or None),
         solver_blind_enabled=bool(payload.get("solver_blind_enabled", True)),
         solver_overwrite=bool(payload.get("solver_overwrite", True)),
+        move_unresolved_files=bool(payload.get("move_unresolved_files", False)),
         interface_mode=str(payload.get("interface_mode", "easy") or "easy"),
         blind_backend_profile=str(payload.get("blind_backend_profile", "zeblind_4d_experimental") or "zeblind_4d_experimental"),
         blind_4d_manifest_path=(payload.get("blind_4d_manifest_path") or None),
@@ -445,6 +460,14 @@ def _migrate_settings_if_needed(settings: PersistentSettings) -> tuple[Persisten
         changed = True
     if getattr(settings, "near_catalog_mode", "auto") != near_catalog_mode:
         settings.near_catalog_mode = near_catalog_mode
+        changed = True
+
+    instrument_mode = str(getattr(settings, "instrument_mode", "auto") or "auto").strip().lower()
+    if instrument_mode not in {"auto", "preset", "custom"}:
+        instrument_mode = "auto"
+        changed = True
+    if getattr(settings, "instrument_mode", "auto") != instrument_mode:
+        settings.instrument_mode = instrument_mode
         changed = True
 
     blind4d_catalog_mode = str(getattr(settings, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-")

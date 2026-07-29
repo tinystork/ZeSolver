@@ -30,11 +30,14 @@ def build_product_settings(state: GuiSettingsState) -> ProductSettings:
         input_formats=tuple(state.formats),
         blind_enabled=state.use_blind,
         blind_only=False,
+        interface_mode=str(getattr(state, "interface_mode", "expert") or "expert"),
+        move_unresolved_files=bool(getattr(state, "move_unresolved_files", False)),
         gpu_mode=str(getattr(state.legacy_config, "near_detect_backend", "auto") or "auto"),
         near_detect_device=getattr(state.legacy_config, "near_detect_device", None),
         near_detect_gpu_slots=max(1, int(getattr(state.legacy_config, "near_detect_gpu_slots", 1) or 1)),
         near_catalog_mode=str(getattr(state.legacy_config, "near_catalog_mode", "auto") or "auto"),
         blind4d_catalog_mode=str(getattr(state.legacy_config, "blind4d_catalog_mode", "auto") or "auto"),
+        instrument_mode=str(getattr(state, "instrument_mode", getattr(state.legacy_config, "instrument_mode", "auto")) or "auto"),
         downsample=state.downsample,
         fov_deg=state.fov_deg,
         hint_ra_deg=state.hint_ra_deg,
@@ -89,6 +92,7 @@ def build_gui_solve_request(
         blind4d_all_sky=state.blind4d_all_sky,
         legacy_config=state.legacy_config,
         catalog_resources=state.catalog_resources,
+        move_unresolved_files=bool(getattr(state, "move_unresolved_files", False)),
     )
 
 
@@ -121,6 +125,8 @@ def build_gui_solve_request_from_legacy_config(
         requires_adaptive_hints=False,
         blind4d_all_sky=bool(getattr(catalog_resources, "all_sky_blind4d", False)),
         log_level=str(getattr(config, "log_level", "INFO") or "INFO"),
+        interface_mode=str(getattr(config, "interface_mode", "expert") or "expert"),
+        instrument_mode=str(getattr(config, "instrument_mode", "auto") or "auto"),
         fov_deg=float(getattr(config, "fov_deg", 1.5) or 1.5),
         downsample=int(getattr(config, "downsample", 1) or 1),
         hint_ra_deg=getattr(config, "hint_ra_deg", None),
@@ -138,6 +144,7 @@ def build_gui_solve_request_from_legacy_config(
         astrometry_use_hints=bool(getattr(config, "astrometry_use_hints", True)),
         legacy_config=config,
         catalog_resources=catalog_resources,
+        move_unresolved_files=bool(getattr(config, "move_unresolved_files", False)),
     )
     request = build_gui_solve_request(paths, state, cancel_token=cancel_token)
     product = replace(

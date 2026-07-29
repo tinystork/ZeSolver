@@ -203,16 +203,9 @@ def wire_settings_tab_callbacks(owner: Any, preset_utils: Any) -> None:
         lambda: owner._pick_settings_directory(owner.settings_db_edit)
     )
 
-    def _sync_db_tab_text(text: str) -> None:
-        try:
-            if hasattr(owner, "db_tab_edit"):
-                if owner.db_tab_edit.text().strip() != text.strip():
-                    owner.db_tab_edit.setText(text)
-        except Exception:
-            pass
-
-    owner.settings_db_edit.textChanged.connect(_sync_db_tab_text)
-    owner.settings_db_edit.textChanged.connect(owner._on_db_root_text_changed)
+    owner.settings_db_edit.textChanged.connect(
+        lambda text: owner._set_astap_root(text, source="settings", validate=False)
+    )
     owner.settings_index_browse.clicked.connect(
         lambda: owner._pick_settings_directory(owner.settings_index_edit)
     )
@@ -221,15 +214,18 @@ def wire_settings_tab_callbacks(owner: Any, preset_utils: Any) -> None:
     owner._instrument_initializing = True
     owner._instrument_applying_snapshot = False
     owner._instrument_preset_id = None
+    owner._instrument_mode = str(getattr(owner._settings, "instrument_mode", "auto") or "auto").strip().lower()
+    if owner._instrument_mode not in {"auto", "preset", "custom"}:
+        owner._instrument_mode = "auto"
     saved_preset = getattr(owner._settings, "last_preset_id", None)
-    if saved_preset:
+    if owner._instrument_mode == "preset" and saved_preset:
         idx = owner.presets_combo.findData(saved_preset)
         if idx >= 0:
             previous = owner.presets_combo.blockSignals(True)
             owner.presets_combo.setCurrentIndex(idx)
             owner.presets_combo.blockSignals(previous)
             apply_settings_preset(owner, preset_utils, saved_preset)
-    elif getattr(owner._settings, "last_fov_focal_mm", 0.0) and getattr(owner._settings, "last_fov_pixel_um", 0.0):
+    elif owner._instrument_mode == "custom" and getattr(owner._settings, "last_fov_focal_mm", 0.0) and getattr(owner._settings, "last_fov_pixel_um", 0.0):
         blockers = []
         for widget_name in (
             "fov_focal_spin",
@@ -252,15 +248,20 @@ def wire_settings_tab_callbacks(owner: Any, preset_utils: Any) -> None:
             widget.blockSignals(previous)
         owner._instrument_preset_id = None
         owner._on_compute_fov_clicked()
-    else:
+    elif owner._instrument_mode != "auto":
         apply_settings_preset(owner, preset_utils, owner.presets_combo.currentData())
     owner._instrument_initializing = False
+    if hasattr(owner, "_populate_instrument_combo"):
+        owner._populate_instrument_combo()
 
     def _preset_changed(idx: int) -> None:
         if getattr(owner, "_instrument_initializing", False):
             return
         preset_id = owner.presets_combo.itemData(idx)
+        owner._instrument_mode = "preset"
         apply_settings_preset(owner, preset_utils, preset_id)
+        if hasattr(owner, "instrument_combo"):
+            owner._set_combo_current_data(owner.instrument_combo, str(preset_id), str(preset_id))
         if hasattr(owner, "_persist_instrument_snapshot"):
             owner._persist_instrument_snapshot()
 
@@ -269,7 +270,10 @@ def wire_settings_tab_callbacks(owner: Any, preset_utils: Any) -> None:
     def _fov_field_changed() -> None:
         if getattr(owner, "_instrument_initializing", False) or getattr(owner, "_instrument_applying_snapshot", False):
             return
+        owner._instrument_mode = "custom"
         owner._instrument_preset_id = None
+        if hasattr(owner, "instrument_combo"):
+            owner._set_combo_current_data(owner.instrument_combo, "__custom__", "__custom__")
 
     def _fov_edit_finished() -> None:
         if getattr(owner, "_instrument_initializing", False) or getattr(owner, "_instrument_applying_snapshot", False):

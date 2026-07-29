@@ -29,6 +29,8 @@ class GuiSettingsState:
     blind4d_all_sky: bool = False
     log_level: str = "INFO"
     language: str = "auto"
+    interface_mode: str = "expert"
+    instrument_mode: str = "auto"
     fov_deg: float = 1.5
     downsample: int = 1
     hint_ra_deg: float | None = None
@@ -46,6 +48,7 @@ class GuiSettingsState:
     astrometry_use_hints: bool = True
     legacy_config: object | None = None
     catalog_resources: object | None = None
+    move_unresolved_files: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +71,7 @@ class GuiSolveRequest:
     legacy_config: object | None = None
     catalog_resources: object | None = None
     metadata_overrides: Mapping[str, object] = field(default_factory=dict)
+    move_unresolved_files: bool = False
 
     def for_phase(self, phase: str) -> "GuiSolveRequest":
         if phase == "blind":

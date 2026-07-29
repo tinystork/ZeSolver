@@ -49,6 +49,8 @@ def build_solver_configuration(
             "formats": product_settings.input_formats,
             "blind_enabled": product_settings.blind_enabled,
             "blind_only": product_settings.blind_only,
+            "interface_mode": product_settings.interface_mode,
+            "move_unresolved_files": product_settings.move_unresolved_files,
             "near_catalog_mode": product_settings.near_catalog_mode,
             "blind4d_catalog_mode": product_settings.blind4d_catalog_mode,
             "blind_backend_profile": blind.values["blind_backend_profile"],

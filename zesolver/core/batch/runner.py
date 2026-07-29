@@ -6,16 +6,19 @@ import math
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Protocol
 
 from zesolver.core.models import SolveRequest, SolveResult, SolveStatus
 from zesolver.core.result_adapter import failure_result
+from zesolver.core.terminal_reasons import TerminalReasonCode
 from zesolver.resource_telemetry import (
     BatchResourceTelemetry,
     active_batch_telemetry,
     reset_active_batch_telemetry,
     set_active_batch_telemetry,
 )
+from zesolver.unresolved_output import move_unresolved_results
 
 from .models import BatchProgress, BatchSolveRequest, BatchSolveResult
 
@@ -65,6 +68,7 @@ class BatchSolverPipeline:
             def _record_terminal(idx: int, result: SolveResult) -> bool:
                 if idx in emitted_indices:
                     return False
+                result = _normalize_terminal_result(result)
                 final[idx] = result
                 emitted.append((idx, result))
                 emitted_indices.add(idx)
@@ -95,8 +99,19 @@ class BatchSolverPipeline:
                 elif result.status is SolveStatus.CANCELLED:
                     _record_terminal(idx, result)
                     cancelled = True
+                elif result.status is SolveStatus.UNSOLVED:
+                    if batch_request.blind_enabled:
+                        unresolved[idx] = requests[idx]
+                    else:
+                        terminal = replace(
+                            result,
+                            terminal_reason_code=TerminalReasonCode.NEAR_UNRESOLVED_BLIND_UNAVAILABLE.value,
+                        )
+                        _record_terminal(idx, terminal)
                 else:
-                    unresolved[idx] = requests[idx]
+                    _record_terminal(idx, result)
+                    if batch_request.stop_on_error:
+                        cancelled = True
 
             self._run_phase(
                 "near",
@@ -115,7 +130,7 @@ class BatchSolverPipeline:
                     _record_terminal(idx, result)
                 return self._finish(batch_request, started, final, emitted, cancelled=True, telemetry=telemetry)
 
-            if unresolved and not cancelled:
+            if unresolved and not cancelled and batch_request.blind_enabled:
                 telemetry.mark_rss("before_blind")
                 blind_phase: dict[int, SolveResult] = {}
 
@@ -152,6 +167,20 @@ class BatchSolverPipeline:
                         cancelled = True
                         break
                 telemetry.mark_rss("after_blind")
+
+            if unresolved and not cancelled:
+                for idx in tuple(unresolved):
+                    if idx in emitted_indices:
+                        continue
+                    result = failure_result(
+                        unresolved[idx],
+                        status=SolveStatus.UNSOLVED,
+                        profile_ids=self.profile_ids,
+                        catalog_status=None,
+                        error="no_solver_produced_solution",
+                        terminal_reason_code=TerminalReasonCode.NEAR_UNRESOLVED_BLIND_UNAVAILABLE.value,
+                    )
+                    _record_terminal(idx, result)
 
             if len(final) < total and cancelled:
                 for idx, request in enumerate(requests):
@@ -411,15 +440,65 @@ class BatchSolverPipeline:
         telemetry: BatchResourceTelemetry | None = None,
     ) -> BatchSolveResult:
         total = len(batch_request.requests)
-        if batch_request.preserve_order:
-            ordered = tuple(final[idx] for idx in sorted(final))
-        else:
-            ordered = tuple(result for _idx, result in emitted)
         if telemetry is not None:
             telemetry.mark_rss("batch_end")
             telemetry.diagnostic_gc()
             terminal = "cancelled" if cancelled else ("failed" if _progress(total=total, final=tuple(final.values())).failed else "completed")
+            move_summary = move_unresolved_results(
+                input_root=batch_request.input_root or _common_input_root(result.input_path for result in final.values()),
+                results=tuple(final.values()),
+                terminal_status=("cancelled" if cancelled else "completed"),
+                requested=bool(batch_request.move_unresolved_files),
+                run_id=batch_request.run_id,
+                started_at=batch_request.started_at,
+                finished_at=None,
+                log_warning=logging.warning,
+            )
+            if move_summary.records:
+                moved_by_input = {
+                    record.original_relative_path: record
+                    for record in move_summary.records
+                    if record.move_status == "moved" and record.destination_relative_path
+                }
+                rewritten: dict[int, SolveResult] = {}
+                input_root = batch_request.input_root or _common_input_root(result.input_path for result in final.values())
+                for idx, result in final.items():
+                    try:
+                        rel = result.input_path.resolve().relative_to(input_root.resolve()).as_posix()
+                    except Exception:
+                        rel = result.input_path.name
+                    record = moved_by_input.get(rel)
+                    if record is not None and record.destination_relative_path:
+                        dst = input_root / record.destination_relative_path
+                        rewritten[idx] = replace(
+                            result,
+                            moved_to=dst,
+                            error=f"Non résolu — déplacé vers {record.destination_relative_path}",
+                        )
+                    else:
+                        rewritten[idx] = result
+                final.clear()
+                final.update(rewritten)
+            telemetry.record_unresolved_output(move_summary.telemetry(requested=bool(batch_request.move_unresolved_files)))
+            if bool(batch_request.move_unresolved_files):
+                logging.info(
+                    "Rangement des non-résolus : éligibles=%d déplacés=%d erreurs=%d destination=%s",
+                    move_summary.eligible,
+                    move_summary.moved,
+                    move_summary.move_failed,
+                    move_summary.directory,
+                )
+            elif move_summary.eligible:
+                logging.info(
+                    "%d image(s) restent non résolues. Rangement automatique désactivé.",
+                    move_summary.eligible,
+                )
             _log_near_detection_summary(telemetry, terminal_status=terminal)
+        if batch_request.preserve_order:
+            ordered = tuple(final[idx] for idx in sorted(final))
+        else:
+            by_index = dict(final)
+            ordered = tuple(by_index.get(idx, result) for idx, result in emitted)
         return BatchSolveResult(
             results=ordered,
             progress=_progress(total=total, final=tuple(final.values())),
@@ -445,14 +524,45 @@ def _progress(*, total: int, final: tuple[SolveResult, ...]) -> BatchProgress:
     )
 
 
+def _normalize_terminal_result(result: SolveResult) -> SolveResult:
+    if result.terminal_reason_code:
+        return result
+    if result.status is SolveStatus.UNSOLVED:
+        return replace(result, terminal_reason_code=TerminalReasonCode.ALL_ENABLED_SOLVERS_EXHAUSTED.value)
+    if result.status is SolveStatus.CANCELLED:
+        return replace(result, terminal_reason_code=TerminalReasonCode.CANCELLED.value)
+    if result.status is SolveStatus.INVALID_INPUT:
+        reason = TerminalReasonCode.SKIPPED_EXISTING_WCS.value if result.error == "SKIPPED" else TerminalReasonCode.INPUT_UNREADABLE.value
+        return replace(result, terminal_reason_code=reason)
+    if result.status is SolveStatus.FAILED:
+        return replace(result, terminal_reason_code=TerminalReasonCode.RUNTIME_ERROR.value)
+    return result
+
+
 def _synthetic_failure(request: SolveRequest, status: SolveStatus, error: str) -> SolveResult:
+    reason = TerminalReasonCode.CANCELLED.value if status is SolveStatus.CANCELLED else TerminalReasonCode.RUNTIME_ERROR.value
     return failure_result(
         request,
         status=status,
         profile_ids={},
         catalog_status=None,
         error=error,
+        terminal_reason_code=reason,
     )
+
+
+def _common_input_root(paths) -> object:
+    from pathlib import Path
+
+    values = [Path(path) for path in paths]
+    if not values:
+        return Path(".").resolve()
+    try:
+        import os
+
+        return Path(os.path.commonpath([str(path.parent.resolve()) for path in values]))
+    except Exception:
+        return values[0].parent
 
 
 def _log_near_detection_summary(telemetry: BatchResourceTelemetry, *, terminal_status: str) -> None:

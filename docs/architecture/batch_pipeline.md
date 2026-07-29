@@ -20,7 +20,10 @@ BatchSolveRequest(
     io_concurrency: int,
     preserve_order: bool,
     stop_on_error: bool,
+    blind_enabled: bool,
     cancel_token: object | None,
+    input_root: Path | None,
+    move_unresolved_files: bool,
 )
 ```
 
@@ -73,6 +76,32 @@ This preserves the historical global route:
 Near on every input first.
 Blind only on unresolved Near failures.
 ```
+
+In simplified Easy/Wizard flows, `blind_enabled=False` is an effective run
+capability, not a persisted profile mutation.  A Near failure in that mode is
+terminal with reason `NEAR_UNRESOLVED_BLIND_UNAVAILABLE`.
+
+## Terminal Unresolved Output
+
+When `move_unresolved_files=True` and the batch reaches a normal terminal state,
+only scientific non-solves are moved after all enabled solvers and optional web
+fallbacks are exhausted:
+
+```text
+<input_root>/unresolved_by_zesolver/
+```
+
+Eligible structured reasons are:
+
+```text
+NEAR_UNRESOLVED_BLIND_UNAVAILABLE
+ALL_ENABLED_SOLVERS_EXHAUSTED
+```
+
+Cancelled files, unreadable inputs, write errors, permission errors, runtime
+exceptions, and skipped existing WCS files are not moved.  Recursive scanners
+ignore `unresolved_by_zesolver` at any depth so a later run does not reprocess
+files that were terminally sorted out.
 
 ## Scheduling
 

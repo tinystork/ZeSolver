@@ -57,7 +57,8 @@ def test_gui_catalog_library_path_roundtrip_and_empty_becomes_none(tmp_path: Pat
 
 def test_gui_catalog_library_branch_does_not_require_legacy_paths_in_build_config() -> None:
     assert "if not db_root_text and catalog_resources_for_config is None" in SOURCE
-    assert "if not index_root_text and catalog_resources_for_config is None" in SOURCE
+    assert "legacy_index_required = near_catalog_mode == \"legacy-index\"" in SOURCE
+    assert "if not index_root_text and catalog_resources_for_config is None" not in SOURCE
     assert "catalog_resources_for_config.near.root" in SOURCE
     assert "blind_index_path=index_root" in SOURCE
 
@@ -71,6 +72,16 @@ def test_gui_logs_catalog_library_preflight_and_runtime_sources() -> None:
     ]
     missing = [needle for needle in required if needle not in SOURCE]
     assert not missing
+
+
+def test_gui_settings_log_is_safe_before_settings_tab_exists() -> None:
+    assert 'log_view = getattr(self, "settings_log_view", None)' in SOURCE
+    assert 'GUI settings log before widget ready' in SOURCE
+
+
+def test_gui_close_event_handles_hidden_legacy_download_worker() -> None:
+    assert "self._dl_worker = None" in SOURCE
+    assert 'getattr(self, "_dl_worker", None)' in SOURCE
 
 
 def test_gui_wizard_prefers_valid_catalog_library_before_legacy_prompts() -> None:

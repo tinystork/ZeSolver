@@ -80,6 +80,8 @@ class BatchResourceTelemetry:
     _current_tasks: dict[int, tuple[str, int]] = field(default_factory=dict)
     _detect_windows: dict[tuple[str, int], dict[str, float]] = field(default_factory=dict)
     _near_detection: dict[str, object] = field(default_factory=lambda: _empty_near_detection())
+    _simplified_capability: dict[str, object] = field(default_factory=dict)
+    _unresolved_output: dict[str, object] = field(default_factory=dict)
     _cancel_requested_at: float | None = None
     _cancel_requested_wall: str | None = None
     _lock: threading.Lock = field(default_factory=threading.Lock)
@@ -261,6 +263,14 @@ class BatchResourceTelemetry:
                 "tasks": tuple(dict(item) for item in tasks),
             }
 
+    def record_simplified_capability(self, payload: Mapping[str, object]) -> None:
+        with self._lock:
+            self._simplified_capability = dict(payload)
+
+    def record_unresolved_output(self, payload: Mapping[str, object]) -> None:
+        with self._lock:
+            self._unresolved_output = dict(payload)
+
     def bind_scheduler_task(self, phase: str, index: int, ident: int | None = None) -> None:
         value = int(ident if ident is not None else threading.get_ident())
         with self._lock:
@@ -311,6 +321,8 @@ class BatchResourceTelemetry:
                     cancel_requested_wall=self._cancel_requested_wall,
                     terminal_status=None,
                 ),
+                "simplified_capability": dict(self._simplified_capability),
+                "unresolved_output": dict(self._unresolved_output),
                 "cancellation": {
                     "requested": self._cancel_requested_at is not None,
                     "requested_at": self._cancel_requested_wall,
@@ -408,6 +420,8 @@ def build_run_telemetry_payload(
             "skipped": int(skipped),
         },
         "near_detection": dict(near),
+        "simplified_capability": dict(snap.get("simplified_capability") if isinstance(snap.get("simplified_capability"), Mapping) else {}),
+        "unresolved_output": dict(snap.get("unresolved_output") if isinstance(snap.get("unresolved_output"), Mapping) else {}),
         "cancellation": dict(cancellation),
     }
 

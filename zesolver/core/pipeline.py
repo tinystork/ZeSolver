@@ -33,6 +33,7 @@ from .models import EngineSolveResult, SolveRequest, SolveResult, SolveStatus
 from .preflight import run_preflight
 from .result_adapter import failure_result, result_from_engine
 from .telemetry import PipelineTelemetry
+from .terminal_reasons import TerminalReasonCode
 from .wcs_io import write_wcs_safely
 
 
@@ -267,7 +268,21 @@ class SolverPipeline:
                 return final
 
         status = SolveStatus.UNSOLVED if (should_attempt_near or should_attempt_blind) else SolveStatus.CATALOG_UNAVAILABLE
-        return self._finish_failure(request, telemetry, status, catalog_status, "no_solver_produced_solution")
+        reason = TerminalReasonCode.ALL_ENABLED_SOLVERS_EXHAUSTED.value if status is SolveStatus.UNSOLVED else TerminalReasonCode.RUNTIME_ERROR.value
+        if (
+            should_attempt_near
+            and not should_attempt_blind
+            and bool(getattr(self.configuration.product_settings, "blind_enabled", True))
+        ):
+            reason = TerminalReasonCode.NEAR_UNRESOLVED_BLIND_UNAVAILABLE.value
+        return self._finish_failure(
+            request,
+            telemetry,
+            status,
+            catalog_status,
+            "no_solver_produced_solution",
+            terminal_reason_code=reason,
+        )
 
     def _resources(self) -> SolverCatalogResources:
         if self.catalog_resources is not None:
@@ -354,6 +369,7 @@ class SolverPipeline:
                     backend=engine_result.backend,
                     warnings=engine_result.warnings,
                     error=written.error,
+                    terminal_reason_code=TerminalReasonCode.WRITE_ERROR.value,
                 )
                 return result_from_engine(
                     request,
@@ -378,6 +394,7 @@ class SolverPipeline:
             warnings=engine_result.warnings,
             error=error,
             raw=engine_result.raw,
+            terminal_reason_code=engine_result.terminal_reason_code,
         )
         return result_from_engine(
             request,
@@ -395,7 +412,10 @@ class SolverPipeline:
         status: SolveStatus,
         catalog_status: str | None,
         error: str | None,
+        terminal_reason_code: str | None = None,
     ) -> SolveResult:
+        if terminal_reason_code is None:
+            terminal_reason_code = _default_terminal_reason(status, error)
         result = failure_result(
             request,
             status=status,
@@ -403,6 +423,7 @@ class SolverPipeline:
             catalog_status=catalog_status,
             warnings=tuple(telemetry.warnings),
             error=error,
+            terminal_reason_code=terminal_reason_code,
         )
         self.last_telemetry = dict(telemetry.finish(final_status=result.status.value, wcs_written=result.wcs_written))
         return result
@@ -430,3 +451,24 @@ def _cancel_check(configuration):
         return bool(token)
 
     return _check
+
+
+def _default_terminal_reason(status: SolveStatus, error: str | None) -> str | None:
+    text = str(error or "").lower()
+    if status is SolveStatus.CANCELLED:
+        return TerminalReasonCode.CANCELLED.value
+    if status is SolveStatus.INVALID_INPUT:
+        if "skip" in text or "wcs" in text:
+            return TerminalReasonCode.SKIPPED_EXISTING_WCS.value
+        if "missing" in text or "no such file" in text:
+            return TerminalReasonCode.INPUT_MISSING.value
+        return TerminalReasonCode.INPUT_UNREADABLE.value
+    if status is SolveStatus.CATALOG_UNAVAILABLE:
+        return TerminalReasonCode.RUNTIME_ERROR.value
+    if status is SolveStatus.FAILED:
+        if "permission" in text:
+            return TerminalReasonCode.PERMISSION_ERROR.value
+        if "write" in text or "wcs" in text:
+            return TerminalReasonCode.WRITE_ERROR.value
+        return TerminalReasonCode.RUNTIME_ERROR.value
+    return None

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable
 
@@ -12,6 +13,12 @@ from zesolver.core.models import SolveRequest, SolveResult
 from zesolver.core.pipeline import ExistingNearSolverPort
 from zesolver.resource_telemetry import BatchResourceTelemetry, reset_active_batch_telemetry, set_active_batch_telemetry
 from zesolver.settings import build_solver_configuration
+from zesolver.simplified_capability import (
+    SimplifiedSolveCapability,
+    evaluate_simplified_capability,
+    is_simplified_interface,
+    product_settings_for_simplified_run,
+)
 
 from .progress_adapter import GuiProgress, gui_progress_from_batch
 from .requests import GuiFileResult, GuiRunSummary, GuiSolveRequest
@@ -84,10 +91,58 @@ class PipelineGuiRunner:
                         catalog_library=request.product_settings.catalog_library_path,
                         legacy_db_root=getattr(legacy, "db_root", None) if legacy is not None else None,
                         legacy_families=tuple(getattr(legacy, "families", ()) or ()) if legacy is not None else None,
-                        legacy_blind4d_manifest=getattr(legacy, "blind_4d_manifest_path", None) if legacy is not None else None,
-                        legacy_index_root=getattr(legacy, "blind_index_path", None) if legacy is not None else None,
+                        legacy_blind4d_manifest=(
+                            None
+                            if is_simplified_interface(request.product_settings)
+                            else (getattr(legacy, "blind_4d_manifest_path", None) if legacy is not None else None)
+                        ),
+                        legacy_index_root=(
+                            None
+                            if is_simplified_interface(request.product_settings)
+                            else (getattr(legacy, "blind_index_path", None) if legacy is not None else None)
+                        ),
                         enable_environment_discovery=legacy is None,
+                        allow_legacy_fallback_on_invalid_library=is_simplified_interface(request.product_settings),
                     )
+                if is_simplified_interface(request.product_settings):
+                    decision = evaluate_simplified_capability(shared_catalog_resources)
+                    telemetry.record_simplified_capability(decision.telemetry())
+                    logging.info(
+                        "Chaîne locale effective : %s Source : %s",
+                        "ZeNear -> ZeBlind 4D" if decision.capability is SimplifiedSolveCapability.FULL_LOCAL else ("ZeNear uniquement" if decision.capability is SimplifiedSolveCapability.NEAR_ONLY else "indisponible"),
+                        decision.catalog_source_used,
+                    )
+                    if decision.capability is SimplifiedSolveCapability.UNAVAILABLE:
+                        final = tuple(
+                            GuiFileResult(
+                                path=Path(path),
+                                status="CATALOG_UNAVAILABLE",
+                                message="Aucun catalogue utilisable. Installez une Bibliothèque ZeSolver ou sélectionnez une base ASTAP.",
+                                errors=("NO_LOCAL_CATALOG_SOURCE_AVAILABLE",),
+                                selected_engine=request.engine_mode,
+                            )
+                            for path in request.input_paths
+                        )
+                        return GuiRunSummary(
+                            selected_engine=request.engine_mode,
+                            selection_reason="simplified_capability_unavailable",
+                            results=final,
+                            cancelled=False,
+                            duration_s=0.0,
+                            warnings=tuple(decision.warnings),
+                            telemetry=telemetry.snapshot(),
+                        )
+                    request = replace(
+                        request,
+                        product_settings=product_settings_for_simplified_run(request.product_settings, decision),
+                    )
+                instrument_mode = str(getattr(request.product_settings, "instrument_mode", "auto") or "auto").strip().lower()
+                logging.info(
+                    "Instrument hints: instrument_mode_requested=%s instrument_hint_source=%s global_instrument_hint_applied=%s",
+                    instrument_mode,
+                    "per-file-fits-metadata" if instrument_mode == "auto" else instrument_mode,
+                    "false" if instrument_mode == "auto" else "true",
+                )
                 near_request = request.for_phase("near")
                 near_configuration = build_solver_configuration(
                     product_settings=near_request.product_settings,
@@ -185,8 +240,11 @@ class PipelineGuiRunner:
                     requests=solve_requests,
                     workers=max(1, int(request.workers or 1)),
                     preserve_order=request.preserve_order,
+                    blind_enabled=bool(request.product_settings.blind_enabled),
                     cancel_token=self._cancel_event,
                     startup_stagger_ms=max(0, int(getattr(request, "startup_stagger_ms", 0) or 0)),
+                    input_root=request.runtime_options.input_dir,
+                    move_unresolved_files=bool(getattr(request, "move_unresolved_files", False) or getattr(request.product_settings, "move_unresolved_files", False)),
                 )
             )
             telemetry.event("batch_complete", telemetry=batch_result.telemetry or {})
