@@ -47,7 +47,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 13
+SETTINGS_SCHEMA_VERSION = 14
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -58,6 +58,8 @@ class PersistentSettings:
     schema_version: int = SETTINGS_SCHEMA_VERSION
     catalog_library_path: Optional[str] = None
     catalog_library_install_parent: Optional[str] = None
+    startup_wizard_version: int = 0
+    startup_wizard_completed: bool = False
     db_root: Optional[str] = None
     index_root: Optional[str] = None
     mag_cap: float = DEFAULT_MAG_CAP
@@ -291,6 +293,8 @@ def load_persistent_settings() -> PersistentSettings:
         schema_version=_int_value(payload.get("schema_version", 1), 1, minimum=1, field="schema_version"),
         catalog_library_path=(payload.get("catalog_library_path") or None),
         catalog_library_install_parent=(payload.get("catalog_library_install_parent") or None),
+        startup_wizard_version=_int_value(payload.get("startup_wizard_version", 0), 0, minimum=0, field="startup_wizard_version"),
+        startup_wizard_completed=bool(payload.get("startup_wizard_completed", False)),
         db_root=payload.get("db_root"),
         index_root=payload.get("index_root"),
         mag_cap=float(payload.get("mag_cap", DEFAULT_MAG_CAP)),

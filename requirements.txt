@@ -9,8 +9,13 @@ rich>=13.7
 # GUI support (install PySide6 only if you need the desktop interface)
 PySide6>=6.7
 
-# Optional GPU runtime for Near star detection (Linux + NVIDIA CUDA 12.x)
-# Safe behavior: if unavailable at runtime, ZeSolver falls back to CPU.
-cupy-cuda12x; platform_system == "Linux"
-nvidia-cuda-runtime-cu12; platform_system == "Linux"
-nvidia-cuda-nvrtc-cu12; platform_system == "Linux"
+# Development/test support used by the repository test and diagnostic suite
+pytest>=7.0
+pytest-cov>=4.0
+mypy>=1.8
+threadpoolctl>=3.6,<4
+
+# Optional GPU runtime for Near star detection (Linux + NVIDIA CUDA 12.x).
+# Do not install by default: CPU fallback is supported and keeps a fresh venv small.
+# For GPU machines, install the optional project extra instead:
+#   python -m pip install -e ".[gpu]"

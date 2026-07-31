@@ -268,6 +268,13 @@ from zesolver.gui_settings_sections import (
     build_presets_fov_reco_groups,
     wire_settings_tab_callbacks,
 )
+from zesolver.gui_startup_wizard import (
+    STARTUP_WIZARD_VERSION,
+    ZeSolverStartupWizard,
+    decide_startup_wizard,
+    mark_startup_wizard_completed,
+    should_allow_legacy_family_prompt,
+)
 from zesolver.gui_pipeline import GuiEngineSelectionError, GuiSolveController
 from zesolver.gui_pipeline.legacy_runner import LegacyGuiRunner
 from zesolver.gui_pipeline.lifecycle import RunLifecycle
@@ -6973,6 +6980,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._catalog_library_validated_resources: SolverCatalogResources | None = None
             self._catalog_library_validation_error: Optional[str] = None
             self._catalog_distribution_worker: Optional[CatalogDistributionInstallWorker] = None
+            self._startup_wizard_dialog: Optional[QtWidgets.QDialog] = None
+            self._startup_wizard_decision = None
+            self._startup_wizard_auto_scheduled = False
             self._catalog_distribution_release = None
             self._catalog_distribution_manifest = None
             self._dl_worker = None
@@ -7499,13 +7509,88 @@ def launch_gui(args: argparse.Namespace) -> int:
             return loaded
 
         def _run_startup_wizard_from_menu(self) -> None:
-            ok = self._run_simple_startup_wizard()
-            if ok:
-                QtWidgets.QMessageBox.information(
-                    self,
-                    self._text("simple_wizard_title"),
-                    self._text("simple_wizard_done"),
-                )
+            self._open_startup_wizard(manual=True)
+
+        def _startup_wizard_policy_decision(self):
+            decision = decide_startup_wizard(self._settings)
+            self._startup_wizard_decision = decision
+            return decision
+
+        def schedule_startup_wizard_if_needed(self, *, delay_ms: int = 250) -> None:
+            if self._startup_wizard_auto_scheduled:
+                return
+            self._startup_wizard_auto_scheduled = True
+
+            def _open_if_needed() -> None:
+                try:
+                    decision = self._startup_wizard_policy_decision()
+                except Exception as exc:
+                    self._log_settings(f"Startup wizard diagnostic failed: {exc}")
+                    return
+                if decision.should_show:
+                    self._open_startup_wizard(manual=False, decision=decision)
+
+            QtCore.QTimer.singleShot(max(0, int(delay_ms)), _open_if_needed)
+
+        def _open_startup_wizard(self, *, manual: bool, decision=None) -> None:
+            if ZeSolverStartupWizard is None:
+                return
+            if decision is None:
+                decision = self._startup_wizard_policy_decision()
+            if manual:
+                decision = decide_startup_wizard(self._settings)
+            dialog = ZeSolverStartupWizard(
+                settings=self._settings,
+                decision=decision,
+                save_settings=save_persistent_settings,
+                parent=self,
+            )
+            dialog.librarySelected.connect(self._on_startup_wizard_library_selected)
+            dialog.astapSelected.connect(self._on_startup_wizard_astap_selected)
+            dialog.completed.connect(self._on_startup_wizard_completed)
+            self._startup_wizard_dialog = dialog
+            dialog.show()
+            try:
+                dialog.raise_()
+                dialog.activateWindow()
+            except Exception:
+                pass
+
+        def _on_startup_wizard_library_selected(self, path: str) -> None:
+            value = str(path or "").strip()
+            if not value:
+                return
+            self._on_catalog_library_manager_selected(value)
+            self._settings.startup_wizard_version = STARTUP_WIZARD_VERSION
+            self._settings.startup_wizard_completed = True
+            try:
+                save_persistent_settings(self._settings)
+            except Exception as exc:
+                self._log_settings(self._text("library_manager_failed", error=str(exc)))
+            self._update_simplified_capability_summary()
+
+        def _on_startup_wizard_astap_selected(self, path: str) -> None:
+            value = str(path or "").strip()
+            if not value:
+                return
+            self._clear_catalog_library_selection()
+            self._set_astap_root(value, source="startup-wizard", validate=True)
+            self._settings.near_catalog_mode = "astap-native"
+            self._settings.blind4d_catalog_mode = "auto"
+            mark_startup_wizard_completed(self._settings)
+            try:
+                save_persistent_settings(self._settings)
+            except Exception as exc:
+                self._log_settings(self._text("library_manager_failed", error=str(exc)))
+            self._update_simplified_capability_summary()
+
+        def _on_startup_wizard_completed(self, source: str) -> None:
+            mark_startup_wizard_completed(self._settings)
+            try:
+                save_persistent_settings(self._settings)
+            except Exception as exc:
+                self._log_settings(self._text("library_manager_failed", error=str(exc)))
+            self._log_settings(f"Startup wizard completed: {source}")
 
         def _set_log_level(self, level: str, *, persist: bool = True) -> None:
             normalized = str(level or "INFO").upper()
@@ -8385,6 +8470,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             if not missing:
                 self._last_family_notice = set()
                 self._last_family_prompt = set()
+                return
+            if not should_allow_legacy_family_prompt(self._settings, getattr(self, "_startup_wizard_decision", None)):
+                self._last_family_notice = set(missing)
+                self._log_settings(
+                    "Legacy index rebuild prompt suppressed; active catalog mode is not explicit legacy-index."
+                )
                 return
             if not hasattr(self, "_last_family_notice"):
                 self._last_family_notice = set()
@@ -12694,6 +12785,7 @@ def launch_gui(args: argparse.Namespace) -> int:
         except Exception:
             pass
     window.show()
+    window.schedule_startup_wizard_if_needed()
     return app.exec()
 
 
