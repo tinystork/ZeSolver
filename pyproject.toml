@@ -56,3 +56,31 @@ line-length = 100
 
 [tool.isort]
 profile = "black"
+
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = [
+  "zesolver*",
+  "zeblindsolver*",
+  "zewcs290*",
+]
+exclude = [
+  "tests*",
+  "tools*",
+  "docs*",
+  "reports*",
+  "packaging*",
+  "config*",
+  "icon*",
+  "legal*",
+]
+
+[tool.setuptools.package-data]
+zewcs290 = ["data/*.json"]
