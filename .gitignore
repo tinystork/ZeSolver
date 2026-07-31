@@ -94,3 +94,6 @@ astrometry-indexes/
 indexes/astrometry_4d/*.npz
 astrometry-net-main.zip
 ASTAP-main.zip
+
+# Python build metadata
+*.egg-info/
