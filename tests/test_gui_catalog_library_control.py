@@ -43,15 +43,25 @@ def test_gui_catalog_library_path_roundtrip_and_empty_becomes_none(tmp_path: Pat
     monkeypatch.setattr(store, "SETTINGS_PATH", settings_file)
     monkeypatch.setattr(store, "_resolve_settings_path", lambda: settings_file)
 
-    save_persistent_settings(PersistentSettings(catalog_library_path=str(library), db_root="/legacy/db", index_root="/legacy/index"))
+    install_parent = tmp_path / "install parent"
+    save_persistent_settings(
+        PersistentSettings(
+            catalog_library_path=str(library),
+            catalog_library_install_parent=str(install_parent),
+            db_root="/legacy/db",
+            index_root="/legacy/index",
+        )
+    )
     loaded = load_persistent_settings()
     assert loaded.catalog_library_path == str(library)
+    assert loaded.catalog_library_install_parent == str(install_parent)
     assert loaded.db_root == "/legacy/db"
     assert loaded.index_root == "/legacy/index"
 
     save_persistent_settings(PersistentSettings(catalog_library_path=None, db_root="/legacy/db", index_root="/legacy/index"))
     payload = json.loads(settings_file.read_text(encoding="utf-8"))
     assert payload["catalog_library_path"] is None
+    assert payload["catalog_library_install_parent"] is None
     assert load_persistent_settings().catalog_library_path is None
 
 

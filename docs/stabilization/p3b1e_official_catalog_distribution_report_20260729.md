@@ -219,6 +219,15 @@ Validation after fix:
 - Offscreen GUI open + close using the real `zesolver.py` entrypoint and real parser defaults.
   - Result: exit code `0`, no traceback, no Qt thread destruction warning.
 
+## Follow-Up P3B-1E2 Storage UX
+
+P3B-1E2 adds the cross-platform storage and cache layer required before closing the official distribution work:
+
+- Report: `docs/stabilization/p3b1e2_cross_platform_storage_report_20260730.md`
+- New non-GUI primitives: `zesolver/catalog_library/paths.py`
+- Scope: native cache/library defaults, persisted install parent, disk preflight by volume, destination-side staging, explicit cache cleanup, and Library tab display before download.
+- Wizard status: unchanged; it should consume the same services in the next mission.
+
 ## Wizard Preparation
 
 The wizard was not modified.

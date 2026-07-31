@@ -57,6 +57,7 @@ TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
 class PersistentSettings:
     schema_version: int = SETTINGS_SCHEMA_VERSION
     catalog_library_path: Optional[str] = None
+    catalog_library_install_parent: Optional[str] = None
     db_root: Optional[str] = None
     index_root: Optional[str] = None
     mag_cap: float = DEFAULT_MAG_CAP
@@ -289,6 +290,7 @@ def load_persistent_settings() -> PersistentSettings:
     settings = PersistentSettings(
         schema_version=_int_value(payload.get("schema_version", 1), 1, minimum=1, field="schema_version"),
         catalog_library_path=(payload.get("catalog_library_path") or None),
+        catalog_library_install_parent=(payload.get("catalog_library_install_parent") or None),
         db_root=payload.get("db_root"),
         index_root=payload.get("index_root"),
         mag_cap=float(payload.get("mag_cap", DEFAULT_MAG_CAP)),

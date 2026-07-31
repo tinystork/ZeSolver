@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import shutil
 import tempfile
 import time
@@ -31,6 +30,14 @@ from .management import (
     CatalogLibraryManagementError,
     CatalogLibraryManagementService,
     LibraryOperationResult,
+)
+from .paths import (
+    DistributionStoragePlan,
+    build_storage_plan,
+    cache_reclaimable_bytes,
+    cleanup_distribution_cache,
+    default_cache_root,
+    resolve_library_destination,
 )
 
 
@@ -53,6 +60,16 @@ class DistributionErrorCode(str, Enum):
     ARCHIVE_COLLISION = "DISTRIBUTION_ARCHIVE_COLLISION"
     COMPONENT_INCOMPATIBLE = "DISTRIBUTION_COMPONENT_INCOMPATIBLE"
     DISK_SPACE_INSUFFICIENT = "DISTRIBUTION_DISK_SPACE_INSUFFICIENT"
+    DESTINATION_INVALID = "DISTRIBUTION_DESTINATION_INVALID"
+    DESTINATION_NOT_WRITABLE = "DISTRIBUTION_DESTINATION_NOT_WRITABLE"
+    DESTINATION_CONFLICT = "DISTRIBUTION_DESTINATION_CONFLICT"
+    DESTINATION_INSIDE_CACHE = "DISTRIBUTION_DESTINATION_INSIDE_CACHE"
+    DESTINATION_INSIDE_APPLICATION = "DISTRIBUTION_DESTINATION_INSIDE_APPLICATION"
+    CACHE_INVALID = "DISTRIBUTION_CACHE_INVALID"
+    CACHE_NOT_WRITABLE = "DISTRIBUTION_CACHE_NOT_WRITABLE"
+    CACHE_CLEANUP_FAILED = "DISTRIBUTION_CACHE_CLEANUP_FAILED"
+    VOLUME_RESOLUTION_FAILED = "DISTRIBUTION_VOLUME_RESOLUTION_FAILED"
+    CROSS_VOLUME_ATOMICITY_UNAVAILABLE = "DISTRIBUTION_CROSS_VOLUME_ATOMICITY_UNAVAILABLE"
     PACKAGE_INVALID = "DISTRIBUTION_PACKAGE_INVALID"
     LIBRARY_VALIDATION_FAILED = "DISTRIBUTION_LIBRARY_VALIDATION_FAILED"
     CANCELLED = "DISTRIBUTION_CANCELLED"
@@ -471,7 +488,7 @@ class CatalogDistributionService:
         )
         self.progress_callback = progress_callback
         self.cancel_callback = cancel_callback
-        self.cache_root = Path(cache_root).expanduser() if cache_root is not None else _default_cache_root()
+        self.cache_root = Path(cache_root).expanduser() if cache_root is not None else default_cache_root()
 
     def fetch_latest_distribution(self) -> tuple[DistributionRelease, DistributionManifest]:
         release = self.fetch_distribution_for_release(None)
@@ -672,7 +689,7 @@ class CatalogDistributionService:
         self._check_cancelled()
         staging_parent = plan.destination.parent
         staging_parent.mkdir(parents=True, exist_ok=True)
-        staging = staging_parent / f"{plan.destination.name}.distribution-staging-{uuid.uuid4().hex[:10]}"
+        staging = staging_parent / f".{plan.destination.name}.partial-{uuid.uuid4().hex[:10]}"
         if staging.exists():
             shutil.rmtree(staging)
         staging.mkdir(parents=True)
@@ -725,7 +742,9 @@ class CatalogDistributionService:
         settings: Any | None = None,
         save_settings: Callable[[Any], None] | None = None,
     ) -> DistributionInstallResult:
+        self._ensure_storage_available(plan)
         downloaded = self.download_distribution(plan)
+        self._ensure_storage_available(plan)
         downloaded_by_asset = {component.asset: path for component, path in zip(plan.components, downloaded, strict=False)}
         package_root = self.assemble_distribution(plan, downloaded_by_asset)
         try:
@@ -779,9 +798,29 @@ class CatalogDistributionService:
         return None
 
     def default_destination(self, manifest: DistributionManifest, *, parent: Path | None = None) -> Path:
-        base = Path(parent).expanduser() if parent is not None else Path.home() / "ZeSolverCatalog" / "libraries"
-        slug = _slug(f"{manifest.library_id}-v{manifest.version}")
-        return base / slug
+        return resolve_library_destination(manifest, parent)
+
+    def build_storage_plan(self, plan: DistributionInstallPlan) -> DistributionStoragePlan:
+        return build_storage_plan(plan)
+
+    def cache_reclaimable_bytes(self, plan: DistributionInstallPlan) -> int:
+        return cache_reclaimable_bytes(plan.cache_dir, plan.components)
+
+    def cleanup_distribution_cache(self, plan: DistributionInstallPlan, *, active: bool = False) -> int:
+        try:
+            return cleanup_distribution_cache(plan.cache_dir, plan.components, active=active)
+        except Exception as exc:
+            raise DistributionError(DistributionErrorCode.CACHE_CLEANUP_FAILED, str(exc)) from exc
+
+    def _ensure_storage_available(self, plan: DistributionInstallPlan) -> None:
+        storage = self.build_storage_plan(plan)
+        if not storage.sufficient:
+            details = "; ".join(
+                f"{item.role} required={item.required_bytes} available={item.available_bytes}"
+                for item in storage.requirements
+                if not item.sufficient
+            )
+            raise DistributionError(DistributionErrorCode.DISK_SPACE_INSUFFICIENT, details or str(plan.destination))
 
     def _fetch_manifest_for_release(self, release: DistributionRelease) -> DistributionManifest:
         candidates = [asset for asset in release.assets.values() if asset.name.endswith(".json")]
@@ -891,15 +930,6 @@ def _http_distribution_error(exc: urllib.error.HTTPError) -> DistributionError:
     )
 
 
-def _default_cache_root() -> Path:
-    if os.name == "nt":
-        base = os.environ.get("LOCALAPPDATA") or os.environ.get("APPDATA")
-        if base:
-            return Path(base) / "ZeSolver" / "catalogs"
-    xdg = os.environ.get("XDG_CACHE_HOME")
-    return (Path(xdg).expanduser() if xdg else Path.home() / ".cache") / "ZeSolver" / "catalogs"
-
-
 def _verified_file(path: Path, *, expected_size: int, expected_sha256: str) -> bool:
     return path.is_file() and path.stat().st_size == expected_size and sha256_file(path).lower() == expected_sha256.lower()
 
@@ -970,11 +1000,6 @@ def _read_json_file(path: Path) -> Any:
 def _write_json_file(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(dict(payload), indent=2, sort_keys=True), encoding="utf-8")
-
-
-def _slug(value: str) -> str:
-    text = str(value).strip().lower().replace(" ", "-")
-    return "".join(ch for ch in text if ch.isalnum() or ch in {"-", "_"}) or "zesolver-library"
 
 
 __all__ = [

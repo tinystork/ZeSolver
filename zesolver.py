@@ -226,7 +226,16 @@ from zesolver.catalog_library import (
     LibraryInstallOptions,
     LibraryRepairPlan,
     CatalogStatus,
+    build_storage_plan,
+    cache_reclaimable_bytes,
+    cleanup_distribution_cache,
+    default_cache_root,
+    default_library_parent,
+    format_bytes_binary,
     IssueSeverity,
+    open_in_file_manager,
+    resolve_library_destination,
+    validate_library_parent,
     build_blind4d_manifest_view,
 )
 from zesolver.catalog_library.verification_cache import (
@@ -1034,6 +1043,33 @@ _GUI_CATALOG_LIBRARY_I18N = {
         "official_library_distribution_unknown": "Version disponible : recherche non effectuée.",
         "official_library_checking": "Recherche de la distribution officielle…",
         "official_library_available": "Version disponible : {version}\nTéléchargement : {size}\nEspace requis : {installed}",
+        "official_library_install_parent_label": "Parent d'installation",
+        "official_library_install_destination_label": "Emplacement d'installation",
+        "official_library_change_location": "Modifier…",
+        "official_library_choose_parent_title": "Choisir le dossier parent des bibliothèques ZeSolver",
+        "official_library_storage_waiting": "Recherche de la distribution nécessaire pour calculer l'espace disque.",
+        "official_library_download_remaining": "Téléchargement restant : {size}",
+        "official_library_installed_size": "Taille installée : {size}",
+        "official_library_temp_peak": "Espace temporaire maximal estimé : {size}",
+        "official_library_volume_cache": "Cache",
+        "official_library_volume_library": "Bibliothèque",
+        "official_library_volume_combined": "Cache + bibliothèque",
+        "official_library_volume_line": "{role} — volume {volume} : {required} requis, {available} disponibles — {state}",
+        "official_library_space_ok": "OK",
+        "official_library_space_insufficient": "espace insuffisant",
+        "official_library_space_blocked": "Espace disque insuffisant pour lancer l'installation.",
+        "official_library_cache_path": "Cache :\n{path}",
+        "official_library_open_cache": "Ouvrir le cache",
+        "official_library_clear_cache": "Vider cette version",
+        "official_library_cache_busy": "Impossible de vider le cache pendant une opération.",
+        "official_library_cache_empty": "Aucun fichier validé de cette version à supprimer dans le cache.",
+        "official_library_clear_cache_title": "Vider le cache de cette version",
+        "official_library_clear_cache_confirm": "Supprimer les fichiers téléchargés validés de cette version ?\nEspace récupérable : {size}",
+        "official_library_cache_cleared": "Cache nettoyé : {size} libérés.",
+        "official_library_cache_clear_failed": "Nettoyage du cache impossible : {error}",
+        "official_library_destination_error_title": "Destination invalide",
+        "official_library_destination_invalid": "Destination invalide : {error}",
+        "official_library_installed_detail": "Emplacement :\n{path}\n\nFichiers téléchargés conservés : {cache}",
         "official_library_network_unavailable": "Réseau indisponible ou Release inaccessible : {error}",
         "official_library_installed": "Bibliothèque officielle installée et activée.",
         "official_library_cancelled": "Installation annulée. Les téléchargements partiels sont conservés pour reprise.",
@@ -1131,6 +1167,33 @@ _GUI_CATALOG_LIBRARY_I18N = {
         "official_library_distribution_unknown": "Available version: not checked yet.",
         "official_library_checking": "Searching official distribution…",
         "official_library_available": "Available version: {version}\nDownload: {size}\nRequired space: {installed}",
+        "official_library_install_parent_label": "Install parent",
+        "official_library_install_destination_label": "Install location",
+        "official_library_change_location": "Change…",
+        "official_library_choose_parent_title": "Choose the ZeSolver libraries parent folder",
+        "official_library_storage_waiting": "Check the official distribution to compute disk space.",
+        "official_library_download_remaining": "Download remaining: {size}",
+        "official_library_installed_size": "Installed size: {size}",
+        "official_library_temp_peak": "Estimated maximum temporary space: {size}",
+        "official_library_volume_cache": "Cache",
+        "official_library_volume_library": "Library",
+        "official_library_volume_combined": "Cache + library",
+        "official_library_volume_line": "{role} — volume {volume}: {required} required, {available} available — {state}",
+        "official_library_space_ok": "OK",
+        "official_library_space_insufficient": "insufficient space",
+        "official_library_space_blocked": "Disk space is insufficient to start installation.",
+        "official_library_cache_path": "Cache:\n{path}",
+        "official_library_open_cache": "Open cache",
+        "official_library_clear_cache": "Clear this version",
+        "official_library_cache_busy": "Cannot clear the cache while an operation is running.",
+        "official_library_cache_empty": "No verified file for this version is present in the cache.",
+        "official_library_clear_cache_title": "Clear this version cache",
+        "official_library_clear_cache_confirm": "Delete verified downloaded files for this version?\nRecoverable space: {size}",
+        "official_library_cache_cleared": "Cache cleared: {size} freed.",
+        "official_library_cache_clear_failed": "Could not clear cache: {error}",
+        "official_library_destination_error_title": "Invalid destination",
+        "official_library_destination_invalid": "Invalid destination: {error}",
+        "official_library_installed_detail": "Location:\n{path}\n\nDownloaded files kept: {cache}",
         "official_library_network_unavailable": "Network unavailable or release unreachable: {error}",
         "official_library_installed": "Official library installed and activated.",
         "official_library_cancelled": "Installation cancelled. Partial downloads are kept for resume.",
@@ -6351,9 +6414,10 @@ def launch_gui(args: argparse.Namespace) -> int:
         discovered = QtCore.Signal(object, object)
         finished = QtCore.Signal(bool, object, str)
 
-        def __init__(self, *, destination: Path | None, settings: PersistentSettings) -> None:
+        def __init__(self, *, destination: Path | None, install_parent: Path | None, settings: PersistentSettings) -> None:
             super().__init__()
             self.destination = destination
+            self.install_parent = install_parent
             self.settings = settings
             self._cancel_event = threading.Event()
 
@@ -6368,7 +6432,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             try:
                 release, manifest = service.fetch_latest_distribution()
                 self.discovered.emit(release, manifest)
-                plan = service.build_install_plan(release, manifest, destination=self.destination)
+                plan = service.build_install_plan(release, manifest, destination=self.destination, parent=self.install_parent)
                 result = service.install_distribution(
                     plan,
                     settings=self.settings,
@@ -7516,6 +7580,29 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.catalog_distribution_status = QtWidgets.QLabel(self._text("official_library_distribution_unknown"))
             self.catalog_distribution_status.setWordWrap(True)
             distribution_layout.addWidget(self.catalog_distribution_status)
+            destination_form = QtWidgets.QFormLayout()
+            self.catalog_distribution_parent_edit = QtWidgets.QLineEdit()
+            self.catalog_distribution_parent_edit.setReadOnly(True)
+            self.catalog_distribution_parent_edit.setMinimumWidth(260)
+            self.catalog_distribution_destination_edit = QtWidgets.QLineEdit()
+            self.catalog_distribution_destination_edit.setReadOnly(True)
+            self.catalog_distribution_destination_edit.setMinimumWidth(260)
+            parent_row = QtWidgets.QWidget()
+            parent_row_layout = QtWidgets.QHBoxLayout(parent_row)
+            parent_row_layout.setContentsMargins(0, 0, 0, 0)
+            parent_row_layout.addWidget(self.catalog_distribution_parent_edit, 1)
+            self.catalog_distribution_change_parent_btn = QtWidgets.QPushButton(self._text("official_library_change_location"))
+            parent_row_layout.addWidget(self.catalog_distribution_change_parent_btn)
+            destination_form.addRow(self._text("official_library_install_parent_label"), parent_row)
+            destination_form.addRow(self._text("official_library_install_destination_label"), self.catalog_distribution_destination_edit)
+            distribution_layout.addLayout(destination_form)
+            self.catalog_distribution_storage = QtWidgets.QLabel(self._text("official_library_storage_waiting"))
+            self.catalog_distribution_storage.setWordWrap(True)
+            distribution_layout.addWidget(self.catalog_distribution_storage)
+            self.catalog_distribution_cache_path = QtWidgets.QLabel()
+            self.catalog_distribution_cache_path.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            self.catalog_distribution_cache_path.setWordWrap(True)
+            distribution_layout.addWidget(self.catalog_distribution_cache_path)
             self.catalog_distribution_progress = QtWidgets.QProgressBar()
             self.catalog_distribution_progress.setRange(0, 100)
             self.catalog_distribution_progress.setValue(0)
@@ -7548,6 +7635,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.catalog_advanced_manager_btn = QtWidgets.QPushButton(self._text("library_manager_open"))
             self.catalog_advanced_manager_btn.clicked.connect(self._open_catalog_library_manager)
             advanced_layout.addWidget(self.catalog_advanced_manager_btn)
+            self.catalog_distribution_open_cache_btn = QtWidgets.QPushButton(self._text("official_library_open_cache"))
+            self.catalog_distribution_clear_cache_btn = QtWidgets.QPushButton(self._text("official_library_clear_cache"))
+            advanced_layout.addWidget(self.catalog_distribution_open_cache_btn)
+            advanced_layout.addWidget(self.catalog_distribution_clear_cache_btn)
             advanced_layout.addStretch(1)
             column.addWidget(self.catalog_advanced_group)
             column.addStretch(1)
@@ -7579,13 +7670,100 @@ def launch_gui(args: argparse.Namespace) -> int:
             def _open_current_folder() -> None:
                 path_text = self._catalog_library_path_from_ui() or ""
                 if path_text:
-                    QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(str(Path(path_text).expanduser())))
+                    try:
+                        open_in_file_manager(Path(path_text).expanduser())
+                    except Exception as exc:
+                        self.catalog_distribution_log.appendPlainText(str(exc))
+
+            def _preferred_install_parent() -> Path:
+                saved = str(getattr(self._settings, "catalog_library_install_parent", "") or "").strip()
+                if saved:
+                    return Path(saved).expanduser()
+                current_path = self._catalog_library_path_from_ui()
+                if current_path:
+                    return Path(current_path).expanduser().parent
+                return default_library_parent()
+
+            def _distribution_plan_preview():
+                release = self._catalog_distribution_release
+                manifest = self._catalog_distribution_manifest
+                if release is None or manifest is None:
+                    return None
+                return CatalogDistributionService().build_install_plan(release, manifest, parent=_preferred_install_parent())
+
+            def _storage_summary_text(storage) -> str:
+                lines = [
+                    self._text("official_library_download_remaining", size=format_bytes_binary(storage.download_remaining_bytes)),
+                    self._text("official_library_installed_size", size=format_bytes_binary(storage.installed_size_bytes)),
+                    self._text("official_library_temp_peak", size=format_bytes_binary(storage.temporary_peak_bytes)),
+                ]
+                for item in storage.requirements:
+                    role_key = "official_library_volume_cache" if item.role == "cache" else (
+                        "official_library_volume_library" if item.role == "library" else "official_library_volume_combined"
+                    )
+                    available = format_bytes_binary(item.available_bytes)
+                    state = self._text("official_library_space_ok" if item.sufficient else "official_library_space_insufficient")
+                    lines.append(
+                        self._text(
+                            "official_library_volume_line",
+                            role=self._text(role_key),
+                            volume=item.volume,
+                            required=format_bytes_binary(item.required_bytes),
+                            available=available,
+                            state=state,
+                        )
+                    )
+                return "\n".join(lines)
+
+            def _refresh_distribution_paths() -> None:
+                parent = _preferred_install_parent()
+                self.catalog_distribution_parent_edit.setText(str(parent))
+                self.catalog_distribution_parent_edit.setToolTip(str(parent))
+                self.catalog_distribution_destination_edit.setText("")
+                self.catalog_distribution_destination_edit.setToolTip("")
+                self.catalog_distribution_cache_path.setText(
+                    self._text("official_library_cache_path", path=str(default_cache_root()))
+                )
+                self.catalog_distribution_cache_path.setToolTip(str(default_cache_root()))
+                self._catalog_distribution_install_allowed = False
+                plan = _distribution_plan_preview()
+                self._catalog_distribution_install_plan_preview = plan
+                if plan is None:
+                    self.catalog_distribution_storage.setText(self._text("official_library_storage_waiting"))
+                    self.catalog_distribution_install_btn.setEnabled(False)
+                    return
+                self.catalog_distribution_destination_edit.setText(str(plan.destination))
+                self.catalog_distribution_destination_edit.setToolTip(str(plan.destination))
+                self.catalog_distribution_cache_path.setText(self._text("official_library_cache_path", path=str(plan.cache_dir)))
+                self.catalog_distribution_cache_path.setToolTip(str(plan.cache_dir))
+                validation = validate_library_parent(
+                    parent,
+                    plan.manifest,
+                    cache_dir=plan.cache_dir,
+                    cache_root=default_cache_root(),
+                    application_roots=[ROOT_DIR, *_runtime_resource_dirs()],
+                    probe=False,
+                )
+                if not validation.ok:
+                    self.catalog_distribution_storage.setText(
+                        self._text("official_library_destination_invalid", error=f"{validation.code}: {validation.message}")
+                    )
+                    self.catalog_distribution_install_btn.setEnabled(False)
+                    return
+                storage = build_storage_plan(plan)
+                self._catalog_distribution_storage_plan = storage
+                self.catalog_distribution_storage.setText(_storage_summary_text(storage))
+                self._catalog_distribution_install_allowed = bool(storage.sufficient)
+                self.catalog_distribution_install_btn.setEnabled(bool(storage.sufficient and self._catalog_distribution_worker is None))
 
             def _set_distribution_busy(busy: bool) -> None:
                 self.catalog_distribution_check_btn.setEnabled(not busy)
-                self.catalog_distribution_install_btn.setEnabled(not busy)
+                self.catalog_distribution_install_btn.setEnabled((not busy) and bool(getattr(self, "_catalog_distribution_install_allowed", False)))
                 self.catalog_distribution_cancel_btn.setEnabled(busy)
                 self.catalog_advanced_manager_btn.setEnabled(not busy)
+                self.catalog_distribution_change_parent_btn.setEnabled(not busy)
+                self.catalog_distribution_open_cache_btn.setEnabled(not busy)
+                self.catalog_distribution_clear_cache_btn.setEnabled(not busy)
 
             class _DiscoverWorker(QtCore.QThread):
                 finished = QtCore.Signal(bool, object, object, str)
@@ -7616,6 +7794,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                         installed=_format_bytes(getattr(manifest, "installed_size_bytes", None)),
                     )
                 )
+                _refresh_distribution_paths()
 
             def _check_release() -> None:
                 if self._catalog_discover_worker is not None:
@@ -7652,6 +7831,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.catalog_distribution_log.appendPlainText(
                     f"release={getattr(release, 'tag', '?')} version={getattr(manifest, 'version', '?')}"
                 )
+                _refresh_distribution_paths()
 
             def _on_distribution_finished(ok: bool, result: object, error: str) -> None:
                 _set_distribution_busy(False)
@@ -7665,31 +7845,58 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self._settings.catalog_library_path = library_root
                     self.catalog_distribution_progress.setValue(100)
                     self.catalog_distribution_status.setText(self._text("official_library_installed"))
-                    self.catalog_distribution_detail.setText(library_root)
+                    try:
+                        plan = self._catalog_distribution_install_plan_preview
+                        cache_size = cache_reclaimable_bytes(plan.cache_dir, plan.components) if plan is not None else 0
+                    except Exception:
+                        cache_size = 0
+                    self.catalog_distribution_detail.setText(
+                        self._text(
+                            "official_library_installed_detail",
+                            path=library_root,
+                            cache=format_bytes_binary(cache_size),
+                        )
+                    )
                     _verify_current()
+                    _refresh_distribution_paths()
                 elif "CANCEL" in str(error).upper():
                     self.catalog_distribution_status.setText(self._text("official_library_cancelled"))
+                    _refresh_distribution_paths()
                 else:
                     self.catalog_distribution_status.setText(self._text("official_library_failed", error=error))
                     self.catalog_distribution_log.appendPlainText(error)
+                    _refresh_distribution_paths()
 
             def _install_recommended() -> None:
                 if self._catalog_distribution_worker is not None:
                     return
-                destination = None
-                current_path = self._catalog_library_path_from_ui()
-                if current_path:
-                    try:
-                        destination = CatalogDistributionService().default_destination(
-                            self._catalog_distribution_manifest,
-                            parent=Path(current_path).expanduser().parent,
-                        ) if self._catalog_distribution_manifest is not None else None
-                    except Exception:
-                        destination = None
+                plan = _distribution_plan_preview()
+                if plan is None:
+                    return
+                validation = validate_library_parent(
+                    _preferred_install_parent(),
+                    plan.manifest,
+                    cache_dir=plan.cache_dir,
+                    cache_root=default_cache_root(),
+                    application_roots=[ROOT_DIR, *_runtime_resource_dirs()],
+                    probe=True,
+                )
+                if not validation.ok:
+                    self.catalog_distribution_status.setText(
+                        self._text("official_library_destination_invalid", error=f"{validation.code}: {validation.message}")
+                    )
+                    _refresh_distribution_paths()
+                    return
+                storage = build_storage_plan(plan)
+                if not storage.sufficient:
+                    self.catalog_distribution_status.setText(self._text("official_library_space_blocked"))
+                    self.catalog_distribution_storage.setText(_storage_summary_text(storage))
+                    _refresh_distribution_paths()
+                    return
                 self.catalog_distribution_log.clear()
                 self.catalog_distribution_progress.setValue(0)
                 _set_distribution_busy(True)
-                worker = CatalogDistributionInstallWorker(destination=destination, settings=self._settings)
+                worker = CatalogDistributionInstallWorker(destination=None, install_parent=validation.parent, settings=self._settings)
                 worker.progress.connect(_on_distribution_progress)
                 worker.discovered.connect(_on_distribution_discovered)
                 worker.finished.connect(_on_distribution_finished)
@@ -7701,13 +7908,86 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self._catalog_distribution_worker.request_cancel()
                     self.catalog_distribution_cancel_btn.setEnabled(False)
 
+            def _choose_install_parent() -> None:
+                current = str(_preferred_install_parent())
+                chosen = QtWidgets.QFileDialog.getExistingDirectory(
+                    self,
+                    self._text("official_library_choose_parent_title"),
+                    current,
+                )
+                if not chosen:
+                    return
+                manifest = self._catalog_distribution_manifest
+                if manifest is None:
+                    self._settings.catalog_library_install_parent = str(Path(chosen).expanduser())
+                    save_persistent_settings(self._settings)
+                    _refresh_distribution_paths()
+                    return
+                validation = validate_library_parent(
+                    chosen,
+                    manifest,
+                    cache_root=default_cache_root(),
+                    application_roots=[ROOT_DIR, *_runtime_resource_dirs()],
+                    probe=True,
+                )
+                if not validation.ok:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        self._text("official_library_destination_error_title"),
+                        self._text("official_library_destination_invalid", error=f"{validation.code}: {validation.message}"),
+                    )
+                    return
+                self._settings.catalog_library_install_parent = str(validation.parent)
+                save_persistent_settings(self._settings)
+                _refresh_distribution_paths()
+
+            def _open_cache_folder() -> None:
+                plan = _distribution_plan_preview()
+                cache_path = plan.cache_dir if plan is not None else default_cache_root()
+                try:
+                    cache_path.mkdir(parents=True, exist_ok=True)
+                    open_in_file_manager(cache_path)
+                except Exception as exc:
+                    self.catalog_distribution_log.appendPlainText(str(exc))
+
+            def _clear_version_cache() -> None:
+                if self._catalog_distribution_worker is not None:
+                    self.catalog_distribution_status.setText(self._text("official_library_cache_busy"))
+                    return
+                plan = _distribution_plan_preview()
+                if plan is None:
+                    return
+                reclaimable = cache_reclaimable_bytes(plan.cache_dir, plan.components)
+                if reclaimable <= 0:
+                    self.catalog_distribution_status.setText(self._text("official_library_cache_empty"))
+                    return
+                answer = QtWidgets.QMessageBox.question(
+                    self,
+                    self._text("official_library_clear_cache_title"),
+                    self._text("official_library_clear_cache_confirm", size=format_bytes_binary(reclaimable)),
+                )
+                if answer != QtWidgets.QMessageBox.Yes:
+                    return
+                try:
+                    removed = cleanup_distribution_cache(plan.cache_dir, plan.components, active=False)
+                    self.catalog_distribution_status.setText(
+                        self._text("official_library_cache_cleared", size=format_bytes_binary(removed))
+                    )
+                    _refresh_distribution_paths()
+                except Exception as exc:
+                    self.catalog_distribution_status.setText(self._text("official_library_cache_clear_failed", error=str(exc)))
+
             self.catalog_library_verify_btn.clicked.connect(_verify_current)
             self.catalog_library_repair_btn.clicked.connect(self._open_catalog_library_manager)
             self.catalog_library_open_folder_btn.clicked.connect(_open_current_folder)
+            self.catalog_distribution_change_parent_btn.clicked.connect(_choose_install_parent)
+            self.catalog_distribution_open_cache_btn.clicked.connect(_open_cache_folder)
+            self.catalog_distribution_clear_cache_btn.clicked.connect(_clear_version_cache)
             self.catalog_distribution_check_btn.clicked.connect(_check_release)
             self.catalog_distribution_install_btn.clicked.connect(_install_recommended)
             self.catalog_distribution_cancel_btn.clicked.connect(_cancel_distribution)
             _refresh_current()
+            _refresh_distribution_paths()
             _check_release()
             return widget
 
