@@ -9,6 +9,7 @@ from zesolver.gui_startup_wizard import (
     STARTUP_WIZARD_VERSION,
     StartupAstapProbe,
     StartupCatalogProbe,
+    StartupWizardDecision,
     clear_invalid_catalog_selection,
     decide_startup_wizard,
     mark_startup_wizard_completed,
@@ -27,6 +28,51 @@ def _catalog(state: str):
 
 def _astap(state: str):
     return lambda _path: StartupAstapProbe(state, Path("/astap") if state != "none" else None)
+
+
+@pytest.fixture()
+def qt_widgets(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    pytest.importorskip("PySide6")
+    from PySide6 import QtWidgets
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    return QtWidgets, app
+
+
+def _fresh_decision() -> StartupWizardDecision:
+    return StartupWizardDecision(
+        True,
+        "fresh",
+        StartupCatalogProbe("none"),
+        StartupAstapProbe("none"),
+        "test",
+        False,
+        0,
+    )
+
+
+def _wizard(qt_widgets, settings: PersistentSettings | None = None, decision: StartupWizardDecision | None = None):
+    from zesolver.gui_startup_wizard import ZeSolverStartupWizard
+
+    saved: list[PersistentSettings] = []
+    dialog = ZeSolverStartupWizard(
+        settings=settings or PersistentSettings(),
+        decision=decision or _fresh_decision(),
+        save_settings=saved.append,
+    )
+    return dialog, saved
+
+
+def _capture_information(monkeypatch: pytest.MonkeyPatch, qt_widgets) -> list[str]:
+    QtWidgets, _app = qt_widgets
+    messages: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "information",
+        lambda _parent, _title, text: messages.append(str(text)),
+    )
+    return messages
 
 
 def test_fresh_profile_schedules_startup_wizard_without_probe_work() -> None:
@@ -128,6 +174,9 @@ def test_completed_empty_profile_after_configure_later_does_not_relaunch() -> No
 def test_menu_action_relaunches_startup_wizard() -> None:
     assert "self.interface_wizard_action.triggered.connect(self._run_startup_wizard_from_menu)" in SOURCE
     assert "def _run_startup_wizard_from_menu(self) -> None:\n            self._open_startup_wizard(manual=True)" in SOURCE
+    manual_branch = SOURCE.index("if manual:")
+    constructor = SOURCE.index("dialog = ZeSolverStartupWizard", manual_branch)
+    assert "decision = decide_startup_wizard(self._settings)" in SOURCE[manual_branch:constructor]
 
 
 def test_legacy_prompt_requires_explicit_legacy_index_mode() -> None:
@@ -224,3 +273,212 @@ def test_successful_install_path_is_forwarded_to_main_window_handler() -> None:
     apply_existing = SOURCE.index("self._on_catalog_library_manager_selected(value)")
     assert selected < handler < apply_existing
     assert "self._update_simplified_capability_summary()" in SOURCE[handler : handler + 1200]
+
+
+def test_astap_browse_selection_updates_visible_and_internal_path(qt_widgets, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    QtWidgets, _app = qt_widgets
+    astap = tmp_path / "astap"
+    astap.mkdir()
+    dialog, _saved = _wizard(qt_widgets)
+    dialog.astap_radio.setChecked(True)
+
+    monkeypatch.setattr(QtWidgets.QFileDialog, "getExistingDirectory", lambda *_args: str(astap))
+    dialog.astap_browse.click()
+
+    assert Path(dialog.astap_edit.text()) == astap
+    assert dialog._current_astap_path() == str(astap)
+    assert not dialog._is_current_astap_validated()
+
+
+def test_astap_manual_entry_validation_then_finish_persists_near_only(qt_widgets, tmp_path: Path) -> None:
+    astap = tmp_path / "astap"
+    astap.mkdir()
+    settings = PersistentSettings(catalog_library_path=None, db_root=None)
+    dialog, saved = _wizard(qt_widgets, settings=settings)
+    selected: list[str] = []
+    dialog.astapSelected.connect(lambda path: (selected.append(path), setattr(settings, "db_root", path), setattr(settings, "near_catalog_mode", "astap-native")))
+    dialog.astap_radio.setChecked(True)
+    dialog.astap_edit.setText(str(astap))
+
+    dialog._on_finished(True, {"path": str(astap), "families": ("d50",)}, "", "astap")
+
+    assert dialog._is_current_astap_validated()
+    assert settings.db_root is None
+
+    dialog.accept()
+
+    assert selected == [str(astap)]
+    assert settings.db_root == str(astap)
+    assert settings.near_catalog_mode == "astap-native"
+    assert saved and saved[-1].startup_wizard_completed is True
+
+
+def test_astap_start_operation_validates_current_visible_field(qt_widgets, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import zesolver.gui_startup_wizard as wizard_module
+
+    astap = tmp_path / "astap"
+    astap.mkdir()
+    captured: dict[str, object] = {}
+
+    class FakeSignal:
+        def __init__(self) -> None:
+            self._slots = []
+
+        def connect(self, slot) -> None:
+            self._slots.append(slot)
+
+        def emit(self, *args) -> None:
+            for slot in list(self._slots):
+                slot(*args)
+
+    class FakeWorker:
+        def __init__(self, operation, payload, **_kwargs) -> None:
+            self.operation = operation
+            self.payload = payload
+            self.progress = FakeSignal()
+            self.discovered = FakeSignal()
+            self.finished = FakeSignal()
+
+        def isRunning(self) -> bool:
+            return False
+
+        def start(self) -> None:
+            captured["operation"] = self.operation
+            captured["payload"] = dict(self.payload)
+            self.finished.emit(True, {"path": self.payload["path"], "families": ("d50",)}, "", self.operation)
+
+    monkeypatch.setattr(wizard_module, "StartupCatalogWorker", FakeWorker)
+    settings = PersistentSettings(db_root="/old/astap")
+    dialog, saved = _wizard(qt_widgets, settings=settings)
+    selected: list[str] = []
+    dialog.astapSelected.connect(selected.append)
+    dialog.astap_radio.setChecked(True)
+    dialog.astap_edit.setText(str(astap))
+
+    dialog._start_operation()
+    dialog.accept()
+
+    assert captured == {"operation": "astap", "payload": {"path": str(astap)}}
+    assert selected == [str(astap)]
+    assert saved and saved[-1].startup_wizard_completed is True
+
+
+def test_astap_validation_success_is_tied_to_exact_path(qt_widgets, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    messages = _capture_information(monkeypatch, qt_widgets)
+    first = tmp_path / "astap-a"
+    second = tmp_path / "astap-b"
+    first.mkdir()
+    second.mkdir()
+    dialog, saved = _wizard(qt_widgets)
+    selected: list[str] = []
+    dialog.astapSelected.connect(selected.append)
+    dialog.astap_radio.setChecked(True)
+    dialog.astap_edit.setText(str(first))
+    dialog._on_finished(True, {"path": str(first), "families": ("d50",)}, "", "astap")
+
+    dialog.astap_edit.setText(str(second))
+    dialog.accept()
+
+    assert not dialog._is_current_astap_validated()
+    assert selected == []
+    assert saved == []
+    assert messages == ["Validez la base ASTAP avant de terminer."]
+
+
+def test_astap_invalid_or_unvalidated_path_cannot_finish(qt_widgets, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    messages = _capture_information(monkeypatch, qt_widgets)
+    dialog, saved = _wizard(qt_widgets)
+    selected: list[str] = []
+    dialog.astapSelected.connect(selected.append)
+    dialog.astap_radio.setChecked(True)
+    dialog.astap_edit.setText(str(tmp_path / "missing-astap"))
+    dialog._on_finished(False, None, "ASTAP_SOURCE_MISSING", "astap")
+
+    dialog.accept()
+
+    assert selected == []
+    assert saved == []
+    assert messages == ["Validez la base ASTAP avant de terminer."]
+
+
+def test_astap_path_is_not_persisted_until_finish(qt_widgets, tmp_path: Path) -> None:
+    astap = tmp_path / "astap"
+    astap.mkdir()
+    settings = PersistentSettings(db_root="/old/astap", index_root="/old/index")
+    dialog, saved = _wizard(qt_widgets, settings=settings)
+    dialog.astap_radio.setChecked(True)
+    dialog.astap_edit.setText(str(astap))
+
+    dialog._on_finished(True, {"path": str(astap), "families": ("d50",)}, "", "astap")
+
+    assert settings.db_root == "/old/astap"
+    assert settings.index_root == "/old/index"
+    assert saved == []
+
+
+def test_astap_cancel_after_validation_preserves_existing_settings(qt_widgets, tmp_path: Path) -> None:
+    astap = tmp_path / "astap"
+    astap.mkdir()
+    settings = PersistentSettings(db_root="/old/astap", index_root="/old/index", catalog_library_path="/old/library")
+    dialog, saved = _wizard(qt_widgets, settings=settings)
+    dialog.astap_radio.setChecked(True)
+    dialog.astap_edit.setText(str(astap))
+    dialog._on_finished(True, {"path": str(astap), "families": ("d50",)}, "", "astap")
+
+    dialog.reject()
+
+    assert settings.db_root == "/old/astap"
+    assert settings.index_root == "/old/index"
+    assert settings.catalog_library_path == "/old/library"
+    assert saved == []
+
+
+def test_astap_near_only_path_clears_library_only_on_successful_finish(qt_widgets, tmp_path: Path) -> None:
+    astap = tmp_path / "astap"
+    astap.mkdir()
+    settings = PersistentSettings(catalog_library_path="/old/library", db_root="/old/astap")
+    dialog, saved = _wizard(qt_widgets, settings=settings)
+
+    def apply_astap(path: str) -> None:
+        clear_invalid_catalog_selection(settings)
+        settings.db_root = path
+        settings.near_catalog_mode = "astap-native"
+
+    dialog.astapSelected.connect(apply_astap)
+    dialog.astap_radio.setChecked(True)
+    dialog.astap_edit.setText(str(astap))
+    dialog._on_finished(True, {"path": str(astap), "families": ("d50",)}, "", "astap")
+    dialog.accept()
+
+    assert settings.catalog_library_path is None
+    assert settings.db_root == str(astap)
+    assert settings.near_catalog_mode == "astap-native"
+    assert saved and saved[-1].startup_wizard_completed is True
+
+
+def test_initial_valid_astap_decision_can_finish_without_download(qt_widgets, tmp_path: Path) -> None:
+    astap = tmp_path / "astap"
+    astap.mkdir()
+    settings = PersistentSettings(db_root=str(astap))
+    decision = StartupWizardDecision(
+        True,
+        "astap_near_only",
+        StartupCatalogProbe("none"),
+        StartupAstapProbe("valid", astap),
+        "test",
+        False,
+        0,
+    )
+    dialog, saved = _wizard(qt_widgets, settings=settings, decision=decision)
+    selected: list[str] = []
+    dialog.astapSelected.connect(selected.append)
+
+    dialog.accept()
+
+    assert selected == [str(astap)]
+    assert saved and saved[-1].startup_wizard_completed is True
+
+
+def test_startup_wizard_tests_cover_legacy_prompt_suppression() -> None:
+    assert "Nouvelles bases détectées" in SOURCE
+    assert "Legacy index rebuild prompt suppressed; active catalog mode is not explicit legacy-index." in SOURCE

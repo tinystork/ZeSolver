@@ -299,7 +299,12 @@ if QtWidgets is not None:
             self._distribution_factory = distribution_factory
             self._management_factory = management_factory
             self._worker: StartupCatalogWorker | None = None
+            self._completed_operation: str | None = None
+            self._completed_operation_signature: tuple[str, ...] | None = None
+            self._active_operation_signature: tuple[str, ...] | None = None
             self._operation_completed = False
+            self._validated_library_path = self._normalized_path_text(decision.catalog.path) if decision.catalog.usable else ""
+            self._validated_astap_path = self._normalized_path_text(decision.astap.path) if decision.astap.usable else ""
             self._selected_choice: CatalogSourceChoice = "official"
             self.setWindowTitle("Assistant de demarrage ZeSolver")
             self.setWizardStyle(QtWidgets.QWizard.ModernStyle)
@@ -358,23 +363,28 @@ if QtWidgets is not None:
             self.existing_library_edit = QtWidgets.QLineEdit(str(getattr(self.settings, "catalog_library_path", "") or ""))
             self.existing_library_browse = QtWidgets.QPushButton("Parcourir")
             self.existing_library_browse.clicked.connect(lambda: self._pick_directory(self.existing_library_edit))
+            self.existing_library_edit.textChanged.connect(lambda _text: self._on_path_text_changed("existing_library"))
             layout.addRow("Bibliotheque existante", self._row(self.existing_library_edit, self.existing_library_browse))
             self.astap_edit = QtWidgets.QLineEdit(str(getattr(self.settings, "db_root", "") or ""))
             self.astap_browse = QtWidgets.QPushButton("Parcourir")
             self.astap_browse.clicked.connect(lambda: self._pick_directory(self.astap_edit))
+            self.astap_edit.textChanged.connect(lambda _text: self._on_path_text_changed("astap"))
             layout.addRow("Base ASTAP", self._row(self.astap_edit, self.astap_browse))
             self.package_edit = QtWidgets.QLineEdit("")
             self.package_browse = QtWidgets.QPushButton("Parcourir")
             self.package_browse.clicked.connect(lambda: self._pick_file(self.package_edit))
+            self.package_edit.textChanged.connect(lambda _text: self._on_path_text_changed("local_package"))
             layout.addRow("Paquet local", self._row(self.package_edit, self.package_browse))
             self.package_destination_edit = QtWidgets.QLineEdit("")
             self.package_destination_browse = QtWidgets.QPushButton("Parcourir")
             self.package_destination_browse.clicked.connect(lambda: self._pick_directory(self.package_destination_edit))
+            self.package_destination_edit.textChanged.connect(lambda _text: self._on_path_text_changed("local_package"))
             layout.addRow("Destination paquet", self._row(self.package_destination_edit, self.package_destination_browse))
             self.storage_label = QtWidgets.QLabel("")
             self.storage_label.setWordWrap(True)
             layout.addRow("Espace disque", self.storage_label)
             self.install_parent_edit.textChanged.connect(self._refresh_storage_preview)
+            self.install_parent_edit.textChanged.connect(lambda _text: self._on_path_text_changed("official"))
             self._refresh_storage_preview()
             return page
 
@@ -450,6 +460,7 @@ if QtWidgets is not None:
                 return
             choice = self._current_choice()
             self._selected_choice = choice
+            self._refresh_operation_completed_flag()
             official = choice == "official"
             existing = choice == "existing_library"
             astap = choice == "astap"
@@ -463,6 +474,91 @@ if QtWidgets is not None:
             for widget in (self.package_edit, self.package_browse, self.package_destination_edit, self.package_destination_browse):
                 widget.setEnabled(package)
             self._refresh_storage_preview()
+
+        @staticmethod
+        def _normalized_path_text(value: object) -> str:
+            text = str(value or "").strip()
+            if not text:
+                return ""
+            try:
+                return str(Path(text).expanduser())
+            except Exception:
+                return text
+
+        def _current_library_path(self) -> str:
+            if not hasattr(self, "existing_library_edit"):
+                return ""
+            return self._normalized_path_text(self.existing_library_edit.text())
+
+        def _current_astap_path(self) -> str:
+            if not hasattr(self, "astap_edit"):
+                return ""
+            return self._normalized_path_text(self.astap_edit.text())
+
+        def _operation_signature(self, operation: str) -> tuple[str, ...]:
+            if operation == "official_install":
+                return (self._normalized_path_text(self.install_parent_edit.text()),)
+            if operation == "existing_library":
+                return (self._current_library_path(),)
+            if operation == "astap":
+                return (self._current_astap_path(),)
+            if operation == "local_package":
+                return (
+                    self._normalized_path_text(self.package_edit.text()),
+                    self._normalized_path_text(self.package_destination_edit.text()),
+                )
+            return ()
+
+        def _operation_for_choice(self, choice: CatalogSourceChoice | None = None) -> str:
+            selected = choice or self._current_choice()
+            if selected == "official":
+                return "official_install"
+            if selected == "existing_library":
+                return "existing_library"
+            if selected == "astap":
+                return "astap"
+            if selected == "local_package":
+                return "local_package"
+            return ""
+
+        def _is_current_library_validated(self) -> bool:
+            path = self._current_library_path()
+            return bool(path and self._validated_library_path and path == self._validated_library_path)
+
+        def _is_current_astap_validated(self) -> bool:
+            path = self._current_astap_path()
+            return bool(path and self._validated_astap_path and path == self._validated_astap_path)
+
+        def _is_current_operation_completed(self, choice: CatalogSourceChoice | None = None) -> bool:
+            selected = choice or self._current_choice()
+            if selected == "existing_library":
+                return self._is_current_library_validated()
+            if selected == "astap":
+                return self._is_current_astap_validated()
+            operation = self._operation_for_choice(selected)
+            return bool(
+                operation
+                and self._completed_operation == operation
+                and self._completed_operation_signature == self._operation_signature(operation)
+                and (selected not in {"official", "local_package"} or self._validated_library_path)
+            )
+
+        def _refresh_operation_completed_flag(self) -> None:
+            if not hasattr(self, "existing_library_edit"):
+                self._operation_completed = False
+                return
+            self._operation_completed = self._is_current_operation_completed()
+
+        def _on_path_text_changed(self, choice: CatalogSourceChoice) -> None:
+            if choice == "existing_library" and self._current_library_path() != self._validated_library_path:
+                self._validated_library_path = ""
+            elif choice == "astap" and self._current_astap_path() != self._validated_astap_path:
+                self._validated_astap_path = ""
+            operation = self._operation_for_choice(choice)
+            if self._completed_operation == operation and self._completed_operation_signature != self._operation_signature(operation):
+                self._completed_operation = None
+                self._completed_operation_signature = None
+            self._refresh_operation_completed_flag()
 
         def _refresh_storage_preview(self) -> None:
             if not hasattr(self, "storage_label"):
@@ -500,6 +596,10 @@ if QtWidgets is not None:
                 operation = "local_package"
             else:
                 return
+            self._completed_operation = None
+            self._completed_operation_signature = None
+            self._active_operation_signature = self._operation_signature(operation)
+            self._operation_completed = False
             self._worker = StartupCatalogWorker(
                 operation,
                 payload,
@@ -546,25 +646,30 @@ if QtWidgets is not None:
             if not ok:
                 self.progress_label.setText(f"Echec: {error}")
                 self._append_log(error)
+                self._active_operation_signature = None
+                self._refresh_operation_completed_flag()
                 return
-            self._operation_completed = True
+            self._completed_operation = operation
+            self._completed_operation_signature = self._active_operation_signature
+            self._active_operation_signature = None
             self.progress.setValue(100)
             if operation in {"official_install", "local_package"}:
                 library_result = getattr(result, "library_result", result)
                 path = str(getattr(library_result, "library_root", "") or "")
                 if path:
-                    self.librarySelected.emit(path)
+                    self._validated_library_path = self._normalized_path_text(path)
                 self.progress_label.setText("Bibliotheque installee et validee.")
             elif operation == "existing_library":
                 path = str((result or {}).get("path", "") if isinstance(result, dict) else "")
                 if path:
-                    self.librarySelected.emit(path)
+                    self._validated_library_path = self._normalized_path_text(path)
                 self.progress_label.setText("Bibliotheque selectionnee.")
             elif operation == "astap":
                 path = str((result or {}).get("path", "") if isinstance(result, dict) else "")
                 if path:
-                    self.astapSelected.emit(path)
+                    self._validated_astap_path = self._normalized_path_text(path)
                 self.progress_label.setText("Base ASTAP selectionnee pour ZeNear.")
+            self._refresh_operation_completed_flag()
             self._append_log(self.progress_label.text())
 
         def _set_busy(self, busy: bool) -> None:
@@ -584,11 +689,12 @@ if QtWidgets is not None:
             mark_startup_wizard_completed(self.settings)
             self._save_settings(self.settings)
             self.completed.emit("later")
-            self.accept()
+            super().accept()
 
         def _update_summary(self) -> None:
             choice = self._current_choice()
-            if choice == "official" and not self._operation_completed:
+            ready = self._is_current_operation_completed(choice)
+            if choice == "official" and not ready:
                 text = "L'installation officielle n'a pas encore ete lancee."
             elif choice == "existing_library":
                 text = f"Bibliotheque: {self.existing_library_edit.text().strip() or '-'}"
@@ -602,35 +708,34 @@ if QtWidgets is not None:
 
         def accept(self) -> None:
             choice = self._current_choice()
-            if choice in {"official", "local_package"} and not self._operation_completed:
+            ready = self._is_current_operation_completed(choice)
+            if choice in {"official", "local_package"} and not ready:
                 QtWidgets.QMessageBox.information(
                     self,
                     "Assistant de demarrage ZeSolver",
                     "L'installation doit etre terminee avec succes avant de terminer ce parcours.",
                 )
                 return
-            if choice == "existing_library" and not self._operation_completed:
-                path = self.existing_library_edit.text().strip()
-                if self.decision.catalog.usable and path:
-                    self.librarySelected.emit(path)
-                else:
+            if choice == "existing_library":
+                if not ready:
                     QtWidgets.QMessageBox.information(
                         self,
                         "Assistant de demarrage ZeSolver",
                         "Validez la bibliotheque existante avant de terminer.",
                     )
                     return
-            if choice == "astap" and not self._operation_completed:
-                path = self.astap_edit.text().strip()
-                if self.decision.astap.usable and path:
-                    self.astapSelected.emit(path)
-                else:
+                self.librarySelected.emit(self._validated_library_path)
+            if choice == "astap":
+                if not ready:
                     QtWidgets.QMessageBox.information(
                         self,
                         "Assistant de demarrage ZeSolver",
                         "Validez la base ASTAP avant de terminer.",
                     )
                     return
+                self.astapSelected.emit(self._validated_astap_path)
+            if choice in {"official", "local_package"} and self._validated_library_path:
+                self.librarySelected.emit(self._validated_library_path)
             self.settings.sample_fits = self.sample_fits_edit.text().strip() or None
             self.settings.solver_blind_enabled = bool(self.blind_enabled_check.isChecked())
             mark_startup_wizard_completed(self.settings)
