@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Added a reproducible public `main` projection manifest and builder so the
+  user-facing branch can be generated from `test` without merging tests,
+  internal tools, reports, or development-only documentation.
 - Promoted guided GPU provisioning for safe source-managed virtual
   environments, while keeping system Python, frozen builds and embedded hosts
   diagnostic-only.

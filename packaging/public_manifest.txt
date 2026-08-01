@@ -1,0 +1,33 @@
+# ZeSolver public main projection allowlist.
+#
+# This manifest is intentionally positive-only.  It describes the files copied
+# from the canonical development branch `test` into the generated public `main`
+# tree.  Development tests, reports, architecture/stabilization notes, CI and
+# internal tools are intentionally excluded.
+
+README.md
+CHANGELOG.md
+LICENSE
+NOTICE.md
+pyproject.toml
+
+zesolver.py
+zewcscleaner.py
+zeindexcheck.py
+
+config/zeblind_4d_experimental_manifest.json
+
+icon/ZSicon.icns
+icon/ZSicon.ico
+icon/ZSicon.jpeg
+icon/ZSicon.png
+
+legal/ASTAP_HNSKY_DATA_TERMS.md
+legal/GAIA_DATA_TERMS.txt
+
+docs/zeblind_astrometry_4d_experimental.md
+
+zeblindsolver/README.md
+zesolver/**
+zeblindsolver/**
+zewcs290/**
