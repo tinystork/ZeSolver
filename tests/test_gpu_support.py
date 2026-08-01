@@ -205,14 +205,46 @@ def _subprocess_plan(script: str) -> GpuProvisioningPlan:
     )
 
 
+def _pip_check_ok_command() -> tuple[str, ...]:
+    return (sys.executable, "-c", "print('No broken requirements found.')")
+
+
+def _self_test_ok_command() -> tuple[str, ...]:
+    payload = {
+        "schema": "zesolver.gpu_diagnostic.v1",
+        "effective_backend": "cuda",
+        "reason_code": "GPU_READY",
+        "device_names": ["Fake GPU"],
+        "device_count": 1,
+        "cupy_version": "14.1.1",
+    }
+    return (sys.executable, "-c", f"import json; print(json.dumps({payload!r}))")
+
+
+def _self_test_failed_command() -> tuple[str, ...]:
+    payload = {
+        "schema": "zesolver.gpu_diagnostic.v1",
+        "effective_backend": "cpu",
+        "reason_code": "CUDA_RUNTIME_UNAVAILABLE",
+        "stderr_tail": "runtime failed",
+    }
+    return (sys.executable, "-c", f"import json, sys; print(json.dumps({payload!r})); print('runtime failed', file=sys.stderr)")
+
+
 def test_python_environment_provisioner_success_requires_restart() -> None:
     plan = _subprocess_plan("print('installed')")
 
-    result = PythonEnvironmentProvisioner().provision(plan, timeout_s=5)
+    result = PythonEnvironmentProvisioner().provision(
+        plan,
+        timeout_s=5,
+        pip_check_command=_pip_check_ok_command(),
+        self_test_command=_self_test_ok_command(),
+    )
 
     assert result.status == ProvisioningStatus.INSTALLED_RESTART_REQUIRED
     assert result.restart_required is True
     assert "installed" in result.stdout_tail
+    assert result.technical_details["self_test"]["cupy_version"] == "14.1.1"
 
 
 def test_python_environment_provisioner_drains_large_output_without_deadlock() -> None:
@@ -229,22 +261,45 @@ def test_python_environment_provisioner_drains_large_output_without_deadlock() -
         _subprocess_plan(script),
         progress_callback=seen.append,
         timeout_s=10,
+        pip_check_command=_pip_check_ok_command(),
+        self_test_command=_self_test_ok_command(),
     )
 
     assert result.status == ProvisioningStatus.INSTALLED_RESTART_REQUIRED
     assert sum(len(line) for line in seen) > 1_000_000
     assert "699:" in result.stdout_tail
+    assert any("self-test" in str(item).lower() or "self_test" in str(item).lower() for item in seen)
+
+
+def test_python_environment_provisioner_self_test_failure_reports_tail() -> None:
+    result = PythonEnvironmentProvisioner().provision(
+        _subprocess_plan("print('installed')"),
+        timeout_s=5,
+        pip_check_command=_pip_check_ok_command(),
+        self_test_command=_self_test_failed_command(),
+    )
+
+    assert result.status == ProvisioningStatus.INSTALL_FAILED
+    assert "CUDA self-test" in result.message
+    assert "runtime failed" in result.stdout_tail
+    assert "runtime failed" in result.stderr_tail
 
 
 def test_python_environment_provisioner_reports_pip_error_without_crash() -> None:
     script = "import sys\nprint('pip says no')\nsys.exit(7)"
 
-    result = PythonEnvironmentProvisioner().provision(_subprocess_plan(script), timeout_s=5)
+    result = PythonEnvironmentProvisioner().provision(
+        _subprocess_plan(script),
+        timeout_s=5,
+        pip_check_command=_pip_check_ok_command(),
+        self_test_command=_self_test_ok_command(),
+    )
 
     assert result.status == ProvisioningStatus.INSTALL_FAILED
     assert result.returncode == 7
     assert "INSTALL_FAILED" in result.message
     assert "pip says no" in result.stdout_tail
+    assert "pip says no" in result.stderr_tail
 
 
 def test_gpu_diagnostic_json_cli(capsys: pytest.CaptureFixture[str]) -> None:

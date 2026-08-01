@@ -40,6 +40,7 @@ from .gpu_support import (
     EffectiveBackend,
     GpuCapabilityReport,
     GpuProvisioningPlan,
+    GpuProvisioningProgress,
     GpuProvisioningResult,
     GpuRuntimeContext,
     ProvisioningStatus,
@@ -327,7 +328,7 @@ if QtCore is not None:
 
 
     class StartupGpuProvisionWorker(QtCore.QThread):
-        progress = QtCore.Signal(str)
+        progress = QtCore.Signal(object)
         resultReady = QtCore.Signal(object)
 
         def __init__(self, plan: GpuProvisioningPlan) -> None:
@@ -435,6 +436,11 @@ if QtWidgets is not None:
             self.gpu_detail_view = QtWidgets.QPlainTextEdit()
             self.gpu_detail_view.setReadOnly(True)
             self.gpu_detail_view.setMaximumHeight(120)
+            self.gpu_detail_view.document().setMaximumBlockCount(1200)
+            self.gpu_progress = QtWidgets.QProgressBar()
+            self.gpu_progress.setRange(0, 1)
+            self.gpu_progress.setValue(0)
+            self.gpu_progress.setVisible(False)
             row = QtWidgets.QHBoxLayout()
             self.gpu_install_btn = QtWidgets.QPushButton("Installer l'acceleration GPU")
             self.gpu_cpu_btn = QtWidgets.QPushButton("Continuer sur CPU")
@@ -447,6 +453,7 @@ if QtWidgets is not None:
             row.addWidget(self.gpu_rediagnose_btn)
             row.addStretch(1)
             layout.addWidget(self.gpu_status_label)
+            layout.addWidget(self.gpu_progress)
             layout.addWidget(self.gpu_detail_view)
             layout.addLayout(row)
             page.initializePage = self._initialize_gpu_page  # type: ignore[method-assign]
@@ -527,6 +534,30 @@ if QtWidgets is not None:
             if hasattr(self, "gpu_detail_view"):
                 self.gpu_detail_view.setPlainText(details)
 
+        @staticmethod
+        def _gpu_phase_label(phase: object) -> str:
+            labels = {
+                "preparation": "preparation",
+                "download": "telechargement",
+                "install": "installation",
+                "pip_check": "pip check",
+                "self_test": "self-test CUDA",
+                "restart_required": "redemarrage requis",
+            }
+            return labels.get(str(phase or ""), str(phase or "progression"))
+
+        def _on_gpu_provision_progress(self, progress: object) -> None:
+            if isinstance(progress, GpuProvisioningProgress):
+                phase = self._gpu_phase_label(progress.phase)
+                line = progress.line or progress.message
+                text = f"[{phase}] {line}" if line else f"[{phase}]"
+                self.gpu_status_label.setText(f"Installation GPU en cours - {phase}")
+            else:
+                text = str(progress)
+            if text:
+                for line in str(text).splitlines() or [str(text)]:
+                    self.gpu_detail_view.appendPlainText(line)
+
         def _choose_cpu_for_gpu(self) -> None:
             if self._is_gpu_provisioning_running():
                 self._cancel_gpu_provisioning()
@@ -559,6 +590,13 @@ if QtWidgets is not None:
             self._gpu_provisioning_active = bool(active)
             for button in self._wizard_buttons():
                 button.setEnabled(not active)
+            if hasattr(self, "gpu_progress"):
+                self.gpu_progress.setVisible(active)
+                if active:
+                    self.gpu_progress.setRange(0, 0)
+                else:
+                    self.gpu_progress.setRange(0, 1)
+                    self.gpu_progress.setValue(1)
             if hasattr(self, "gpu_install_btn"):
                 self.gpu_install_btn.setEnabled(False if active else bool(self._gpu_plan and self._gpu_plan.command))
             if hasattr(self, "gpu_rediagnose_btn"):
@@ -593,7 +631,7 @@ if QtWidgets is not None:
                 return
             self._gpu_provision_result = None
             self._gpu_worker = StartupGpuProvisionWorker(plan)
-            self._gpu_worker.progress.connect(lambda text: self.gpu_detail_view.appendPlainText(str(text)))
+            self._gpu_worker.progress.connect(self._on_gpu_provision_progress)
             self._gpu_worker.resultReady.connect(self._on_gpu_provision_result_ready)
             self._gpu_worker.finished.connect(self._on_gpu_worker_thread_finished)
             self._gpu_worker.finished.connect(self._gpu_worker.deleteLater)
@@ -643,6 +681,17 @@ if QtWidgets is not None:
             )
             if output_tail and output_tail not in details:
                 details = (details + "\n" if details else "") + output_tail
+            self_test = getattr(result, "technical_details", {}).get("self_test", {}) if hasattr(result, "technical_details") else {}
+            if isinstance(self_test, dict) and self_test:
+                names = self_test.get("device_names") if isinstance(self_test.get("device_names"), list) else []
+                gpu_name = ", ".join(str(item) for item in names) if names else "-"
+                summary = [
+                    f"GPU: {gpu_name}",
+                    f"CuPy: {self_test.get('cupy_version') or '-'}",
+                    f"Peripheriques: {self_test.get('device_count') if self_test.get('device_count') is not None else '-'}",
+                    f"Self-test: {self_test.get('reason_code') or '-'}",
+                ]
+                details = (details + "\n" if details else "") + "\n".join(summary)
             if restart_required:
                 details = (details + "\n" if details else "") + "Relancez ZeSolver pour activer l'acceleration GPU."
             self._set_gpu_page_text(message or "Installation GPU terminee.", details=details)

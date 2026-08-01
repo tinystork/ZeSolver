@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Added visible GPU installation progress in the startup wizard, including pip
+  output, pip check, a fresh CUDA self-test subprocess, and a clear restart
+  required state instead of leaving the user with a silent install.
 - Fixed a GPU provisioning wizard crash after successful pip installation by
   separating the custom result signal from native `QThread.finished`, delaying
   worker cleanup until the Qt thread has really stopped, and continuously

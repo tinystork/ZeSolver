@@ -150,7 +150,30 @@ class GpuProvisioningResult:
     technical_details: Mapping[str, Any] = field(default_factory=dict)
 
 
-ProgressCallback = Callable[[str], None]
+@dataclass(frozen=True)
+class GpuProvisioningProgress:
+    phase: str
+    message: str
+    line: str = ""
+
+    def to_text(self) -> str:
+        text = self.line or self.message
+        return f"[{self.phase}] {text}" if self.phase else text
+
+    def to_dict(self) -> dict[str, str]:
+        return {"phase": self.phase, "message": self.message, "line": self.line}
+
+    def __str__(self) -> str:
+        return self.to_text()
+
+    def __len__(self) -> int:
+        return len(self.to_text())
+
+    def __contains__(self, value: object) -> bool:
+        return str(value) in self.to_text()
+
+
+ProgressCallback = Callable[[GpuProvisioningProgress | str], None]
 CancelToken = Callable[[], bool]
 HostProvisioningCallback = Callable[[GpuProvisioningPlan], GpuProvisioningResult]
 

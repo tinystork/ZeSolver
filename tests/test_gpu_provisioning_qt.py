@@ -12,7 +12,7 @@ QtCore = pytest.importorskip("PySide6.QtCore")
 QtGui = pytest.importorskip("PySide6.QtGui")
 QtWidgets = pytest.importorskip("PySide6.QtWidgets")
 
-from zesolver.gpu_support import GpuProvisioningPlan, GpuProvisioningResult, ProvisioningStatus
+from zesolver.gpu_support import GpuProvisioningPlan, GpuProvisioningProgress, GpuProvisioningResult, ProvisioningStatus
 from zesolver.gui_startup_wizard import StartupAstapProbe, StartupCatalogProbe, StartupGpuProvisionWorker, StartupWizardDecision, ZeSolverStartupWizard
 from zesolver.settings_store import PersistentSettings
 
@@ -78,11 +78,20 @@ def test_gpu_worker_result_ready_does_not_mask_native_qthread_finished(qt_app, m
     class FakeProvisioner:
         def provision(self, plan, progress_callback=None, cancel_token=None):
             if progress_callback:
-                progress_callback("fake pip output")
+                progress_callback(GpuProvisioningProgress("download", "fake pip output", "fake pip output"))
             return GpuProvisioningResult(
                 ProvisioningStatus.INSTALLED_RESTART_REQUIRED,
                 "installed",
                 restart_required=True,
+                technical_details={
+                    "self_test": {
+                        "effective_backend": "cuda",
+                        "reason_code": "GPU_READY",
+                        "device_names": ["Fake GPU"],
+                        "device_count": 1,
+                        "cupy_version": "14.1.1",
+                    }
+                },
             )
 
     monkeypatch.setattr(wizard_module, "PythonEnvironmentProvisioner", lambda: FakeProvisioner())
@@ -138,11 +147,24 @@ def test_gpu_provision_success_cleans_worker_after_native_finished(qt_app, monke
     class FakeProvisioner:
         def provision(self, plan, progress_callback=None, cancel_token=None):
             if progress_callback:
-                progress_callback("install ok")
+                progress_callback(GpuProvisioningProgress("preparation", "preparation"))
+                progress_callback(GpuProvisioningProgress("download", "download line", "Downloading cupy"))
+                progress_callback(GpuProvisioningProgress("install", "install line", "Installing collected packages"))
+                progress_callback(GpuProvisioningProgress("pip_check", "pip check", "No broken requirements found."))
+                progress_callback(GpuProvisioningProgress("self_test", "self-test", "CUDA_SELF_TEST_OK"))
             return GpuProvisioningResult(
                 ProvisioningStatus.INSTALLED_RESTART_REQUIRED,
                 "Installation terminee.",
                 restart_required=True,
+                technical_details={
+                    "self_test": {
+                        "effective_backend": "cuda",
+                        "reason_code": "GPU_READY",
+                        "device_names": ["Fake GPU"],
+                        "device_count": 1,
+                        "cupy_version": "14.1.1",
+                    }
+                },
             )
 
     monkeypatch.setattr(wizard_module, "PythonEnvironmentProvisioner", lambda: FakeProvisioner())
@@ -153,8 +175,13 @@ def test_gpu_provision_success_cleans_worker_after_native_finished(qt_app, monke
 
     assert _wait_until(qt_app, lambda: dialog._gpu_worker is None, timeout_s=3.0)
     assert saved[-1].gpu_restart_required is True
-    assert "Relancez ZeSolver" in dialog.gpu_detail_view.toPlainText()
-    assert "Operation GPU terminee." in dialog.gpu_detail_view.toPlainText()
+    detail = dialog.gpu_detail_view.toPlainText()
+    assert "Relancez ZeSolver" in detail
+    assert "Operation GPU terminee." in detail
+    assert "[telechargement] Downloading cupy" in detail
+    assert "[pip check] No broken requirements found." in detail
+    assert "GPU: Fake GPU" in detail
+    assert "CuPy: 14.1.1" in detail
 
 
 def test_gpu_provision_error_is_displayed_without_crash(qt_app, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -163,11 +190,12 @@ def test_gpu_provision_error_is_displayed_without_crash(qt_app, monkeypatch: pyt
     class FakeProvisioner:
         def provision(self, plan, progress_callback=None, cancel_token=None):
             if progress_callback:
-                progress_callback("pip failed")
+                progress_callback(GpuProvisioningProgress("install", "pip failed", "pip failed"))
             return GpuProvisioningResult(
                 ProvisioningStatus.INSTALL_FAILED,
                 "INSTALL_FAILED: pip failed",
                 returncode=7,
+                stderr_tail="pip stderr tail",
             )
 
     monkeypatch.setattr(wizard_module, "PythonEnvironmentProvisioner", lambda: FakeProvisioner())
@@ -180,6 +208,7 @@ def test_gpu_provision_error_is_displayed_without_crash(qt_app, monkeypatch: pyt
     assert saved[-1].gpu_user_cpu_selected is True
     assert "INSTALL_FAILED" in dialog.gpu_status_label.text()
     assert "pip failed" in dialog.gpu_detail_view.toPlainText()
+    assert "pip stderr tail" in dialog.gpu_detail_view.toPlainText()
 
 
 def test_gpu_provision_cancel_stops_worker_before_reject(qt_app, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -210,6 +239,19 @@ def test_gpu_provision_cancel_stops_worker_before_reject(qt_app, monkeypatch: py
     assert _wait_until(qt_app, lambda: dialog._gpu_worker is None, timeout_s=3.0)
     assert saved[-1].gpu_user_cpu_selected is True
     assert "cancelled" in dialog.gpu_detail_view.toPlainText()
+
+
+def test_gpu_progress_messages_reach_gui(qt_app) -> None:
+    dialog, _saved = _wizard(qt_app)
+
+    dialog._on_gpu_provision_progress(GpuProvisioningProgress("download", "download", "Downloading wheel"))
+    dialog._on_gpu_provision_progress(GpuProvisioningProgress("install", "install", "Installing collected packages"))
+    dialog._on_gpu_provision_progress(GpuProvisioningProgress("self_test", "self-test", "CUDA_SELF_TEST_OK"))
+
+    detail = dialog.gpu_detail_view.toPlainText()
+    assert "[telechargement] Downloading wheel" in detail
+    assert "[installation] Installing collected packages" in detail
+    assert "[self-test CUDA] CUDA_SELF_TEST_OK" in detail
 
 
 def test_gpu_close_event_ignores_when_worker_does_not_stop(qt_app) -> None:
