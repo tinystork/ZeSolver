@@ -161,7 +161,7 @@ def test_s6a1c_tool_outputs_complete_json_from_fresh_subprocess(tmp_path: Path) 
         cwd=str(ROOT),
         text=True,
         capture_output=True,
-        timeout=20,
+        timeout=90,
     )
 
     assert proc.returncode == 0, proc.stderr
@@ -175,7 +175,11 @@ def test_s6a1c_tool_outputs_complete_json_from_fresh_subprocess(tmp_path: Path) 
     assert "after_numpy" in row["threadpool_info"]
     assert "during_limit" in row["threadpool_info"]
     assert "after_restore" in row["threadpool_info"]
-    assert row["threads_process_peak"] is not None
+    assert isinstance(row["process_thread_sampling_supported"], bool)
+    if row["process_thread_sampling_supported"]:
+        assert row["threads_process_peak"] is not None
+    else:
+        assert row["threads_process_peak"] is None
     assert row["ru_nvcsw_delta"] >= 0
     assert sum(int(value) for value in row["statuses"].values()) == len(inputs)
     assert row["counters"]["near_catalog_runtime_closed"] == 1

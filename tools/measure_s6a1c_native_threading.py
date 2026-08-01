@@ -266,6 +266,7 @@ def _run_worker(args: argparse.Namespace) -> dict[str, object]:
         "rss_peak_kib": max(_ru_maxrss_kib(), int(process_rss.get("peak", 0) or 0)),
         "rss_samples": process_rss,
         "threads_process_start": sampler.thread_start,
+        "process_thread_sampling_supported": sampler.thread_sampling_supported,
         "threads_process_median": process_threads.get("median"),
         "threads_process_p95": process_threads.get("p95"),
         "threads_process_peak": process_threads.get("peak"),
@@ -338,6 +339,7 @@ class _ProcessSampler:
         self.thread_samples: list[int] = []
         self.rss_samples: list[int] = []
         self.thread_start = _process_threads()
+        self.thread_sampling_supported = self.thread_start is not None
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, name="s6a1c-process-sampler", daemon=True)
@@ -357,6 +359,7 @@ class _ProcessSampler:
         threads = _process_threads()
         rss = _current_rss_kib()
         if threads is not None:
+            self.thread_sampling_supported = True
             self.thread_samples.append(int(threads))
         if rss is not None:
             self.rss_samples.append(int(rss))
@@ -526,8 +529,11 @@ def _loadavg() -> tuple[float, float, float] | None:
 
 
 def _process_threads() -> int | None:
+    status_path = Path("/proc/self/status")
+    if not status_path.exists():
+        return None
     try:
-        with open("/proc/self/status", "r", encoding="utf-8") as handle:
+        with status_path.open("r", encoding="utf-8") as handle:
             for line in handle:
                 if line.startswith("Threads:"):
                     return int(line.split()[1])

@@ -54,6 +54,7 @@ import concurrent.futures
 import json
 import logging
 import math
+import multiprocessing
 import os
 import re
 import shutil
@@ -74,6 +75,18 @@ from astropy.io import fits
 ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
+
+def _process_pool_context():
+    start_method = str(os.environ.get("ZE_PROCESS_START_METHOD", "") or "").strip().lower()
+    if start_method:
+        try:
+            return multiprocessing.get_context(start_method)
+        except ValueError:
+            logging.warning("Invalid ZE_PROCESS_START_METHOD=%s; using platform default", start_method)
+    return multiprocessing.get_context()
+
+
 LOG_FILE = ROOT_DIR / "zesolver.log"
 APP_ICON_CANDIDATES = (
     "ZSicon.ico",
@@ -4609,7 +4622,8 @@ class BatchSolver:
             )
             return
         # Propagate cancellation to the solver for cooperative early exit
-        process_cancel_controller = ProcessCancellationController()
+        process_context = _process_pool_context()
+        process_cancel_controller = ProcessCancellationController(context=process_context)
         thread_cancel_token = ThreadCancellationToken(cancel_event) if cancel_event is not None else None
         run_cancel_token = (
             CompositeCancellationToken((thread_cancel_token, process_cancel_controller.token))
@@ -4672,7 +4686,11 @@ class BatchSolver:
             )
 
         def _queue_result(result: ImageSolveResult) -> None:
+            if result.path in emitted_paths:
+                logging.warning("Duplicate terminal result ignored for %s", result.path)
+                return
             emitted_paths.add(result.path)
+            unresolved.pop(result.path, None)
             yield_queue.append(result)
             if on_result is not None:
                 try:
@@ -4772,11 +4790,16 @@ class BatchSolver:
                 _queue_result(result)
                 return
             if result.status == "solved" or (result.status == "skipped" and "WCS already present" in (result.message or "")):
+                unresolved.pop(path, None)
                 _queue_result(result)
                 return
             if (self.config.blind_enabled and self.config.overwrite) or astrometry_fallback_ready:
+                if path in emitted_paths:
+                    return
                 unresolved[path] = result
             else:
+                if path in emitted_paths:
+                    return
                 result.terminal_reason_code = TerminalReasonCode.NEAR_UNRESOLVED_BLIND_UNAVAILABLE.value
                 unresolved[path] = result
 
@@ -4790,6 +4813,7 @@ class BatchSolver:
             cancelled = False
             pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=max(1, int(phase_workers)),
+                mp_context=process_context,
                 initializer=_near_worker_init,
                 initargs=(self.config, process_cancel_controller.token),
             )
@@ -4884,11 +4908,13 @@ class BatchSolver:
             cancelled = False
             cpu_pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=cpu_w,
+                mp_context=process_context,
                 initializer=_near_worker_init_with_backend,
                 initargs=(self.config, "cpu", process_cancel_controller.token),
             )
             gpu_pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=gpu_w,
+                mp_context=process_context,
                 initializer=_near_worker_init_with_backend,
                 initargs=(self.config, "cuda", process_cancel_controller.token),
             )

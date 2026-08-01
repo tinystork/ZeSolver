@@ -30,6 +30,7 @@ def test_development_surface_reorganized_and_persisted() -> None:
         zesolver_app = importlib.util.module_from_spec(spec)
         sys.modules["zesolver_app_p3b1c"] = zesolver_app
         spec.loader.exec_module(zesolver_app)
+        zesolver_app.os.cpu_count = lambda: 8
 
         root = Path(tempfile.mkdtemp(prefix="p3b1c-gui-"))
         db_root = root / "database"

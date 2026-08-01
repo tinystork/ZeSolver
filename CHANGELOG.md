@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Fixed macOS CI portability failures around deterministic worker caps,
+  spawn-based legacy executor shutdown, WCS-writer cancellation safety,
+  Darwin thread-sampling telemetry, and deterministic Blind 4D ring sampling.
 - Tightened macOS compatibility checks for catalog storage paths, Finder
   opening, spawn-based cancellation, Qt offscreen startup, and CPU-only
   operation when CuPy/CUDA is absent.

@@ -13,6 +13,7 @@ from tests.legacy_stop_helpers import (
 
 
 def test_new_run_creates_fresh_executor_after_stop(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("ZE_PROCESS_START_METHOD", "spawn")
     run_legacy_stop_case(
         monkeypatch,
         tmp_path / "first",
@@ -36,4 +37,6 @@ def test_new_run_creates_fresh_executor_after_stop(monkeypatch, tmp_path) -> Non
     batch = zs.BatchSolver(make_config(zs, second_root, workers=2), files=paths)
     results = list(batch.run(cancel_event=threading.Event()))
     assert len(results) == 3
+    assert sorted(str(item.path) for item in results) == sorted(str(path) for path in paths)
+    assert len({item.path for item in results}) == len(paths)
     assert all(item.status == "solved" for item in results)
