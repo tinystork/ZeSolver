@@ -40,6 +40,7 @@ from .gpu_support import (
     EffectiveBackend,
     GpuCapabilityReport,
     GpuProvisioningPlan,
+    GpuProvisioningResult,
     GpuRuntimeContext,
     ProvisioningStatus,
     PythonEnvironmentProvisioner,
@@ -327,7 +328,7 @@ if QtCore is not None:
 
     class StartupGpuProvisionWorker(QtCore.QThread):
         progress = QtCore.Signal(str)
-        finished = QtCore.Signal(object)
+        resultReady = QtCore.Signal(object)
 
         def __init__(self, plan: GpuProvisioningPlan) -> None:
             super().__init__()
@@ -338,13 +339,16 @@ if QtCore is not None:
             self._cancel_event.set()
 
         def run(self) -> None:
-            provisioner = PythonEnvironmentProvisioner()
-            result = provisioner.provision(
-                self.plan,
-                progress_callback=self.progress.emit,
-                cancel_token=self._cancel_event.is_set,
-            )
-            self.finished.emit(result)
+            try:
+                provisioner = PythonEnvironmentProvisioner()
+                result = provisioner.provision(
+                    self.plan,
+                    progress_callback=self.progress.emit,
+                    cancel_token=self._cancel_event.is_set,
+                )
+            except Exception as exc:
+                result = GpuProvisioningResult(ProvisioningStatus.INSTALL_FAILED, f"INSTALL_FAILED: {exc}")
+            self.resultReady.emit(result)
 
 else:  # pragma: no cover - import surface for non-GUI CLI environments
     StartupCatalogWorker = None  # type: ignore[assignment]
@@ -384,6 +388,8 @@ if QtWidgets is not None:
             self._gpu_report: GpuCapabilityReport | None = None
             self._gpu_plan: GpuProvisioningPlan | None = None
             self._gpu_worker: StartupGpuProvisionWorker | None = None
+            self._gpu_provision_result: object | None = None
+            self._gpu_provisioning_active = False
             self._worker: StartupCatalogWorker | None = None
             self._completed_operation: str | None = None
             self._completed_operation_signature: tuple[str, ...] | None = None
@@ -522,6 +528,9 @@ if QtWidgets is not None:
                 self.gpu_detail_view.setPlainText(details)
 
         def _choose_cpu_for_gpu(self) -> None:
+            if self._is_gpu_provisioning_running():
+                self._cancel_gpu_provisioning()
+                return
             self.settings.gpu_user_cpu_selected = True
             self.settings.gpu_restart_required = False
             self.settings.gpu_diagnostic_completed = True
@@ -532,8 +541,40 @@ if QtWidgets is not None:
             )
             self.gpu_install_btn.setEnabled(False)
 
+        def _wizard_buttons(self) -> tuple[Any, ...]:
+            buttons = []
+            for which in (
+                QtWidgets.QWizard.BackButton,
+                QtWidgets.QWizard.NextButton,
+                QtWidgets.QWizard.FinishButton,
+                QtWidgets.QWizard.CancelButton,
+                QtWidgets.QWizard.CustomButton1,
+            ):
+                button = self.button(which)
+                if button is not None:
+                    buttons.append(button)
+            return tuple(buttons)
+
+        def _set_gpu_provisioning_active(self, active: bool) -> None:
+            self._gpu_provisioning_active = bool(active)
+            for button in self._wizard_buttons():
+                button.setEnabled(not active)
+            if hasattr(self, "gpu_install_btn"):
+                self.gpu_install_btn.setEnabled(False if active else bool(self._gpu_plan and self._gpu_plan.command))
+            if hasattr(self, "gpu_rediagnose_btn"):
+                self.gpu_rediagnose_btn.setEnabled(not active)
+            if hasattr(self, "gpu_cpu_btn"):
+                self.gpu_cpu_btn.setEnabled(True)
+                self.gpu_cpu_btn.setText("Annuler l'installation GPU" if active else "Continuer sur CPU")
+
+        def _is_gpu_provisioning_running(self) -> bool:
+            worker = self._gpu_worker
+            return bool(worker is not None and worker.isRunning())
+
         def _install_gpu_support(self) -> None:
             plan = self._gpu_plan
+            if self._is_gpu_provisioning_running():
+                return
             if plan is None or plan.status != ProvisioningStatus.AVAILABLE or not plan.command:
                 QtWidgets.QMessageBox.information(self, "Acceleration GPU", "Aucune installation GPU n'est disponible dans ce contexte.")
                 return
@@ -550,14 +591,40 @@ if QtWidgets is not None:
                 self.settings.gpu_last_reason_code = "DECLINED"
                 self._save_settings(self.settings)
                 return
-            self.gpu_install_btn.setEnabled(False)
-            self.gpu_cpu_btn.setEnabled(False)
+            self._gpu_provision_result = None
             self._gpu_worker = StartupGpuProvisionWorker(plan)
             self._gpu_worker.progress.connect(lambda text: self.gpu_detail_view.appendPlainText(str(text)))
-            self._gpu_worker.finished.connect(self._on_gpu_provision_finished)
+            self._gpu_worker.resultReady.connect(self._on_gpu_provision_result_ready)
+            self._gpu_worker.finished.connect(self._on_gpu_worker_thread_finished)
+            self._gpu_worker.finished.connect(self._gpu_worker.deleteLater)
+            self._set_gpu_provisioning_active(True)
+            self._set_gpu_page_text("Installation GPU en cours...", details="")
             self._gpu_worker.start()
 
-        def _on_gpu_provision_finished(self, result: object) -> None:
+        def _cancel_gpu_provisioning(self) -> None:
+            worker = self._gpu_worker
+            if worker is None:
+                return
+            worker.request_cancel()
+            self._set_gpu_page_text("Annulation en cours...", details=self.gpu_detail_view.toPlainText())
+            if hasattr(self, "gpu_cpu_btn"):
+                self.gpu_cpu_btn.setEnabled(False)
+
+        def _wait_for_gpu_provisioning_stop(self, timeout_ms: int = 5000) -> bool:
+            worker = self._gpu_worker
+            if worker is None or not worker.isRunning():
+                return True
+            worker.request_cancel()
+            self._set_gpu_page_text("Annulation en cours...", details=self.gpu_detail_view.toPlainText() if hasattr(self, "gpu_detail_view") else "")
+            if not worker.wait(timeout_ms):
+                return False
+            app = QtWidgets.QApplication.instance()
+            if app is not None:
+                app.processEvents()
+            return True
+
+        def _on_gpu_provision_result_ready(self, result: object) -> None:
+            self._gpu_provision_result = result
             status = str(getattr(result, "status", "") or "")
             message = str(getattr(result, "message", "") or "")
             restart_required = bool(getattr(result, "restart_required", False))
@@ -565,8 +632,26 @@ if QtWidgets is not None:
             self.settings.gpu_last_reason_code = status.split(".")[-1] if status else "UNKNOWN"
             self.settings.gpu_user_cpu_selected = not restart_required
             self._save_settings(self.settings)
-            self._set_gpu_page_text(message or "Installation GPU terminee.", details="Relancez ZeSolver pour activer l'acceleration GPU." if restart_required else "")
-            self.gpu_cpu_btn.setEnabled(True)
+            details = self.gpu_detail_view.toPlainText()
+            output_tail = "\n".join(
+                part
+                for part in (
+                    str(getattr(result, "stdout_tail", "") or "").strip(),
+                    str(getattr(result, "stderr_tail", "") or "").strip(),
+                )
+                if part
+            )
+            if output_tail and output_tail not in details:
+                details = (details + "\n" if details else "") + output_tail
+            if restart_required:
+                details = (details + "\n" if details else "") + "Relancez ZeSolver pour activer l'acceleration GPU."
+            self._set_gpu_page_text(message or "Installation GPU terminee.", details=details)
+
+        def _on_gpu_worker_thread_finished(self) -> None:
+            self._set_gpu_provisioning_active(False)
+            if self._gpu_provision_result is not None:
+                self.gpu_detail_view.appendPlainText("Operation GPU terminee.")
+            self._gpu_worker = None
 
         def _source_page(self) -> Any:
             page = QtWidgets.QWizardPage()
@@ -1039,6 +1124,13 @@ if QtWidgets is not None:
             self.summary_label.setText(text)
 
         def accept(self) -> None:
+            if self._is_gpu_provisioning_running():
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Acceleration GPU",
+                    "L'installation GPU est encore en cours. Attendez la fin ou annulez-la.",
+                )
+                return
             choice = self._current_choice()
             ready = self._is_current_operation_completed(choice)
             image_directory = self._current_image_directory()
@@ -1119,9 +1211,8 @@ if QtWidgets is not None:
             super().accept()
 
         def reject(self) -> None:
-            if self._gpu_worker is not None and self._gpu_worker.isRunning():
-                self._gpu_worker.request_cancel()
-                self._gpu_worker.wait(5000)
+            if not self._wait_for_gpu_provisioning_stop(5000):
+                return
             if self._worker is not None and self._worker.isRunning():
                 self._worker.request_cancel()
                 self._worker.wait(5000)
@@ -1149,6 +1240,9 @@ if QtWidgets is not None:
             self.progress_log.appendPlainText(str(text))
 
         def closeEvent(self, event: Any) -> None:
+            if not self._wait_for_gpu_provisioning_stop(5000):
+                event.ignore()
+                return
             if self._worker is not None and self._worker.isRunning():
                 box = QtWidgets.QMessageBox(self)
                 box.setWindowTitle("Assistant de demarrage ZeSolver")

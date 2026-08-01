@@ -13,6 +13,9 @@ def test_startup_wizard_gpu_page_uses_non_gui_service_contract() -> None:
     assert "build_gpu_provisioning_plan" in source
     assert "PythonEnvironmentProvisioner" in source
     assert "gpu_user_cpu_selected" in source
+    worker_section = source[source.index("class StartupGpuProvisionWorker") : source.index("else:  # pragma: no cover - import surface")]
+    assert "resultReady = QtCore.Signal(object)" in worker_section
+    assert "finished = QtCore.Signal(object)" not in worker_section
 
 
 def test_settings_performance_tab_exposes_gpu_diagnostic_button() -> None:

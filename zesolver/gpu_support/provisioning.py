@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections import deque
+import logging
 import subprocess
+import threading
 import time
-from typing import Callable
 
 from .models import (
     CancelToken,
@@ -24,6 +26,10 @@ from .policy import ALLOWED_GPU_PACKAGES, build_gpu_provisioning_plan
 def _tail(text: str, *, limit: int = 4000) -> str:
     text = str(text or "")
     return text[-limit:]
+
+
+def _format_command(command: tuple[str, ...]) -> str:
+    return " ".join(str(part) for part in command)
 
 
 class PythonEnvironmentProvisioner:
@@ -52,57 +58,99 @@ class PythonEnvironmentProvisioner:
         if progress_callback:
             progress_callback("Starting optional GPU package installation...")
         try:
+            logging.info("GPU_PROVISIONING_START command=%s shell=false", _format_command(tuple(plan.command)))
             proc = subprocess.Popen(
                 list(plan.command),
                 stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 text=True,
+                bufsize=1,
                 shell=False,
             )
+            logging.info("GPU_PROVISIONING_PROCESS_STARTED pid=%s", getattr(proc, "pid", None))
             started = time.monotonic()
+            output_tail: deque[str] = deque(maxlen=400)
+            output_lock = threading.Lock()
+
+            def _reader() -> None:
+                stream = proc.stdout
+                if stream is None:
+                    return
+                while True:
+                    chunk = stream.read(4096)
+                    if chunk == "":
+                        break
+                    with output_lock:
+                        output_tail.append(chunk.rstrip("\r\n"))
+                    if progress_callback:
+                        progress_callback(chunk.rstrip("\r\n"))
+
+            reader = threading.Thread(target=_reader, name="zesolver-gpu-provision-output", daemon=True)
+            reader.start()
             while proc.poll() is None:
                 if cancel_token and cancel_token():
+                    logging.info("GPU_PROVISIONING_CANCEL_REQUESTED pid=%s", getattr(proc, "pid", None))
                     proc.terminate()
                     try:
-                        stdout, stderr = proc.communicate(timeout=10)
+                        proc.wait(timeout=10)
                     except subprocess.TimeoutExpired:
+                        logging.warning("GPU_PROVISIONING_CANCEL_KILL pid=%s", getattr(proc, "pid", None))
                         proc.kill()
-                        stdout, stderr = proc.communicate(timeout=10)
+                        proc.wait(timeout=10)
+                    reader.join(timeout=5)
+                    with output_lock:
+                        stdout = "\n".join(output_tail)
+                    logging.info("GPU_PROVISIONING_CANCELLED returncode=%s", proc.returncode)
                     return GpuProvisioningResult(
                         ProvisioningStatus.CANCELLED,
                         "GPU installation cancelled.",
                         returncode=proc.returncode,
                         stdout_tail=_tail(stdout),
-                        stderr_tail=_tail(stderr),
+                        stderr_tail="",
                     )
                 if time.monotonic() - started > timeout_s:
+                    logging.warning("GPU_PROVISIONING_TIMEOUT pid=%s timeout_s=%s", getattr(proc, "pid", None), timeout_s)
                     proc.terminate()
-                    stdout, stderr = proc.communicate(timeout=10)
+                    try:
+                        proc.wait(timeout=10)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                        proc.wait(timeout=10)
+                    reader.join(timeout=5)
+                    with output_lock:
+                        stdout = "\n".join(output_tail)
+                    logging.warning("GPU_PROVISIONING_TIMEOUT_END returncode=%s", proc.returncode)
                     return GpuProvisioningResult(
                         ProvisioningStatus.INSTALL_FAILED,
                         "GPU installation timed out.",
                         returncode=proc.returncode,
                         stdout_tail=_tail(stdout),
-                        stderr_tail=_tail(stderr),
+                        stderr_tail="",
                     )
                 time.sleep(0.1)
-            stdout, stderr = proc.communicate()
+            proc.wait()
+            reader.join(timeout=5)
+            with output_lock:
+                stdout = "\n".join(output_tail)
         except Exception as exc:
+            logging.warning("GPU_PROVISIONING_EXCEPTION error=%s", exc)
             return GpuProvisioningResult(ProvisioningStatus.INSTALL_FAILED, str(exc))
+        logging.info("GPU_PROVISIONING_END returncode=%s", proc.returncode)
         if proc.returncode != 0:
+            logging.warning("GPU_PROVISIONING_INSTALL_FAILED returncode=%s", proc.returncode)
             return GpuProvisioningResult(
                 ProvisioningStatus.INSTALL_FAILED,
-                "GPU package installation failed.",
+                "INSTALL_FAILED: GPU package installation failed.",
                 returncode=proc.returncode,
                 stdout_tail=_tail(stdout),
-                stderr_tail=_tail(stderr),
+                stderr_tail="",
             )
         return GpuProvisioningResult(
             ProvisioningStatus.INSTALLED_RESTART_REQUIRED,
             "Installation finished. Restart ZeSolver to activate GPU acceleration.",
             returncode=0,
             stdout_tail=_tail(stdout),
-            stderr_tail=_tail(stderr),
+            stderr_tail="",
             restart_required=True,
         )
 

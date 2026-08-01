@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import json
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -13,6 +14,8 @@ from zesolver.gpu_support import (
     CapabilityState,
     DistributionKind,
     EffectiveBackend,
+    GpuProvisioningPlan,
+    GpuProvisioningResult,
     GpuRuntimeContext,
     ProbeHooks,
     ProvisioningStatus,
@@ -111,7 +114,6 @@ def test_host_adapter_delegates_to_host_callback() -> None:
 
     def callback(plan):
         calls.append(plan)
-        from zesolver.gpu_support import GpuProvisioningResult
 
         return GpuProvisioningResult(ProvisioningStatus.GUIDANCE_ONLY, "host handled")
 
@@ -195,41 +197,54 @@ def test_cupy_self_test_success_with_fake_runtime() -> None:
     assert result["device_count"] == 1
 
 
-def test_python_environment_provisioner_success_requires_restart(monkeypatch: pytest.MonkeyPatch) -> None:
-    class FakeProc:
-        returncode = 0
-
-        def __init__(self, *args, **kwargs):
-            self.args = args
-            self._polled = False
-
-        def poll(self):
-            if self._polled:
-                return 0
-            self._polled = True
-            return None
-
-        def communicate(self, timeout=None):
-            self.returncode = 0
-            return "installed", ""
-
-        def terminate(self):
-            self.returncode = -15
-
-    monkeypatch.setattr(subprocess, "Popen", FakeProc)
-    plan = build_gpu_provisioning_plan(
-        probe_gpu_capability(
-            GpuRuntimeContext(DistributionKind.SOURCE_MANAGED, True, "/py"),
-            hooks=_hooks(which=lambda name: "/usr/bin/nvidia-smi", run=lambda *a, **k: subprocess.CompletedProcess(a[0], 0, stdout="GPU, 555\n", stderr="")),
-            run_self_test=False,
-        ),
-        GpuRuntimeContext(DistributionKind.SOURCE_MANAGED, True, "/py"),
+def _subprocess_plan(script: str) -> GpuProvisioningPlan:
+    return GpuProvisioningPlan(
+        ProvisioningStatus.AVAILABLE,
+        None,
+        command=(sys.executable, "-c", script, "cupy-cuda12x[ctk]"),
     )
+
+
+def test_python_environment_provisioner_success_requires_restart() -> None:
+    plan = _subprocess_plan("print('installed')")
 
     result = PythonEnvironmentProvisioner().provision(plan, timeout_s=5)
 
     assert result.status == ProvisioningStatus.INSTALLED_RESTART_REQUIRED
     assert result.restart_required is True
+    assert "installed" in result.stdout_tail
+
+
+def test_python_environment_provisioner_drains_large_output_without_deadlock() -> None:
+    script = (
+        "import sys\n"
+        "for idx in range(700):\n"
+        "    sys.stdout.write(str(idx) + ':out:' + ('x' * 1024))\n"
+        "    sys.stderr.write(str(idx) + ':err:' + ('y' * 1024))\n"
+        "sys.stdout.flush(); sys.stderr.flush()\n"
+    )
+    seen: list[str] = []
+
+    result = PythonEnvironmentProvisioner().provision(
+        _subprocess_plan(script),
+        progress_callback=seen.append,
+        timeout_s=10,
+    )
+
+    assert result.status == ProvisioningStatus.INSTALLED_RESTART_REQUIRED
+    assert sum(len(line) for line in seen) > 1_000_000
+    assert "699:" in result.stdout_tail
+
+
+def test_python_environment_provisioner_reports_pip_error_without_crash() -> None:
+    script = "import sys\nprint('pip says no')\nsys.exit(7)"
+
+    result = PythonEnvironmentProvisioner().provision(_subprocess_plan(script), timeout_s=5)
+
+    assert result.status == ProvisioningStatus.INSTALL_FAILED
+    assert result.returncode == 7
+    assert "INSTALL_FAILED" in result.message
+    assert "pip says no" in result.stdout_tail
 
 
 def test_gpu_diagnostic_json_cli(capsys: pytest.CaptureFixture[str]) -> None:

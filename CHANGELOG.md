@@ -4,6 +4,10 @@
 
 ### Fixed
 
+- Fixed a GPU provisioning wizard crash after successful pip installation by
+  separating the custom result signal from native `QThread.finished`, delaying
+  worker cleanup until the Qt thread has really stopped, and continuously
+  draining pip output.
 - Added a guided optional GPU diagnostic/provisioning layer for ZeNear CUDA
   acceleration and stopped repeating the missing-CuPy fallback once per image
   in CPU-only batches.
