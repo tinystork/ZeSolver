@@ -279,7 +279,10 @@ Points de contrôle résiduels
 
 absence de contradiction entre un avertissement précoce de couverture Blind 4Dpartielle et la télémétrie finale 1476 / 1476, all_sky=true ;
 
-en l’absence de CuPy, éviter de répéter inutilement le fallback CUDA pourchaque image du même batch ;
+RC-GPU-1 ferme le bruit principal : en l’absence permanente de CuPy, ZeNear
+désactive CUDA une seule fois pour le batch et continue directement sur CPU. La
+gestion GPU reste optionnelle, guidée seulement en environnement source
+explicitement modifiable, et le packaging GPU frozen reste à définir.
 
 cohérence des caches FAST quand le chemin canonique change ;
 

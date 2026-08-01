@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Added a guided optional GPU diagnostic/provisioning layer for ZeNear CUDA
+  acceleration and stopped repeating the missing-CuPy fallback once per image
+  in CPU-only batches.
 - Fixed macOS CI portability failures around deterministic worker caps,
   spawn-based legacy executor shutdown, WCS-writer cancellation safety,
   Darwin thread-sampling telemetry, and deterministic Blind 4D ring sampling.

@@ -29,7 +29,7 @@ threadpoolctl>=3.6,<4
 #   - macOS uses the CPU backend
 #
 # Recommended and validated ZeSolver configuration:
-#   CUDA 12.x + cupy-cuda12x
+#   CUDA 12.x + cupy-cuda12x[ctk]
 #
 # Check the NVIDIA driver and the maximum CUDA version supported by it:
 #   nvidia-smi
@@ -46,7 +46,7 @@ threadpoolctl>=3.6,<4
 #   python -m pip install -e ".[gpu]"
 #
 # Or install CuPy manually:
-#   python -m pip install cupy-cuda12x
+#   python -m pip install "cupy-cuda12x[ctk]"
 #
 # Verify the installation:
 #   python -c "import cupy; cupy.show_config(); print('GPU count:', cupy.cuda.runtime.getDeviceCount())"

@@ -937,6 +937,9 @@ def _is_structural_cuda_error(exc: BaseException) -> bool:
     if _is_cuda_oom(exc):
         return True
     markers = (
+        "no module named 'cupy'",
+        "no module named cupy",
+        "cupy not installed",
         "no cuda device",
         "out of range",
         "invalid device",
@@ -949,12 +952,25 @@ def _is_structural_cuda_error(exc: BaseException) -> bool:
     return any(marker in text for marker in markers)
 
 
+def _permanent_cuda_unavailable_reason(exc: BaseException) -> str | None:
+    text = str(exc).lower()
+    if "no module named 'cupy'" in text or "no module named cupy" in text or "cupy not installed" in text:
+        return "CUPY_NOT_INSTALLED"
+    return None
+
+
 def _disable_gpu_for_batch(reason: str) -> None:
     global _ZENEAR_GPU_BATCH_DISABLED, _ZENEAR_GPU_BATCH_DISABLED_REASON
+    was_disabled = bool(_ZENEAR_GPU_BATCH_DISABLED)
     _ZENEAR_GPU_BATCH_DISABLED = True
     _ZENEAR_GPU_BATCH_DISABLED_REASON = str(reason or "cuda_runtime_error")
     _increment_near_detect_counter("near_detect_gpu_disabled_for_batch")
     _record_near_detect_event("near_detect_gpu_disabled_for_batch", reason=_ZENEAR_GPU_BATCH_DISABLED_REASON)
+    if not was_disabled:
+        logging.warning(
+            "ZeNear GPU unavailable: reason=%s CPU selected for the complete batch",
+            _ZENEAR_GPU_BATCH_DISABLED_REASON,
+        )
 
 
 def _astap_compatible_mean_bin_image_cuda(
@@ -1735,15 +1751,20 @@ def _select_astap_strict_backend(requested: str, device: int | None) -> tuple[st
         return "cpu", None, None, None
     if _ZENEAR_GPU_BATCH_DISABLED:
         if req == "auto":
-            return "cpu", None, str(_ZENEAR_GPU_BATCH_DISABLED_REASON or "gpu_disabled_for_batch"), None
+            disabled_reason = str(_ZENEAR_GPU_BATCH_DISABLED_REASON or "")
+            if disabled_reason == "CUPY_NOT_INSTALLED":
+                return "cpu", None, None, None
+            return "cpu", None, disabled_reason or "gpu_disabled_for_batch", None
         return "cuda", int(device) if device is not None else 0, str(_ZENEAR_GPU_BATCH_DISABLED_REASON or "gpu_disabled_for_batch"), None
     try:
         info = _cuda_runtime_probe(device)
         dev = int(info.get("device", int(device) if device is not None else 0))
         return "cuda", dev, None, info
     except Exception as exc:
-        reason = str(exc)
+        reason = _permanent_cuda_unavailable_reason(exc) or str(exc)
         if req == "cuda" and _is_structural_cuda_error(exc):
+            _disable_gpu_for_batch(reason)
+        if req == "auto" and _permanent_cuda_unavailable_reason(exc):
             _disable_gpu_for_batch(reason)
         if req == "auto":
             return "cpu", None, reason, None

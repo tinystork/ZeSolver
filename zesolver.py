@@ -287,11 +287,13 @@ from zesolver.gui_startup_wizard import (
     StartupWizardCompletionRequest,
     StartupWizardCompletionResult,
     ZeSolverStartupWizard,
+    default_gpu_runtime_context,
     decide_startup_wizard,
     mark_startup_wizard_completed,
     should_allow_legacy_family_prompt,
 )
 from zesolver.gui_theme import ThemeController, normalize_theme_mode
+from zesolver.gpu_support import EffectiveBackend, build_gpu_provisioning_plan, probe_gpu_capability
 from zesolver.gui_pipeline import GuiEngineSelectionError, GuiSolveController
 from zesolver.gui_pipeline.legacy_runner import LegacyGuiRunner
 from zesolver.gui_pipeline.lifecycle import RunLifecycle
@@ -625,6 +627,9 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_detect_label": "Dispositif détection (GPU/CPU)",
         "settings_perf_detect_auto_option": "Auto (GPU si disponible, sinon CPU)",
         "settings_perf_detect_cpu_option": "CPU",
+        "settings_perf_gpu_diag_btn": "Diagnostic acceleration GPU",
+        "settings_perf_gpu_diag_ready": "GPU disponible pour ZeNear: {reason}",
+        "settings_perf_gpu_diag_cpu": "CPU selectionne: {reason}",
         "settings_perf_io_label": "Concurrence I/O (Auto=0)",
         "settings_perf_near_warm_label": "Near rapide (séquence)",
         # Fast solver (near) tab
@@ -886,6 +891,9 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_detect_label": "Star detection device",
         "settings_perf_detect_auto_option": "Auto (GPU if available, else CPU)",
         "settings_perf_detect_cpu_option": "CPU",
+        "settings_perf_gpu_diag_btn": "GPU acceleration diagnostic",
+        "settings_perf_gpu_diag_ready": "GPU available for ZeNear: {reason}",
+        "settings_perf_gpu_diag_cpu": "CPU selected: {reason}",
         "settings_perf_io_label": "I/O concurrency (Auto=0)",
         "settings_perf_near_warm_label": "Fast near (sequential warm-start)",
         # Fast solver (near) tab
@@ -9783,6 +9791,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.perf_detect_combo = QtWidgets.QComboBox()
             self._populate_detect_devices(self.perf_detect_combo)
             form.addRow(self.perf_detect_label, self.perf_detect_combo)
+            self.perf_gpu_diag_btn = QtWidgets.QPushButton()
+            self.perf_gpu_diag_btn.clicked.connect(self._run_gpu_diagnostic_from_settings)
+            self.perf_gpu_diag_label = QtWidgets.QLabel()
+            self.perf_gpu_diag_label.setWordWrap(True)
+            gpu_diag_row = QtWidgets.QHBoxLayout()
+            gpu_diag_row.addWidget(self.perf_gpu_diag_btn)
+            gpu_diag_row.addWidget(self.perf_gpu_diag_label, 1)
+            form.addRow(gpu_diag_row)
             # I/O concurrency (0 = Auto)
             self.perf_io_label = QtWidgets.QLabel()
             self.perf_io_spin = QtWidgets.QSpinBox()
@@ -9914,16 +9930,16 @@ def launch_gui(args: argparse.Namespace) -> int:
             # Offer an explicit Auto mode (best UX): GPU if available, otherwise CPU.
             combo.addItem(self._text("settings_perf_detect_auto_option"), ("auto", 0))
             combo.addItem(self._text("settings_perf_detect_cpu_option"), ("cpu", -1))
-            # Try CUDA via CuPy
+            # Try CUDA via the GUI-free diagnostic service.
             try:
-                import cupy  # type: ignore
-                from cupy.cuda import runtime as _rt  # type: ignore
-                n = int(_rt.getDeviceCount())
+                report = probe_gpu_capability(default_gpu_runtime_context())
+                n = int(report.device_count or 0)
+                if report.effective_backend == EffectiveBackend.CUDA and n > 0:
+                    names = list(report.device_names)
+                else:
+                    names = []
                 for i in range(n):
-                    props = _rt.getDeviceProperties(i)
-                    name = props.get('name') if isinstance(props, dict) else None
-                    if isinstance(name, (bytes, bytearray)):
-                        name = name.decode(errors='ignore')
+                    name = names[i] if i < len(names) else "GPU"
                     label = f"CUDA: {name or 'GPU'} (id {i})"
                     combo.addItem(label, ("cuda", i))
             except Exception:
@@ -10601,6 +10617,40 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self._text(f"settings_tile_compression_option_{key}"),
                     )
 
+        def _update_gpu_diagnostic_label_from_settings(self) -> None:
+            label = getattr(self, "perf_gpu_diag_label", None)
+            if label is None:
+                return
+            reason = str(getattr(self._settings, "gpu_last_reason_code", "") or "-")
+            if bool(getattr(self._settings, "gpu_available", False)):
+                label.setText(self._text("settings_perf_gpu_diag_ready", reason=reason))
+            else:
+                label.setText(self._text("settings_perf_gpu_diag_cpu", reason=reason))
+
+        def _run_gpu_diagnostic_from_settings(self) -> None:
+            context = default_gpu_runtime_context()
+            try:
+                report = probe_gpu_capability(context)
+                plan = build_gpu_provisioning_plan(report, context)
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(self, "GPU", str(exc))
+                return
+            self._settings.gpu_diagnostic_schema_version = 1
+            self._settings.gpu_diagnostic_completed = True
+            self._settings.gpu_available = report.effective_backend == EffectiveBackend.CUDA
+            self._settings.gpu_last_reason_code = report.reason_code.value
+            if self._settings.gpu_available:
+                self._settings.gpu_user_cpu_selected = False
+            try:
+                save_persistent_settings(self._settings)
+            except Exception as exc:
+                logging.warning("GPU_DIAGNOSTIC_SAVE_FAILED error=%s", exc)
+            self._update_gpu_diagnostic_label_from_settings()
+            details = report.human_message
+            if plan.command:
+                details += "\n\nInstallation guidee disponible depuis l'assistant de demarrage en contexte source autorise."
+            QtWidgets.QMessageBox.information(self, "Diagnostic acceleration GPU", details)
+
         def _read_settings_from_ui(self) -> PersistentSettings:
             catalog_library_path = self._catalog_library_path_from_ui()
             catalog_resources_for_save = None
@@ -10738,6 +10788,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                 move_unresolved_files=bool(self.move_unresolved_check.isChecked()) if hasattr(self, "move_unresolved_check") else bool(getattr(self._settings, "move_unresolved_files", False)),
                 interface_mode=str(getattr(self, "_interface_mode", "easy") or "easy"),
                 ui_theme=normalize_theme_mode(getattr(self._settings, "ui_theme", "system")),
+                gpu_diagnostic_schema_version=int(getattr(self._settings, "gpu_diagnostic_schema_version", 1) or 1),
+                gpu_diagnostic_completed=bool(getattr(self._settings, "gpu_diagnostic_completed", False)),
+                gpu_available=bool(getattr(self._settings, "gpu_available", False)),
+                gpu_user_cpu_selected=bool(getattr(self._settings, "gpu_user_cpu_selected", False)),
+                gpu_restart_required=bool(getattr(self._settings, "gpu_restart_required", False)),
+                gpu_last_reason_code=(getattr(self._settings, "gpu_last_reason_code", None) or None),
                 blind_backend_profile=self._current_blind_profile(),
                 blind_4d_manifest_path=manifest_text_for_save,
                 astrometry_api_url=(self.ast_api_url_edit.text().strip() if hasattr(self, 'ast_api_url_edit') else "https://nova.astrometry.net/api"),
@@ -11665,6 +11721,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.perf_near_max_tiles_label.setText(self._text("settings_perf_near_max_tiles_label"))
             if hasattr(self, "perf_detect_label"):
                 self.perf_detect_label.setText(self._text("settings_perf_detect_label"))
+            if hasattr(self, "perf_gpu_diag_btn"):
+                self.perf_gpu_diag_btn.setText(self._text("settings_perf_gpu_diag_btn"))
+                self._update_gpu_diagnostic_label_from_settings()
             if hasattr(self, "perf_io_label"):
                 self.perf_io_label.setText(self._text("settings_perf_io_label"))
             if hasattr(self, "perf_near_warm_check"):

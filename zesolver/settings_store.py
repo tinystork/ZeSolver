@@ -47,7 +47,7 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 15
+SETTINGS_SCHEMA_VERSION = 16
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
@@ -156,6 +156,12 @@ class PersistentSettings:
     move_unresolved_files: bool = False
     interface_mode: str = "easy"
     ui_theme: str = "system"
+    gpu_diagnostic_schema_version: int = 1
+    gpu_diagnostic_completed: bool = False
+    gpu_available: bool = False
+    gpu_user_cpu_selected: bool = False
+    gpu_restart_required: bool = False
+    gpu_last_reason_code: Optional[str] = None
     blind_backend_profile: str = "zeblind_4d_experimental"
     blind_4d_manifest_path: Optional[str] = None
     solver_hint_ra_deg: Optional[float] = None
@@ -387,6 +393,12 @@ def load_persistent_settings() -> PersistentSettings:
         move_unresolved_files=bool(payload.get("move_unresolved_files", False)),
         interface_mode=str(payload.get("interface_mode", "easy") or "easy"),
         ui_theme=normalize_ui_theme(payload.get("ui_theme", "system")),
+        gpu_diagnostic_schema_version=_int_value(payload.get("gpu_diagnostic_schema_version", 1), 1, minimum=1, field="gpu_diagnostic_schema_version"),
+        gpu_diagnostic_completed=bool(payload.get("gpu_diagnostic_completed", False)),
+        gpu_available=bool(payload.get("gpu_available", False)),
+        gpu_user_cpu_selected=bool(payload.get("gpu_user_cpu_selected", False)),
+        gpu_restart_required=bool(payload.get("gpu_restart_required", False)),
+        gpu_last_reason_code=(payload.get("gpu_last_reason_code") or None),
         blind_backend_profile=str(payload.get("blind_backend_profile", "zeblind_4d_experimental") or "zeblind_4d_experimental"),
         blind_4d_manifest_path=(payload.get("blind_4d_manifest_path") or None),
         solver_hint_ra_deg=_float_or_none(payload.get("solver_hint_ra_deg")),

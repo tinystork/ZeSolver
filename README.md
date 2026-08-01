@@ -355,24 +355,32 @@ the source raster.
 
 ## Optional GPU acceleration
 
-ZeSolver works on CPU by default.
+ZeSolver works fully on CPU by default. CUDA and CuPy are optional, and they are
+only used today for ZeNear star-detection acceleration.
 
-Optional CUDA acceleration currently targets Near star detection on supported Linux/NVIDIA
-systems.
-
-Install the optional runtime where appropriate:
+Check the current runtime without installing anything:
 
 ```bash
-python -m pip install -U \
-  cupy-cuda12x \
-  nvidia-cuda-runtime-cu12 \
-  nvidia-cuda-nvrtc-cu12
+python -m zesolver.gpu_diagnostic --json --show-install-plan
+```
+
+In source-managed environments where you explicitly allow ZeSolver to modify the
+Python environment, the startup wizard can propose a guided CuPy installation.
+It never installs NVIDIA drivers, CUDA Toolkit, system packages, or multiple CuPy
+variants. Frozen executables and embedded hosts remain diagnostic-only unless a
+future packaging flow provides its own GPU component.
+
+Manual source install, when appropriate for your driver/Python combination:
+
+```bash
+python -m pip install "cupy-cuda12x[ctk]"
 ```
 
 In the GUI, select `Auto` or `CUDA` for the star-detection backend.
 
 When CUDA or one of its runtime libraries is unavailable, ZeSolver should fall back safely to CPU
-and record the reason in the log.
+and record the reason in the log. A permanent missing-GPU condition is selected once per batch,
+so a CPU-only run does not repeat a CuPy error for every image.
 
 ## Benchmarking and diagnostics
 

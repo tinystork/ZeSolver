@@ -68,3 +68,29 @@ def test_settings_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     assert s2.last_fov_reducer == pytest.approx(s.last_fov_reducer)
     assert s2.last_fov_binning == s.last_fov_binning
 
+
+def test_settings_roundtrip_preserves_gpu_diagnostic_preferences(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import zesolver.settings_store as store
+
+    settings_file = tmp_path / ".zesolver_settings.json"
+    monkeypatch.setattr(store, "SETTINGS_PATH", settings_file, raising=True)
+    original = store.PersistentSettings(
+        gpu_diagnostic_schema_version=1,
+        gpu_diagnostic_completed=True,
+        gpu_available=False,
+        gpu_user_cpu_selected=True,
+        gpu_restart_required=False,
+        gpu_last_reason_code="CUPY_NOT_INSTALLED",
+        solver_workers=3,
+    )
+
+    store.save_persistent_settings(original)
+    loaded = store.load_persistent_settings()
+
+    assert loaded.gpu_diagnostic_schema_version == 1
+    assert loaded.gpu_diagnostic_completed is True
+    assert loaded.gpu_available is False
+    assert loaded.gpu_user_cpu_selected is True
+    assert loaded.gpu_restart_required is False
+    assert loaded.gpu_last_reason_code == "CUPY_NOT_INSTALLED"
+    assert loaded.solver_workers == 3
