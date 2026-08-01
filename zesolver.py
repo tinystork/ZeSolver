@@ -7009,6 +7009,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._startup_wizard_dialog: Optional[QtWidgets.QDialog] = None
             self._startup_wizard_decision = None
             self._startup_wizard_auto_scheduled = False
+            self._input_directory_scan_pending = False
             self._catalog_distribution_release = None
             self._catalog_distribution_manifest = None
             self._dl_worker = None
@@ -7036,6 +7037,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._build_ui()
             self._set_log_level(self._current_log_level, persist=False)
             self._populate_settings_ui()
+            if self._settings.sample_fits:
+                self._apply_input_directory(self._settings.sample_fits, trigger_scan=False, show_error=False)
             self._prefill_from_args(args)
             self._apply_language()
             self._apply_interface_mode()
@@ -7573,6 +7576,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             )
             dialog.librarySelected.connect(self._on_startup_wizard_library_selected)
             dialog.astapSelected.connect(self._on_startup_wizard_astap_selected)
+            dialog.imageDirectorySelected.connect(self._on_startup_wizard_image_directory_selected)
             dialog.completed.connect(self._on_startup_wizard_completed)
             self._startup_wizard_dialog = dialog
             dialog.show()
@@ -7609,6 +7613,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._log_settings(self._text("library_manager_failed", error=str(exc)))
             self._update_simplified_capability_summary()
 
+        def _on_startup_wizard_image_directory_selected(self, path: str) -> None:
+            self._apply_input_directory(path, trigger_scan=True)
+
         def _on_startup_wizard_completed(self, source: str) -> None:
             mark_startup_wizard_completed(self._settings)
             try:
@@ -7616,6 +7623,48 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception as exc:
                 self._log_settings(self._text("library_manager_failed", error=str(exc)))
             self._log_settings(f"Startup wizard completed: {source}")
+
+        def _apply_input_directory(self, path: str, *, trigger_scan: bool = True, show_error: bool = True) -> bool:
+            value = str(path or "").strip()
+            if not value:
+                return False
+            try:
+                directory = Path(value).expanduser()
+            except Exception:
+                if show_error:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_input_missing", path=value))
+                return False
+            if not directory.is_dir():
+                if show_error:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_input_missing", path=directory))
+                return False
+            try:
+                normalized = str(directory.resolve())
+            except Exception:
+                normalized = str(directory)
+            self._settings.sample_fits = normalized
+            if hasattr(self, "settings_sample_edit"):
+                self.settings_sample_edit.setText(normalized)
+            if hasattr(self, "input_edit"):
+                self.input_edit.setText(normalized)
+            try:
+                save_persistent_settings(self._settings)
+            except Exception as exc:
+                self._log_settings(self._text("library_manager_failed", error=str(exc)))
+            if trigger_scan:
+                self._schedule_input_directory_scan()
+            return True
+
+        def _schedule_input_directory_scan(self) -> None:
+            if self._input_directory_scan_pending:
+                return
+            self._input_directory_scan_pending = True
+
+            def _scan_once() -> None:
+                self._input_directory_scan_pending = False
+                self.scan_files()
+
+            QtCore.QTimer.singleShot(0, _scan_once)
 
         def _set_log_level(self, level: str, *, persist: bool = True) -> None:
             normalized = str(level or "INFO").upper()
@@ -11514,9 +11563,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 options=opts,
             )
             if directory:
-                line_edit.setText(directory)
-                if trigger_scan:
-                    self.scan_files()
+                if trigger_scan and line_edit is self.input_edit:
+                    self._apply_input_directory(directory, trigger_scan=True)
+                else:
+                    line_edit.setText(directory)
 
         def scan_files(self) -> None:
             # Cancel previous scan if any

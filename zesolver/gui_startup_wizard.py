@@ -280,6 +280,7 @@ if QtWidgets is not None:
     class ZeSolverStartupWizard(QtWidgets.QWizard):
         librarySelected = QtCore.Signal(str)
         astapSelected = QtCore.Signal(str)
+        imageDirectorySelected = QtCore.Signal(str)
         completed = QtCore.Signal(str)
 
         def __init__(
@@ -543,6 +544,23 @@ if QtWidgets is not None:
                 and (selected not in {"official", "local_package"} or self._validated_library_path)
             )
 
+        def _current_image_directory(self) -> str:
+            if not hasattr(self, "sample_fits_edit"):
+                return ""
+            text = self.sample_fits_edit.text().strip()
+            if not text:
+                return ""
+            try:
+                directory = Path(text).expanduser()
+            except Exception:
+                return text
+            if not directory.is_dir():
+                return text
+            try:
+                return str(directory.resolve())
+            except Exception:
+                return str(directory)
+
         def _refresh_operation_completed_flag(self) -> None:
             if not hasattr(self, "existing_library_edit"):
                 self._operation_completed = False
@@ -709,6 +727,14 @@ if QtWidgets is not None:
         def accept(self) -> None:
             choice = self._current_choice()
             ready = self._is_current_operation_completed(choice)
+            image_directory = self._current_image_directory()
+            if image_directory and not Path(image_directory).expanduser().is_dir():
+                QtWidgets.QMessageBox.information(
+                    self,
+                    "Assistant de demarrage ZeSolver",
+                    "Le dossier d'images indique n'existe pas ou n'est pas un repertoire.",
+                )
+                return
             if choice in {"official", "local_package"} and not ready:
                 QtWidgets.QMessageBox.information(
                     self,
@@ -736,10 +762,12 @@ if QtWidgets is not None:
                 self.astapSelected.emit(self._validated_astap_path)
             if choice in {"official", "local_package"} and self._validated_library_path:
                 self.librarySelected.emit(self._validated_library_path)
-            self.settings.sample_fits = self.sample_fits_edit.text().strip() or None
+            self.settings.sample_fits = image_directory or None
             self.settings.solver_blind_enabled = bool(self.blind_enabled_check.isChecked())
             mark_startup_wizard_completed(self.settings)
             self._save_settings(self.settings)
+            if image_directory:
+                self.imageDirectorySelected.emit(image_directory)
             self.completed.emit(choice)
             super().accept()
 

@@ -60,6 +60,18 @@ def _fresh_decision() -> StartupWizardDecision:
     )
 
 
+def _ready_decision(catalog_path: Path) -> StartupWizardDecision:
+    return StartupWizardDecision(
+        True,
+        "ready",
+        StartupCatalogProbe("ready_full", catalog_path),
+        StartupAstapProbe("none"),
+        "test",
+        False,
+        0,
+    )
+
+
 def _wizard(qt_widgets, settings: PersistentSettings | None = None, decision: StartupWizardDecision | None = None):
     from zesolver.gui_startup_wizard import ZeSolverStartupWizard
 
@@ -219,6 +231,7 @@ def test_settings_roundtrip_preserves_existing_fields_and_wizard_state(tmp_path:
         db_root="/astap",
         index_root="/legacy-index",
         solver_search_scale=1.5,
+        sample_fits=str(tmp_path / "Images ete"),
         startup_wizard_completed=True,
         startup_wizard_version=STARTUP_WIZARD_VERSION,
     )
@@ -230,6 +243,7 @@ def test_settings_roundtrip_preserves_existing_fields_and_wizard_state(tmp_path:
     assert loaded.db_root == "/astap"
     assert loaded.index_root == "/legacy-index"
     assert loaded.solver_search_scale == pytest.approx(1.5)
+    assert loaded.sample_fits == str(tmp_path / "Images ete")
     assert loaded.startup_wizard_completed is True
     assert loaded.startup_wizard_version == STARTUP_WIZARD_VERSION
 
@@ -504,6 +518,144 @@ def test_initial_valid_astap_decision_can_finish_without_download(qt_widgets, tm
 
     assert selected == [str(astap)]
     assert saved and saved[-1].startup_wizard_completed is True
+
+
+def test_startup_wizard_emits_valid_image_directory_on_finish(qt_widgets, tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog"
+    image_dir = tmp_path / "Images ete 2026"
+    catalog.mkdir()
+    image_dir.mkdir()
+    settings = PersistentSettings(catalog_library_path=str(catalog))
+    dialog, saved = _wizard(qt_widgets, settings=settings, decision=_ready_decision(catalog))
+    selected: list[str] = []
+    dialog.imageDirectorySelected.connect(selected.append)
+    dialog.sample_fits_edit.setText(str(image_dir))
+
+    dialog.accept()
+
+    normalized = str(image_dir.resolve())
+    assert selected == [normalized]
+    assert settings.sample_fits == normalized
+    assert saved and saved[-1].sample_fits == normalized
+
+
+def test_startup_wizard_rejects_invalid_image_directory_before_side_effects(
+    qt_widgets,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    messages = _capture_information(monkeypatch, qt_widgets)
+    catalog = tmp_path / "catalog"
+    catalog.mkdir()
+    settings = PersistentSettings(catalog_library_path=str(catalog), sample_fits="/old/images")
+    dialog, saved = _wizard(qt_widgets, settings=settings, decision=_ready_decision(catalog))
+    libraries: list[str] = []
+    image_dirs: list[str] = []
+    dialog.librarySelected.connect(libraries.append)
+    dialog.imageDirectorySelected.connect(image_dirs.append)
+    dialog.sample_fits_edit.setText(str(tmp_path / "missing images"))
+
+    dialog.accept()
+
+    assert libraries == []
+    assert image_dirs == []
+    assert saved == []
+    assert settings.sample_fits == "/old/images"
+    assert messages == ["Le dossier d'images indique n'existe pas ou n'est pas un repertoire."]
+
+
+def test_startup_wizard_cancel_and_later_do_not_apply_image_directory(qt_widgets, tmp_path: Path) -> None:
+    QtWidgets, _app = qt_widgets
+    catalog = tmp_path / "catalog"
+    image_dir = tmp_path / "Images finales"
+    catalog.mkdir()
+    image_dir.mkdir()
+    settings = PersistentSettings(catalog_library_path=str(catalog), sample_fits="/old/images")
+
+    cancel_dialog, cancel_saved = _wizard(qt_widgets, settings=settings, decision=_ready_decision(catalog))
+    cancel_selected: list[str] = []
+    cancel_dialog.imageDirectorySelected.connect(cancel_selected.append)
+    cancel_dialog.sample_fits_edit.setText(str(image_dir))
+    cancel_dialog.reject()
+
+    assert cancel_selected == []
+    assert cancel_saved == []
+    assert settings.sample_fits == "/old/images"
+
+    later_dialog, later_saved = _wizard(qt_widgets, settings=settings, decision=_ready_decision(catalog))
+    later_selected: list[str] = []
+    later_dialog.imageDirectorySelected.connect(later_selected.append)
+    later_dialog.sample_fits_edit.setText(str(image_dir))
+    later_dialog._on_custom_button(QtWidgets.QWizard.CustomButton1)
+
+    assert later_selected == []
+    assert later_saved and later_saved[-1].sample_fits == "/old/images"
+    assert settings.sample_fits == "/old/images"
+
+
+def test_startup_wizard_can_apply_another_image_directory_on_relaunch(qt_widgets, tmp_path: Path) -> None:
+    catalog = tmp_path / "catalog"
+    first = tmp_path / "Images hiver"
+    second = tmp_path / "Images aout accentue"
+    catalog.mkdir()
+    first.mkdir()
+    second.mkdir()
+    settings = PersistentSettings(catalog_library_path=str(catalog))
+    selected: list[str] = []
+
+    first_dialog, _first_saved = _wizard(qt_widgets, settings=settings, decision=_ready_decision(catalog))
+    first_dialog.imageDirectorySelected.connect(selected.append)
+    first_dialog.sample_fits_edit.setText(str(first))
+    first_dialog.accept()
+
+    second_dialog, _second_saved = _wizard(qt_widgets, settings=settings, decision=_ready_decision(catalog))
+    second_dialog.imageDirectorySelected.connect(selected.append)
+    second_dialog.sample_fits_edit.setText(str(second))
+    second_dialog.accept()
+
+    assert selected == [str(first.resolve()), str(second.resolve())]
+    assert settings.sample_fits == str(second.resolve())
+
+
+def test_main_window_apply_input_directory_centralizes_persist_sync_and_scan() -> None:
+    handler = SOURCE.index("def _on_startup_wizard_image_directory_selected")
+    apply_method = SOURCE.index("def _apply_input_directory")
+    schedule_method = SOURCE.index("def _schedule_input_directory_scan")
+    body = SOURCE[apply_method:schedule_method]
+    schedule_body = SOURCE[schedule_method : SOURCE.index("def _set_log_level", schedule_method)]
+
+    assert handler < apply_method < schedule_method
+    assert "self._apply_input_directory(path, trigger_scan=True)" in SOURCE[handler : handler + 180]
+    assert "directory = Path(value).expanduser()" in body
+    assert "if not directory.is_dir():" in body
+    assert "return False" in body
+    assert "self._settings.sample_fits = normalized" in body
+    assert "self.settings_sample_edit.setText(normalized)" in body
+    assert "self.input_edit.setText(normalized)" in body
+    assert "save_persistent_settings(self._settings)" in body
+    assert "self._schedule_input_directory_scan()" in body
+    assert "if self._input_directory_scan_pending:" in schedule_body
+    assert "QtCore.QTimer.singleShot(0, _scan_once)" in schedule_body
+    assert "self.scan_files()" in schedule_body
+
+
+def test_main_window_browse_uses_apply_input_directory_without_immediate_double_scan() -> None:
+    picker = SOURCE.index("def _pick_directory")
+    picker_body = SOURCE[picker : SOURCE.index("def scan_files", picker)]
+
+    assert "if trigger_scan and line_edit is self.input_edit:" in picker_body
+    assert "self._apply_input_directory(directory, trigger_scan=True)" in picker_body
+    assert "self.scan_files()" not in picker_body
+
+
+def test_main_window_restores_persisted_sample_fits_into_input_field_on_startup() -> None:
+    constructor = SOURCE.index("def __init__(self, settings: PersistentSettings)")
+    populate = SOURCE.index("self._populate_settings_ui()", constructor)
+    restore = SOURCE.index("self._apply_input_directory(self._settings.sample_fits, trigger_scan=False, show_error=False)", constructor)
+    prefill = SOURCE.index("self._prefill_from_args(args)", constructor)
+
+    assert populate < restore < prefill
+    assert "dialog.imageDirectorySelected.connect(self._on_startup_wizard_image_directory_selected)" in SOURCE
 
 
 def test_startup_wizard_tests_cover_legacy_prompt_suppression() -> None:
