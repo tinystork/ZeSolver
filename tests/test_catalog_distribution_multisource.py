@@ -18,6 +18,8 @@ from zesolver.catalog_library.distribution import (
     DistributionErrorCode,
     DistributionRelease,
     DistributionSource,
+    DistributionTransferController,
+    DistributionTransferState,
 )
 
 
@@ -91,6 +93,8 @@ def _policy(
     mirror2: bool = False,
     max_parallel: int = 3,
     threshold: int = 2,
+    retry_delays: tuple[float, ...] = (0.0,),
+    max_retries: int | None = 0,
 ) -> DistributionDownloadPolicy:
     return DistributionDownloadPolicy(
         sources=(
@@ -100,6 +104,9 @@ def _policy(
         ),
         max_parallel_downloads=max_parallel,
         unhealthy_failure_threshold=threshold,
+        retry_delays_s=retry_delays,
+        retry_poll_interval_s=0.01,
+        max_component_retries=max_retries,
     )
 
 
@@ -159,6 +166,11 @@ class _FakeBackend:
         with self.lock:
             self.requests.append((url, request_headers))
         route = self.routes.get(url)
+        if isinstance(route, list):
+            if route:
+                route = route.pop(0)
+            else:
+                route = None
         if isinstance(route, Exception):
             raise route
         if route is None:
@@ -204,7 +216,7 @@ def _routes_for(source_host: str, *, assets: dict[str, bytes] | None = None) -> 
 
 def test_historical_manifest_without_mirrors_uses_github_only(tmp_path: Path) -> None:
     backend = _FakeBackend(_routes_for("github.example"))
-    service, plan = _plan(tmp_path, backend)
+    service, plan = _plan(tmp_path, backend, policy=_policy())
 
     paths = service.download_distribution(plan)
 
@@ -306,7 +318,16 @@ def test_wrong_size_is_rejected(tmp_path: Path) -> None:
     short = dict(ASSETS)
     short["near.zip"] = b"x"
     backend = _FakeBackend(_routes_for("mirror1.example/catalog", assets=short))
-    service, plan = _plan(tmp_path, backend, policy=DistributionDownloadPolicy(sources=(DistributionSource("mirror-1", True, "https://mirror1.example/catalog"),)))
+    service, plan = _plan(
+        tmp_path,
+        backend,
+        policy=DistributionDownloadPolicy(
+            sources=(DistributionSource("mirror-1", True, "https://mirror1.example/catalog"),),
+            retry_delays_s=(0.0,),
+            retry_poll_interval_s=0.01,
+            max_component_retries=0,
+        ),
+    )
 
     with pytest.raises(DistributionError) as exc:
         service.download_distribution(plan)
@@ -317,7 +338,7 @@ def test_wrong_size_is_rejected(tmp_path: Path) -> None:
 
 def test_partial_resume_on_same_source_uses_range(tmp_path: Path) -> None:
     backend = _FakeBackend(_routes_for("github.example"))
-    service, plan = _plan(tmp_path, backend)
+    service, plan = _plan(tmp_path, backend, policy=_policy())
     part = plan.cache_dir / "near.zip.part"
     part.parent.mkdir(parents=True)
     part.write_bytes(ASSETS["near.zip"][:4])
@@ -349,7 +370,7 @@ def test_partial_resume_can_continue_from_different_source(tmp_path: Path) -> No
 
 def test_server_without_range_support_restarts_component(tmp_path: Path) -> None:
     backend = _FakeBackend(_routes_for("github.example"), ignore_range={"https://github.example/near.zip"})
-    service, plan = _plan(tmp_path, backend)
+    service, plan = _plan(tmp_path, backend, policy=_policy())
     part = plan.cache_dir / "near.zip.part"
     part.parent.mkdir(parents=True)
     part.write_bytes(b"stale")
@@ -383,7 +404,7 @@ def test_parallelism_limit_is_respected(tmp_path: Path) -> None:
 
 def test_same_asset_is_not_downloaded_twice_concurrently(tmp_path: Path) -> None:
     backend = _FakeBackend(_routes_for("github.example"), delay=0.01)
-    service, plan = _plan(tmp_path, backend)
+    service, plan = _plan(tmp_path, backend, policy=_policy())
     duplicate = SimpleNamespace(
         id="near-copy",
         asset="near.zip",
@@ -412,7 +433,7 @@ def test_same_asset_is_not_downloaded_twice_concurrently(tmp_path: Path) -> None
 def test_aggregated_progress_is_monotone(tmp_path: Path) -> None:
     progress = []
     backend = _FakeBackend(_routes_for("github.example"))
-    service, plan = _plan(tmp_path, backend)
+    service, plan = _plan(tmp_path, backend, policy=_policy())
     service.progress_callback = progress.append
 
     service.download_distribution(plan)
@@ -446,7 +467,7 @@ def test_cancellation_stops_parallel_downloads_and_keeps_partials(tmp_path: Path
 
 def test_valid_cache_skips_network_requests(tmp_path: Path) -> None:
     backend = _FakeBackend({})
-    service, plan = _plan(tmp_path, backend)
+    service, plan = _plan(tmp_path, backend, policy=_policy())
     plan.cache_dir.mkdir(parents=True)
     for name, data in ASSETS.items():
         (plan.cache_dir / name).write_bytes(data)
@@ -474,7 +495,7 @@ def test_assembly_is_not_started_until_all_downloads_succeed(tmp_path: Path) -> 
     routes = _routes_for("github.example")
     routes["https://github.example/blind.zip"] = DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "down")
     backend = _FakeBackend(routes)
-    service, plan = _plan(tmp_path, backend)
+    service, plan = _plan(tmp_path, backend, policy=_policy())
     called = {"assembly": False}
 
     def fail_if_called(*_args, **_kwargs):
@@ -491,7 +512,7 @@ def test_assembly_is_not_started_until_all_downloads_succeed(tmp_path: Path) -> 
 
 def test_failed_install_does_not_persist_final_path(tmp_path: Path) -> None:
     backend = _FakeBackend({f"https://github.example/{name}": DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "down") for name in ASSETS})
-    service, plan = _plan(tmp_path, backend)
+    service, plan = _plan(tmp_path, backend, policy=_policy())
     settings = SimpleNamespace(catalog_library_path=None, catalog_library_verification=None)
     saved = []
 
@@ -501,6 +522,231 @@ def test_failed_install_does_not_persist_final_path(tmp_path: Path) -> None:
     assert settings.catalog_library_path is None
     assert settings.catalog_library_verification is None
     assert saved == []
+
+
+def test_recoverable_timeout_retries_automatically_and_keeps_partial(tmp_path: Path) -> None:
+    assets = {"near.zip": ASSETS["near.zip"]}
+    routes = {
+        "https://github.example/near.zip": [
+            DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "read timeout"),
+            ASSETS["near.zip"],
+        ],
+    }
+    backend = _FakeBackend(routes)
+    progress = []
+    service, plan = _plan(
+        tmp_path,
+        backend,
+        assets={**ASSETS, **assets},
+        policy=_policy(retry_delays=(0.01,), max_retries=1),
+    )
+    plan = SimpleNamespace(
+        release=plan.release,
+        manifest=plan.manifest,
+        destination=plan.destination,
+        cache_dir=plan.cache_dir,
+        components=(plan.components[0],),
+        assets={"near.zip": plan.assets["near.zip"]},
+        total_download_bytes=len(ASSETS["near.zip"]),
+        installed_size_bytes=plan.installed_size_bytes,
+    )
+    service.progress_callback = progress.append
+
+    service.download_distribution(plan)  # type: ignore[arg-type]
+
+    assert backend.request_count_for_asset("near.zip") == 2
+    assert any(item.stage == "retry_wait" and item.retry_number == 1 for item in progress)
+    assert service._last_download_stats is not None
+    assert service._last_download_stats.retry_count == 1
+
+
+def test_second_timeout_uses_second_retry_delay_and_delay_is_capped(tmp_path: Path) -> None:
+    assert _policy(retry_delays=(10.0, 30.0, 90.0), max_retries=3).retry_delay(3) == 60.0
+    routes = {
+        "https://github.example/near.zip": [
+            DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "timeout"),
+            DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "WinError 10054"),
+            ASSETS["near.zip"],
+        ],
+    }
+    backend = _FakeBackend(routes)
+    progress = []
+    service, plan = _plan(tmp_path, backend, policy=_policy(retry_delays=(0.01, 0.02), max_retries=2))
+    plan = SimpleNamespace(
+        release=plan.release,
+        manifest=plan.manifest,
+        destination=plan.destination,
+        cache_dir=plan.cache_dir,
+        components=(plan.components[0],),
+        assets={"near.zip": plan.assets["near.zip"]},
+        total_download_bytes=len(ASSETS["near.zip"]),
+        installed_size_bytes=plan.installed_size_bytes,
+    )
+    service.progress_callback = progress.append
+
+    service.download_distribution(plan)  # type: ignore[arg-type]
+
+    waits = [(item.retry_number, item.retry_delay_s) for item in progress if item.stage == "retry_wait"]
+    assert (1, pytest.approx(0.01)) in waits
+    assert (2, pytest.approx(0.02)) in waits
+    assert backend.request_count_for_asset("near.zip") == 3
+
+
+def test_resume_now_interrupts_retry_wait_without_waiting_for_timer(tmp_path: Path) -> None:
+    control = DistributionTransferController()
+    routes = {
+        "https://github.example/near.zip": [
+            DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "temporary DNS failure"),
+            ASSETS["near.zip"],
+        ],
+    }
+    backend = _FakeBackend(routes)
+    service, plan = _plan(tmp_path, backend, policy=_policy(retry_delays=(5.0,), max_retries=1))
+    service.transfer_control = control
+    plan = SimpleNamespace(
+        release=plan.release,
+        manifest=plan.manifest,
+        destination=plan.destination,
+        cache_dir=plan.cache_dir,
+        components=(plan.components[0],),
+        assets={"near.zip": plan.assets["near.zip"]},
+        total_download_bytes=len(ASSETS["near.zip"]),
+        installed_size_bytes=plan.installed_size_bytes,
+    )
+
+    def progress(item) -> None:
+        if item.stage == "retry_wait":
+            control.request_resume_now()
+
+    service.progress_callback = progress
+    started = time.perf_counter()
+
+    service.download_distribution(plan)  # type: ignore[arg-type]
+
+    assert time.perf_counter() - started < 1.0
+    assert backend.request_count_for_asset("near.zip") == 2
+
+
+def test_manual_retry_failure_returns_to_retry_wait(tmp_path: Path) -> None:
+    control = DistributionTransferController()
+    routes = {
+        "https://github.example/near.zip": [
+            DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "temporary outage"),
+            DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "temporary outage"),
+            ASSETS["near.zip"],
+        ],
+    }
+    backend = _FakeBackend(routes)
+    progress = []
+    service, plan = _plan(tmp_path, backend, policy=_policy(retry_delays=(5.0, 0.01), max_retries=2))
+    service.transfer_control = control
+    plan = SimpleNamespace(
+        release=plan.release,
+        manifest=plan.manifest,
+        destination=plan.destination,
+        cache_dir=plan.cache_dir,
+        components=(plan.components[0],),
+        assets={"near.zip": plan.assets["near.zip"]},
+        total_download_bytes=len(ASSETS["near.zip"]),
+        installed_size_bytes=plan.installed_size_bytes,
+    )
+
+    def on_progress(item) -> None:
+        progress.append(item)
+        if item.stage == "retry_wait" and item.retry_number == 1:
+            control.request_resume_now()
+
+    service.progress_callback = on_progress
+
+    service.download_distribution(plan)  # type: ignore[arg-type]
+
+    retry_numbers = [item.retry_number for item in progress if item.stage == "retry_wait"]
+    assert 1 in retry_numbers and 2 in retry_numbers
+    assert backend.request_count_for_asset("near.zip") == 3
+
+
+def test_pause_during_retry_wait_then_resume_preserves_partials(tmp_path: Path) -> None:
+    control = DistributionTransferController()
+    routes = {
+        "https://github.example/near.zip": [
+            DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "connection reset"),
+            ASSETS["near.zip"],
+        ],
+    }
+    backend = _FakeBackend(routes)
+    progress = []
+    service, plan = _plan(tmp_path, backend, policy=_policy(retry_delays=(5.0,), max_retries=1))
+    service.transfer_control = control
+    plan = SimpleNamespace(
+        release=plan.release,
+        manifest=plan.manifest,
+        destination=plan.destination,
+        cache_dir=plan.cache_dir,
+        components=(plan.components[0],),
+        assets={"near.zip": plan.assets["near.zip"]},
+        total_download_bytes=len(ASSETS["near.zip"]),
+        installed_size_bytes=plan.installed_size_bytes,
+    )
+
+    def resume_later() -> None:
+        time.sleep(0.02)
+        control.request_resume()
+
+    def on_progress(item) -> None:
+        progress.append(item)
+        if item.stage == "retry_wait" and not control.pause_requested():
+            control.request_pause()
+            threading.Thread(target=resume_later, daemon=True).start()
+
+    service.progress_callback = on_progress
+
+    service.download_distribution(plan)  # type: ignore[arg-type]
+
+    assert any(item.stage == "paused" for item in progress)
+    assert control.pause_count == 1
+    assert (plan.cache_dir / "near.zip").is_file()
+
+
+def test_cancel_during_retry_wait_is_immediate_and_keeps_partials(tmp_path: Path) -> None:
+    control = DistributionTransferController()
+    routes = {"https://github.example/near.zip": [DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "timeout")]}
+    backend = _FakeBackend(routes)
+    service, plan = _plan(tmp_path, backend, policy=_policy(retry_delays=(5.0,), max_retries=1))
+    service.transfer_control = control
+    plan = SimpleNamespace(
+        release=plan.release,
+        manifest=plan.manifest,
+        destination=plan.destination,
+        cache_dir=plan.cache_dir,
+        components=(plan.components[0],),
+        assets={"near.zip": plan.assets["near.zip"]},
+        total_download_bytes=len(ASSETS["near.zip"]),
+        installed_size_bytes=plan.installed_size_bytes,
+    )
+    service.progress_callback = lambda item: control.request_cancel() if item.stage == "retry_wait" else None
+
+    with pytest.raises(DistributionError) as exc:
+        service.download_distribution(plan)  # type: ignore[arg-type]
+
+    assert exc.value.code == DistributionErrorCode.CANCELLED
+    assert control.state == DistributionTransferState.CANCELLING
+
+
+def test_two_components_retry_independently_and_restore_parallelism(tmp_path: Path) -> None:
+    payloads = {name: data * 50 for name, data in ASSETS.items()}
+    routes = _routes_for("github.example", assets=payloads)
+    routes["https://github.example/near.zip"] = [DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "timeout"), payloads["near.zip"]]
+    routes["https://github.example/blind.zip"] = [DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, "timeout"), payloads["blind.zip"]]
+    backend = _FakeBackend(routes, delay=0.001)
+    service, plan = _plan(tmp_path, backend, assets=payloads, policy=_policy(max_parallel=3, retry_delays=(0.01,), max_retries=1))
+
+    service.download_distribution(plan)
+
+    assert backend.request_count_for_asset("near.zip") == 2
+    assert backend.request_count_for_asset("blind.zip") == 2
+    assert backend.request_count_for_asset("metadata.zip") == 1
+    assert service._last_download_stats is not None
+    assert service._last_download_stats.max_concurrency_observed >= 2
 
 
 def test_cross_platform_dormant_policy_is_data_only() -> None:
@@ -528,6 +774,13 @@ def test_distribution_source_contains_required_structured_telemetry_events() -> 
         "DISTRIBUTION_ASSEMBLY_END",
         "DISTRIBUTION_VALIDATION_BEGIN",
         "DISTRIBUTION_VALIDATION_END",
+        "DISTRIBUTION_RETRY_SCHEDULED",
+        "DISTRIBUTION_RETRY_BEGIN",
+        "DISTRIBUTION_RETRY_NOW_REQUESTED",
+        "DISTRIBUTION_RETRY_CANCELLED",
+        "DISTRIBUTION_PAUSE_REQUESTED",
+        "DISTRIBUTION_PAUSED",
+        "DISTRIBUTION_RESUMED",
         "DISTRIBUTION_RUN_END",
     ):
         assert event in source

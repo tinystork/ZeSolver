@@ -45,6 +45,8 @@ from .distribution import (
     DistributionManifest,
     DistributionProgress,
     DistributionRelease,
+    DistributionTransferController,
+    DistributionTransferState,
     ResumableAssetDownloader,
     UrllibDistributionHttpBackend,
 )
@@ -147,6 +149,8 @@ __all__ = [
     "DistributionManifest",
     "DistributionProgress",
     "DistributionRelease",
+    "DistributionTransferController",
+    "DistributionTransferState",
     "DistributionStoragePlan",
     "DistributionVolumeRequirement",
     "PathValidationResult",

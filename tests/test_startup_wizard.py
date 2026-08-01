@@ -658,6 +658,26 @@ def test_main_window_restores_persisted_sample_fits_into_input_field_on_startup(
     assert "dialog.imageDirectorySelected.connect(self._on_startup_wizard_image_directory_selected)" in SOURCE
 
 
+def test_startup_wizard_exposes_pause_resume_retry_controls() -> None:
+    source = (Path(__file__).resolve().parents[1] / "zesolver" / "gui_startup_wizard.py").read_text(encoding="utf-8")
+
+    for needle in (
+        "DistributionTransferController()",
+        "def request_pause(self)",
+        "def request_resume(self)",
+        "def request_resume_now(self)",
+        "self.pause_btn = QtWidgets.QPushButton(\"Mettre en pause\")",
+        "self.start_btn.setText(\"Pause\")",
+        "self.start_btn.setText(\"Reprendre maintenant\")",
+        "self.start_btn.setText(\"Reprendre\")",
+        "self.start_btn.setText(\"Reessayer\")",
+        "Quitter et conserver",
+        "Continuer le telechargement",
+        "Annuler l'installation",
+    ):
+        assert needle in source
+
+
 def test_startup_wizard_tests_cover_legacy_prompt_suppression() -> None:
     assert "Nouvelles bases détectées" in SOURCE
     assert "Legacy index rebuild prompt suppressed; active catalog mode is not explicit legacy-index." in SOURCE

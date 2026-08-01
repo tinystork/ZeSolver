@@ -22,6 +22,8 @@ from .catalog_library import (
     CatalogStatus,
     DistributionCancelled,
     DistributionError,
+    DistributionTransferController,
+    DistributionTransferState,
     LibraryInstallOptions,
     build_storage_plan,
     default_cache_root,
@@ -216,9 +218,20 @@ if QtCore is not None:
             self._distribution_factory = distribution_factory
             self._management_factory = management_factory
             self._cancel_event = threading.Event()
+            self._transfer_control = DistributionTransferController()
 
         def request_cancel(self) -> None:
             self._cancel_event.set()
+            self._transfer_control.request_cancel()
+
+        def request_pause(self) -> None:
+            self._transfer_control.request_pause()
+
+        def request_resume(self) -> None:
+            self._transfer_control.request_resume()
+
+        def request_resume_now(self) -> None:
+            self._transfer_control.request_resume_now()
 
         def run(self) -> None:
             try:
@@ -234,6 +247,7 @@ if QtCore is not None:
                 service = self._distribution_factory(
                     progress_callback=self.progress.emit,
                     cancel_callback=self._cancel_event.is_set,
+                    transfer_control=self._transfer_control,
                 )
                 release, manifest = service.fetch_latest_distribution()
                 parent_value = self.payload.get("install_parent")
@@ -304,6 +318,7 @@ if QtWidgets is not None:
             self._completed_operation_signature: tuple[str, ...] | None = None
             self._active_operation_signature: tuple[str, ...] | None = None
             self._operation_completed = False
+            self._operation_state = DistributionTransferState.IDLE.value
             self._validated_library_path = self._normalized_path_text(decision.catalog.path) if decision.catalog.usable else ""
             self._validated_astap_path = self._normalized_path_text(decision.astap.path) if decision.astap.usable else ""
             self._selected_choice: CatalogSourceChoice = "official"
@@ -402,11 +417,15 @@ if QtWidgets is not None:
             self.progress_log.document().setMaximumBlockCount(500)
             row = QtWidgets.QHBoxLayout()
             self.start_btn = QtWidgets.QPushButton("Demarrer")
+            self.pause_btn = QtWidgets.QPushButton("Mettre en pause")
             self.cancel_btn = QtWidgets.QPushButton("Annuler")
             self.cancel_btn.setEnabled(False)
-            self.start_btn.clicked.connect(self._start_operation)
+            self.pause_btn.setVisible(False)
+            self.start_btn.clicked.connect(self._primary_operation_action)
+            self.pause_btn.clicked.connect(self._pause_worker)
             self.cancel_btn.clicked.connect(self._cancel_worker)
             row.addWidget(self.start_btn)
+            row.addWidget(self.pause_btn)
             row.addWidget(self.cancel_btn)
             row.addStretch(1)
             layout.addWidget(self.progress_label)
@@ -647,6 +666,9 @@ if QtWidgets is not None:
 
         def _on_progress(self, progress: object) -> None:
             message = str(getattr(progress, "message", "") or getattr(progress, "stage", "") or "operation")
+            state = str(getattr(progress, "transfer_state", "") or "")
+            if state:
+                self._set_operation_state(state)
             total = int(getattr(progress, "overall_total", 0) or 0)
             current = int(getattr(progress, "overall_current", 0) or 0)
             if total > 0:
@@ -659,7 +681,7 @@ if QtWidgets is not None:
             self._append_log(message)
 
         def _on_finished(self, ok: bool, result: object, error: str, operation: str) -> None:
-            self._set_busy(False)
+            self._set_operation_state(DistributionTransferState.COMPLETED.value if ok else DistributionTransferState.FAILED.value)
             self._worker = None
             if not ok:
                 self.progress_label.setText(f"Echec: {error}")
@@ -691,14 +713,86 @@ if QtWidgets is not None:
             self._append_log(self.progress_label.text())
 
         def _set_busy(self, busy: bool) -> None:
-            self.start_btn.setEnabled(not busy)
-            self.cancel_btn.setEnabled(busy)
-            self.button(QtWidgets.QWizard.FinishButton).setEnabled(not busy)
+            self._set_operation_state(DistributionTransferState.DOWNLOADING.value if busy else DistributionTransferState.IDLE.value)
+
+        def _primary_operation_action(self) -> None:
+            state = str(getattr(self, "_operation_state", DistributionTransferState.IDLE.value) or DistributionTransferState.IDLE.value)
+            if state in {DistributionTransferState.IDLE.value, DistributionTransferState.FAILED.value}:
+                self._start_operation()
+            elif state == DistributionTransferState.DOWNLOADING.value:
+                self._pause_worker()
+            elif state == DistributionTransferState.RETRY_WAIT.value:
+                self._resume_now_worker()
+            elif state == DistributionTransferState.PAUSED.value:
+                self._resume_worker()
+
+        def _set_operation_state(self, state: str) -> None:
+            normalized = str(state or DistributionTransferState.IDLE.value)
+            valid = {item.value for item in DistributionTransferState}
+            if normalized not in valid:
+                normalized = DistributionTransferState.IDLE.value
+            self._operation_state = normalized
+            running = self._worker is not None and self._worker.isRunning()
+            terminal = normalized in {DistributionTransferState.COMPLETED.value, DistributionTransferState.FAILED.value, DistributionTransferState.IDLE.value}
+            self.cancel_btn.setEnabled(running and not terminal)
+            if normalized in {
+                DistributionTransferState.DOWNLOADING.value,
+                DistributionTransferState.RETRY_WAIT.value,
+                DistributionTransferState.PAUSED.value,
+                DistributionTransferState.CANCELLING.value,
+            }:
+                self.cancel_btn.setText("Annuler")
+            self.pause_btn.setVisible(normalized == DistributionTransferState.RETRY_WAIT.value)
+            self.pause_btn.setEnabled(running and normalized == DistributionTransferState.RETRY_WAIT.value)
+            if normalized == DistributionTransferState.DOWNLOADING.value:
+                self.start_btn.setText("Pause")
+                self.start_btn.setEnabled(running)
+            elif normalized == DistributionTransferState.RETRY_WAIT.value:
+                self.start_btn.setText("Reprendre maintenant")
+                self.start_btn.setEnabled(running)
+                self.pause_btn.setText("Mettre en pause")
+            elif normalized == DistributionTransferState.PAUSED.value:
+                self.start_btn.setText("Reprendre")
+                self.start_btn.setEnabled(running)
+            elif normalized == DistributionTransferState.CANCELLING.value:
+                self.start_btn.setText("Annulation...")
+                self.start_btn.setEnabled(False)
+                self.cancel_btn.setEnabled(False)
+            elif normalized == DistributionTransferState.FAILED.value:
+                self.start_btn.setText("Reessayer")
+                self.start_btn.setEnabled(True)
+                self.cancel_btn.setText("Fermer")
+                self.cancel_btn.setEnabled(True)
+            elif normalized == DistributionTransferState.COMPLETED.value:
+                self.start_btn.setText("Terminer")
+                self.start_btn.setEnabled(False)
+            else:
+                self.start_btn.setText("Demarrer")
+                self.start_btn.setEnabled(True)
+                self.cancel_btn.setText("Annuler")
+            self.button(QtWidgets.QWizard.FinishButton).setEnabled(normalized == DistributionTransferState.COMPLETED.value or not running)
 
         def _cancel_worker(self) -> None:
+            if self._worker is None and self._operation_state == DistributionTransferState.FAILED.value:
+                self.reject()
+                return
             if self._worker is not None and self._worker.isRunning():
                 self._worker.request_cancel()
-                self.cancel_btn.setEnabled(False)
+                self._set_operation_state(DistributionTransferState.CANCELLING.value)
+
+        def _pause_worker(self) -> None:
+            if self._worker is not None and self._worker.isRunning():
+                self._worker.request_pause()
+                self._set_operation_state(DistributionTransferState.PAUSED.value)
+
+        def _resume_worker(self) -> None:
+            if self._worker is not None and self._worker.isRunning():
+                self._worker.request_resume()
+                self._set_operation_state(DistributionTransferState.DOWNLOADING.value)
+
+        def _resume_now_worker(self) -> None:
+            if self._worker is not None and self._worker.isRunning():
+                self._worker.request_resume_now()
 
         def _on_custom_button(self, which: int) -> None:
             if which != QtWidgets.QWizard.CustomButton1:
@@ -800,8 +894,20 @@ if QtWidgets is not None:
 
         def closeEvent(self, event: Any) -> None:
             if self._worker is not None and self._worker.isRunning():
-                self._worker.request_cancel()
-                self._worker.wait(5000)
+                box = QtWidgets.QMessageBox(self)
+                box.setWindowTitle("Assistant de demarrage ZeSolver")
+                box.setText("Le telechargement n'est pas termine.\nLes fichiers partiels seront conserves.")
+                quit_btn = box.addButton("Quitter et conserver", QtWidgets.QMessageBox.AcceptRole)
+                continue_btn = box.addButton("Continuer le telechargement", QtWidgets.QMessageBox.RejectRole)
+                cancel_btn = box.addButton("Annuler l'installation", QtWidgets.QMessageBox.DestructiveRole)
+                box.exec()
+                clicked = box.clickedButton()
+                if clicked is continue_btn:
+                    event.ignore()
+                    return
+                if clicked is quit_btn or clicked is cancel_btn:
+                    self._worker.request_cancel()
+                    self._worker.wait(5000)
             super().closeEvent(event)
 
 else:  # pragma: no cover - import surface for non-GUI CLI environments
