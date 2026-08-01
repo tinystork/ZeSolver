@@ -15,7 +15,44 @@ pytest-cov>=4.0
 mypy>=1.8
 threadpoolctl>=3.6,<4
 
-# Optional GPU runtime for Near star detection (Linux + NVIDIA CUDA 12.x).
-# Do not install by default: CPU fallback is supported and keeps a fresh venv small.
-# For GPU machines, install the optional project extra instead:
+# ---------------------------------------------------------------------------
+# OPTIONAL NVIDIA GPU ACCELERATION
+# ---------------------------------------------------------------------------
+# CUDA and CuPy are NOT required to use ZeSolver.
+# ZeSolver remains fully functional on CPU when CuPy or a compatible NVIDIA GPU
+# is unavailable. GPU acceleration is currently intended only for ZeNear star
+# detection.
+#
+# Supported platform:
+#   - Windows or Linux
+#   - NVIDIA CUDA-capable GPU
+#   - macOS uses the CPU backend
+#
+# Recommended and validated ZeSolver configuration:
+#   CUDA 12.x + cupy-cuda12x
+#
+# Check the NVIDIA driver and the maximum CUDA version supported by it:
+#   nvidia-smi
+#
+# Check the CUDA Toolkit actually installed, when present:
+#   nvcc --version
+#
+# Important:
+# The "CUDA Version" shown by nvidia-smi is the maximum CUDA version supported
+# by the installed NVIDIA driver. It is not necessarily the Toolkit installed
+# on the computer.
+#
+# Install ZeSolver GPU support:
 #   python -m pip install -e ".[gpu]"
+#
+# Or install CuPy manually:
+#   python -m pip install cupy-cuda12x
+#
+# Verify the installation:
+#   python -c "import cupy; cupy.show_config(); print('GPU count:', cupy.cuda.runtime.getDeviceCount())"
+#
+# Never install more than one of these packages in the same environment:
+#   cupy
+#   cupy-cuda12x
+#   cupy-cuda13x
+# ---------------------------------------------------------------------------
