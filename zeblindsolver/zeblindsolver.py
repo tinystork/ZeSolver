@@ -8234,7 +8234,8 @@ def solve_blind(
                 + ", ".join(levels)
                 + ") — details: "
                 + ", ".join(details)
-                + ". Build the index with zebuildindex (see firstrun.txt)"
+                + '. Build the index with zebuildindex '
+                + '(see README.md, section "Building derived indexes").'
             )
             logger.error(msg)
             return _finish(WcsSolution(False, msg, None, {}, None, {}))

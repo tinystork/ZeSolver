@@ -366,19 +366,12 @@ ZeSolver repository structure
 |   `-- layouts.py
 |-- .gitignore
 |-- AGENT.md
-|-- benchmark_report.csv
-|-- benchmark_report.json
 |-- CHANGELOG.md
-|-- firstrun.txt
 |-- followup.md
 |-- install.ps1
 |-- memory.md
-|-- nono_handoff.md
-|-- nono_status.md
 |-- pyproject.toml
 |-- README.md
-|-- reports_cleanup_candidates_20260627_020935.txt
-|-- reports_cleanup_manifest_20260627_020935.txt
 |-- requirements.txt
 |-- structure.txt
 |-- zedatabase..py

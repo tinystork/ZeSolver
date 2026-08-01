@@ -201,8 +201,7 @@ logs locaux
 archives temporaires
 caches
 memory.md
-nono_handoff.md
-nono_status.md
+anciens handoffs et statuts temporaires d’agents
 followup.md
 rapports temporaires non documentés
 artefacts de benchmark non destinés au produit
