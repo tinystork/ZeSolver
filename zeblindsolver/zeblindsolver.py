@@ -6401,7 +6401,8 @@ def _astrometry_4d_wcs_header_hash(wcs: WCS) -> str:
     try:
         header = wcs.to_header(relax=True)
         rows = [f"{key}={header[key]!r}" for key in sorted(header.keys())]
-        return f"{zlib.crc32('\\n'.join(rows).encode('utf-8')) & 0xffffffff:08x}"
+        payload = '\\n'.join(rows).encode('utf-8')
+        return f"{zlib.crc32(payload) & 0xffffffff:08x}"
     except Exception:
         return ""
 
