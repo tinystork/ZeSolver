@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import json
 import logging
 import os
+from pathlib import Path
 import subprocess
 import threading
 import time
@@ -67,6 +68,7 @@ def _run_command_streaming(
     cancel_token: CancelToken | None,
     timeout_s: float,
     phase_from_line: object | None = None,
+    env: dict[str, str] | None = None,
 ) -> _CommandResult:
     logging.info("GPU_PROVISIONING_COMMAND_START phase=%s command=%s shell=false", phase, _format_command(command))
     proc = subprocess.Popen(
@@ -76,6 +78,7 @@ def _run_command_streaming(
         text=False,
         bufsize=0,
         shell=False,
+        env=env,
     )
     logging.info("GPU_PROVISIONING_PROCESS_STARTED phase=%s pid=%s", phase, getattr(proc, "pid", None))
     output_tail: deque[str] = deque(maxlen=400)
@@ -174,6 +177,19 @@ def _parse_self_test_report(stdout_tail: str) -> dict[str, object]:
     return parsed if isinstance(parsed, dict) else {}
 
 
+def _pip_environment(plan: GpuProvisioningPlan) -> dict[str, str] | None:
+    temp_dir = str((plan.technical_details or {}).get("gpu_temp_dir") or "").strip()
+    if not temp_dir:
+        return None
+    path = Path(temp_dir).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    env = dict(os.environ)
+    env["TMPDIR"] = str(path)
+    env["TMP"] = str(path)
+    env["TEMP"] = str(path)
+    return env
+
+
 class PythonEnvironmentProvisioner:
     def can_provision(self, context: GpuRuntimeContext, report: GpuCapabilityReport) -> bool:
         plan = build_gpu_provisioning_plan(report, context)
@@ -200,6 +216,7 @@ class PythonEnvironmentProvisioner:
         if cancel_token and cancel_token():
             return GpuProvisioningResult(ProvisioningStatus.CANCELLED, "GPU installation cancelled before start.")
         _emit_progress(progress_callback, "preparation", "Preparing optional GPU package installation.")
+        pip_env = _pip_environment(plan)
         try:
             logging.info("GPU_PROVISIONING_START command=%s shell=false", _format_command(tuple(plan.command)))
             install = _run_command_streaming(
@@ -209,6 +226,7 @@ class PythonEnvironmentProvisioner:
                 cancel_token=cancel_token,
                 timeout_s=timeout_s,
                 phase_from_line=_pip_phase_for_line,
+                env=pip_env,
             )
         except Exception as exc:
             logging.warning("GPU_PROVISIONING_EXCEPTION error=%s", exc)
@@ -248,6 +266,7 @@ class PythonEnvironmentProvisioner:
             progress_callback=progress_callback,
             cancel_token=cancel_token,
             timeout_s=min(timeout_s, 120.0),
+            env=pip_env,
         )
         if check.cancelled:
             return GpuProvisioningResult(

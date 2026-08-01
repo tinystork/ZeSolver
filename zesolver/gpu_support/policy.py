@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 from .models import (
     CapabilityState,
@@ -31,6 +32,15 @@ DEFAULT_CUPY_PROFILE = GpuPackageProfile(
 ALLOWED_GPU_PACKAGES = (DEFAULT_CUPY_PROFILE.package_requirement,)
 
 
+def _same_python(left: str | None, right: str | None) -> bool:
+    if not left or not right:
+        return False
+    try:
+        return Path(left).expanduser().absolute() == Path(right).expanduser().absolute()
+    except Exception:
+        return str(left) == str(right)
+
+
 def gpu_profile_for_runtime(report: GpuCapabilityReport) -> GpuPackageProfile | None:
     platform = str(report.platform or "").lower()
     py = f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -46,6 +56,7 @@ def build_gpu_provisioning_plan(
     runtime_context: GpuRuntimeContext | None = None,
 ) -> GpuProvisioningPlan:
     context = ensure_runtime_context(runtime_context)
+    reason = str(getattr(context, "environment_reason", "") or "").strip()
     if report.effective_backend == EffectiveBackend.CUDA:
         return GpuProvisioningPlan(
             ProvisioningStatus.ALREADY_AVAILABLE,
@@ -61,13 +72,31 @@ def build_gpu_provisioning_plan(
             message="Multiple CuPy variants are installed. ZeSolver will not modify this environment automatically.",
         )
     if context.distribution_kind != DistributionKind.SOURCE_MANAGED or not context.allow_environment_mutation:
+        if context.distribution_kind == DistributionKind.FROZEN_STANDALONE:
+            message = "Executable standalone: GPU provisioning is diagnostic-only in this edition; CPU mode remains available."
+        elif context.distribution_kind == DistributionKind.EMBEDDED_HOST:
+            message = "Embedded host runtime: the host application is responsible for GPU provisioning; CPU mode remains available."
+        else:
+            message = reason or "System or unproven Python environment: GPU provisioning is disabled; CPU mode remains available."
         return GpuProvisioningPlan(
             ProvisioningStatus.ENVIRONMENT_NOT_MUTABLE
             if context.distribution_kind != DistributionKind.FROZEN_STANDALONE
             else ProvisioningStatus.GUIDANCE_ONLY,
             None,
-            message="This ZeSolver runtime is diagnostic-only for GPU support; CPU mode remains available.",
-            technical_details={"distribution_kind": context.distribution_kind.value},
+            message=message,
+            technical_details={"distribution_kind": context.distribution_kind.value, "environment_reason": reason},
+        )
+    if not _same_python(context.python_executable, sys.executable):
+        return GpuProvisioningPlan(
+            ProvisioningStatus.ENVIRONMENT_NOT_MUTABLE,
+            None,
+            message="GPU provisioning disabled: the target interpreter is not the active ZeSolver Python executable.",
+            technical_details={
+                "distribution_kind": context.distribution_kind.value,
+                "environment_reason": reason,
+                "python_executable": context.python_executable,
+                "active_executable": sys.executable,
+            },
         )
     if report.platform == "darwin" or report.reason_code == ReasonCode.CUDA_UNSUPPORTED_ON_PLATFORM:
         return GpuProvisioningPlan(
@@ -94,7 +123,7 @@ def build_gpu_provisioning_plan(
             None,
             message="No validated ZeSolver CuPy package profile matches this runtime.",
         )
-    python = context.python_executable or sys.executable
+    python = sys.executable
     return GpuProvisioningPlan(
         ProvisioningStatus.AVAILABLE,
         profile,
@@ -102,5 +131,9 @@ def build_gpu_provisioning_plan(
         requires_consent=True,
         restart_required=True,
         message=f"Install optional {profile.display_name} support for ZeNear detection.",
-        technical_details={"allowlist": ALLOWED_GPU_PACKAGES},
+        technical_details={
+            "allowlist": ALLOWED_GPU_PACKAGES,
+            "environment_reason": reason,
+            "gpu_temp_dir": getattr(context, "gpu_temp_dir", None),
+        },
     )

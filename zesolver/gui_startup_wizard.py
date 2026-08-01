@@ -8,8 +8,6 @@ those decisions and delegates catalog work to existing catalog services.
 from __future__ import annotations
 
 import threading
-import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Literal
@@ -36,7 +34,6 @@ from .catalog_library import (
 )
 from .catalog_resources import resolve_catalog_resources
 from .gpu_support import (
-    DistributionKind,
     EffectiveBackend,
     GpuCapabilityReport,
     GpuProvisioningPlan,
@@ -46,6 +43,7 @@ from .gpu_support import (
     ProvisioningStatus,
     PythonEnvironmentProvisioner,
     build_gpu_provisioning_plan,
+    detect_gpu_runtime_context,
     probe_gpu_capability,
 )
 
@@ -60,13 +58,7 @@ CatalogSourceChoice = Literal["official", "existing_library", "astap", "local_pa
 
 def default_gpu_runtime_context() -> GpuRuntimeContext:
     """Return the conservative default runtime context for wizard diagnostics."""
-    allow = os.environ.get("ZESOLVER_ALLOW_GPU_PROVISIONING", "").strip().lower() in {"1", "true", "yes"}
-    kind = DistributionKind.SOURCE_MANAGED if allow else DistributionKind.UNKNOWN
-    return GpuRuntimeContext(
-        distribution_kind=kind,
-        allow_environment_mutation=allow,
-        python_executable=sys.executable if allow else None,
-    )
+    return detect_gpu_runtime_context()
 
 
 @dataclass(frozen=True, slots=True)
@@ -522,10 +514,16 @@ if QtWidgets is not None:
             elif report.cupy_package_state.value in {"broken", "conflict"}:
                 title = "L'installation GPU est presente mais n'a pas reussi le test. ZeSolver continuera sur CPU."
                 details = [report.human_message]
+            elif plan.status in {ProvisioningStatus.ENVIRONMENT_NOT_MUTABLE, ProvisioningStatus.GUIDANCE_ONLY}:
+                title = plan.message or "L'installation GPU n'est pas disponible dans ce contexte. ZeSolver utilisera le processeur."
+                details = [
+                    report.human_message,
+                    str(plan.technical_details.get("environment_reason", "") if isinstance(plan.technical_details, dict) else "").strip(),
+                ]
             else:
                 title = "Aucun GPU NVIDIA utilisable n'a ete detecte. ZeSolver utilisera le processeur."
                 details = [report.human_message]
-            self._set_gpu_page_text(title, details="\n".join(details))
+            self._set_gpu_page_text(title, details="\n".join(line for line in details if line))
             self.gpu_install_btn.setEnabled(plan.status == ProvisioningStatus.AVAILABLE and bool(plan.command))
 
         def _set_gpu_page_text(self, text: str, *, details: str = "") -> None:

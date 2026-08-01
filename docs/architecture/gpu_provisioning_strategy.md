@@ -15,16 +15,24 @@ detection. CPU operation is always the safe baseline.
 
 ## Runtime Contexts
 
-- `SOURCE_MANAGED`: diagnostic plus guided package installation, only when
-  `allow_environment_mutation=true` is explicitly supplied by the launcher.
+- `SOURCE_MANAGED`: diagnostic plus guided package installation, only when the
+  runtime is a provable virtual environment: not frozen, not embedded,
+  `sys.prefix != sys.base_prefix`, and `sys.executable` is inside the active
+  virtual environment.
 - `FROZEN_STANDALONE`: diagnostic and guidance only. No `pip install` from a
   bundled executable.
 - `EMBEDDED_HOST`: diagnostic and plan generation only unless the host supplies
   a provisioning callback.
 - `UNKNOWN`: diagnostic only.
 
-The wizard uses `ZESOLVER_ALLOW_GPU_PROVISIONING=1` as the explicit source-mode
-gate. A virtual environment is not considered mutable merely because it exists.
+The wizard detects safe source-managed virtual environments automatically.
+`ZESOLVER_ALLOW_GPU_PROVISIONING=1` remains an advanced/testing override, but it
+does not make a system Python mutable. `ZESOLVER_DISABLE_GPU_PROVISIONING=1`
+wins over every other signal and forces diagnostic-only behavior.
+
+Provisioning commands always target exactly the active `sys.executable`. Pip
+subprocesses receive a ZeSolver GPU temporary directory through `TMPDIR`, `TMP`
+and `TEMP`; the parent process environment is not modified.
 
 ## Package Policy
 

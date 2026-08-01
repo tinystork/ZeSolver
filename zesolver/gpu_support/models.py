@@ -71,6 +71,8 @@ class GpuRuntimeContext:
     python_executable: str | None = None
     host_name: str | None = None
     host_can_provision: bool = False
+    environment_reason: str = ""
+    gpu_temp_dir: str | None = None
 
 
 @dataclass(frozen=True)

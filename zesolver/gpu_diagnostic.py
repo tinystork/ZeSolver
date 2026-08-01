@@ -4,16 +4,29 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
+from dataclasses import replace
 
-from .gpu_support import DistributionKind, GpuRuntimeContext, build_gpu_provisioning_plan, probe_gpu_capability
+from .gpu_support import DistributionKind, GpuRuntimeContext, build_gpu_provisioning_plan, detect_gpu_runtime_context, probe_gpu_capability
 
 
 def _context_from_args(args: argparse.Namespace) -> GpuRuntimeContext:
-    return GpuRuntimeContext(
-        distribution_kind=DistributionKind(args.distribution_kind),
-        allow_environment_mutation=bool(args.allow_environment_mutation),
+    env = dict(os.environ)
+    if args.allow_environment_mutation:
+        env["ZESOLVER_ALLOW_GPU_PROVISIONING"] = "1"
+    detected = detect_gpu_runtime_context(env=env)
+    if args.distribution_kind is None:
+        return detected
+    explicit_kind = DistributionKind(args.distribution_kind)
+    if explicit_kind == DistributionKind.SOURCE_MANAGED:
+        return detected
+    return replace(
+        detected,
+        distribution_kind=explicit_kind,
+        allow_environment_mutation=False,
         python_executable=sys.executable,
+        environment_reason=f"Explicit diagnostic context: {explicit_kind.value}; provisioning disabled.",
     )
 
 
@@ -25,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--distribution-kind",
         choices=[item.value for item in DistributionKind],
-        default=DistributionKind.UNKNOWN.value,
+        default=None,
     )
     parser.add_argument("--allow-environment-mutation", action="store_true")
     args = parser.parse_args(argv)

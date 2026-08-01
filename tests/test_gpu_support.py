@@ -4,6 +4,7 @@ import importlib.metadata
 import json
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -21,6 +22,8 @@ from zesolver.gpu_support import (
     ProvisioningStatus,
     ReasonCode,
     build_gpu_provisioning_plan,
+    default_gpu_temp_dir,
+    detect_gpu_runtime_context,
     probe_gpu_capability,
     run_cupy_self_test,
 )
@@ -67,7 +70,7 @@ def test_gpu_probe_nvidia_without_cupy_can_build_source_plan() -> None:
     def fake_run(*args, **kwargs):
         return subprocess.CompletedProcess(args[0], 0, stdout="RTX 4080, 555.42\n", stderr="")
 
-    ctx = GpuRuntimeContext(DistributionKind.SOURCE_MANAGED, allow_environment_mutation=True, python_executable="/venv/bin/python")
+    ctx = GpuRuntimeContext(DistributionKind.SOURCE_MANAGED, allow_environment_mutation=True, python_executable=sys.executable)
     report = probe_gpu_capability(
         ctx,
         hooks=_hooks(which=lambda name: "/usr/bin/nvidia-smi", run=fake_run),
@@ -78,8 +81,109 @@ def test_gpu_probe_nvidia_without_cupy_can_build_source_plan() -> None:
     assert report.nvidia_gpu_state == CapabilityState.AVAILABLE
     assert report.reason_code == ReasonCode.CUPY_NOT_INSTALLED
     assert plan.status == ProvisioningStatus.AVAILABLE
-    assert plan.command == ("/venv/bin/python", "-m", "pip", "install", "cupy-cuda12x[ctk]")
+    assert plan.command == (sys.executable, "-m", "pip", "install", "cupy-cuda12x[ctk]")
     assert plan.requires_consent is True
+
+
+def test_gpu_runtime_context_detects_repo_venv_source_managed() -> None:
+    ctx = detect_gpu_runtime_context(
+        env={"HOME": "/home/alice"},
+        executable="/work/ZeSolver/.venv/bin/python",
+        prefix="/work/ZeSolver/.venv",
+        base_prefix="/usr",
+        platform_name="Linux",
+    )
+
+    assert ctx.distribution_kind == DistributionKind.SOURCE_MANAGED
+    assert ctx.allow_environment_mutation is True
+    assert ctx.python_executable == "/work/ZeSolver/.venv/bin/python"
+    assert ctx.gpu_temp_dir == "/home/alice/.cache/zesolver/gpu-tmp"
+
+
+def test_gpu_runtime_context_detects_other_safe_user_venv() -> None:
+    ctx = detect_gpu_runtime_context(
+        env={"HOME": "/Users/alice"},
+        executable="/Users/alice/envs/astro/bin/python",
+        prefix="/Users/alice/envs/astro",
+        base_prefix="/Library/Frameworks/Python.framework/Versions/3.13",
+        platform_name="Darwin",
+    )
+
+    assert ctx.distribution_kind == DistributionKind.SOURCE_MANAGED
+    assert ctx.allow_environment_mutation is True
+    assert "virtual environment" in ctx.environment_reason
+
+
+def test_gpu_runtime_context_python_system_is_not_mutable_even_with_allow_override() -> None:
+    ctx = detect_gpu_runtime_context(
+        env={"ZESOLVER_ALLOW_GPU_PROVISIONING": "1", "HOME": "/home/alice"},
+        executable="/usr/bin/python3",
+        prefix="/usr",
+        base_prefix="/usr",
+        platform_name="Linux",
+    )
+
+    assert ctx.distribution_kind == DistributionKind.UNKNOWN
+    assert ctx.allow_environment_mutation is False
+    assert "not a provable virtual environment" in ctx.environment_reason
+
+
+def test_gpu_runtime_context_disable_override_wins_over_allow() -> None:
+    ctx = detect_gpu_runtime_context(
+        env={"ZESOLVER_ALLOW_GPU_PROVISIONING": "1", "ZESOLVER_DISABLE_GPU_PROVISIONING": "1", "HOME": "/home/alice"},
+        executable="/work/ZeSolver/.venv/bin/python",
+        prefix="/work/ZeSolver/.venv",
+        base_prefix="/usr",
+        platform_name="Linux",
+    )
+
+    assert ctx.distribution_kind == DistributionKind.UNKNOWN
+    assert ctx.allow_environment_mutation is False
+    assert "disabled" in ctx.environment_reason
+
+
+def test_gpu_runtime_context_frozen_and_embedded_are_not_mutable() -> None:
+    frozen = detect_gpu_runtime_context(
+        executable="/opt/ZeSolver/ZeSolver",
+        prefix="/opt/ZeSolver",
+        base_prefix="/opt/ZeSolver",
+        frozen=True,
+    )
+    embedded = detect_gpu_runtime_context(
+        executable="/work/.venv/bin/python",
+        prefix="/work/.venv",
+        base_prefix="/usr",
+        embedded_host=True,
+    )
+
+    assert frozen.distribution_kind == DistributionKind.FROZEN_STANDALONE
+    assert frozen.allow_environment_mutation is False
+    assert embedded.distribution_kind == DistributionKind.EMBEDDED_HOST
+    assert embedded.allow_environment_mutation is False
+
+
+def test_gpu_plan_refuses_mismatched_python_executable() -> None:
+    def fake_run(*args, **kwargs):
+        return subprocess.CompletedProcess(args[0], 0, stdout="RTX 4080, 555.42\n", stderr="")
+
+    ctx = GpuRuntimeContext(DistributionKind.SOURCE_MANAGED, allow_environment_mutation=True, python_executable="/tmp/not-this-python")
+    report = probe_gpu_capability(
+        ctx,
+        hooks=_hooks(which=lambda name: "/usr/bin/nvidia-smi", run=fake_run),
+        run_self_test=False,
+    )
+    plan = build_gpu_provisioning_plan(report, ctx)
+
+    assert plan.status == ProvisioningStatus.ENVIRONMENT_NOT_MUTABLE
+    assert plan.command == ()
+    assert "target interpreter" in plan.message
+
+
+def test_default_gpu_temp_dir_uses_platform_cache_roots() -> None:
+    assert default_gpu_temp_dir(platform_name="Linux", env={"HOME": "/home/alice"}) == Path("/home/alice/.cache/zesolver/gpu-tmp")
+    assert str(default_gpu_temp_dir(platform_name="Windows", env={"LOCALAPPDATA": r"C:\Users\Alice\AppData\Local"})).replace("/", "\\").endswith(
+        r"ZeSolver\gpu-tmp"
+    )
 
 
 def test_gpu_probe_frozen_standalone_never_builds_pip_plan() -> None:
@@ -300,6 +404,39 @@ def test_python_environment_provisioner_reports_pip_error_without_crash() -> Non
     assert "INSTALL_FAILED" in result.message
     assert "pip says no" in result.stdout_tail
     assert "pip says no" in result.stderr_tail
+
+
+def test_python_environment_provisioner_sets_gpu_temp_for_pip_only(tmp_path) -> None:
+    temp_dir = tmp_path / "gpu tmp"
+    plan = GpuProvisioningPlan(
+        ProvisioningStatus.AVAILABLE,
+        None,
+        command=(
+            sys.executable,
+            "-c",
+            "import os; print('TMPDIR=' + os.environ.get('TMPDIR', '')); print('TMP=' + os.environ.get('TMP', '')); print('TEMP=' + os.environ.get('TEMP', ''))",
+            "cupy-cuda12x[ctk]",
+        ),
+        technical_details={"gpu_temp_dir": str(temp_dir)},
+    )
+
+    result = PythonEnvironmentProvisioner().provision(
+        plan,
+        timeout_s=5,
+        pip_check_command=(
+            sys.executable,
+            "-c",
+            "import os; print('CHECK_TMPDIR=' + os.environ.get('TMPDIR', ''))",
+        ),
+        self_test_command=_self_test_ok_command(),
+    )
+
+    assert result.status == ProvisioningStatus.INSTALLED_RESTART_REQUIRED
+    assert temp_dir.is_dir()
+    assert f"TMPDIR={temp_dir}" in result.stdout_tail
+    assert f"TMP={temp_dir}" in result.stdout_tail
+    assert f"TEMP={temp_dir}" in result.stdout_tail
+    assert f"CHECK_TMPDIR={temp_dir}" in result.stdout_tail
 
 
 def test_gpu_diagnostic_json_cli(capsys: pytest.CaptureFixture[str]) -> None:

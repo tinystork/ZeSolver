@@ -364,11 +364,14 @@ Check the current runtime without installing anything:
 python -m zesolver.gpu_diagnostic --json --show-install-plan
 ```
 
-In source-managed environments where you explicitly allow ZeSolver to modify the
-Python environment, the startup wizard can propose a guided CuPy installation.
-It never installs NVIDIA drivers, CUDA Toolkit, system packages, or multiple CuPy
-variants. Frozen executables and embedded hosts remain diagnostic-only unless a
-future packaging flow provides its own GPU component.
+In a safe source-managed virtual environment, the startup wizard can propose a
+guided CuPy installation after explicit confirmation. It never installs NVIDIA
+drivers, CUDA Toolkit, system packages, or multiple CuPy variants. Frozen
+executables, embedded hosts, Python system installs, and unproven interpreters
+remain diagnostic-only unless a future packaging flow provides its own GPU
+component. Set `ZESOLVER_DISABLE_GPU_PROVISIONING=1` to force diagnostic-only
+behavior; `ZESOLVER_ALLOW_GPU_PROVISIONING=1` remains an advanced override, but
+does not make a system Python mutable.
 
 Manual source install, when appropriate for your driver/Python combination:
 

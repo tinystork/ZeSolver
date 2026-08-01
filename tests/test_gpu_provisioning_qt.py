@@ -184,6 +184,28 @@ def test_gpu_provision_success_cleans_worker_after_native_finished(qt_app, monke
     assert "CuPy: 14.1.1" in detail
 
 
+def test_gpu_install_declined_does_not_start_provisioner(qt_app, monkeypatch: pytest.MonkeyPatch) -> None:
+    import zesolver.gui_startup_wizard as wizard_module
+
+    calls = {"provision": 0}
+
+    class FakeProvisioner:
+        def provision(self, plan, progress_callback=None, cancel_token=None):
+            calls["provision"] += 1
+            return GpuProvisioningResult(ProvisioningStatus.INSTALLED_RESTART_REQUIRED, "unexpected")
+
+    monkeypatch.setattr(wizard_module, "PythonEnvironmentProvisioner", lambda: FakeProvisioner())
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", lambda *_args, **_kwargs: QtWidgets.QMessageBox.StandardButton.No)
+    dialog, saved = _wizard(qt_app)
+
+    dialog._install_gpu_support()
+
+    assert calls["provision"] == 0
+    assert dialog._gpu_worker is None
+    assert saved[-1].gpu_user_cpu_selected is True
+    assert saved[-1].gpu_last_reason_code == "DECLINED"
+
+
 def test_gpu_provision_error_is_displayed_without_crash(qt_app, monkeypatch: pytest.MonkeyPatch) -> None:
     import zesolver.gui_startup_wizard as wizard_module
 

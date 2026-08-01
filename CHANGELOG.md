@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Promoted guided GPU provisioning for safe source-managed virtual
+  environments, while keeping system Python, frozen builds and embedded hosts
+  diagnostic-only.
 - Added visible GPU installation progress in the startup wizard, including pip
   output, pip check, a fresh CUDA self-test subprocess, and a clear restart
   required state instead of leaving the user with a silent install.
