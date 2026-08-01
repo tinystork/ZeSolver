@@ -82,6 +82,7 @@ tools/*
 !tools/adopt_catalog_library.py
 !tools/compare_blind4d_builders.py
 !tools/validate_direct_blind4d_runtime.py
+!tools/generate_blind4d_manifest_view.py
 tests/*
 !tests/
 !tests/conftest.py

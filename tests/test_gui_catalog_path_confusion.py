@@ -30,8 +30,7 @@ def test_gui_uses_typed_validators_before_save_and_run() -> None:
         "validate_legacy_near_index_root(index_root_text)",
         "validate_blind4d_manifest_file(manifest_text_for_save)",
         "validate_blind4d_manifest_file(manifest_text_for_run)",
-        "catalog_resources_for_config is None or near_catalog_mode == \"legacy-index\"",
+        "catalog_resources_for_config is None or near_catalog_mode in {\"astap-native\", \"legacy-index\"}",
     ]
     missing = [needle for needle in required if needle not in SOURCE]
     assert not missing
-

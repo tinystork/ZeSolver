@@ -290,11 +290,12 @@ def test_worker_progress_and_cancellation_without_network() -> None:
 
 
 def test_successful_install_path_is_forwarded_to_main_window_handler() -> None:
-    selected = SOURCE.index("dialog.librarySelected.connect(self._on_startup_wizard_library_selected)")
+    selected = SOURCE.index("completion_handler=self._complete_startup_wizard_transaction")
     handler = SOURCE.index("def _on_startup_wizard_library_selected")
-    apply_existing = SOURCE.index("self._on_catalog_library_manager_selected(value)")
+    apply_existing = SOURCE.index("self._activate_catalog_library_product_mode(value, source=\"startup-wizard\")")
     assert selected < handler < apply_existing
-    assert "self._update_simplified_capability_summary()" in SOURCE[handler : handler + 1200]
+    transaction = SOURCE.index("def _complete_startup_wizard_transaction")
+    assert "_activate_catalog_library_product_mode(" in SOURCE[transaction : transaction + 2200]
 
 
 def test_astap_browse_selection_updates_visible_and_internal_path(qt_widgets, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

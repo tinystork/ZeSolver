@@ -688,7 +688,7 @@ def resolve_catalog_resources(
         try:
             library = _coerce_library(catalog_library)
             resources = _resources_from_library(library)
-            if prefer_legacy_near and legacy_db_root is not None:
+            if prefer_legacy_near and legacy_db_root is not None and Path(legacy_db_root).expanduser().is_dir():
                 resources = _with_legacy_near(
                     resources,
                     legacy_db_root=legacy_db_root,

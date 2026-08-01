@@ -194,6 +194,7 @@ from zesolver.settings_store import (
     DEFAULT_SEARCH_RADIUS_ATTEMPTS,
     DEFAULT_SEARCH_RADIUS_SCALE,
     QUAD_STORAGE_CHOICES,
+    SETTINGS_SCHEMA_VERSION,
     TILE_COMPRESSION_CHOICES,
     PersistentSettings,
     load_persistent_settings,
@@ -270,6 +271,8 @@ from zesolver.gui_settings_sections import (
 )
 from zesolver.gui_startup_wizard import (
     STARTUP_WIZARD_VERSION,
+    StartupWizardCompletionRequest,
+    StartupWizardCompletionResult,
     ZeSolverStartupWizard,
     decide_startup_wizard,
     mark_startup_wizard_completed,
@@ -7637,6 +7640,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 decision=decision,
                 save_settings=save_persistent_settings,
                 parent=self,
+                completion_handler=self._complete_startup_wizard_transaction,
             )
             dialog.librarySelected.connect(self._on_startup_wizard_library_selected)
             dialog.astapSelected.connect(self._on_startup_wizard_astap_selected)
@@ -7654,14 +7658,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             value = str(path or "").strip()
             if not value:
                 return
-            self._on_catalog_library_manager_selected(value)
-            self._settings.startup_wizard_version = STARTUP_WIZARD_VERSION
-            self._settings.startup_wizard_completed = True
-            try:
-                save_persistent_settings(self._settings)
-            except Exception as exc:
-                self._log_settings(self._text("library_manager_failed", error=str(exc)))
-            self._update_simplified_capability_summary()
+            self._activate_catalog_library_product_mode(value, source="startup-wizard")
 
         def _on_startup_wizard_astap_selected(self, path: str) -> None:
             value = str(path or "").strip()
@@ -7680,15 +7677,64 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _on_startup_wizard_image_directory_selected(self, path: str) -> None:
             self._apply_input_directory(path, trigger_scan=True)
 
-        def _on_startup_wizard_completed(self, source: str) -> None:
-            mark_startup_wizard_completed(self._settings)
+        def _complete_startup_wizard_transaction(self, request: StartupWizardCompletionRequest) -> StartupWizardCompletionResult:
+            source = str(getattr(request, "source", "") or "")
             try:
+                if source in {"existing_library", "official", "local_package"}:
+                    library_path = str(getattr(request, "catalog_library_path", "") or "").strip()
+                    if not library_path:
+                        return StartupWizardCompletionResult(False, "Aucune bibliotheque valide n'a ete selectionnee.")
+                    ok = self._activate_catalog_library_product_mode(
+                        library_path,
+                        source=f"startup-wizard:{source}",
+                        persist=False,
+                        show_error=False,
+                    )
+                    if not ok:
+                        return StartupWizardCompletionResult(
+                            False,
+                            self._catalog_library_validation_error or "La bibliotheque selectionnee n'a pas pu etre activee.",
+                        )
+                elif source == "astap":
+                    astap_path = str(getattr(request, "astap_path", "") or "").strip()
+                    if not astap_path:
+                        return StartupWizardCompletionResult(False, "Aucune base ASTAP valide n'a ete selectionnee.")
+                    validation = validate_astap_root(astap_path)
+                    if not validation.ok:
+                        return StartupWizardCompletionResult(
+                            False,
+                            self._format_catalog_path_error(validation, field_key="field_astap_root"),
+                        )
+                    self._set_astap_root(astap_path, source="startup-wizard", validate=True)
+                    if hasattr(self, "near_catalog_mode_combo"):
+                        self._set_combo_current_data(self.near_catalog_mode_combo, "astap-native", "astap-native")
+                    if hasattr(self, "blind4d_catalog_mode_combo"):
+                        self._set_combo_current_data(self.blind4d_catalog_mode_combo, "auto", "auto")
+                    self._settings.near_catalog_mode = "astap-native"
+                    self._settings.blind4d_catalog_mode = "auto"
+                    self._update_blind4d_source_visibility()
+                    self._update_catalog_rollback_status()
+                else:
+                    return StartupWizardCompletionResult(False, f"Parcours wizard inconnu: {source or '-'}")
+                image_directory = str(getattr(request, "image_directory", "") or "").strip()
+                if image_directory:
+                    if not self._apply_input_directory(image_directory, trigger_scan=True, persist=False):
+                        return StartupWizardCompletionResult(False, "Le dossier d'images indique n'existe pas ou n'est pas un repertoire.")
+                else:
+                    self._settings.sample_fits = None
+                self._settings.solver_blind_enabled = bool(getattr(request, "blind_enabled", True))
+                mark_startup_wizard_completed(self._settings)
                 save_persistent_settings(self._settings)
+                self._update_simplified_capability_summary()
+                return StartupWizardCompletionResult(True)
             except Exception as exc:
                 self._log_settings(self._text("library_manager_failed", error=str(exc)))
+                return StartupWizardCompletionResult(False, str(exc))
+
+        def _on_startup_wizard_completed(self, source: str) -> None:
             self._log_settings(f"Startup wizard completed: {source}")
 
-        def _apply_input_directory(self, path: str, *, trigger_scan: bool = True, show_error: bool = True) -> bool:
+        def _apply_input_directory(self, path: str, *, trigger_scan: bool = True, show_error: bool = True, persist: bool = True) -> bool:
             value = str(path or "").strip()
             if not value:
                 return False
@@ -7711,10 +7757,11 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_sample_edit.setText(normalized)
             if hasattr(self, "input_edit"):
                 self.input_edit.setText(normalized)
-            try:
-                save_persistent_settings(self._settings)
-            except Exception as exc:
-                self._log_settings(self._text("library_manager_failed", error=str(exc)))
+            if persist:
+                try:
+                    save_persistent_settings(self._settings)
+                except Exception as exc:
+                    self._log_settings(self._text("library_manager_failed", error=str(exc)))
             if trigger_scan:
                 self._schedule_input_directory_scan()
             return True
@@ -8804,20 +8851,85 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
 
         def _on_catalog_library_manager_selected(self, path: str) -> None:
+            self._activate_catalog_library_product_mode(path, source="library-manager")
+
+        def _activate_catalog_library_product_mode(
+            self,
+            path: str,
+            *,
+            source: str,
+            persist: bool = True,
+            show_error: bool = True,
+        ) -> bool:
             value = str(path or "").strip()
             if not value:
-                return
+                return False
+            try:
+                value = str(Path(value).expanduser())
+            except Exception:
+                pass
+            previous_settings = replace(self._settings)
+            previous_text = (
+                self.settings_catalog_library_edit.text().strip()
+                if hasattr(self, "settings_catalog_library_edit")
+                else str(getattr(self._settings, "catalog_library_path", "") or "").strip()
+            )
             if hasattr(self, "settings_catalog_library_edit"):
                 self.settings_catalog_library_edit.setText(value)
-            resources = self._validate_catalog_library_from_gui(show_error=True)
+            resources = self._validate_catalog_library_from_gui(show_error=False)
             if resources is None:
-                return
-            self._settings.catalog_library_path = value
+                if hasattr(self, "settings_catalog_library_edit"):
+                    self.settings_catalog_library_edit.setText(previous_text)
+                self._settings = previous_settings
+                if show_error:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        self._text("dialog_config_title"),
+                        self._catalog_library_validation_error or "CATALOG_LIBRARY_INVALID",
+                    )
+                return False
             try:
-                self._settings = self._read_settings_from_ui()
-                save_persistent_settings(self._settings)
+                self._restore_catalog_auto_modes()
+                self._settings.catalog_library_path = value
+                settings = self._read_settings_from_ui()
+                settings.catalog_library_path = value
+                settings.near_catalog_mode = "auto"
+                settings.blind4d_catalog_mode = "auto"
+                try:
+                    fingerprint = build_lightweight_catalog_fingerprint(value)
+                    settings.catalog_library_verification = catalog_verification_record(
+                        fingerprint=fingerprint,
+                        verification_level=FULL_LEVEL,
+                        verification_status=STATUS_VALID,
+                    )
+                except Exception:
+                    settings.catalog_library_verification = getattr(self._settings, "catalog_library_verification", None)
+                self._settings = settings
+                self._catalog_library_validated_path = value
+                self._catalog_library_validated_resources = resources
+                self._catalog_library_validation_error = None
+                if hasattr(self, "settings_catalog_library_edit"):
+                    self.settings_catalog_library_edit.setText(value)
+                self._set_catalog_library_status(
+                    resources.library_status.value if resources.library_status else "INVALID",
+                    resources=resources,
+                )
+                if persist:
+                    save_persistent_settings(self._settings)
+                self._update_simplified_capability_summary()
+                self._log_settings(f"Catalog library product activation: source={source} path={value}")
+                return True
             except Exception as exc:
+                self._settings = previous_settings
+                if hasattr(self, "settings_catalog_library_edit"):
+                    self.settings_catalog_library_edit.setText(previous_text)
+                self._catalog_library_validated_path = None
+                self._catalog_library_validated_resources = None
+                self._catalog_library_validation_error = str(exc)
                 self._log_settings(self._text("library_manager_failed", error=str(exc)))
+                if show_error:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                return False
 
         def _build_historical_index_maintenance_dialog(self) -> QtWidgets.QDialog:
             dialog = QtWidgets.QDialog(self)
@@ -10542,7 +10654,11 @@ def launch_gui(args: argparse.Namespace) -> int:
                     raise ValueError(self._text("dev_family_none_error"))
 
             return PersistentSettings(
+                schema_version=getattr(self._settings, "schema_version", SETTINGS_SCHEMA_VERSION),
                 catalog_library_path=catalog_library_path,
+                catalog_library_install_parent=getattr(self._settings, "catalog_library_install_parent", None),
+                startup_wizard_version=int(getattr(self._settings, "startup_wizard_version", 0) or 0),
+                startup_wizard_completed=bool(getattr(self._settings, "startup_wizard_completed", False)),
                 db_root=db_root or None,
                 index_root=index_root or None,
                 mag_cap=float(self.settings_mag_spin.value()),
@@ -10595,6 +10711,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 solver_backend=(self.backend_combo.currentData() if hasattr(self, 'backend_combo') else "local"),
                 move_unresolved_files=bool(self.move_unresolved_check.isChecked()) if hasattr(self, "move_unresolved_check") else bool(getattr(self._settings, "move_unresolved_files", False)),
                 interface_mode=str(getattr(self, "_interface_mode", "easy") or "easy"),
+                ui_theme=normalize_theme_mode(getattr(self._settings, "ui_theme", "system")),
                 blind_backend_profile=self._current_blind_profile(),
                 blind_4d_manifest_path=manifest_text_for_save,
                 astrometry_api_url=(self.ast_api_url_edit.text().strip() if hasattr(self, 'ast_api_url_edit') else "https://nova.astrometry.net/api"),

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Made startup wizard CatalogLibrary activation transactional: existing
+  libraries, official installs, and local packages now persist product modes
+  (`near_catalog_mode=auto`, `blind4d_catalog_mode=auto`) before any settings
+  read can validate a stale external Blind 4D manifest.
+- Prevented the startup wizard from marking itself complete after a failed
+  activation, avoiding contradictory saves from a stale wizard settings object.
+- Restored the CatalogLibrary Blind 4D manifest-view CLI used by validation
+  tests.
+
 ## [1.0.0] - 2026-04-23
 
 ### Added
@@ -55,4 +66,3 @@
 - The GUI/CLI batch runner now actually invokes the metadata-based near solver
   before falling back to the blind pipeline; the helper previously ignored the
   loaded FITS metadata, so only the manual “Near solve” tester would ever run it.
-

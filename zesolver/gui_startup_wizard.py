@@ -88,6 +88,21 @@ class StartupWizardDecision:
         return self.mode == "astap_near_only"
 
 
+@dataclass(frozen=True, slots=True)
+class StartupWizardCompletionRequest:
+    source: CatalogSourceChoice
+    catalog_library_path: str | None = None
+    astap_path: str | None = None
+    image_directory: str | None = None
+    blind_enabled: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class StartupWizardCompletionResult:
+    ok: bool
+    error: str = ""
+
+
 def default_catalog_probe(path: str | Path | None) -> StartupCatalogProbe:
     if not path:
         return StartupCatalogProbe("none")
@@ -306,6 +321,7 @@ if QtWidgets is not None:
             parent: Any = None,
             distribution_factory: Callable[..., CatalogDistributionService] = CatalogDistributionService,
             management_factory: Callable[..., CatalogLibraryManagementService] = CatalogLibraryManagementService,
+            completion_handler: Callable[[StartupWizardCompletionRequest], StartupWizardCompletionResult | bool] | None = None,
         ) -> None:
             super().__init__(parent)
             self.settings = settings
@@ -313,6 +329,7 @@ if QtWidgets is not None:
             self._save_settings = save_settings
             self._distribution_factory = distribution_factory
             self._management_factory = management_factory
+            self._completion_handler = completion_handler
             self._worker: StartupCatalogWorker | None = None
             self._completed_operation: str | None = None
             self._completed_operation_signature: tuple[str, ...] | None = None
@@ -836,6 +853,39 @@ if QtWidgets is not None:
                     "L'installation doit etre terminee avec succes avant de terminer ce parcours.",
                 )
                 return
+            request = StartupWizardCompletionRequest(
+                source=choice,
+                catalog_library_path=(
+                    self._validated_library_path
+                    if choice in {"existing_library", "official", "local_package"} and self._validated_library_path
+                    else None
+                ),
+                astap_path=(self._validated_astap_path if choice == "astap" and self._validated_astap_path else None),
+                image_directory=image_directory or None,
+                blind_enabled=bool(self.blind_enabled_check.isChecked()),
+            )
+            if self._completion_handler is not None:
+                try:
+                    result = self._completion_handler(request)
+                    if isinstance(result, bool):
+                        result = StartupWizardCompletionResult(result)
+                    elif not isinstance(result, StartupWizardCompletionResult):
+                        result = StartupWizardCompletionResult(
+                            bool(getattr(result, "ok", False)),
+                            str(getattr(result, "error", "") or ""),
+                        )
+                except Exception as exc:
+                    result = StartupWizardCompletionResult(False, str(exc))
+                if not result.ok:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        "Assistant de demarrage ZeSolver",
+                        result.error or "L'activation demandee a echoue.",
+                    )
+                    return
+                self.completed.emit(choice)
+                super().accept()
+                return
             if choice == "existing_library":
                 if not ready:
                     QtWidgets.QMessageBox.information(
@@ -919,6 +969,8 @@ __all__ = [
     "StartupAstapProbe",
     "StartupCatalogProbe",
     "StartupCatalogWorker",
+    "StartupWizardCompletionRequest",
+    "StartupWizardCompletionResult",
     "StartupWizardDecision",
     "ZeSolverStartupWizard",
     "clear_invalid_catalog_selection",
