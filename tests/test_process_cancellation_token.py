@@ -13,14 +13,14 @@ def _spawn_token_worker(token: ProcessCancellationToken, queue) -> None:
 
 def test_process_cancellation_token_is_spawn_visible() -> None:
     ctx = multiprocessing.get_context("spawn")
-    controller = ProcessCancellationController()
+    controller = ProcessCancellationController(context=ctx)
     queue = ctx.Queue()
     proc = ctx.Process(target=_spawn_token_worker, args=(controller.token, queue))
     try:
         proc.start()
-        assert queue.get(timeout=5) is False
-        assert queue.get(timeout=5) is True
-        proc.join(timeout=5)
+        assert queue.get(timeout=20) is False
+        assert queue.get(timeout=20) is True
+        proc.join(timeout=20)
         assert proc.exitcode == 0
         assert controller.token.is_cancelled()
     finally:

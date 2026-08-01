@@ -28,10 +28,13 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import multiprocessing
+import os
 import platform
 import shutil
 import subprocess
 import sys
+import tempfile
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
@@ -53,11 +56,12 @@ def _check_import(name: str) -> tuple[bool, str]:
 
 def _check_process_pool() -> tuple[bool, str]:
     try:
-        with ProcessPoolExecutor(max_workers=1) as pool:
+        ctx = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=1, mp_context=ctx) as pool:
             value = pool.submit(_proc_square, 7).result(timeout=10)
         if value != 49:
             return False, f"unexpected result {value}"
-        return True, "ok"
+        return True, "ok (spawn)"
     except Exception as exc:
         return False, f"process pool failed: {exc}"
 
@@ -83,6 +87,68 @@ def _check_zesolver_help(python_exe: str, repo_root: Path) -> tuple[bool, str]:
     return True, "ok"
 
 
+def _check_temp_paths_and_fits() -> tuple[bool, str]:
+    try:
+        import numpy as np
+        from astropy.io import fits
+
+        from zesolver.catalog_library.paths import default_cache_root, default_library_parent
+
+        with tempfile.TemporaryDirectory(prefix="ZeSolver macOS éspace ") as tmp:
+            home = Path(tmp) / "Utilisateur Test É"
+            cache = default_cache_root(platform_name="Darwin", home=home)
+            library_parent = default_library_parent(platform_name="Darwin", home=home)
+            if cache != home / "Library" / "Caches" / "ZeSolver" / "catalogs":
+                return False, f"unexpected cache path: {cache}"
+            if library_parent != home / "ZeSolverCatalog" / "libraries":
+                return False, f"unexpected library path: {library_parent}"
+            cache.mkdir(parents=True, exist_ok=True)
+            library_parent.mkdir(parents=True, exist_ok=True)
+            fits_path = cache / "préflight sample's frame.fit"
+            fits.PrimaryHDU(data=np.ones((4, 4), dtype=np.uint16)).writeto(fits_path)
+            with fits.open(fits_path, memmap=False) as hdul:
+                shape = tuple(hdul[0].data.shape)
+            if shape != (4, 4):
+                return False, f"unexpected FITS shape: {shape}"
+        return True, "ok"
+    except Exception as exc:
+        return False, f"path/FITS check failed: {exc}"
+
+
+def _check_qt_offscreen() -> tuple[bool, str]:
+    try:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6 import QtWidgets
+
+        app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+        widget = QtWidgets.QWidget()
+        widget.setWindowTitle("ZeSolver macOS preflight")
+        widget.show()
+        app.processEvents()
+        widget.close()
+        app.processEvents()
+        return True, "ok"
+    except Exception as exc:
+        return False, f"Qt offscreen failed: {exc}"
+
+
+def _check_static_resources(repo_root: Path) -> tuple[bool, str]:
+    icon_dir = repo_root / "icon"
+    if not icon_dir.is_dir():
+        return False, "icon directory missing"
+    if not any((icon_dir / name).is_file() for name in ("ZSicon.icns", "ZSicon.png", "ZSicon.ico")):
+        return False, "no usable application icon found"
+    return True, "ok"
+
+
+def _check_cupy_optional() -> tuple[bool, str]:
+    try:
+        importlib.import_module("cupy")
+    except Exception:
+        return True, "not installed (CPU fallback expected)"
+    return True, "installed"
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="ZeSolver macOS compatibility preflight")
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]), help="Path to ZeSolver repository root")
@@ -103,7 +169,7 @@ def main() -> int:
     else:
         checks.append(("Python >= 3.10", True, "ok", False))
 
-    for mod in ["numpy", "astropy", "scipy", "skimage", "astroalign"]:
+    for mod in ["numpy", "astropy", "scipy", "skimage", "astroalign", "threadpoolctl"]:
         ok, detail = _check_import(mod)
         checks.append((f"import {mod}", ok, detail, False))
 
@@ -111,10 +177,22 @@ def main() -> int:
     checks.append(("import PySide6 (GUI)", ok_gui, detail_gui, not args.strict_gui))
 
     ok_pool, detail_pool = _check_process_pool()
-    checks.append(("multiprocessing ProcessPool", ok_pool, detail_pool, False))
+    checks.append(("multiprocessing ProcessPool spawn", ok_pool, detail_pool, False))
+
+    ok_paths, detail_paths = _check_temp_paths_and_fits()
+    checks.append(("macOS user/cache/temp paths + FITS", ok_paths, detail_paths, False))
+
+    ok_static, detail_static = _check_static_resources(repo_root)
+    checks.append(("static resources", ok_static, detail_static, False))
+
+    ok_qt, detail_qt = _check_qt_offscreen()
+    checks.append(("Qt offscreen widget", ok_qt, detail_qt, not args.strict_gui))
 
     ok_help, detail_help = _check_zesolver_help(sys.executable, repo_root)
     checks.append(("zesolver.py --help", ok_help, detail_help, False))
+
+    ok_cupy, detail_cupy = _check_cupy_optional()
+    checks.append(("CuPy optional", ok_cupy, detail_cupy, True))
 
     nvidia = shutil.which("nvidia-smi")
     if nvidia:

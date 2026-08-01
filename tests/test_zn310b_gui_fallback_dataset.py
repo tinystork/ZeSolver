@@ -26,6 +26,23 @@ def _json(name: str):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _external_run_dir(manifest: dict) -> Path:
+    run_dir = Path(manifest["run_dir"])
+    if not run_dir.is_dir():
+        pytest.skip(f"external ZN310B GUI fixture directory not present: {run_dir}")
+    return run_dir
+
+
+def _require_external_sources(manifest: dict) -> None:
+    missing = [
+        Path(item["source_path"])
+        for item in manifest["items"]
+        if not Path(item["source_path"]).is_file()
+    ]
+    if missing:
+        pytest.skip(f"external ZN310B source FITS files not present: {missing[0]}")
+
+
 def _has_wcs(path: Path) -> bool:
     try:
         return bool(WCS(fits.getheader(path)).has_celestial)
@@ -52,6 +69,7 @@ def test_zn310b_manifest_has_eight_deterministic_gui_cases() -> None:
 
 def test_zn310b_originals_remain_unmodified_by_source_sha() -> None:
     manifest = _json("zenear_zn310b_gui_manifest.json")
+    _require_external_sources(manifest)
 
     for item in manifest["items"]:
         assert zn310b_log.sha256_file(Path(item["source_path"])) == item["source_SHA256"]
@@ -66,7 +84,7 @@ def test_zn310b_pixels_identical_between_all_variants() -> None:
 
 def test_zn310b_all_generated_copies_have_no_old_wcs() -> None:
     manifest = _json("zenear_zn310b_gui_manifest.json")
-    run_dir = Path(manifest["run_dir"])
+    run_dir = _external_run_dir(manifest)
 
     for sub in ("control_clean", "no_hints", "wrong_hints", "gui_mixed"):
         for path in (run_dir / sub).glob("*.fit"):
@@ -75,7 +93,7 @@ def test_zn310b_all_generated_copies_have_no_old_wcs() -> None:
 
 def test_zn310b_control_keeps_near_hints_when_source_has_them() -> None:
     manifest = _json("zenear_zn310b_gui_manifest.json")
-    run_dir = Path(manifest["run_dir"])
+    run_dir = _external_run_dir(manifest)
     controls = sorted((run_dir / "control_clean").glob("*.fit"))
 
     assert controls
@@ -87,7 +105,7 @@ def test_zn310b_control_keeps_near_hints_when_source_has_them() -> None:
 
 def test_zn310b_nohint_removes_all_near_hint_aliases_and_object() -> None:
     manifest = _json("zenear_zn310b_gui_manifest.json")
-    run_dir = Path(manifest["run_dir"])
+    run_dir = _external_run_dir(manifest)
 
     for path in (run_dir / "no_hints").glob("*.fit"):
         header = fits.getheader(path)
@@ -98,7 +116,7 @@ def test_zn310b_nohint_removes_all_near_hint_aliases_and_object() -> None:
 
 def test_zn310b_badhint_has_wrong_center_hints() -> None:
     manifest = _json("zenear_zn310b_gui_manifest.json")
-    run_dir = Path(manifest["run_dir"])
+    run_dir = _external_run_dir(manifest)
 
     for path in (run_dir / "wrong_hints").glob("*.fit"):
         header = fits.getheader(path)

@@ -1,0 +1,86 @@
+name: macOS CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - test
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS Python 3.11
+    runs-on: macos-latest
+    timeout-minutes: 45
+    env:
+      QT_QPA_PLATFORM: offscreen
+      MPLBACKEND: Agg
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Create virtual environment
+        run: python -m venv .venv
+
+      - name: Install dependencies
+        run: |
+          .venv/bin/python -m pip install --upgrade pip setuptools wheel
+          .venv/bin/python -m pip install -e ".[dev,gui]"
+
+      - name: Platform information
+        run: |
+          .venv/bin/python --version
+          uname -a
+          .venv/bin/python -c "import platform; print(platform.platform()); print(platform.machine())"
+
+      - name: Compile sources
+        run: .venv/bin/python -m compileall zesolver zeblindsolver tools
+
+      - name: Import smoke test
+        run: |
+          .venv/bin/python - <<'PY'
+          import astropy
+          import astroalign
+          import numpy
+          import scipy
+          import skimage
+          import threadpoolctl
+          import zeblindsolver
+          import zesolver
+          import zesolver.catalog_library
+          import zesolver.gui_pipeline
+          import zesolver.macos_preflight
+          print("imports ok")
+          PY
+
+      - name: macOS preflight
+        run: .venv/bin/python -m zesolver.macos_preflight --strict-gui
+
+      - name: CLI help smoke test
+        run: .venv/bin/python zesolver.py --help
+
+      - name: Targeted macOS tests
+        run: |
+          .venv/bin/python -m pytest -q \
+            tests/test_macos_compatibility.py \
+            tests/test_catalog_library_paths.py \
+            tests/test_process_cancellation_token.py \
+            tests/test_gui_theme.py \
+            tests/test_catalog_distribution.py \
+            tests/test_catalog_distribution_multisource.py \
+            tests/test_catalog_library_blind4d_integration.py
+
+      - name: Full CI-compatible suite
+        run: |
+          .venv/bin/python -m pytest -q \
+            --ignore tests/test_zn310b_gui_fallback_dataset.py

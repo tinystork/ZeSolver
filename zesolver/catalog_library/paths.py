@@ -143,7 +143,7 @@ def validate_library_parent(
         code, message = "DISTRIBUTION_DESTINATION_INSIDE_CACHE", "Final destination cannot be inside the download cache."
     elif any(_same_or_inside(destination, Path(root).expanduser(), system=system) for root in application_roots):
         code, message = "DISTRIBUTION_DESTINATION_INSIDE_APPLICATION", "Final destination cannot be inside the application directory."
-    elif system == "macos" and ".app" in [part.lower() for part in destination.parts]:
+    elif system == "macos" and any(part.lower().endswith(".app") for part in destination.parts):
         code, message = "DISTRIBUTION_DESTINATION_INSIDE_APPLICATION", "Final destination cannot be inside a macOS application bundle."
 
     if code is not None:
@@ -358,17 +358,29 @@ def cleanup_distribution_cache(cache_dir: str | Path, components: Iterable[Any],
     return removed
 
 
+def file_manager_command(
+    path: str | Path,
+    *,
+    platform_name: str | None = None,
+    os_name: str | None = None,
+) -> list[str] | None:
+    target = Path(path).expanduser()
+    if (os_name or os.name) == "nt":
+        return None
+    if (platform_name or sys.platform) == "darwin":
+        return ["open", str(target)]
+    return ["xdg-open", str(target)]
+
+
 def open_in_file_manager(path: str | Path) -> bool:
     target = Path(path).expanduser()
     if not target.exists():
         raise FileNotFoundError(str(target))
-    if os.name == "nt":
+    command = file_manager_command(target)
+    if command is None:
         os.startfile(str(target))  # type: ignore[attr-defined]
         return True
-    if sys.platform == "darwin":
-        subprocess.Popen(["open", str(target)])
-        return True
-    subprocess.Popen(["xdg-open", str(target)])
+    subprocess.Popen(command)
     return True
 
 

@@ -126,8 +126,9 @@ class CompositeCancellationToken:
 
 
 class ProcessCancellationController:
-    def __init__(self) -> None:
-        self._manager = multiprocessing.Manager()
+    def __init__(self, *, context: Any | None = None) -> None:
+        manager_factory = getattr(context, "Manager", None) if context is not None else None
+        self._manager = manager_factory() if callable(manager_factory) else multiprocessing.Manager()
         self.token = ProcessCancellationToken(self._manager.Event(), self._manager.dict())
 
     def cancel(self) -> None:

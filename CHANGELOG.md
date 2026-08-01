@@ -4,6 +4,9 @@
 
 ### Fixed
 
+- Tightened macOS compatibility checks for catalog storage paths, Finder
+  opening, spawn-based cancellation, Qt offscreen startup, and CPU-only
+  operation when CuPy/CUDA is absent.
 - Fixed a false Blind 4D partial-coverage warning shown before a full
   CatalogLibrary had been resolved.
 - Made startup wizard CatalogLibrary activation transactional: existing
