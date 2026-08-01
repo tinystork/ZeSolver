@@ -3,15 +3,16 @@
 Date: 2026-08-01
 Branch: `test`
 
-Status at local commit preparation:
+Status after GitHub Actions validation:
 
 ```text
 MACOS_COMPATIBILITY_AUDIT_PASSED
-MACOS_CI_READY_FOR_EXECUTION
+MACOS_CI_VALIDATED
 MACOS_RUNTIME_VALIDATION_PENDING
 ```
-`MACOS_CI_VALIDATED` is reserved for the GitHub Actions run on the pushed
-commit.
+
+This does not claim `MACOS_RUNTIME_VALIDATED`, `MACOS_PRODUCTION_READY`, or
+`PRODUCTION_READY_FOR_MACOS`.
 
 ## 1. Initial Git State
 
@@ -212,23 +213,25 @@ mission added no new exclusion.
 
 ## 7. GitHub Actions Result
 
-Pending until the commit is pushed and the macOS workflow runs.
-
-Fields to capture after execution:
+GitHub Actions run:
 
 ```text
-run_url:
-run_id:
-commit:
-runner:
-architecture:
-python:
-duration:
-tests:
-skips:
-warnings:
-result:
+run_url: https://github.com/tinystork/ZeSolver/actions/runs/30717490880
+run_id: 30717490880
+job_id: 91415505296
+commit: caed8f21f0eff9e7589098e1638df6c53b7f16e1
+runner: macos-latest -> macos-26-arm64
+runner_version: 2.336.0
+macOS: 26.5.2 / Darwin 25.5.0
+architecture: arm64
+python: CPython 3.11.9
+duration: 3m15s
+targeted_macos_tests: 79 passed, 1 warning
+full_ci_compatible_suite: 794 passed, 42 skipped, 2 warnings
+result: success
 ```
+
+The workflow used `actions/checkout@v6` and `actions/setup-python@v6`.
 
 ## 8. Residual Risks
 
@@ -239,10 +242,10 @@ result:
 
 ## 9. Verdict
 
-Local status before GitHub Actions:
+Final status:
 
 ```text
 MACOS_COMPATIBILITY_AUDIT_PASSED
-MACOS_CI_READY_FOR_EXECUTION
+MACOS_CI_VALIDATED
 MACOS_RUNTIME_VALIDATION_PENDING
 ```

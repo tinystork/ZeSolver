@@ -43,6 +43,13 @@ Dernière validation automatisée connue :
 compileall zesolver zeblindsolver tools : OK
 git diff --check : OK
 
+Validation macOS CI connue :
+
+Audit statique macOS : passed
+CI macOS automatisée : passed sur macos-26-arm64 / arm64, Python 3.11.9
+Validation runtime sur Mac physique : pending
+Paquet public macOS : non construit
+
 Dernière validation Linux réelle connue :
 
 Bibliothèque : /home/tristan/ZeSolverCatalog/new
