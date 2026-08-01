@@ -44,7 +44,62 @@ jobs:
           .venv/bin/python -c "import platform; print(platform.platform()); print(platform.machine())"
 
       - name: Compile sources
-        run: .venv/bin/python -m compileall zesolver zeblindsolver tools
+        shell: bash
+        run: |
+          .venv/bin/python - <<'PYCODE'
+          from pathlib import Path
+          import py_compile
+          import traceback
+
+          roots = (
+              Path("zesolver"),
+              Path("zeblindsolver"),
+              Path("tools"),
+          )
+
+          failures: list[tuple[Path, BaseException]] = []
+
+          for root in roots:
+              print(f"\n=== Compiling {root} ===", flush=True)
+
+              if not root.is_dir():
+                  error = RuntimeError(f"Source directory not found: {root}")
+                  failures.append((root, error))
+                  print(
+                      f"::error title=Missing source directory::{error}",
+                      flush=True,
+                  )
+                  continue
+
+              for source_path in sorted(root.rglob("*.py")):
+                  print(f"Compiling {source_path}", flush=True)
+
+                  try:
+                      py_compile.compile(
+                          str(source_path),
+                          doraise=True,
+                      )
+                  except BaseException as exc:
+                      failures.append((source_path, exc))
+                      print(
+                          f"::error file={source_path},"
+                          f"title=Python compilation failure::"
+                          f"{type(exc).__name__}: {exc}",
+                          flush=True,
+                      )
+                      traceback.print_exc()
+
+          if failures:
+              print("\n=== COMPILATION FAILURES ===", flush=True)
+              for source_path, exc in failures:
+                  print(
+                      f"{source_path}: {type(exc).__name__}: {exc}",
+                      flush=True,
+                  )
+              raise SystemExit(1)
+
+          print("\nAll Python sources compiled successfully.", flush=True)
+          PYCODE
 
       - name: Import smoke test
         run: |
