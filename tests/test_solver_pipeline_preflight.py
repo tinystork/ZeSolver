@@ -56,4 +56,4 @@ def test_preflight_accepts_partial_blind_resources(tmp_path: Path) -> None:
 
     assert result.ok is True
     assert result.image_shape == (8, 8)
-    assert "blind4d_coverage_not_all_sky" in result.warnings
+    assert "blind4d_coverage_partial_not_all_sky" in result.warnings

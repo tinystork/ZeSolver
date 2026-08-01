@@ -79,7 +79,7 @@ def near_resources(tmp_path: Path, *, blind_count: int = 0) -> SolverCatalogReso
         blind4d_manifest_path=manifest_path,
         legacy_index_root=tmp_path,
         source="legacy",
-        warnings=("blind4d_coverage_not_all_sky",) if blind else (),
+        warnings=("blind4d_coverage_partial_not_all_sky",) if blind else (),
         coverage=coverage if blind else None,
         all_sky_blind4d=False,
     )

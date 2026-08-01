@@ -123,7 +123,7 @@ def build_gui_solve_request_from_legacy_config(
         worker_strategy=_worker_strategy_from_environment(paths),
         requires_raster_sidecar=_has_raster(paths),
         requires_adaptive_hints=False,
-        blind4d_all_sky=bool(getattr(catalog_resources, "all_sky_blind4d", False)),
+        blind4d_all_sky=_blind4d_all_sky_from_resources(catalog_resources),
         log_level=str(getattr(config, "log_level", "INFO") or "INFO"),
         interface_mode=str(getattr(config, "interface_mode", "expert") or "expert"),
         instrument_mode=str(getattr(config, "instrument_mode", "auto") or "auto"),
@@ -171,6 +171,7 @@ def build_engine_selection_request(request: GuiSolveRequest) -> EngineSelectionR
         requires_raster_sidecar=request.requires_raster_sidecar,
         requires_adaptive_hints=request.requires_adaptive_hints,
         unknown_capabilities=tuple(unknown),
+        blind4d_enabled=request.use_blind,
         blind4d_all_sky=request.blind4d_all_sky,
     )
 
@@ -186,6 +187,15 @@ def _representative_path(paths: tuple[Path, ...]) -> Path | None:
 
 def _has_raster(paths: Sequence[Path]) -> bool:
     return any(Path(path).suffix.lower() in RASTER_EXTENSIONS for path in paths)
+
+
+def _blind4d_all_sky_from_resources(catalog_resources: object | None) -> bool | None:
+    if catalog_resources is None:
+        return None
+    value = getattr(catalog_resources, "all_sky_blind4d", None)
+    if value is None:
+        return None
+    return bool(value)
 
 
 def _worker_strategy_from_environment(paths: Sequence[Path]) -> str:

@@ -23,7 +23,8 @@ class EngineSelectionRequest:
     requires_raster_sidecar: bool = False
     requires_adaptive_hints: bool = False
     unknown_capabilities: tuple[str, ...] = field(default_factory=tuple)
-    blind4d_all_sky: bool = False
+    blind4d_enabled: bool = True
+    blind4d_all_sky: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -125,10 +126,7 @@ def _unsupported_pipeline_reasons(request: EngineSelectionRequest) -> tuple[str,
 
 
 def _selection_warnings(request: EngineSelectionRequest) -> tuple[str, ...]:
-    warnings: list[str] = []
-    if not request.blind4d_all_sky:
-        warnings.append("blind4d_coverage_partial_not_all_sky")
-    return tuple(warnings)
+    return ()
 
 
 def _suffix(path: Path | str | None) -> str:

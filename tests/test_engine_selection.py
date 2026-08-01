@@ -85,7 +85,21 @@ def test_reason_is_always_present() -> None:
     assert all(select_engine(case).reason for case in cases)
 
 
-def test_partial_coverage_is_warning_not_all_sky_promotion() -> None:
+def test_unknown_blind4d_coverage_does_not_warn_partial() -> None:
+    selected = select_engine(EngineSelectionRequest(input_path="m106.fit", backend="near_blind4d", blind4d_all_sky=None))
+    assert selected.selected_mode == EngineMode.PIPELINE
+    assert "blind4d_coverage_partial_not_all_sky" not in selected.warnings
+
+
+def test_engine_selection_does_not_emit_catalog_coverage_warning() -> None:
     selected = select_engine(EngineSelectionRequest(input_path="m106.fit", backend="near_blind4d", blind4d_all_sky=False))
     assert selected.selected_mode == EngineMode.PIPELINE
-    assert "blind4d_coverage_partial_not_all_sky" in selected.warnings
+    assert "blind4d_coverage_partial_not_all_sky" not in selected.warnings
+
+
+def test_blind_disabled_does_not_emit_catalog_coverage_warning() -> None:
+    selected = select_engine(
+        EngineSelectionRequest(input_path="m106.fit", backend="near_blind4d", blind4d_enabled=False, blind4d_all_sky=False)
+    )
+    assert selected.selected_mode == EngineMode.PIPELINE
+    assert selected.warnings == ()

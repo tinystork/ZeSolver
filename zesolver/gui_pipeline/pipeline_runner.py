@@ -109,6 +109,7 @@ class PipelineGuiRunner:
                             or bool(getattr(request.product_settings, "blind_only", False))
                         ),
                     )
+                _log_blind4d_coverage(shared_catalog_resources)
                 if is_simplified_interface(request.product_settings):
                     decision = evaluate_simplified_capability(shared_catalog_resources)
                     telemetry.record_simplified_capability(decision.telemetry())
@@ -319,3 +320,29 @@ def _near_backend_indicator_from_telemetry(snapshot: object) -> str | None:
     if fallback:
         text += " - fallback CUDA"
     return text
+
+
+def _log_blind4d_coverage(resources) -> None:
+    coverage = getattr(resources, "coverage", None)
+    warning_code = "blind4d_coverage_partial_not_all_sky"
+    all_sky = bool(getattr(resources, "all_sky_blind4d", False))
+    status = "unknown"
+    if coverage is not None:
+        if all_sky:
+            status = "full"
+        elif getattr(coverage, "total_tiles", None) or getattr(coverage, "covered_tiles", 0):
+            status = "partial"
+        else:
+            status = str(getattr(getattr(coverage, "status", None), "value", None) or "unknown").lower()
+    logging.info(
+        "Blind4D coverage: source=%s status=%s indexes=%d covered=%s total=%s all_sky=%s warning=%s",
+        "library-view"
+        if getattr(resources, "source", None) == "library" and getattr(resources, "blind4d_available", False)
+        else getattr(resources, "source", None),
+        status,
+        int(getattr(resources, "blind4d_index_count", 0) or 0),
+        getattr(coverage, "covered_tiles", 0) if coverage is not None else 0,
+        getattr(coverage, "total_tiles", None) if coverage is not None else None,
+        "true" if all_sky else "false",
+        warning_code if warning_code in tuple(getattr(resources, "warnings", ()) or ()) else "-",
+    )

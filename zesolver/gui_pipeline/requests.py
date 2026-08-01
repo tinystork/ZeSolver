@@ -26,7 +26,7 @@ class GuiSettingsState:
     startup_stagger_ms: int = 0
     requires_raster_sidecar: bool = False
     requires_adaptive_hints: bool = False
-    blind4d_all_sky: bool = False
+    blind4d_all_sky: bool | None = None
     log_level: str = "INFO"
     language: str = "auto"
     interface_mode: str = "expert"
@@ -67,7 +67,7 @@ class GuiSolveRequest:
     startup_stagger_ms: int = 0
     requires_raster_sidecar: bool = False
     requires_adaptive_hints: bool = False
-    blind4d_all_sky: bool = False
+    blind4d_all_sky: bool | None = None
     legacy_config: object | None = None
     catalog_resources: object | None = None
     metadata_overrides: Mapping[str, object] = field(default_factory=dict)

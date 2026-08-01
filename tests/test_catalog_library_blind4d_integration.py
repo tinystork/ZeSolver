@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -67,7 +68,7 @@ def test_six_indexes_remain_partial_not_all_sky(tmp_path: Path) -> None:
 
     assert resources.blind4d_index_count == 6
     assert resources.all_sky_blind4d is False
-    assert "blind4d_coverage_not_all_sky" in resources.warnings
+    assert "blind4d_coverage_partial_not_all_sky" in resources.warnings
     assert resources.telemetry()["blind4d_all_sky"] is False
 
 
@@ -80,3 +81,27 @@ def test_legacy_manifest_still_works_without_library(tmp_path: Path) -> None:
     assert resources.source == "legacy"
     assert resources.blind4d_manifest_path == manifest
     assert resources.blind4d_runtime_paths == (idx.resolve(),)
+    assert "blind4d_coverage_partial_not_all_sky" in resources.warnings
+
+
+def test_external_manifest_declared_all_sky_does_not_warn_partial(tmp_path: Path) -> None:
+    idx = write_fake_4d_index(tmp_path / "d50_A_S_q.npz", "d50_A")
+    manifest = write_strict_manifest(tmp_path / "manifest.json", [strict_entry("a", idx, "d50_A")])
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["coverage"] = {
+        "status": "FULL",
+        "all_sky": True,
+        "families": ["d50"],
+        "tile_keys": ["d50_A"],
+        "covered_tiles": 1,
+        "total_tiles": 1,
+        "fraction": 1.0,
+    }
+    manifest.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+    resources = resolve_catalog_resources(legacy_blind4d_manifest=manifest)
+
+    assert resources.all_sky_blind4d is True
+    assert resources.coverage is not None
+    assert resources.coverage.all_sky is True
+    assert "blind4d_coverage_partial_not_all_sky" not in resources.warnings

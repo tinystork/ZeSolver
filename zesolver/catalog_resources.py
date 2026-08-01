@@ -32,6 +32,7 @@ from .catalog_library import (
     build_blind4d_manifest_view,
     discover_existing,
 )
+from .catalog_library.coverage import coverage_from_payload
 from .catalog_library.models import CatalogCoverage
 from .resource_telemetry import increment_batch_counter, record_batch_event
 
@@ -765,7 +766,7 @@ def _resources_from_library(library: CatalogLibrary) -> SolverCatalogResources:
     if report.status is CatalogStatus.READY_PARTIAL:
         warnings.append("catalog_library_ready_partial")
     if report.capabilities.blind4d and not all_sky_blind4d:
-        warnings.append("blind4d_coverage_not_all_sky")
+        warnings.append("blind4d_coverage_partial_not_all_sky")
     return SolverCatalogResources(
         library_path=library.root,
         library_status=report.status,
@@ -929,6 +930,7 @@ def _resources_from_legacy(
             warnings.append(f"legacy_blind4d_manifest_invalid_ignored: {exc}")
             manifest_path = None
         else:
+            loaded_coverage = coverage_from_payload(loaded.coverage, provenance=source) if loaded.coverage is not None else None
             blind_indexes = tuple(
                 Blind4DIndexDescriptor(
                     id=entry.id,
@@ -950,6 +952,17 @@ def _resources_from_legacy(
                 for entry in loaded.entries
             )
             warnings.append("legacy_blind4d_manifest_used")
+            coverage = (
+                loaded_coverage
+                if loaded_coverage is not None and loaded_coverage.status is not CoverageStatus.UNKNOWN
+                else _merge_descriptor_coverage(blind_indexes)
+            )
+            if blind_indexes and not coverage.all_sky:
+                warnings.append("blind4d_coverage_partial_not_all_sky")
+        if not blind_indexes:
+            coverage = None
+    else:
+        coverage = None
     return SolverCatalogResources(
         library_path=None,
         library_status=None,
@@ -961,8 +974,8 @@ def _resources_from_legacy(
         source=source,
         warnings=tuple(warnings),
         catalog_library_id=None,
-        coverage=_merge_descriptor_coverage(blind_indexes),
-        all_sky_blind4d=False,
+        coverage=coverage,
+        all_sky_blind4d=bool(coverage.all_sky) if coverage is not None else False,
     )
 
 

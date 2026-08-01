@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Fixed a false Blind 4D partial-coverage warning shown before a full
+  CatalogLibrary had been resolved.
 - Made startup wizard CatalogLibrary activation transactional: existing
   libraries, official installs, and local packages now persist product modes
   (`near_catalog_mode=auto`, `blind4d_catalog_mode=auto`) before any settings

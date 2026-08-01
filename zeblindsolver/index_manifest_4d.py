@@ -54,6 +54,7 @@ class Loaded4DManifest:
     schema: str
     manifest_version: int
     entries: tuple[Loaded4DIndexEntry, ...]
+    coverage: dict[str, Any] | None = None
 
     @property
     def enabled_index_paths(self) -> tuple[Path, ...]:
@@ -256,6 +257,7 @@ def load_4d_index_manifest_payload(
         schema=schema,
         manifest_version=version,
         entries=tuple(entries),
+        coverage=dict(payload["coverage"]) if isinstance(payload.get("coverage"), dict) else None,
     )
 
 

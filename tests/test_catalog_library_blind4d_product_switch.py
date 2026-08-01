@@ -262,7 +262,7 @@ def test_s5f_catalog_resources_publish_final_library_view_coverage_without_compa
     assert resources.coverage.covered_tiles == 47
     assert resources.coverage.total_tiles == 47
     assert resources.all_sky_blind4d is True
-    assert "blind4d_coverage_not_all_sky" not in resources.warnings
+    assert "blind4d_coverage_partial_not_all_sky" not in resources.warnings
 
 
 def test_blind_port_forced_external_rollback_uses_external_manifest(tmp_path: Path, monkeypatch) -> None:

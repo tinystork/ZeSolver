@@ -95,4 +95,4 @@ def test_partial_library_telemetry_is_preserved(tmp_path: Path) -> None:
     assert telemetry["catalog_library_status"] == "READY_PARTIAL"
     assert telemetry["blind4d_index_count"] == 1
     assert telemetry["blind4d_all_sky"] is False
-    assert "blind4d_coverage_not_all_sky" in telemetry["warnings"]
+    assert "blind4d_coverage_partial_not_all_sky" in telemetry["warnings"]

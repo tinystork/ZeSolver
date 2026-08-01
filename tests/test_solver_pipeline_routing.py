@@ -65,6 +65,24 @@ def test_pipeline_near_success_skips_blind(tmp_path: Path) -> None:
     assert pipeline.last_telemetry["blind_attempted"] is False
 
 
+def test_pipeline_reports_known_partial_blind4d_coverage_once(tmp_path: Path) -> None:
+    near = FakePort(
+        EngineSolveResult(
+            status=SolveStatus.SOLVED,
+            backend="NEAR",
+            wcs=sample_wcs(),
+        )
+    )
+    pipeline = _pipeline(tmp_path, near=near, resources=near_resources(tmp_path, blind_count=6))
+
+    result = pipeline.solve(SolveRequest(_frame(tmp_path), tmp_path / "out.fit", True, request_id="partial"))
+
+    warning = "blind4d_coverage_partial_not_all_sky"
+    assert result.status is SolveStatus.SOLVED
+    assert result.warnings.count(warning) == 1
+    assert pipeline.last_telemetry["warnings"].count(warning) == 1
+
+
 def test_pipeline_near_failure_then_blind_success(tmp_path: Path) -> None:
     near = FakePort(EngineSolveResult(status=SolveStatus.UNSOLVED, backend="NEAR", error="near failed"))
     blind = FakePort(EngineSolveResult(status=SolveStatus.SOLVED, backend="BLIND4D", wcs=sample_wcs(), inliers=44, rms_px=0.5))

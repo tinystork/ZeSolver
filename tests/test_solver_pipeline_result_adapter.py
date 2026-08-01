@@ -27,7 +27,7 @@ def test_result_adapter_preserves_engine_fields_and_profiles() -> None:
         engine,
         profile_ids={"near": "zenear-v1", "blind": "zeblind4d-v1", "pipeline": "pipeline-v1"},
         catalog_status="READY_PARTIAL",
-        warnings=("blind4d_coverage_not_all_sky",),
+        warnings=("blind4d_coverage_partial_not_all_sky",),
     )
 
     assert result.status is SolveStatus.SOLVED
@@ -39,7 +39,7 @@ def test_result_adapter_preserves_engine_fields_and_profiles() -> None:
     assert result.rms_px == 0.2
     assert result.profile_ids["near"] == "zenear-v1"
     assert result.catalog_status == "READY_PARTIAL"
-    assert result.warnings == ("blind4d_coverage_not_all_sky", "partial_catalog")
+    assert result.warnings == ("blind4d_coverage_partial_not_all_sky", "partial_catalog")
 
 
 def test_failure_result_normalizes_engine_exception() -> None:
