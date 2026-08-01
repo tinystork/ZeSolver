@@ -275,6 +275,7 @@ from zesolver.gui_startup_wizard import (
     mark_startup_wizard_completed,
     should_allow_legacy_family_prompt,
 )
+from zesolver.gui_theme import ThemeController, normalize_theme_mode
 from zesolver.gui_pipeline import GuiEngineSelectionError, GuiSolveController
 from zesolver.gui_pipeline.legacy_runner import LegacyGuiRunner
 from zesolver.gui_pipeline.lifecycle import RunLifecycle
@@ -383,6 +384,10 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_level_debug": "Debug",
         "log_level_warning": "Warning",
         "interface_menu": "Interface",
+        "appearance_menu": "Apparence",
+        "appearance_system": "Système",
+        "appearance_light": "Clair",
+        "appearance_dark": "Sombre",
         "advanced_tools_menu": "Outils avancés",
         "historical_index_maintenance_action": "Maintenance des index historiques",
         "historical_index_maintenance_title": "Maintenance des index historiques",
@@ -685,6 +690,10 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_level_debug": "Debug",
         "log_level_warning": "Warning",
         "interface_menu": "Interface",
+        "appearance_menu": "Appearance",
+        "appearance_system": "System",
+        "appearance_light": "Light",
+        "appearance_dark": "Dark",
         "interface_mode_expert": "Expert",
         "interface_mode_easy": "Easy",
         "interface_mode_wizard": "Wizard",
@@ -5613,6 +5622,11 @@ def _should_launch_gui(args: argparse.Namespace) -> bool:
     return not (args.db_root and args.input_dir)
 
 
+def _save_theme_preference(settings: PersistentSettings, mode: str) -> None:
+    settings.ui_theme = normalize_theme_mode(mode)
+    save_persistent_settings(settings)
+
+
 def _normalize_family_args(values: Optional[Sequence[str]]) -> Optional[List[str]]:
     if not values:
         return None
@@ -6983,6 +6997,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._closing = False
             self._language_actions: dict[str, QtGui.QAction] = {}
             self._interface_actions: dict[str, QtGui.QAction] = {}
+            self._theme_actions: dict[str, QtGui.QAction] = {}
+            self._theme_controller: ThemeController | None = getattr(QtWidgets.QApplication.instance(), "zesolver_theme_controller", None)
             self._interface_mode = str(getattr(settings, "interface_mode", "easy") or "easy").strip().lower()
             if self._interface_mode not in {"easy", "expert"}:
                 self._interface_mode = "easy"
@@ -7135,6 +7151,20 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._interface_group.addAction(action)
                 self._interface_actions[mode] = action
             self.interface_menu.addSeparator()
+            self.appearance_menu = self.interface_menu.addMenu("")
+            self._theme_actions.clear()
+            self._theme_group = QtGui.QActionGroup(self)
+            self._theme_group.setExclusive(True)
+            for mode in ("system", "light", "dark"):
+                action = QtGui.QAction(self)
+                action.setCheckable(True)
+                action.triggered.connect(
+                    lambda checked, theme=mode: self._on_theme_selected(theme) if checked else None
+                )
+                self.appearance_menu.addAction(action)
+                self._theme_group.addAction(action)
+                self._theme_actions[mode] = action
+            self.interface_menu.addSeparator()
             self.interface_wizard_action = QtGui.QAction(self)
             self.interface_wizard_action.triggered.connect(self._run_startup_wizard_from_menu)
             self.interface_menu.addAction(self.interface_wizard_action)
@@ -7173,6 +7203,40 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception:
                 pass
             self._apply_interface_mode()
+
+        def _on_theme_selected(self, mode: str) -> None:
+            normalized = normalize_theme_mode(mode)
+            self._settings.ui_theme = normalized
+            controller = self._theme_controller or getattr(QtWidgets.QApplication.instance(), "zesolver_theme_controller", None)
+
+            def _save(theme: str) -> None:
+                self._settings.ui_theme = theme
+                save_persistent_settings(self._settings)
+
+            if controller is None:
+                app = QtWidgets.QApplication.instance()
+                if app is None:
+                    return
+                controller = ThemeController(app, initial_mode=normalized, save_callback=_save)
+                setattr(app, "zesolver_theme_controller", controller)
+                self._theme_controller = controller
+                controller.apply(normalized, source="user", persist=True)
+            else:
+                try:
+                    controller.save_callback = _save
+                    controller.apply(normalized, source="user", persist=True)
+                except Exception as exc:
+                    logging.warning("UI_THEME_SAVE_FAILED error=%s", exc)
+            self._sync_theme_actions()
+
+        def _sync_theme_actions(self) -> None:
+            mode = normalize_theme_mode(getattr(self._settings, "ui_theme", "system"))
+            for key, action in self._theme_actions.items():
+                try:
+                    action.blockSignals(True)
+                    action.setChecked(key == mode)
+                finally:
+                    action.blockSignals(False)
 
         def _set_tab_visible(self, tab_widget: QtWidgets.QWidget, visible: bool) -> None:
             try:
@@ -11080,6 +11144,11 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self._interface_actions["expert"].setText(self._text("interface_mode_expert"))
                 if "easy" in self._interface_actions:
                     self._interface_actions["easy"].setText(self._text("interface_mode_easy"))
+                if hasattr(self, "appearance_menu"):
+                    self.appearance_menu.setTitle(self._text("appearance_menu"))
+                    for mode, action in self._theme_actions.items():
+                        action.setText(self._text(f"appearance_{mode}"))
+                    self._sync_theme_actions()
                 if hasattr(self, "interface_wizard_action"):
                     self.interface_wizard_action.setText(self._text("interface_mode_wizard"))
             if hasattr(self, "log_menu"):
@@ -12844,6 +12913,12 @@ def launch_gui(args: argparse.Namespace) -> int:
     QtWidgets.QApplication.setApplicationName(build_window_title("ZeSolver"))
     QtWidgets.QApplication.setApplicationVersion(APP_VERSION)
     app = QtWidgets.QApplication(sys.argv)
+    theme_controller = ThemeController(
+        app,
+        initial_mode=getattr(persistent_settings, "ui_theme", "system"),
+        save_callback=lambda mode: _save_theme_preference(persistent_settings, mode),
+    )
+    setattr(app, "zesolver_theme_controller", theme_controller)
     app_icon = None
     icon_path = resolve_app_icon_path()
     if icon_path is not None:

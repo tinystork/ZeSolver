@@ -47,10 +47,21 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 14
+SETTINGS_SCHEMA_VERSION = 15
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
+UI_THEME_CHOICES = ("system", "light", "dark")
+
+
+def normalize_ui_theme(value: object) -> str:
+    if isinstance(value, str):
+        candidate = value.strip().lower().replace("_", "-")
+        if candidate in UI_THEME_CHOICES:
+            return candidate
+    if value not in (None, ""):
+        logging.warning("UI_THEME_SETTING_INVALID value=%r fallback=system", value)
+    return "system"
 
 
 @dataclass
@@ -144,6 +155,7 @@ class PersistentSettings:
     solver_overwrite: bool = True
     move_unresolved_files: bool = False
     interface_mode: str = "easy"
+    ui_theme: str = "system"
     blind_backend_profile: str = "zeblind_4d_experimental"
     blind_4d_manifest_path: Optional[str] = None
     solver_hint_ra_deg: Optional[float] = None
@@ -374,6 +386,7 @@ def load_persistent_settings() -> PersistentSettings:
         solver_overwrite=bool(payload.get("solver_overwrite", True)),
         move_unresolved_files=bool(payload.get("move_unresolved_files", False)),
         interface_mode=str(payload.get("interface_mode", "easy") or "easy"),
+        ui_theme=normalize_ui_theme(payload.get("ui_theme", "system")),
         blind_backend_profile=str(payload.get("blind_backend_profile", "zeblind_4d_experimental") or "zeblind_4d_experimental"),
         blind_4d_manifest_path=(payload.get("blind_4d_manifest_path") or None),
         solver_hint_ra_deg=_float_or_none(payload.get("solver_hint_ra_deg")),
@@ -421,6 +434,7 @@ def save_persistent_settings(settings: PersistentSettings) -> None:
     path = _resolve_settings_path()
     # Legacy non-strict mode is retired.
     settings.near_astap_iso_strict = True
+    settings.ui_theme = normalize_ui_theme(getattr(settings, "ui_theme", "system"))
     data = asdict(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -546,9 +560,11 @@ __all__ = [
     "DEFAULT_SEARCH_RADIUS_SCALE",
     "QUAD_STORAGE_CHOICES",
     "TILE_COMPRESSION_CHOICES",
+    "UI_THEME_CHOICES",
     "PersistentSettings",
     "SETTINGS_PATH",
     "SETTINGS_SCHEMA_VERSION",
     "load_persistent_settings",
+    "normalize_ui_theme",
     "save_persistent_settings",
 ]

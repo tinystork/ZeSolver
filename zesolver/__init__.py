@@ -34,6 +34,7 @@ from .settings_store import (
     PersistentSettings,
     SETTINGS_PATH,
     load_persistent_settings,
+    normalize_ui_theme,
     save_persistent_settings,
 )
 from .zeblindsolver import (
@@ -63,6 +64,7 @@ __all__ = [
     "NearSolveConfig",
     "PersistentSettings",
     "load_persistent_settings",
+    "normalize_ui_theme",
     "save_persistent_settings",
     "SETTINGS_PATH",
     "DEFAULT_FOV_DEG",
