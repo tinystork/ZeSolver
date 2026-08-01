@@ -441,16 +441,16 @@ def test_astap_cancel_after_validation_preserves_existing_settings(qt_widgets, t
     assert saved == []
 
 
-def test_astap_near_only_path_clears_library_only_on_successful_finish(qt_widgets, tmp_path: Path) -> None:
+def test_astap_near_only_path_preserves_existing_library_on_successful_finish(qt_widgets, tmp_path: Path) -> None:
     astap = tmp_path / "astap"
     astap.mkdir()
     settings = PersistentSettings(catalog_library_path="/old/library", db_root="/old/astap")
     dialog, saved = _wizard(qt_widgets, settings=settings)
 
     def apply_astap(path: str) -> None:
-        clear_invalid_catalog_selection(settings)
         settings.db_root = path
         settings.near_catalog_mode = "astap-native"
+        settings.blind4d_catalog_mode = "auto"
 
     dialog.astapSelected.connect(apply_astap)
     dialog.astap_radio.setChecked(True)
@@ -458,10 +458,29 @@ def test_astap_near_only_path_clears_library_only_on_successful_finish(qt_widget
     dialog._on_finished(True, {"path": str(astap), "families": ("d50",)}, "", "astap")
     dialog.accept()
 
-    assert settings.catalog_library_path is None
+    assert settings.catalog_library_path == "/old/library"
     assert settings.db_root == str(astap)
     assert settings.near_catalog_mode == "astap-native"
+    assert settings.blind4d_catalog_mode == "auto"
     assert saved and saved[-1].startup_wizard_completed is True
+
+
+def test_startup_wizard_astap_handler_does_not_clear_catalog_library() -> None:
+    handler = SOURCE.index("def _on_startup_wizard_astap_selected")
+    body = SOURCE[handler : SOURCE.index("def _on_startup_wizard_completed", handler)]
+
+    assert "self._clear_catalog_library_selection()" not in body
+    assert 'self._settings.near_catalog_mode = "astap-native"' in body
+    assert 'self._settings.blind4d_catalog_mode = "auto"' in body
+
+
+def test_auto_blind_runtime_does_not_reuse_stale_external_manifest_path() -> None:
+    resolver = SOURCE.index("def _resolve_blind4d_runtime")
+    body = SOURCE[resolver : SOURCE.index("    @staticmethod", resolver)]
+
+    assert "requested = Blind4DCatalogMode.normalize(mode)" in body
+    assert "if requested is Blind4DCatalogMode.EXTERNAL_MANIFEST" in body
+    assert "else self.catalog_resources.blind4d_manifest_path" in body
 
 
 def test_initial_valid_astap_decision_can_finish_without_download(qt_widgets, tmp_path: Path) -> None:

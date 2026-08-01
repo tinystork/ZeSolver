@@ -103,6 +103,11 @@ class PipelineGuiRunner:
                         ),
                         enable_environment_discovery=legacy is None,
                         allow_legacy_fallback_on_invalid_library=is_simplified_interface(request.product_settings),
+                        prefer_legacy_near=str(getattr(request.product_settings, "near_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-") == "astap-native",
+                        strict_legacy_blind4d_manifest=(
+                            str(getattr(request.product_settings, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-") == "external-manifest"
+                            or bool(getattr(request.product_settings, "blind_only", False))
+                        ),
                     )
                 if is_simplified_interface(request.product_settings):
                     decision = evaluate_simplified_capability(shared_catalog_resources)

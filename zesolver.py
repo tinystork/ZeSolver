@@ -1586,6 +1586,8 @@ class SolveConfig:
 
 
 def resolve_catalog_resources_for_config(config: SolveConfig) -> SolverCatalogResources:
+    near_mode = NearCatalogMode.normalize(getattr(config, "near_catalog_mode", "auto"))
+    blind_mode = Blind4DCatalogMode.normalize(getattr(config, "blind4d_catalog_mode", "auto"))
     return resolve_catalog_resources(
         catalog_library=config.catalog_library_path,
         legacy_db_root=config.db_root,
@@ -1593,15 +1595,28 @@ def resolve_catalog_resources_for_config(config: SolveConfig) -> SolverCatalogRe
         legacy_blind4d_manifest=config.blind_4d_manifest_path,
         legacy_index_root=config.blind_index_path,
         enable_environment_discovery=False,
+        prefer_legacy_near=near_mode is NearCatalogMode.ASTAP_NATIVE,
+        strict_legacy_blind4d_manifest=(
+            blind_mode is Blind4DCatalogMode.EXTERNAL_MANIFEST
+            or bool(getattr(config, "blind_only", False))
+        ),
     )
 
 
 def apply_catalog_resources_to_config(config: SolveConfig) -> tuple[SolveConfig, SolverCatalogResources]:
     resources = resolve_catalog_resources_for_config(config)
     updates: dict[str, object] = {}
+    blind_mode = Blind4DCatalogMode.normalize(getattr(config, "blind4d_catalog_mode", "auto"))
     if resources.source in {"library", "environment"} and resources.near is not None:
         updates["db_root"] = resources.near.root
         updates["families"] = resources.near.families or None
+    if (
+        blind_mode is Blind4DCatalogMode.AUTO
+        and resources.blind4d_manifest_path is None
+        and config.blind_4d_manifest_path is not None
+    ):
+        updates["blind_4d_manifest_path"] = None
+        updates["blind_4d_loaded_manifest"] = None
     if (
         resources.source == "library"
         and resources.catalog_library is not None
@@ -2488,10 +2503,16 @@ class ImageSolver:
                 warnings=("blind4d_profile_not_selected",),
             )
         try:
+            mode = getattr(self.config, "blind4d_catalog_mode", "auto")
+            requested = Blind4DCatalogMode.normalize(mode)
             return resolve_blind4d_runtime(
                 self.catalog_resources,
-                mode=getattr(self.config, "blind4d_catalog_mode", "auto"),
-                external_manifest_path=self.config.blind_4d_manifest_path,
+                mode=mode,
+                external_manifest_path=(
+                    self.config.blind_4d_manifest_path
+                    if requested is Blind4DCatalogMode.EXTERNAL_MANIFEST
+                    else self.catalog_resources.blind4d_manifest_path
+                ),
             )
         except Blind4DRuntimeError as exc:
             try:
@@ -5642,6 +5663,11 @@ def run_cli(args: argparse.Namespace) -> int:
                 legacy_blind4d_manifest=args.blind_4d_manifest,
                 legacy_index_root=args.blind_index,
                 enable_environment_discovery=False,
+                prefer_legacy_near=str(getattr(args, "near_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-") == "astap-native",
+                strict_legacy_blind4d_manifest=(
+                    str(getattr(args, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-") == "external-manifest"
+                    or bool(getattr(args, "blind_only", False))
+                ),
             )
         except CatalogResourceResolutionError as exc:
             raise SystemExit(f"Catalog library error: {exc}") from exc
@@ -7573,7 +7599,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             value = str(path or "").strip()
             if not value:
                 return
-            self._clear_catalog_library_selection()
             self._set_astap_root(value, source="startup-wizard", validate=True)
             self._settings.near_catalog_mode = "astap-native"
             self._settings.blind4d_catalog_mode = "auto"
@@ -11591,6 +11616,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             catalog_library_path = self._catalog_library_path_from_ui()
             catalog_resources_for_config: SolverCatalogResources | None = None
             simplified_interface = str(getattr(self, "_interface_mode", "easy") or "easy").strip().lower() in {"easy", "wizard", "simple", "simplified"}
+            near_catalog_mode = self._current_near_catalog_mode_from_ui()
+            blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
             if catalog_library_path:
                 catalog_resources_for_config = self._validate_catalog_library_from_gui(show_error=False)
                 if catalog_resources_for_config is None:
@@ -11600,20 +11627,22 @@ def launch_gui(args: argparse.Namespace) -> int:
                         catalog_library_path = None
                     else:
                         raise ValueError(self._catalog_library_validation_error or "CATALOG_LIBRARY_INVALID")
-            near_catalog_mode = self._current_near_catalog_mode_from_ui()
-            blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
             db_root_text = self._settings.db_root
             if hasattr(self, "settings_db_edit"):
                 db_root_text = self.settings_db_edit.text().strip() or db_root_text
             if not db_root_text and catalog_resources_for_config is None:
                 raise ValueError(self._text("error_database_required"))
-            if catalog_resources_for_config is not None and catalog_resources_for_config.near is not None:
+            if (
+                catalog_resources_for_config is not None
+                and catalog_resources_for_config.near is not None
+                and near_catalog_mode != "astap-native"
+            ):
                 db_root = catalog_resources_for_config.near.root
             else:
                 db_root = Path(db_root_text).expanduser() if db_root_text else Path(catalog_library_path or ".").expanduser()
             if catalog_resources_for_config is None and not db_root.is_dir():
                 raise ValueError(self._text("error_database_missing", path=db_root))
-            if db_root_text and (catalog_resources_for_config is None or near_catalog_mode == "legacy-index"):
+            if db_root_text and (catalog_resources_for_config is None or near_catalog_mode in {"astap-native", "legacy-index"}):
                 validation = validate_astap_root(db_root_text)
                 if not validation.ok:
                     raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_astap"))

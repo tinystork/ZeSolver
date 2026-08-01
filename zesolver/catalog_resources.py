@@ -678,6 +678,8 @@ def resolve_catalog_resources(
     env: Mapping[str, str] | None = None,
     enable_environment_discovery: bool = True,
     allow_legacy_fallback_on_invalid_library: bool = False,
+    prefer_legacy_near: bool = False,
+    strict_legacy_blind4d_manifest: bool = True,
 ) -> SolverCatalogResources:
     """Resolve catalogue resources in the P1C priority order."""
 
@@ -685,7 +687,15 @@ def resolve_catalog_resources(
     if catalog_library is not None:
         try:
             library = _coerce_library(catalog_library)
-            return _resources_from_library(library)
+            resources = _resources_from_library(library)
+            if prefer_legacy_near and legacy_db_root is not None:
+                resources = _with_legacy_near(
+                    resources,
+                    legacy_db_root=legacy_db_root,
+                    legacy_families=legacy_families,
+                    source="startup-wizard-astap",
+                )
+            return resources
         except Exception as exc:
             if not allow_legacy_fallback_on_invalid_library:
                 raise CatalogResourceResolutionError(f"catalog_library_invalid: {exc}") from exc
@@ -695,6 +705,7 @@ def resolve_catalog_resources(
                 legacy_blind4d_manifest=legacy_blind4d_manifest,
                 legacy_index_root=legacy_index_root,
                 source="legacy",
+                strict_legacy_blind4d_manifest=strict_legacy_blind4d_manifest,
             )
             return _with_warning(legacy, f"catalog_library_invalid_fell_back_to_legacy: {exc}")
 
@@ -705,6 +716,7 @@ def resolve_catalog_resources(
             legacy_blind4d_manifest=legacy_blind4d_manifest,
             legacy_index_root=legacy_index_root,
             source="legacy",
+            strict_legacy_blind4d_manifest=strict_legacy_blind4d_manifest,
         )
 
     if enable_environment_discovery and _has_environment_catalog_hint(env):
@@ -769,6 +781,39 @@ def _resources_from_library(library: CatalogLibrary) -> SolverCatalogResources:
         coverage=coverage,
         all_sky_blind4d=all_sky_blind4d,
         catalog_library=library,
+    )
+
+
+def _with_legacy_near(
+    resources: SolverCatalogResources,
+    *,
+    legacy_db_root: str | Path,
+    legacy_families: tuple[str, ...] | list[str] | None,
+    source: str,
+) -> SolverCatalogResources:
+    near = NearCatalogDescriptor(
+        root=Path(legacy_db_root).expanduser(),
+        families=_normalize_families(legacy_families),
+        formats=(),
+        coverage=CatalogCoverage(status=CoverageStatus.UNKNOWN, provenance=source),
+        external_reference=True,
+    )
+    warnings = tuple(dict.fromkeys((*resources.warnings, "astap_near_overrides_library_near")))
+    return SolverCatalogResources(
+        library_path=resources.library_path,
+        library_status=resources.library_status,
+        near=near,
+        blind4d_indexes=resources.blind4d_indexes,
+        blind4d_runtime_paths=resources.blind4d_runtime_paths,
+        blind4d_manifest_path=resources.blind4d_manifest_path,
+        legacy_index_root=None,
+        source=resources.source,
+        warnings=warnings,
+        catalog_library_id=resources.catalog_library_id,
+        catalog_manifest_fingerprint=resources.catalog_manifest_fingerprint,
+        coverage=resources.coverage,
+        all_sky_blind4d=resources.all_sky_blind4d,
+        catalog_library=resources.catalog_library,
     )
 
 
@@ -861,6 +906,7 @@ def _resources_from_legacy(
     legacy_blind4d_manifest: str | Path | None,
     legacy_index_root: str | Path | None,
     source: str,
+    strict_legacy_blind4d_manifest: bool,
 ) -> SolverCatalogResources:
     near = None
     if legacy_db_root is not None:
@@ -878,28 +924,32 @@ def _resources_from_legacy(
         try:
             loaded = load_4d_index_manifest(manifest_path, validate_indexes=False)
         except IndexManifestError as exc:
-            raise CatalogResourceResolutionError(f"legacy_blind4d_manifest_invalid: {exc}") from exc
-        blind_indexes = tuple(
-            Blind4DIndexDescriptor(
-                id=entry.id,
-                path=entry.path,
-                family=_family_from_tiles(entry.tile_keys),
-                tile_keys=entry.tile_keys,
-                sha256=entry.sha256,
-                coverage=CatalogCoverage(
-                    status=CoverageStatus.PARTIAL,
-                    all_sky=False,
-                    families=tuple(filter(None, (_family_from_tiles(entry.tile_keys),))),
+            if strict_legacy_blind4d_manifest:
+                raise CatalogResourceResolutionError(f"legacy_blind4d_manifest_invalid: {exc}") from exc
+            warnings.append(f"legacy_blind4d_manifest_invalid_ignored: {exc}")
+            manifest_path = None
+        else:
+            blind_indexes = tuple(
+                Blind4DIndexDescriptor(
+                    id=entry.id,
+                    path=entry.path,
+                    family=_family_from_tiles(entry.tile_keys),
                     tile_keys=entry.tile_keys,
-                    covered_tiles=len(entry.tile_keys),
-                    provenance=source,
-                ),
-                schema=entry.quad_schema,
-                enabled=True,
+                    sha256=entry.sha256,
+                    coverage=CatalogCoverage(
+                        status=CoverageStatus.PARTIAL,
+                        all_sky=False,
+                        families=tuple(filter(None, (_family_from_tiles(entry.tile_keys),))),
+                        tile_keys=entry.tile_keys,
+                        covered_tiles=len(entry.tile_keys),
+                        provenance=source,
+                    ),
+                    schema=entry.quad_schema,
+                    enabled=True,
+                )
+                for entry in loaded.entries
             )
-            for entry in loaded.entries
-        )
-        warnings.append("legacy_blind4d_manifest_used")
+            warnings.append("legacy_blind4d_manifest_used")
     return SolverCatalogResources(
         library_path=None,
         library_status=None,
