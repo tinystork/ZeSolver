@@ -10,14 +10,18 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import re
 import shutil
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 import zipfile
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PurePosixPath
@@ -45,6 +49,8 @@ DEFAULT_CATALOG_RELEASE_REPOSITORY = "tinystork/ZeSolver-Catalogs"
 DEFAULT_DISTRIBUTION_SCHEMA = "zesolver.catalog_distribution.v1"
 DEFAULT_INSTALLATION_MODEL = "merge-assets-into-one-package-root"
 DEFAULT_USER_AGENT = "ZeSolver-CatalogDistribution/1.0"
+DEFAULT_MAX_PARALLEL_DOWNLOADS = 3
+MAX_PARALLEL_DOWNLOADS_LIMIT = 4
 
 
 class DistributionErrorCode(str, Enum):
@@ -68,6 +74,7 @@ class DistributionErrorCode(str, Enum):
     CACHE_INVALID = "DISTRIBUTION_CACHE_INVALID"
     CACHE_NOT_WRITABLE = "DISTRIBUTION_CACHE_NOT_WRITABLE"
     CACHE_CLEANUP_FAILED = "DISTRIBUTION_CACHE_CLEANUP_FAILED"
+    SOURCE_UNAVAILABLE = "DISTRIBUTION_SOURCE_UNAVAILABLE"
     VOLUME_RESOLUTION_FAILED = "DISTRIBUTION_VOLUME_RESOLUTION_FAILED"
     CROSS_VOLUME_ATOMICITY_UNAVAILABLE = "DISTRIBUTION_CROSS_VOLUME_ATOMICITY_UNAVAILABLE"
     PACKAGE_INVALID = "DISTRIBUTION_PACKAGE_INVALID"
@@ -112,6 +119,62 @@ class DistributionRelease:
     name: str
     html_url: str
     assets: Mapping[str, DistributionAsset]
+
+
+@dataclass(frozen=True, slots=True)
+class DistributionSource:
+    id: str
+    enabled: bool = True
+    base_url: str = ""
+    url_template: str = ""
+    canonical: bool = False
+
+    def url_for_asset(self, asset: DistributionAsset) -> str | None:
+        if not self.enabled:
+            return None
+        if self.canonical:
+            return asset.url
+        if self.url_template.strip():
+            return self.url_template.format(asset=urllib.parse.quote(asset.name), asset_name=urllib.parse.quote(asset.name))
+        if self.base_url.strip():
+            return urllib.parse.urljoin(self.base_url.rstrip("/") + "/", urllib.parse.quote(asset.name))
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class DistributionSourceCandidate:
+    source_id: str
+    url: str
+
+
+@dataclass(frozen=True, slots=True)
+class DistributionDownloadPolicy:
+    sources: tuple[DistributionSource, ...] = field(
+        default_factory=lambda: (
+            DistributionSource("mirror-1", enabled=False),
+            DistributionSource("mirror-2", enabled=False),
+            DistributionSource("github-release", enabled=True, canonical=True),
+        )
+    )
+    max_parallel_downloads: int = DEFAULT_MAX_PARALLEL_DOWNLOADS
+    unhealthy_failure_threshold: int = 2
+
+    def bounded_parallelism(self) -> int:
+        return max(1, min(MAX_PARALLEL_DOWNLOADS_LIMIT, int(self.max_parallel_downloads or 1)))
+
+
+@dataclass(slots=True)
+class SourceHealthState:
+    source_id: str
+    failures: int = 0
+    last_error: str = ""
+
+    def record_failure(self, error: Exception | str) -> None:
+        self.failures += 1
+        self.last_error = str(error)
+
+    def healthy(self, threshold: int) -> bool:
+        return self.failures < max(1, int(threshold or 1))
 
 
 @dataclass(frozen=True, slots=True)
@@ -169,6 +232,17 @@ class DistributionProgress:
     overall_total: int = 0
     version: str | None = None
     destination: Path | None = None
+    source_id: str | None = None
+    active_components: tuple[str, ...] = ()
+    components_done: int = 0
+    components_total: int = 0
+    throughput_bps: float | None = None
+    elapsed_s: float | None = None
+    eta_s: float | None = None
+    bytes_downloaded: int = 0
+    bytes_resumed: int = 0
+    bytes_reused: int = 0
+    verify_duration_s: float = 0.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,6 +252,7 @@ class DistributionInstallResult:
     manifest: DistributionManifest
     cache_dir: Path
     downloaded_assets: tuple[Path, ...]
+    telemetry: Mapping[str, Any] = field(default_factory=dict)
 
 
 ProgressCallback = Callable[[DistributionProgress], None]
@@ -251,6 +326,7 @@ class ResumableAssetDownloader:
         version: str,
         overall_current: int,
         overall_total: int,
+        source_id: str | None = None,
     ) -> Path:
         destination = Path(destination)
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -265,6 +341,7 @@ class ResumableAssetDownloader:
                 overall_current=overall_current,
                 overall_total=overall_total,
                 version=version,
+                source_id=source_id,
             )
             return destination
         if destination.exists():
@@ -282,6 +359,7 @@ class ResumableAssetDownloader:
                     version=version,
                     overall_current=overall_current,
                     overall_total=overall_total,
+                    source_id=source_id,
                 )
             except DistributionCancelled:
                 raise
@@ -305,6 +383,7 @@ class ResumableAssetDownloader:
         version: str,
         overall_current: int,
         overall_total: int,
+        source_id: str | None = None,
         allow_range_restart: bool = True,
     ) -> Path:
         part = destination.with_suffix(destination.suffix + ".part")
@@ -312,13 +391,17 @@ class ResumableAssetDownloader:
         offset = part.stat().st_size if part.exists() else 0
         headers: dict[str, str] = {}
         meta_payload = _read_json_file(meta)
+        same_source_identity = isinstance(meta_payload, dict) and (
+            (source_id and meta_payload.get("source_id") == source_id)
+            or (not source_id and meta_payload.get("url") == url)
+        )
         if offset > 0:
             if offset > expected_size:
                 self._discard_partial(part, meta)
                 offset = 0
             else:
                 headers["Range"] = f"bytes={offset}-"
-                if isinstance(meta_payload, dict):
+                if isinstance(meta_payload, dict) and same_source_identity:
                     if meta_payload.get("etag"):
                         headers["If-Range"] = str(meta_payload["etag"])
                     elif meta_payload.get("last_modified"):
@@ -338,6 +421,7 @@ class ResumableAssetDownloader:
                     version=version,
                     overall_current=overall_current,
                     overall_total=overall_total,
+                    source_id=source_id,
                     allow_range_restart=False,
                 )
             raise
@@ -362,6 +446,7 @@ class ResumableAssetDownloader:
                         version=version,
                         overall_current=overall_current,
                         overall_total=overall_total,
+                        source_id=source_id,
                         allow_range_restart=False,
                     )
                 raise DistributionError(DistributionErrorCode.DOWNLOAD_RANGE_INVALID, f"{component_id}: HTTP {status}")
@@ -375,7 +460,7 @@ class ResumableAssetDownloader:
 
             remote_etag = response_headers.get("ETag") or response_headers.get("Etag")
             remote_last_modified = response_headers.get("Last-Modified")
-            if offset > 0 and isinstance(meta_payload, dict):
+            if offset > 0 and isinstance(meta_payload, dict) and same_source_identity:
                 old_etag = meta_payload.get("etag")
                 old_lm = meta_payload.get("last_modified")
                 if old_etag and remote_etag and old_etag != remote_etag:
@@ -389,6 +474,7 @@ class ResumableAssetDownloader:
                         version=version,
                         overall_current=overall_current,
                         overall_total=overall_total,
+                        source_id=source_id,
                         allow_range_restart=allow_range_restart,
                     )
                 if old_lm and remote_last_modified and old_lm != remote_last_modified:
@@ -402,10 +488,11 @@ class ResumableAssetDownloader:
                         version=version,
                         overall_current=overall_current,
                         overall_total=overall_total,
+                        source_id=source_id,
                         allow_range_restart=allow_range_restart,
                     )
 
-            _write_json_file(meta, {"etag": remote_etag, "last_modified": remote_last_modified, "url": url})
+            _write_json_file(meta, {"etag": remote_etag, "last_modified": remote_last_modified, "url": url, "source_id": source_id})
             mode = "ab" if offset > 0 and status == 206 else "wb"
             done = offset if mode == "ab" else 0
             with part.open(mode + "") as handle:
@@ -425,6 +512,7 @@ class ResumableAssetDownloader:
                         overall_current=overall_current,
                         overall_total=overall_total,
                         version=version,
+                        source_id=source_id,
                     )
 
         actual_size = part.stat().st_size if part.exists() else 0
@@ -433,7 +521,9 @@ class ResumableAssetDownloader:
                 DistributionErrorCode.ASSET_SIZE_MISMATCH,
                 f"{component_id}: expected {expected_size}, got {actual_size}",
             )
+        verify_started = time.perf_counter()
         actual_sha = sha256_file(part)
+        verify_duration_s = max(0.0, time.perf_counter() - verify_started)
         if actual_sha.lower() != expected_sha256.lower():
             invalid = destination.with_suffix(destination.suffix + ".invalid")
             if invalid.exists():
@@ -451,6 +541,8 @@ class ResumableAssetDownloader:
             overall_current=overall_current,
             overall_total=overall_total,
             version=version,
+            source_id=source_id,
+            verify_duration_s=verify_duration_s,
         )
         return destination
 
@@ -467,6 +559,359 @@ class ResumableAssetDownloader:
             raise DistributionCancelled()
 
 
+@dataclass(frozen=True, slots=True)
+class DistributionDownloadStats:
+    paths_by_asset: Mapping[str, Path]
+    sources_used: Mapping[str, str]
+    bytes_downloaded: int
+    bytes_resumed: int
+    bytes_reused: int
+    duration_s: float
+    verify_duration_s: float
+    max_concurrency_observed: int
+
+
+class _DistributionProgressAggregator:
+    def __init__(
+        self,
+        *,
+        plan: DistributionInstallPlan,
+        progress_callback: ProgressCallback | None,
+    ) -> None:
+        self.plan = plan
+        self.progress_callback = progress_callback
+        self.started_at = time.perf_counter()
+        self.lock = threading.Lock()
+        self.component_bytes: dict[str, int] = {component.id: 0 for component in plan.components}
+        self.active_components: set[str] = set()
+        self.completed_components: set[str] = set()
+        self.sources_used: dict[str, str] = {}
+        self.bytes_reused = 0
+        self.bytes_resumed = 0
+        self.verify_duration_s = 0.0
+        self.max_concurrency_observed = 0
+
+    def component_begin(self, component: DistributionComponent, *, source_id: str, resumed_bytes: int) -> None:
+        with self.lock:
+            self.active_components.add(component.id)
+            self.max_concurrency_observed = max(self.max_concurrency_observed, len(self.active_components))
+            if resumed_bytes > 0:
+                self.bytes_resumed += resumed_bytes
+                self.component_bytes[component.id] = max(self.component_bytes.get(component.id, 0), resumed_bytes)
+            self._emit_locked(
+                "download_component",
+                f"DISTRIBUTION_COMPONENT_BEGIN component={component.id} source_id={source_id}",
+                component=component.id,
+                source_id=source_id,
+            )
+
+    def component_progress(self, progress: DistributionProgress) -> None:
+        with self.lock:
+            if progress.component:
+                self.active_components.add(progress.component)
+                self.component_bytes[progress.component] = max(
+                    self.component_bytes.get(progress.component, 0),
+                    int(progress.bytes_current or 0),
+                )
+                if progress.source_id:
+                    self.sources_used[progress.component] = progress.source_id
+            self.verify_duration_s += float(progress.verify_duration_s or 0.0)
+            self.max_concurrency_observed = max(self.max_concurrency_observed, len(self.active_components))
+            self._emit_locked(
+                progress.stage,
+                progress.message,
+                component=progress.component,
+                source_id=progress.source_id,
+                bytes_current=int(progress.bytes_current or 0),
+                bytes_total=int(progress.bytes_total or 0),
+            )
+
+    def component_reused(self, component: DistributionComponent, *, source_id: str) -> None:
+        with self.lock:
+            self.bytes_reused += component.size_bytes
+            self.completed_components.add(component.id)
+            self.component_bytes[component.id] = component.size_bytes
+            self.sources_used[component.id] = source_id
+            self._emit_locked(
+                "download_component",
+                f"DISTRIBUTION_COMPONENT_END component={component.id} source_id=cache status=reused",
+                component=component.id,
+                source_id=source_id,
+                bytes_current=component.size_bytes,
+                bytes_total=component.size_bytes,
+            )
+
+    def source_switch(self, component: DistributionComponent, *, from_source: str, to_source: str, error: Exception | str) -> None:
+        _log_distribution_event(
+            "DISTRIBUTION_SOURCE_SWITCH",
+            component=component.id,
+            from_source=from_source,
+            to_source=to_source,
+            error=_safe_error_text(error),
+        )
+        with self.lock:
+            self._emit_locked(
+                "download_source_switch",
+                f"DISTRIBUTION_SOURCE_SWITCH component={component.id} from={from_source} to={to_source} cause={_safe_error_text(error)}",
+                component=component.id,
+                source_id=to_source,
+            )
+
+    def component_end(self, component: DistributionComponent, *, source_id: str, duration_s: float) -> None:
+        with self.lock:
+            self.active_components.discard(component.id)
+            self.completed_components.add(component.id)
+            self.component_bytes[component.id] = component.size_bytes
+            self.sources_used[component.id] = source_id
+            rate = component.size_bytes / duration_s if duration_s > 0 else None
+            self._emit_locked(
+                "verify_component",
+                f"DISTRIBUTION_COMPONENT_END component={component.id} source_id={source_id}",
+                component=component.id,
+                source_id=source_id,
+                bytes_current=component.size_bytes,
+                bytes_total=component.size_bytes,
+                throughput_bps=rate,
+            )
+
+    def snapshot(self) -> dict[str, Any]:
+        with self.lock:
+            return {
+                "sources_used": dict(self.sources_used),
+                "bytes_reused": self.bytes_reused,
+                "bytes_resumed": self.bytes_resumed,
+                "max_concurrency_observed": self.max_concurrency_observed,
+                "bytes_current": sum(self.component_bytes.values()),
+                "verify_duration_s": self.verify_duration_s,
+            }
+
+    def _emit_locked(
+        self,
+        stage: str,
+        message: str,
+        *,
+        component: str | None = None,
+        source_id: str | None = None,
+        bytes_current: int = 0,
+        bytes_total: int = 0,
+        throughput_bps: float | None = None,
+    ) -> None:
+        if self.progress_callback is None:
+            return
+        elapsed = max(0.0, time.perf_counter() - self.started_at)
+        overall_current = sum(self.component_bytes.values())
+        overall_total = int(self.plan.total_download_bytes or 0)
+        rate = throughput_bps if throughput_bps is not None else (overall_current / elapsed if elapsed > 0 else None)
+        eta = ((overall_total - overall_current) / rate) if rate and overall_total > overall_current else None
+        self.progress_callback(
+            DistributionProgress(
+                stage=stage,
+                message=message,
+                component=component,
+                source_id=source_id,
+                bytes_current=bytes_current,
+                bytes_total=bytes_total,
+                overall_current=overall_current,
+                overall_total=overall_total,
+                version=self.plan.manifest.version,
+                destination=self.plan.destination,
+                active_components=tuple(sorted(self.active_components)),
+                components_done=len(self.completed_components),
+                components_total=len(self.plan.components),
+                throughput_bps=rate,
+                elapsed_s=elapsed,
+                eta_s=eta,
+                bytes_downloaded=max(0, overall_current - self.bytes_resumed - self.bytes_reused),
+                bytes_resumed=self.bytes_resumed,
+                bytes_reused=self.bytes_reused,
+            )
+        )
+
+
+class ParallelDistributionDownloader:
+    """Download distinct distribution components concurrently with source fallback."""
+
+    def __init__(
+        self,
+        *,
+        http_backend: UrllibDistributionHttpBackend,
+        policy: DistributionDownloadPolicy,
+        progress_callback: ProgressCallback | None = None,
+        cancel_callback: CancelCallback | None = None,
+        chunk_size: int = 1024 * 1024,
+    ) -> None:
+        self.http = http_backend
+        self.policy = policy
+        self.progress_callback = progress_callback
+        self.cancel_callback = cancel_callback
+        self.chunk_size = max(64 * 1024, int(chunk_size))
+        self._stop_event = threading.Event()
+        self._health = {source.id: SourceHealthState(source.id) for source in policy.sources}
+
+    def download(self, plan: DistributionInstallPlan) -> DistributionDownloadStats:
+        if not plan.components:
+            return DistributionDownloadStats({}, {}, 0, 0, 0, 0.0, 0.0, 0)
+        started_at = time.perf_counter()
+        aggregator = _DistributionProgressAggregator(plan=plan, progress_callback=self.progress_callback)
+        paths_by_asset: dict[str, Path] = {}
+        components_by_asset: dict[str, DistributionComponent] = {}
+        for component in plan.components:
+            components_by_asset.setdefault(component.asset, component)
+        max_workers = min(self.policy.bounded_parallelism(), len(components_by_asset))
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="zesolver-catalog-download") as executor:
+            pending = {
+                executor.submit(self._download_component, plan, component, aggregator): component
+                for component in components_by_asset.values()
+            }
+            first_error: BaseException | None = None
+            while pending:
+                if self._is_cancelled():
+                    self._stop_event.set()
+                done, _not_done = wait(tuple(pending), return_when=FIRST_COMPLETED)
+                for future in done:
+                    component = pending.pop(future)
+                    try:
+                        paths_by_asset[component.asset] = future.result()
+                    except BaseException as exc:
+                        first_error = exc
+                        self._stop_event.set()
+                if first_error is not None:
+                    break
+            if first_error is not None:
+                for future in pending:
+                    future.cancel()
+                executor.shutdown(wait=True, cancel_futures=True)
+                if isinstance(first_error, DistributionError):
+                    raise first_error
+                raise DistributionError(DistributionErrorCode.NETWORK_UNAVAILABLE, str(first_error)) from first_error
+        snapshot = aggregator.snapshot()
+        duration = max(0.0, time.perf_counter() - started_at)
+        return DistributionDownloadStats(
+            paths_by_asset=paths_by_asset,
+            sources_used=snapshot["sources_used"],
+            bytes_downloaded=max(0, int(snapshot["bytes_current"]) - int(snapshot["bytes_resumed"]) - int(snapshot["bytes_reused"])),
+            bytes_resumed=int(snapshot["bytes_resumed"]),
+            bytes_reused=int(snapshot["bytes_reused"]),
+            duration_s=duration,
+            verify_duration_s=float(snapshot["verify_duration_s"]),
+            max_concurrency_observed=int(snapshot["max_concurrency_observed"]),
+        )
+
+    def _download_component(
+        self,
+        plan: DistributionInstallPlan,
+        component: DistributionComponent,
+        aggregator: _DistributionProgressAggregator,
+    ) -> Path:
+        self._check_cancelled()
+        asset = plan.assets[component.asset]
+        destination = plan.cache_dir / component.asset
+        expected_hash = _normalize_sha256(component.sha256)
+        if _verified_file(destination, expected_size=component.size_bytes, expected_sha256=expected_hash):
+            aggregator.component_reused(component, source_id="cache")
+            return destination
+        if destination.exists():
+            destination.rename(destination.with_suffix(destination.suffix + ".invalid"))
+        candidates = self._source_candidates(asset)
+        if not candidates:
+            raise DistributionError(DistributionErrorCode.SOURCE_UNAVAILABLE, component.id)
+        failures: list[str] = []
+        previous_source: str | None = None
+        for index, candidate in enumerate(candidates, start=1):
+            self._check_cancelled()
+            if previous_source is not None:
+                aggregator.source_switch(component, from_source=previous_source, to_source=candidate.source_id, error=failures[-1] if failures else "retry")
+            previous_source = candidate.source_id
+            resumed = _partial_size(destination)
+            started = time.perf_counter()
+            aggregator.component_begin(component, source_id=candidate.source_id, resumed_bytes=resumed)
+            _log_distribution_event(
+                "DISTRIBUTION_COMPONENT_BEGIN",
+                component=component.id,
+                source_id=candidate.source_id,
+                attempt=index,
+                resume_bytes=resumed,
+            )
+            try:
+                downloader = ResumableAssetDownloader(
+                    http_backend=self.http,
+                    progress_callback=aggregator.component_progress,
+                    cancel_callback=self._is_cancelled,
+                    chunk_size=self.chunk_size,
+                    retries=0,
+                )
+                path = downloader.download(
+                    url=candidate.url,
+                    destination=destination,
+                    expected_size=component.size_bytes,
+                    expected_sha256=component.sha256,
+                    component_id=component.id,
+                    version=plan.manifest.version,
+                    overall_current=index,
+                    overall_total=len(candidates),
+                    source_id=candidate.source_id,
+                )
+                duration = max(0.0, time.perf_counter() - started)
+                aggregator.component_end(component, source_id=candidate.source_id, duration_s=duration)
+                _log_distribution_event(
+                    "DISTRIBUTION_COMPONENT_END",
+                    component=component.id,
+                    source_id=candidate.source_id,
+                    attempt=index,
+                    duration_s=duration,
+                    bytes=component.size_bytes,
+                    status="completed",
+                )
+                return path
+            except DistributionCancelled:
+                _log_distribution_event("DISTRIBUTION_COMPONENT_END", component=component.id, source_id=candidate.source_id, status="cancelled")
+                raise
+            except Exception as exc:
+                self._record_source_failure(candidate.source_id, exc)
+                if isinstance(exc, DistributionError) and exc.code in {
+                    DistributionErrorCode.ASSET_SIZE_MISMATCH,
+                    DistributionErrorCode.ASSET_SHA256_MISMATCH,
+                    DistributionErrorCode.DOWNLOAD_RANGE_INVALID,
+                }:
+                    _discard_partial_for_destination(destination)
+                failures.append(f"{candidate.source_id}: {_safe_error_text(exc)}")
+                _log_distribution_event(
+                    "DISTRIBUTION_COMPONENT_END",
+                    component=component.id,
+                    source_id=candidate.source_id,
+                    attempt=index,
+                    status="failed",
+                    error=_safe_error_text(exc),
+                )
+                continue
+        raise DistributionError(DistributionErrorCode.SOURCE_UNAVAILABLE, f"{component.id}: " + " | ".join(failures))
+
+    def _source_candidates(self, asset: DistributionAsset) -> list[DistributionSourceCandidate]:
+        active: list[DistributionSourceCandidate] = []
+        delayed_unhealthy: list[DistributionSourceCandidate] = []
+        for source in self.policy.sources:
+            url = source.url_for_asset(asset)
+            if not url:
+                continue
+            candidate = DistributionSourceCandidate(source.id, url)
+            health = self._health.setdefault(source.id, SourceHealthState(source.id))
+            if health.healthy(self.policy.unhealthy_failure_threshold):
+                active.append(candidate)
+            else:
+                delayed_unhealthy.append(candidate)
+        return active if active else delayed_unhealthy
+
+    def _record_source_failure(self, source_id: str, error: Exception | str) -> None:
+        self._health.setdefault(source_id, SourceHealthState(source_id)).record_failure(error)
+
+    def _is_cancelled(self) -> bool:
+        return self._stop_event.is_set() or bool(self.cancel_callback and self.cancel_callback())
+
+    def _check_cancelled(self) -> None:
+        if self._is_cancelled():
+            raise DistributionCancelled()
+
+
 class CatalogDistributionService:
     """Official distribution orchestration service used by GUI and future wizard."""
 
@@ -479,6 +924,7 @@ class CatalogDistributionService:
         progress_callback: ProgressCallback | None = None,
         cancel_callback: CancelCallback | None = None,
         cache_root: Path | None = None,
+        download_policy: DistributionDownloadPolicy | None = None,
     ) -> None:
         self.repository = repository
         self.http = http_backend or UrllibDistributionHttpBackend()
@@ -489,11 +935,18 @@ class CatalogDistributionService:
         self.progress_callback = progress_callback
         self.cancel_callback = cancel_callback
         self.cache_root = Path(cache_root).expanduser() if cache_root is not None else default_cache_root()
+        self.download_policy = download_policy or DistributionDownloadPolicy()
+        self._last_discovery_duration_s = 0.0
+        self._last_download_stats: DistributionDownloadStats | None = None
 
     def fetch_latest_distribution(self) -> tuple[DistributionRelease, DistributionManifest]:
-        release = self.fetch_distribution_for_release(None)
-        manifest = self._fetch_manifest_for_release(release)
-        return release, manifest
+        started = time.perf_counter()
+        try:
+            release = self.fetch_distribution_for_release(None)
+            manifest = self._fetch_manifest_for_release(release)
+            return release, manifest
+        finally:
+            self._last_discovery_duration_s = max(0.0, time.perf_counter() - started)
 
     def fetch_distribution_for_release(self, tag: str | None) -> DistributionRelease:
         self._check_cancelled()
@@ -661,29 +1114,15 @@ class CatalogDistributionService:
 
     def download_distribution(self, plan: DistributionInstallPlan) -> tuple[Path, ...]:
         self._check_cancelled()
-        downloader = ResumableAssetDownloader(
+        downloader = ParallelDistributionDownloader(
             http_backend=self.http,
+            policy=self.download_policy,
             progress_callback=self.progress_callback,
             cancel_callback=self._is_cancelled,
         )
-        paths: list[Path] = []
-        total = len(plan.components)
-        for index, component in enumerate(plan.components, start=1):
-            asset = plan.assets[component.asset]
-            path = plan.cache_dir / component.asset
-            paths.append(
-                downloader.download(
-                    url=asset.url,
-                    destination=path,
-                    expected_size=component.size_bytes,
-                    expected_sha256=component.sha256,
-                    component_id=component.id,
-                    version=plan.manifest.version,
-                    overall_current=index,
-                    overall_total=total,
-                )
-            )
-        return tuple(paths)
+        stats = downloader.download(plan)
+        self._last_download_stats = stats
+        return tuple(stats.paths_by_asset[component.asset] for component in plan.components)
 
     def assemble_distribution(self, plan: DistributionInstallPlan, downloaded_assets: Mapping[str, Path] | None = None) -> Path:
         self._check_cancelled()
@@ -742,14 +1181,56 @@ class CatalogDistributionService:
         settings: Any | None = None,
         save_settings: Callable[[Any], None] | None = None,
     ) -> DistributionInstallResult:
-        self._ensure_storage_available(plan)
-        downloaded = self.download_distribution(plan)
-        self._ensure_storage_available(plan)
-        downloaded_by_asset = {component.asset: path for component, path in zip(plan.components, downloaded, strict=False)}
-        package_root = self.assemble_distribution(plan, downloaded_by_asset)
+        run_started = time.perf_counter()
+        status = "failed"
+        telemetry: dict[str, Any] = {
+            "library_id": plan.manifest.library_id,
+            "version": plan.manifest.version,
+            "destination": str(plan.destination),
+            "cache": str(plan.cache_dir),
+            "components": len(plan.components),
+            "discovery_duration_s": self._last_discovery_duration_s,
+            "download_duration_s": 0.0,
+            "sha256_duration_s": 0.0,
+            "assembly_duration_s": 0.0,
+            "validation_duration_s": 0.0,
+            "bytes_downloaded": 0,
+            "bytes_resumed": 0,
+            "bytes_reused": 0,
+            "sources_used": {},
+            "max_concurrency_observed": 0,
+            "status": status,
+        }
+        self._structured_event("DISTRIBUTION_RUN_BEGIN", plan, status="started")
+        package_root: Path | None = None
         try:
+            self._ensure_storage_available(plan)
+            downloaded = self.download_distribution(plan)
+            if self._last_download_stats is not None:
+                telemetry.update(
+                    {
+                        "download_duration_s": self._last_download_stats.duration_s,
+                        "sha256_duration_s": self._last_download_stats.verify_duration_s,
+                        "bytes_downloaded": self._last_download_stats.bytes_downloaded,
+                        "bytes_resumed": self._last_download_stats.bytes_resumed,
+                        "bytes_reused": self._last_download_stats.bytes_reused,
+                        "sources_used": dict(self._last_download_stats.sources_used),
+                        "max_concurrency_observed": self._last_download_stats.max_concurrency_observed,
+                    }
+                )
+            self._ensure_storage_available(plan)
+            downloaded_by_asset = {component.asset: path for component, path in zip(plan.components, downloaded, strict=False)}
+            assembly_started = time.perf_counter()
+            self._structured_event("DISTRIBUTION_ASSEMBLY_BEGIN", plan)
+            package_root = self.assemble_distribution(plan, downloaded_by_asset)
+            telemetry["assembly_duration_s"] = max(0.0, time.perf_counter() - assembly_started)
+            self._structured_event("DISTRIBUTION_ASSEMBLY_END", plan, duration_s=telemetry["assembly_duration_s"])
+            validation_started = time.perf_counter()
+            self._structured_event("DISTRIBUTION_VALIDATION_BEGIN", plan)
             self._emit("verify_package", "Verifying assembled package", version=plan.manifest.version, destination=plan.destination)
             result = self.management_service.install_materialized_package(package_root, plan.destination)
+            telemetry["validation_duration_s"] = max(0.0, time.perf_counter() - validation_started)
+            self._structured_event("DISTRIBUTION_VALIDATION_END", plan, duration_s=telemetry["validation_duration_s"], status=str(result.status.value))
             self._emit("persist_settings", "Persisting selected library", version=plan.manifest.version, destination=plan.destination)
             if settings is not None:
                 settings.catalog_library_path = str(result.library_root)
@@ -762,20 +1243,49 @@ class CatalogDistributionService:
                 }
                 if save_settings is not None:
                     save_settings(settings)
+            status = "completed"
+            telemetry["status"] = status
+            total_duration = max(0.0, time.perf_counter() - run_started)
+            telemetry["total_duration_s"] = total_duration
+            telemetry["average_throughput_bps"] = (
+                float(telemetry["bytes_downloaded"]) / float(telemetry["download_duration_s"])
+                if float(telemetry["download_duration_s"] or 0.0) > 0
+                else None
+            )
             self._emit("complete", "Official library installed", version=plan.manifest.version, destination=result.library_root)
+            self._structured_event("DISTRIBUTION_RUN_END", plan, **telemetry)
             return DistributionInstallResult(
                 library_result=result,
                 release=plan.release,
                 manifest=plan.manifest,
                 cache_dir=plan.cache_dir,
                 downloaded_assets=downloaded,
+                telemetry=telemetry,
             )
+        except DistributionCancelled:
+            status = "cancelled"
+            telemetry["status"] = status
+            telemetry["total_duration_s"] = max(0.0, time.perf_counter() - run_started)
+            self._structured_event("DISTRIBUTION_RUN_END", plan, **telemetry)
+            raise
         except CatalogLibraryManagementCancelled as exc:
+            status = "cancelled"
+            telemetry["status"] = status
+            telemetry["total_duration_s"] = max(0.0, time.perf_counter() - run_started)
+            self._structured_event("DISTRIBUTION_RUN_END", plan, **telemetry)
             raise DistributionCancelled(str(exc)) from exc
         except CatalogLibraryManagementError as exc:
+            telemetry["status"] = status
+            telemetry["total_duration_s"] = max(0.0, time.perf_counter() - run_started)
+            self._structured_event("DISTRIBUTION_RUN_END", plan, **telemetry)
             raise DistributionError(DistributionErrorCode.LIBRARY_VALIDATION_FAILED, str(exc)) from exc
+        except Exception:
+            telemetry["status"] = status
+            telemetry["total_duration_s"] = max(0.0, time.perf_counter() - run_started)
+            self._structured_event("DISTRIBUTION_RUN_END", plan, **telemetry)
+            raise
         finally:
-            if package_root.exists():
+            if package_root is not None and package_root.exists():
                 shutil.rmtree(package_root, ignore_errors=True)
 
     def inspect_installed_version(self, library_root: str | Path | None) -> str | None:
@@ -904,6 +1414,18 @@ class CatalogDistributionService:
         if self.progress_callback is not None:
             self.progress_callback(DistributionProgress(stage=stage, message=message, **kwargs))
 
+    def _structured_event(self, event: str, plan: DistributionInstallPlan, **payload: Any) -> None:
+        safe_payload = {
+            "event": event,
+            "library_id": plan.manifest.library_id,
+            "version": plan.manifest.version,
+            "destination": str(plan.destination),
+            "cache": str(plan.cache_dir),
+            "components": len(plan.components),
+        }
+        safe_payload.update({key: _json_safe_value(value) for key, value in payload.items() if key not in {"destination", "cache", "components"}})
+        logging.info("%s %s", event, json.dumps(safe_payload, sort_keys=True))
+
     def _is_cancelled(self) -> bool:
         return bool(self.cancel_callback and self.cancel_callback())
 
@@ -928,6 +1450,44 @@ def _http_distribution_error(exc: urllib.error.HTTPError) -> DistributionError:
         f"HTTP {exc.code}: {exc.reason}",
         http_status=exc.code,
     )
+
+
+def _partial_size(destination: Path) -> int:
+    part = Path(destination).with_suffix(Path(destination).suffix + ".part")
+    try:
+        return part.stat().st_size if part.exists() else 0
+    except OSError:
+        return 0
+
+
+def _discard_partial_for_destination(destination: Path) -> None:
+    target = Path(destination)
+    target.with_suffix(target.suffix + ".part").unlink(missing_ok=True)
+    target.with_suffix(target.suffix + ".part.json").unlink(missing_ok=True)
+
+
+def _safe_error_text(error: Exception | str) -> str:
+    text = str(error)
+    text = re.sub(r"https?://\S+", "https://<redacted>", text)
+    return text[:500]
+
+
+def _json_safe_value(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe_value(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_json_safe_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return str(value)
+
+
+def _log_distribution_event(event: str, **payload: Any) -> None:
+    safe_payload = {"event": event}
+    safe_payload.update({str(key): _json_safe_value(value) for key, value in payload.items()})
+    logging.info("%s %s", event, json.dumps(safe_payload, sort_keys=True))
 
 
 def _verified_file(path: Path, *, expected_size: int, expected_sha256: str) -> bool:
@@ -1008,6 +1568,8 @@ __all__ = [
     "DistributionAsset",
     "DistributionCancelled",
     "DistributionComponent",
+    "DistributionDownloadPolicy",
+    "DistributionDownloadStats",
     "DistributionError",
     "DistributionErrorCode",
     "DistributionInstallPlan",
@@ -1015,6 +1577,10 @@ __all__ = [
     "DistributionManifest",
     "DistributionProgress",
     "DistributionRelease",
+    "DistributionSource",
+    "DistributionSourceCandidate",
+    "ParallelDistributionDownloader",
     "ResumableAssetDownloader",
+    "SourceHealthState",
     "UrllibDistributionHttpBackend",
 ]

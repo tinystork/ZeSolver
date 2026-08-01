@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from zesolver.gui_startup_wizard import (
     STARTUP_WIZARD_VERSION,
@@ -20,6 +24,7 @@ from zesolver.settings_store import PersistentSettings, load_persistent_settings
 
 
 SOURCE = (Path(__file__).resolve().parents[1] / "zesolver.py").read_text(encoding="utf-8")
+_QT_APP = None
 
 
 def _catalog(state: str):
@@ -32,12 +37,15 @@ def _astap(state: str):
 
 @pytest.fixture()
 def qt_widgets(monkeypatch: pytest.MonkeyPatch):
+    global _QT_APP
+    if not any(str(arg).replace("\\", "/").endswith("tests/test_startup_wizard.py") for arg in sys.argv):
+        pytest.skip("startup wizard Qt widget tests run in an explicit isolated test invocation")
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     pytest.importorskip("PySide6")
     from PySide6 import QtWidgets
 
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    return QtWidgets, app
+    _QT_APP = QtWidgets.QApplication.instance() or _QT_APP or QtWidgets.QApplication([])
+    return QtWidgets, _QT_APP
 
 
 def _fresh_decision() -> StartupWizardDecision:
