@@ -1,106 +1,325 @@
-# AGENT.md — État courant ZeSolver
+AGENT.md — État courant ZeSolver
 
-**Projet :** ZeSolver  
-**Écosystème :** ZeMosaic / ZeSeestarStacker  
-**Auteur principal :** Tinystork — Tristan Nauleau  
-**Mise à jour :** 1 août 2026
-**Phase active :** Release Candidate acceptance — validation manuelle finale
+Projet : ZeSolverÉcosystème : ZeMosaic / ZeSeestarStackerAuteur principal : Tinystork — Tristan NauleauMise à jour : 1er août 2026Phase active : Release Candidate Acceptance
 
----
+READY_FOR_RELEASE_CANDIDATE_ACCEPTANCE
+NOT_YET_PRODUCTION_READY
 
-## Portée
+Portée
 
-Ce fichier s’applique à tout le dépôt, sauf instruction plus spécifique dans un
-sous-répertoire.
+Ce fichier s’applique à tout le dépôt, sauf instruction plus précise dans unsous-répertoire.
 
-Les rapports de mission détaillés vivent dans `docs/stabilization/`. Ne pas
-recommencer S5C/S5D sans régression reproduite.
+Il décrit uniquement l’état courant, les invariants et la prochaine étape. Lesrapports détaillés de mission restent dans docs/stabilization/ et font foi pourl’historique technique.
 
----
+Ne pas rouvrir un chantier fermé sans régression reproduite et documentée.
 
-## État Validé
+État validé
 
-| Chantier | État |
-|---|---|
-| P0 — baseline et non-régression | Terminé, à préserver |
-| P1 — `CatalogLibrary` | Intégré |
-| P2 — réglages, profils et cœur | Stabilisés |
-| P3A — GUI/pipeline | Terminé |
-| P3B-1D — gestionnaire de bibliothèques | Terminé |
-| S5C — cycle batch, ressources, mémoire, preflight GUI | Terminé |
-| S5D — partitionnement D50 fixed32 et recherche progressive | Terminé |
-| S5D-2 — adoption CatalogLibrary, GUI, négatifs | Terminé |
-| S5D-3 — budget progressif et réutilisation quads image | Terminé |
-| S5E — persistance instrument et vérification CatalogLibrary | Terminé |
-| P3B-1E — distribution officielle des Bibliothèques ZeSolver | Intégré |
-| P3B-1F — assistant de démarrage et activation transactionnelle | Terminé |
-| P3B-1G/P3B-1G1 — téléchargement parallèle, reprise, pause | Terminé |
-| P3B-1H — sélecteur Système/Clair/Sombre | Terminé |
+Les chantiers d’architecture, de stabilisation du pipeline et d’intégration desbibliothèques sont fermés.
 
-Le produit fixed32 complet est le chemin runtime normal quand disponible:
+Éléments produit désormais intégrés :
 
-```text
-/home/tristan/ZeSolverCatalog/new
+CatalogLibrary et gestionnaire de bibliothèques ;
+
+distribution officielle multi-source avec reprise ;
+
+installation officielle, paquet local et bibliothèque existante ;
+
+D50 fixed32 en 47 shards avec recherche progressive ;
+
+wizard relançable et activation transactionnelle ;
+
+modes produit auto/auto après adoption d’une bibliothèque ;
+
+thème système / clair / sombre ;
+
+pipeline batch Near puis Blind lazy ;
+
+persistance des réglages et vérification de bibliothèque.
+
+Dernière validation automatisée connue :
+
+801 passed, 36 skipped, 17 warnings
+compileall zesolver zeblindsolver tools : OK
+git diff --check : OK
+
+Dernière validation Linux réelle connue :
+
+Bibliothèque : /home/tristan/ZeSolverCatalog/new
+Statut : READY_FULL
+Near : astap-native depuis la bibliothèque
+Blind 4D : library-view
+Index Blind 4D : 47
+Tuiles couvertes : 1476 / 1476
+Couverture ciel complet : true
+Fallback manifeste externe : false
+Batch Near : succès
+Batch Blind : succès
+
+Contrat produit courant
+
+Bibliothèque ZeSolver complète
+
+Après sélection ou installation réussie d’une bibliothèque READY_FULL :
+
+catalog_library_path=<racine contenant catalog.json>
+near_catalog_mode=auto
+blind4d_catalog_mode=auto
+
+Le runtime doit résoudre :
+
+ZeNear -> ressources ASTAP de la Bibliothèque ZeSolver
+ZeBlind 4D -> library-view
+
+État Blind 4D attendu :
+
 blind4d_catalog_mode_effective=library-view
 blind4d_index_count=47
 blind4d_covered_tiles=1476
 blind4d_total_tiles=1476
 blind4d_all_sky=true
 blind4d_external_fallback_used=false
-```
 
-Le monolithe `direct-d50` reste conservé comme compatibilité, mais ne doit pas
-être sélectionné dans l’ordre runtime par défaut si les 47 shards fixed32 sont
-valides.
+Le monolithe direct-d50 reste un artefact de compatibilité. Les 47 shardsfixed32 valides sont le chemin runtime normal.
 
----
+Wizard
 
-## Invariants
+Les parcours suivants doivent converger vers la même activation produit :
 
-- Ne pas modifier les algorithmes ZeNear ou ZeBlind sans mission explicite.
-- Ne pas relâcher `quality_inliers`, `quality_rms`, `match_radius` ou `code_tol`
-  pendant les missions de persistance/GUI.
-- Ne pas reconstruire D50 pour S5E.
-- Ne pas supprimer le monolithe ni les shards existants.
-- Conserver le routage logique Near puis Blind lazy.
-- Le GUI ne doit pas bloquer le thread Qt avec des hashes complets ou des
-  chargements NPZ lourds au démarrage.
+bibliothèque existante ;
 
----
+installation officielle ;
 
-## État Produit Actuel
+paquet local.
 
-- Le wizard de démarrage couvre l'installation officielle, le paquet local, la
-  réutilisation d'une Bibliothèque ZeSolver existante, et la base ASTAP Near-only.
-- Les parcours Bibliothèque activent transactionnellement la bibliothèque en
-  mode produit:
-  `catalog_library_path=<path>`, `near_catalog_mode=auto`,
-  `blind4d_catalog_mode=auto`.
-- Le téléchargement officiel est parallèle, multi-source, reprend les `.part`
-  compatibles, conserve le cache terminé, et expose Pause/Reprendre/Annuler.
-- Le thème GUI est configurable et persistant: Système, Clair, Sombre.
-- Le rollback avancé historique reste disponible hors wizard:
-  `near_catalog_mode=legacy-index` et `blind4d_catalog_mode=external-manifest`.
+Le wizard ne peut être marqué terminé que si la transaction principale aréellement réussi. Une erreur ne doit jamais être suivie d’un succès silencieuxou d’une seconde sauvegarde contradictoire.
 
----
+Parcours ASTAP seul
 
-## Limites Réelles Restantes
+Sans bibliothèque complète :
 
-- FAST invalide conservativement si le chemin canonique change.
-- FAST vérifie l'identité légère déclarée et les métadonnées de fichiers; FULL
-  reste la route explicite pour les hashes complets et validations coûteuses.
-- La validation manuelle Windows reste le gate final avant promotion de `test`
-  vers `main` et beta publique.
-- Ne pas déclarer `PRODUCTION_READY` avant le rapport de Release Candidate
-  acceptance sur le paquet destiné aux utilisateurs.
+near_catalog_mode=astap-native
+blind4d_catalog_mode=auto
 
----
+Compatibilité avancée
 
-## Prochaine Étape
+Les modes historiques restent disponibles uniquement sur demande explicite :
 
-```text
-READY_FOR_RELEASE_CANDIDATE_ACCEPTANCE
-```
+near_catalog_mode=legacy-index
+blind4d_catalog_mode=external-manifest
 
-Le passage à `PRODUCTION_READY_FOR_PUBLIC_BETA` nécessite encore le gate final
-sur installation fraîche/profil vierge décrit dans les rapports de stabilisation.
+Un ancien chemin de manifeste externe peut rester mémorisé, mais ne doit être nivalidé ni utilisé lorsque blind4d_catalog_mode=auto.
+
+Invariants techniques
+
+Ne pas modifier les algorithmes ZeNear ou ZeBlind sans mission explicite.
+
+Ne pas relâcher les critères scientifiques (quality_inliers, quality_rms,match_radius, code_tol) pendant une mission GUI, packaging ou documentation.
+
+Conserver le routage Near puis Blind lazy.
+
+Ne pas reconstruire D50 ni les 47 shards fixed32 sans mission dédiée.
+
+Ne pas supprimer le monolithe ni les shards existants sans plan de migration.
+
+Ne pas accepter un manifeste invalide pour masquer une erreur de configuration.
+
+Ne pas réactiver automatiquement un rollback historique au démarrage.
+
+Ne pas bloquer le thread Qt avec des hashes complets, des chargements NPZlourds ou une opération réseau longue.
+
+Préserver l’annulation et la reprise des opérations longues quand leur contratle prévoit.
+
+Règles Git obligatoires
+
+Ne jamais supposer que la branche locale est synchronisée avec le remote.
+
+Avant toute mission :
+
+git status --short
+git branch -vv
+git rev-parse HEAD
+git rev-parse origin/test
+git log --oneline --decorate -10
+git diff --check
+
+Instantané connu après P3B-1F : la branche locale test était en avance de deuxcommits sur origin/test :
+
+5858b51 Close startup wizard catalog activation transaction
+43fa8e6 Add system light and dark theme selector
+
+Toujours revérifier cet état : ce n’est pas un invariant.
+
+Sans demande explicite de Tristan :
+
+ne pas pousser ;
+
+ne pas merger vers main ;
+
+ne pas créer de tag ou de Release ;
+
+ne pas réécrire l’historique ;
+
+ne pas utiliser push --force, reset --hard ou un rebase destructif ;
+
+ne pas écraser des changements non commités existants.
+
+Si l’état Git ne correspond pas littéralement à une mission, le consigner dansle rapport au lieu de modifier l’historique.
+
+Dépôt source et artefacts publics
+
+Le dépôt main doit rester un dépôt source complet, maintenable et reproductible.
+
+À conserver dans le dépôt :
+
+code source ;
+
+tests ;
+
+outils de build, diagnostic et validation utiles ;
+
+documentation ;
+
+rapports de stabilisation significatifs ;
+
+scripts de packaging.
+
+Ne pas supprimer tests/ ni l’ensemble de tools/ pour alléger une livraison.Le nettoyage doit viser l’artefact distribué, pas appauvrir le dépôt source.
+
+À exclure des artefacts publics et, selon le cas, supprimer ou archiver :
+
+__pycache__/
+*.pyc
+logs locaux
+archives temporaires
+caches
+memory.md
+nono_handoff.md
+nono_status.md
+followup.md
+rapports temporaires non documentés
+artefacts de benchmark non destinés au produit
+
+Avant toute suppression, vérifier les imports, références, tests, scripts debuild et documentation.
+
+Phase active — Release Candidate Acceptance
+
+Aucun nouveau chantier architectural ne doit être ouvert avant fermeture du gateRelease Candidate.
+
+Gate Windows — bloquant
+
+Valider le paquet réellement destiné aux utilisateurs, depuis un profil vierge :
+
+installation ou extraction propre ;
+
+premier lancement et wizard ;
+
+installation ou sélection de la bibliothèque ;
+
+fermeture puis redémarrage ;
+
+statut READY_FULL ;
+
+batch Near réussi ;
+
+fallback Blind 4D réussi ;
+
+reprise d’un téléchargement interrompu ;
+
+thème système / clair / sombre persistant ;
+
+chemins contenant des espaces ;
+
+Stop et annulation propres ;
+
+aucune traceback ni console Python inattendue.
+
+Audit macOS — requis
+
+Sans machine macOS physique, le verdict autorisé est :
+
+MACOS_COMPATIBILITY_AUDIT_PASSED
+
+et non :
+
+MACOS_RUNTIME_VALIDATED
+
+L’audit doit couvrir : build PyInstaller, icône .icns, plugins Qt, chemins,permissions, comportement multiprocessing avec spawn et absence de dépendanceLinux ou Windows implicite.
+
+Tant qu’aucun essai humain n’a été fait sur Mac, la documentation publique doitindiquer que macOS est expérimental ou non validé sur machine physique.
+
+Documentation et publication
+
+Avant promotion vers main :
+
+mettre à jour README.md et CHANGELOG.md ;
+
+vérifier crédits et licences ;
+
+documenter installation, premier lancement, bibliothèque et dépannage ;
+
+construire et inspecter les artefacts publics ;
+
+exécuter les tests finaux sur le commit exact à promouvoir ;
+
+rédiger le rapport Release Candidate Acceptance.
+
+Le site ZeSoftware peut être développé en parallèle, mais ses liens publicsdoivent pointer vers des Releases et artefacts stables.
+
+Points de contrôle résiduels
+
+À vérifier pendant le gate final, sans lancer une refonte générale :
+
+absence de contradiction entre un avertissement précoce de couverture Blind 4Dpartielle et la télémétrie finale 1476 / 1476, all_sky=true ;
+
+en l’absence de CuPy, éviter de répéter inutilement le fallback CUDA pourchaque image du même batch ;
+
+cohérence des caches FAST quand le chemin canonique change ;
+
+maintien de FULL comme route explicite pour les hashes complets.
+
+Critères de promotion vers main
+
+La promotion test -> main est autorisée seulement après :
+
+branche test poussée et état Git partagé ;
+
+gate Windows réussi sur l’artefact final ;
+
+audit macOS terminé et limites documentées ;
+
+suite globale verte ;
+
+compileall vert ;
+
+git diff --check propre ;
+
+README et changelog à jour ;
+
+contenu du paquet vérifié ;
+
+aucun fichier sensible, local ou temporaire inclus ;
+
+rapport Release Candidate Acceptance rédigé.
+
+Verdict attendu avant promotion :
+
+RELEASE_CANDIDATE_ACCEPTANCE_PASSED
+READY_TO_PROMOTE_TEST_TO_MAIN
+
+Verdict autorisé après promotion, tag et validation des artefacts publiés :
+
+PRODUCTION_READY_FOR_PUBLIC_BETA
+
+Ne pas annoncer PRODUCTION_READY avant la fermeture effective de ces gates.
+
+Référence immédiate
+
+Rapport P3B-1F :
+
+docs/stabilization/p3b1f_startup_wizard_catalog_activation_report_20260801.md
+
+Commit P3B-1F :
+
+5858b51884518c41fd2773fae99a9bd37eaa66bf
+Close startup wizard catalog activation transaction
