@@ -173,40 +173,46 @@ ne pas écraser des changements non commités existants.
 
 Si l’état Git ne correspond pas littéralement à une mission, le consigner dansle rapport au lieu de modifier l’historique.
 
-Dépôt source et artefacts publics
+Publication `test` -> `main`
 
-Le dépôt main doit rester un dépôt source complet, maintenable et reproductible.
+Règle de référence :
 
-À conserver dans le dépôt :
+docs/maintenance/main_publication_workflow.md
 
-code source ;
+Le dépôt GitHub reste unique, mais les deux branches ont des rôles strictement séparés.
 
-tests ;
+`test` est la seule branche de développement et la source de vérité. Elle conserve le code complet, les tests, les outils, les rapports, la documentation technique et les scripts de publication.
 
-outils de build, diagnostic et validation utiles ;
+`main` est une distribution publique générée. Elle contient uniquement le runtime ZeSolver, les ressources nécessaires, les métadonnées d’installation, la documentation utilisateur essentielle et les mentions légales.
 
-documentation ;
+Ne jamais développer directement sur `main`.
 
-rapports de stabilisation significatifs ;
+Ne jamais corriger directement sur `main`.
 
-scripts de packaging.
+Ne jamais faire `git merge test` depuis `main`.
 
-Ne pas supprimer tests/ ni l’ensemble de tools/ pour alléger une livraison.Le nettoyage doit viser l’artefact distribué, pas appauvrir le dépôt source.
+Toute contribution, même minuscule, cible d’abord `test`.
 
-À exclure des artefacts publics et, selon le cas, supprimer ou archiver :
+Toute publication vers `main` passe par :
 
-__pycache__/
-*.pyc
-logs locaux
-archives temporaires
-caches
-memory.md
-anciens handoffs et statuts temporaires d’agents
-followup.md
-rapports temporaires non documentés
-artefacts de benchmark non destinés au produit
+1. correction et validation sur `test` ;
+2. commit et push de `test` ;
+3. génération via `tools/build_public_tree.py` ;
+4. synchronisation vers `/home/tristan/.openclaw/workspace/projects/ZeSolver-main` ;
+5. contrôle du diff ;
+6. commit et push de `main` uniquement après validation explicite de Tristan.
 
-Avant toute suppression, vérifier les imports, références, tests, scripts debuild et documentation.
+Le contenu public est défini par :
+
+packaging/public_manifest.txt
+
+Le générateur officiel est :
+
+tools/build_public_tree.py
+
+Ne jamais publier depuis un `test` sale ou non poussé.
+
+Ne jamais utiliser `push --force` sur `main`.
 
 Phase active — Release Candidate Acceptance
 
