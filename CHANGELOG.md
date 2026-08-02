@@ -41,7 +41,7 @@
 
 ### Added
 
-- First stable public release of ZeSolver (Near + ZeBlind pipeline, GUI/CLI integration).
+- First Release Candidate Acceptance of ZeSolver (Near + ZeBlind pipeline, GUI/CLI integration).
 - Formal semantic versioning baseline with release tag `v1.0.0`.
 
 

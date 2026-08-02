@@ -152,7 +152,7 @@ def _load_source_version(default: str = "0.0.dev") -> str:
 
 
 try:
-    APP_VERSION = pkg_version("zewcs290")
+    APP_VERSION = pkg_version("ZeSolver")
 except PackageNotFoundError:  # pragma: no cover - running from source tree
     APP_VERSION = _load_source_version()
 
