@@ -210,6 +210,23 @@ Le générateur officiel est :
 
 tools/build_public_tree.py
 
+Le script d'orchestration sûr pour préparer une candidate `main` locale est :
+
+tools/prepare_public_main.sh
+
+Usage minimal :
+
+tools/prepare_public_main.sh --dry-run
+
+Puis, après validation du dry-run :
+
+tools/prepare_public_main.sh
+
+Ce script vérifie les deux worktrees, génère et valide la projection publique,
+demande confirmation avant de synchroniser vers ZeSolver-main, puis affiche les
+commandes manuelles de revue, commit et push. Il ne commit jamais, ne pousse
+jamais et ne merge jamais `test` dans `main`.
+
 Ne jamais publier depuis un `test` sale ou non poussé.
 
 Ne jamais utiliser `push --force` sur `main`.
