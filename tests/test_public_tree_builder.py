@@ -101,3 +101,13 @@ def test_public_manifest_rejects_traversal(tmp_path: Path) -> None:
 
     with pytest.raises(build_public_tree.PublicTreeError, match="invalid manifest path"):
         build_public_tree.read_manifest(manifest)
+
+
+def test_public_manifest_includes_ballad_documents() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    manifest = repo / "packaging" / "public_manifest.txt"
+
+    selected = build_public_tree.expand_manifest(repo, build_public_tree.read_manifest(manifest))
+
+    assert "ZeSolver_Ballad.md" in selected
+    assert "la_ballade_de_ZeSolver.md" in selected

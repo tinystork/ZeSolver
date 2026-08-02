@@ -54,6 +54,21 @@ note() {
  printf '\n==> %s\n' "$*"
 }
 
+assert_no_python_bytecode() {
+ local root="$1"
+ local found
+
+ found="$(
+ find "$root" \
+  \( -type d -name __pycache__ -o -type f \( -name '*.pyc' -o -name '*.pyo' \) \) \
+  -print
+ )"
+ [[ -z "$found" ]] || {
+  printf '%s\n' "$found" >&2
+  die "Python bytecode artifacts found under: $root"
+ }
+}
+
 while (($#)); do
  case "$1" in
  --yes)
@@ -79,7 +94,7 @@ while (($#)); do
  esac
 done
 
-for command in git rsync awk; do
+for command in git rsync awk find; do
  command -v "$command" >/dev/null 2>&1 || die "required command not found: $command"
 done
 
@@ -144,6 +159,10 @@ read -r MAIN_LEFT MAIN_RIGHT < <(
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/zesolver-public-main.XXXXXX")"
 PUBLIC_TREE="${TMP_ROOT}/public"
 REPORT="${TMP_ROOT}/public-tree-report.json"
+PYCACHE_ROOT="${TMP_ROOT}/pycache"
+
+export PYTHONPYCACHEPREFIX="$PYCACHE_ROOT"
+export PYTHONDONTWRITEBYTECODE=1
 
 cleanup() {
  rm -rf -- "$TMP_ROOT"
@@ -210,6 +229,8 @@ for path in "${FORBIDDEN_PATHS[@]}"; do
  "forbidden path found in generated public tree: $path"
 done
 
+assert_no_python_bytecode "$PUBLIC_TREE"
+
 printf 'Generated report: %s\n' "$REPORT"
 cat "${PUBLIC_TREE}/ZESOLVER_SOURCE_REVISION"
 
@@ -257,6 +278,8 @@ for path in "${FORBIDDEN_PATHS[@]}"; do
  [[ ! -e "${MAIN_WORKTREE}/${path}" ]] || die \
  "forbidden path found in prepared main candidate: $path"
 done
+
+assert_no_python_bytecode "$MAIN_WORKTREE"
 
 note "Prepared main candidate summary"
 

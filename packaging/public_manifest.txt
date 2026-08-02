@@ -10,6 +10,8 @@ CHANGELOG.md
 LICENSE
 NOTICE.md
 pyproject.toml
+ZeSolver_Ballad.md
+la_ballade_de_ZeSolver.md
 
 zesolver.py
 zewcscleaner.py
