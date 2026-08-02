@@ -1,5 +1,5 @@
 [project]
-name = "zewcs290"
+name = "ZeSolver"
 version = "1.0.0"
 description = "Offline WCS solver built around ASTAP/HNSKY 1476/290 catalogues"
 readme = "README.md"
