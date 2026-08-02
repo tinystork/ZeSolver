@@ -7,6 +7,7 @@ own solver thresholds, candidate limits, quad parameters or GUI options.
 from __future__ import annotations
 
 import hashlib
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -31,7 +32,9 @@ from .catalog_library import (
     build_blind4d_manifest_view,
     discover_existing,
 )
+from .catalog_library.coverage import coverage_from_payload
 from .catalog_library.models import CatalogCoverage
+from .resource_telemetry import increment_batch_counter, record_batch_event
 
 
 ENVIRONMENT_CATALOG_KEYS = (
@@ -141,6 +144,29 @@ class NearCatalogRuntime:
     error_code: str | None = None
     error_message: str | None = None
 
+    def __post_init__(self) -> None:
+        increment_batch_counter("near_catalog_runtime_created")
+        provider = self.provider
+        provider_id = id(provider) if provider is not None else None
+        inventory_id = None
+        cache_id = None
+        if provider is not None:
+            try:
+                provider_telemetry = provider.telemetry()
+                inventory_id = provider_telemetry.get("near_catalog_inventory_id")
+                cache_id = provider_telemetry.get("near_catalog_payload_cache_id")
+            except Exception:
+                pass
+        record_batch_event(
+            "near_catalog_runtime_created",
+            runtime_id=id(self),
+            provider_id=provider_id,
+            inventory_id=inventory_id,
+            payload_cache_id=cache_id,
+            source=self.source,
+            effective_mode=self.effective_mode.value if self.effective_mode else None,
+        )
+
     @property
     def available(self) -> bool:
         return self.provider is not None
@@ -168,6 +194,85 @@ class NearCatalogRuntime:
         if include_paths:
             data["legacy_index_root"] = str(self.legacy_index_root) if self.legacy_index_root else None
         return data
+
+
+class NearBatchRuntime:
+    """Batch-owned ZeNear catalog runtime shared by worker-local pipelines."""
+
+    def __init__(
+        self,
+        resources: "SolverCatalogResources",
+        *,
+        mode: NearCatalogMode | str = NearCatalogMode.AUTO,
+        legacy_index_root: str | Path | None = None,
+        blind_only: bool = False,
+        legacy_cache_size: int = 128,
+    ) -> None:
+        normalized_mode = NearCatalogMode.normalize(mode)
+        self.resources = resources
+        self.identity = (
+            str(resources.library_path.resolve()) if resources.library_path is not None else None,
+            resources.source,
+            tuple(resources.near.families if resources.near is not None else ()),
+            normalized_mode.value,
+            str(Path(legacy_index_root).expanduser().resolve()) if legacy_index_root is not None else None,
+            bool(blind_only),
+        )
+        self._mode = normalized_mode
+        self._legacy_index_root = legacy_index_root
+        self._blind_only = bool(blind_only)
+        self._legacy_cache_size = int(legacy_cache_size)
+        self._runtime: NearCatalogRuntime | None = None
+        self._lock = threading.Lock()
+        self._closed = False
+        record_batch_event(
+            "near_batch_runtime_created",
+            batch_runtime_id=id(self),
+            identity=self.identity,
+        )
+
+    def acquire(self) -> NearCatalogRuntime:
+        with self._lock:
+            if self._closed:
+                raise NearCatalogRuntimeError("NEAR_BATCH_RUNTIME_CLOSED", "NEAR_BATCH_RUNTIME_CLOSED")
+            if self._runtime is None:
+                self._runtime = resolve_near_catalog_runtime(
+                    self.resources,
+                    mode=self._mode,
+                    legacy_index_root=self._legacy_index_root,
+                    blind_only=self._blind_only,
+                    legacy_cache_size=self._legacy_cache_size,
+                )
+                record_batch_event(
+                    "near_batch_runtime_ready",
+                    batch_runtime_id=id(self),
+                    runtime_id=id(self._runtime),
+                    identity=self.identity,
+                )
+            runtime = self._runtime
+        increment_batch_counter("near_catalog_runtime_reused")
+        provider = runtime.provider
+        if provider is not None:
+            increment_batch_counter("near_catalog_provider_reused")
+        return runtime
+
+    def close(self) -> None:
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            runtime = self._runtime
+        provider = runtime.provider if runtime is not None else None
+        close = getattr(provider, "close", None)
+        if callable(close):
+            close()
+        increment_batch_counter("near_catalog_runtime_closed")
+        record_batch_event(
+            "near_catalog_runtime_closed",
+            batch_runtime_id=id(self),
+            runtime_id=id(runtime) if runtime is not None else None,
+            provider_id=id(provider) if provider is not None else None,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,7 +331,12 @@ def build_near_catalog_provider(resources: "SolverCatalogResources") -> AstapNea
 
     if resources.near is None:
         raise CatalogResourceResolutionError("near_catalog_provider_unavailable")
-    return AstapNearCatalogProvider(resources.near.root, families=resources.near.families)
+    increment_batch_counter("catalog_provider_constructor_count")
+    return AstapNearCatalogProvider(
+        resources.near.root,
+        families=resources.near.families,
+        metrics_callback=increment_batch_counter,
+    )
 
 
 def resolve_near_catalog_runtime(
@@ -237,6 +347,7 @@ def resolve_near_catalog_runtime(
     blind_only: bool = False,
     legacy_cache_size: int = 128,
 ) -> NearCatalogRuntime:
+    increment_batch_counter("near_runtime_resolution_count")
     requested = NearCatalogMode.normalize(mode)
     legacy_root = Path(legacy_index_root).expanduser() if legacy_index_root is not None else resources.legacy_index_root
     if blind_only:
@@ -313,7 +424,12 @@ def _astap_runtime(resources: "SolverCatalogResources", requested: NearCatalogMo
 
 def _legacy_runtime(requested: NearCatalogMode, legacy_root: Path, *, cache_size: int) -> NearCatalogRuntime:
     try:
-        provider = LegacyIndexNearCatalogProvider(legacy_root, cache_size=cache_size)
+        increment_batch_counter("catalog_provider_constructor_count")
+        provider = LegacyIndexNearCatalogProvider(
+            legacy_root,
+            cache_size=cache_size,
+            metrics_callback=increment_batch_counter,
+        )
     except Exception as exc:
         raise NearCatalogRuntimeError(LEGACY_NEAR_INDEX_INVALID, f"{LEGACY_NEAR_INDEX_INVALID}: {exc}") from exc
     warnings = ("legacy_near_catalog_runtime_selected",) if requested is NearCatalogMode.LEGACY_INDEX else ()
@@ -334,6 +450,7 @@ def resolve_blind4d_runtime(
     mode: Blind4DCatalogMode | str = Blind4DCatalogMode.AUTO,
     external_manifest_path: str | Path | None = None,
 ) -> Blind4DRuntimeSelection:
+    increment_batch_counter("blind_runtime_resolution_count")
     requested = Blind4DCatalogMode.normalize(mode)
     external_path = Path(external_manifest_path).expanduser() if external_manifest_path is not None else resources.blind4d_manifest_path
     has_explicit_library = resources.source == "library"
@@ -399,7 +516,7 @@ def _blind4d_library_selection(
         )
     try:
         manifest_path = (resources.library_path / "catalog.json") if resources.library_path is not None else None
-        loaded = load_4d_index_manifest_payload(view.payload, manifest_path=manifest_path)
+        loaded = load_4d_index_manifest_payload(view.payload, manifest_path=manifest_path, validate_indexes=False)
     except IndexManifestError as exc:
         return _blind4d_library_failure(
             requested,
@@ -456,7 +573,7 @@ def _blind4d_external_selection(
     raise_on_error: bool = True,
 ) -> Blind4DRuntimeSelection:
     try:
-        loaded = load_4d_index_manifest(manifest_path)
+        loaded = load_4d_index_manifest(manifest_path, validate_indexes=False)
     except IndexManifestError as exc:
         if raise_on_error:
             raise Blind4DRuntimeError(BLIND4D_EXTERNAL_MANIFEST_INVALID, f"{BLIND4D_EXTERNAL_MANIFEST_INVALID}: {exc}") from exc
@@ -562,13 +679,24 @@ def resolve_catalog_resources(
     env: Mapping[str, str] | None = None,
     enable_environment_discovery: bool = True,
     allow_legacy_fallback_on_invalid_library: bool = False,
+    prefer_legacy_near: bool = False,
+    strict_legacy_blind4d_manifest: bool = True,
 ) -> SolverCatalogResources:
     """Resolve catalogue resources in the P1C priority order."""
 
+    increment_batch_counter("catalog_resource_resolution_count")
     if catalog_library is not None:
         try:
             library = _coerce_library(catalog_library)
-            return _resources_from_library(library)
+            resources = _resources_from_library(library)
+            if prefer_legacy_near and legacy_db_root is not None and Path(legacy_db_root).expanduser().is_dir():
+                resources = _with_legacy_near(
+                    resources,
+                    legacy_db_root=legacy_db_root,
+                    legacy_families=legacy_families,
+                    source="startup-wizard-astap",
+                )
+            return resources
         except Exception as exc:
             if not allow_legacy_fallback_on_invalid_library:
                 raise CatalogResourceResolutionError(f"catalog_library_invalid: {exc}") from exc
@@ -578,6 +706,7 @@ def resolve_catalog_resources(
                 legacy_blind4d_manifest=legacy_blind4d_manifest,
                 legacy_index_root=legacy_index_root,
                 source="legacy",
+                strict_legacy_blind4d_manifest=strict_legacy_blind4d_manifest,
             )
             return _with_warning(legacy, f"catalog_library_invalid_fell_back_to_legacy: {exc}")
 
@@ -588,6 +717,7 @@ def resolve_catalog_resources(
             legacy_blind4d_manifest=legacy_blind4d_manifest,
             legacy_index_root=legacy_index_root,
             source="legacy",
+            strict_legacy_blind4d_manifest=strict_legacy_blind4d_manifest,
         )
 
     if enable_environment_discovery and _has_environment_catalog_hint(env):
@@ -612,6 +742,7 @@ def resolve_catalog_resources(
 def _coerce_library(value: CatalogLibrary | str | Path) -> CatalogLibrary:
     if isinstance(value, CatalogLibrary):
         return value
+    increment_batch_counter("catalog_library_open_count")
     return CatalogLibrary.open(value)
 
 
@@ -622,10 +753,20 @@ def _resources_from_library(library: CatalogLibrary) -> SolverCatalogResources:
     near = library.near_source() if report.capabilities.near else None
     blind_indexes = library.blind4d_indexes() if report.capabilities.blind4d else ()
     manifest_path = _library_4d_manifest_path(library, blind_indexes)
+    coverage = report.coverage
+    all_sky_blind4d = bool(report.capabilities.all_sky_blind4d)
+    if report.capabilities.blind4d:
+        view_indexes, view_coverage, view_warnings = _library_blind4d_runtime_view_resources(library)
+        warnings.extend(view_warnings)
+        if view_indexes:
+            blind_indexes = view_indexes
+            manifest_path = _library_4d_manifest_path(library, blind_indexes)
+            coverage = view_coverage
+            all_sky_blind4d = bool(view_coverage.all_sky)
     if report.status is CatalogStatus.READY_PARTIAL:
         warnings.append("catalog_library_ready_partial")
-    if report.capabilities.blind4d and not report.capabilities.all_sky_blind4d:
-        warnings.append("blind4d_coverage_not_all_sky")
+    if report.capabilities.blind4d and not all_sky_blind4d:
+        warnings.append("blind4d_coverage_partial_not_all_sky")
     return SolverCatalogResources(
         library_path=library.root,
         library_status=report.status,
@@ -638,10 +779,85 @@ def _resources_from_library(library: CatalogLibrary) -> SolverCatalogResources:
         warnings=tuple(dict.fromkeys(warnings)),
         catalog_library_id=library.manifest.library_id,
         catalog_manifest_fingerprint=_catalog_manifest_fingerprint(library),
-        coverage=report.coverage,
-        all_sky_blind4d=bool(report.capabilities.all_sky_blind4d),
+        coverage=coverage,
+        all_sky_blind4d=all_sky_blind4d,
         catalog_library=library,
     )
+
+
+def _with_legacy_near(
+    resources: SolverCatalogResources,
+    *,
+    legacy_db_root: str | Path,
+    legacy_families: tuple[str, ...] | list[str] | None,
+    source: str,
+) -> SolverCatalogResources:
+    near = NearCatalogDescriptor(
+        root=Path(legacy_db_root).expanduser(),
+        families=_normalize_families(legacy_families),
+        formats=(),
+        coverage=CatalogCoverage(status=CoverageStatus.UNKNOWN, provenance=source),
+        external_reference=True,
+    )
+    warnings = tuple(dict.fromkeys((*resources.warnings, "astap_near_overrides_library_near")))
+    return SolverCatalogResources(
+        library_path=resources.library_path,
+        library_status=resources.library_status,
+        near=near,
+        blind4d_indexes=resources.blind4d_indexes,
+        blind4d_runtime_paths=resources.blind4d_runtime_paths,
+        blind4d_manifest_path=resources.blind4d_manifest_path,
+        legacy_index_root=None,
+        source=resources.source,
+        warnings=warnings,
+        catalog_library_id=resources.catalog_library_id,
+        catalog_manifest_fingerprint=resources.catalog_manifest_fingerprint,
+        coverage=resources.coverage,
+        all_sky_blind4d=resources.all_sky_blind4d,
+        catalog_library=resources.catalog_library,
+    )
+
+
+def _library_blind4d_runtime_view_resources(
+    library: CatalogLibrary,
+) -> tuple[tuple[Blind4DIndexDescriptor, ...], CatalogCoverage, tuple[str, ...]]:
+    view = build_blind4d_manifest_view(library)
+    warnings = [issue.code for issue in view.warnings]
+    if view.errors:
+        warnings.extend(issue.code for issue in view.errors)
+        return (), view.coverage, tuple(dict.fromkeys(warnings))
+    try:
+        loaded = load_4d_index_manifest_payload(
+            view.payload,
+            manifest_path=library.root / "catalog.json",
+            validate_indexes=False,
+        )
+    except IndexManifestError as exc:
+        warnings.append(f"{BLIND4D_LIBRARY_VIEW_INVALID}: {exc}")
+        return (), view.coverage, tuple(dict.fromkeys(warnings))
+    descriptors = tuple(
+        Blind4DIndexDescriptor(
+            id=entry.id,
+            path=entry.path,
+            family=_family_from_tiles(entry.tile_keys),
+            tile_keys=entry.tile_keys,
+            sha256=entry.sha256,
+            coverage=CatalogCoverage(
+                status=CoverageStatus.PARTIAL,
+                all_sky=False,
+                families=tuple(filter(None, (_family_from_tiles(entry.tile_keys),))),
+                tile_keys=entry.tile_keys,
+                covered_tiles=len(entry.tile_keys),
+                total_tiles=view.coverage.total_tiles,
+                fraction=(len(entry.tile_keys) / view.coverage.total_tiles if view.coverage.total_tiles else None),
+                provenance="catalog_library_view",
+            ),
+            schema=entry.quad_schema,
+            enabled=True,
+        )
+        for entry in loaded.entries
+    )
+    return descriptors, view.coverage, tuple(dict.fromkeys(warnings))
 
 
 def _raise_if_library_unusable(report: CatalogValidationReport) -> None:
@@ -691,6 +907,7 @@ def _resources_from_legacy(
     legacy_blind4d_manifest: str | Path | None,
     legacy_index_root: str | Path | None,
     source: str,
+    strict_legacy_blind4d_manifest: bool,
 ) -> SolverCatalogResources:
     near = None
     if legacy_db_root is not None:
@@ -706,30 +923,46 @@ def _resources_from_legacy(
     warnings: list[str] = []
     if manifest_path is not None:
         try:
-            loaded = load_4d_index_manifest(manifest_path)
+            loaded = load_4d_index_manifest(manifest_path, validate_indexes=False)
         except IndexManifestError as exc:
-            raise CatalogResourceResolutionError(f"legacy_blind4d_manifest_invalid: {exc}") from exc
-        blind_indexes = tuple(
-            Blind4DIndexDescriptor(
-                id=entry.id,
-                path=entry.path,
-                family=_family_from_tiles(entry.tile_keys),
-                tile_keys=entry.tile_keys,
-                sha256=entry.sha256,
-                coverage=CatalogCoverage(
-                    status=CoverageStatus.PARTIAL,
-                    all_sky=False,
-                    families=tuple(filter(None, (_family_from_tiles(entry.tile_keys),))),
+            if strict_legacy_blind4d_manifest:
+                raise CatalogResourceResolutionError(f"legacy_blind4d_manifest_invalid: {exc}") from exc
+            warnings.append(f"legacy_blind4d_manifest_invalid_ignored: {exc}")
+            manifest_path = None
+        else:
+            loaded_coverage = coverage_from_payload(loaded.coverage, provenance=source) if loaded.coverage is not None else None
+            blind_indexes = tuple(
+                Blind4DIndexDescriptor(
+                    id=entry.id,
+                    path=entry.path,
+                    family=_family_from_tiles(entry.tile_keys),
                     tile_keys=entry.tile_keys,
-                    covered_tiles=len(entry.tile_keys),
-                    provenance=source,
-                ),
-                schema=entry.quad_schema,
-                enabled=True,
+                    sha256=entry.sha256,
+                    coverage=CatalogCoverage(
+                        status=CoverageStatus.PARTIAL,
+                        all_sky=False,
+                        families=tuple(filter(None, (_family_from_tiles(entry.tile_keys),))),
+                        tile_keys=entry.tile_keys,
+                        covered_tiles=len(entry.tile_keys),
+                        provenance=source,
+                    ),
+                    schema=entry.quad_schema,
+                    enabled=True,
+                )
+                for entry in loaded.entries
             )
-            for entry in loaded.entries
-        )
-        warnings.append("legacy_blind4d_manifest_used")
+            warnings.append("legacy_blind4d_manifest_used")
+            coverage = (
+                loaded_coverage
+                if loaded_coverage is not None and loaded_coverage.status is not CoverageStatus.UNKNOWN
+                else _merge_descriptor_coverage(blind_indexes)
+            )
+            if blind_indexes and not coverage.all_sky:
+                warnings.append("blind4d_coverage_partial_not_all_sky")
+        if not blind_indexes:
+            coverage = None
+    else:
+        coverage = None
     return SolverCatalogResources(
         library_path=None,
         library_status=None,
@@ -741,8 +974,8 @@ def _resources_from_legacy(
         source=source,
         warnings=tuple(warnings),
         catalog_library_id=None,
-        coverage=_merge_descriptor_coverage(blind_indexes),
-        all_sky_blind4d=False,
+        coverage=coverage,
+        all_sky_blind4d=bool(coverage.all_sky) if coverage is not None else False,
     )
 
 
@@ -867,6 +1100,7 @@ __all__ = [
     "Blind4DCatalogMode",
     "Blind4DRuntimeError",
     "Blind4DRuntimeSelection",
+    "NearBatchRuntime",
     "NearCatalogMode",
     "NearCatalogRuntime",
     "NearCatalogRuntimeError",

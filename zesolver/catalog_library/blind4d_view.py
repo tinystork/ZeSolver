@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from zeblindsolver.index_manifest_4d import (
     MANIFEST_SCHEMA,
     MANIFEST_VERSION,
@@ -17,7 +19,7 @@ from zeblindsolver.index_manifest_4d import (
     load_4d_index_manifest_payload,
     sha256_file,
 )
-from zeblindsolver.quad_index_4d import ASTROMETRY_AB_CODE_4D_SCHEMA, Quad4DIndex
+from zeblindsolver.quad_index_4d import ASTROMETRY_AB_CODE_4D_SCHEMA
 
 from .coverage import merge_coverages
 from .manifest import CatalogLibrary
@@ -121,6 +123,18 @@ def _build_view(library: CatalogLibrary) -> CatalogBlind4DManifestView:
         if index.engine == "blind4d" and index.category != "compatibility"
     )
     ordered_indexes = _ordered_indexes(library, indexes, errors)
+    for index in ordered_indexes:
+        index_coverage_reasons = _coverage_inconsistency_reasons(index.coverage)
+        if index_coverage_reasons:
+            errors.append(
+                _issue(
+                    BLIND4D_VIEW_COVERAGE_INCONSISTENT,
+                    IssueSeverity.ERROR,
+                    index.id,
+                    index.path.resolved,
+                    message=f"{BLIND4D_VIEW_COVERAGE_INCONSISTENT}: {', '.join(index_coverage_reasons)}",
+                )
+            )
     entries: list[dict[str, Any]] = []
     seen_tiles: set[str] = set()
     for priority, index in enumerate(ordered_indexes):
@@ -134,8 +148,17 @@ def _build_view(library: CatalogLibrary) -> CatalogBlind4DManifestView:
         seen_tiles.update(str(tile) for tile in entry["tile_keys"])
         entries.append(entry)
     coverage = _view_coverage(tuple(ordered_indexes))
-    if coverage.all_sky or coverage.status is CoverageStatus.FULL:
-        errors.append(_issue(BLIND4D_VIEW_COVERAGE_INCONSISTENT, IssueSeverity.ERROR, "blind4d", None))
+    coverage_reasons = _coverage_inconsistency_reasons(coverage)
+    if coverage_reasons:
+        errors.append(
+            _issue(
+                BLIND4D_VIEW_COVERAGE_INCONSISTENT,
+                IssueSeverity.ERROR,
+                "blind4d",
+                None,
+                message=f"{BLIND4D_VIEW_COVERAGE_INCONSISTENT}: {', '.join(coverage_reasons)}",
+            )
+        )
     payload = {
         "schema": MANIFEST_SCHEMA,
         "manifest_version": MANIFEST_VERSION,
@@ -160,6 +183,8 @@ def _build_view(library: CatalogLibrary) -> CatalogBlind4DManifestView:
             "covered_tiles": coverage.covered_tiles,
             "total_tiles": coverage.total_tiles,
             "all_sky": coverage.all_sky,
+            "validation": "invalid" if errors else "valid",
+            "error_codes": tuple(issue.code for issue in errors),
         },
     )
 
@@ -214,24 +239,27 @@ def _entry_from_index(
     if not expected_sha:
         errors.append(_issue(BLIND4D_VIEW_INDEX_CORRUPT, IssueSeverity.ERROR, index.id, path))
         return None
-    actual_sha = sha256_file(path)
-    if actual_sha.lower() != expected_sha.lower():
-        errors.append(_issue(BLIND4D_VIEW_CHECKSUM_MISMATCH, IssueSeverity.ERROR, index.id, path))
-        return None
+    actual_sha = expected_sha.lower()
+    if index.status not in {CatalogDataStatus.FAST_VERIFIED, CatalogDataStatus.FULL_VERIFIED}:
+        actual_sha = sha256_file(path)
+        if actual_sha.lower() != expected_sha.lower():
+            errors.append(_issue(BLIND4D_VIEW_CHECKSUM_MISMATCH, IssueSeverity.ERROR, index.id, path))
+            return None
     try:
-        loaded = Quad4DIndex.load(path)
+        header = _read_npz_4d_header(path)
     except Exception as exc:
         errors.append(_issue(BLIND4D_VIEW_INDEX_CORRUPT, IssueSeverity.ERROR, index.id, path, message=str(exc)))
         return None
-    quad_schema = str(loaded.metadata.get("schema") or index.schema)
+    metadata = _metadata_from_index(index)
+    quad_schema = str(metadata.get("schema") or index.algorithm_version or index.schema)
     if quad_schema != ASTROMETRY_AB_CODE_4D_SCHEMA:
         errors.append(_issue(BLIND4D_VIEW_SCHEMA_UNSUPPORTED, IssueSeverity.ERROR, index.id, path))
         return None
-    tile_keys = tuple(str(tile) for tile in loaded.tile_keys)
+    tile_keys = tuple(str(tile) for tile in header["tile_keys"])
     if tuple(index.source_tiles) != tile_keys:
         errors.append(_issue(BLIND4D_VIEW_COVERAGE_INCONSISTENT, IssueSeverity.ERROR, index.id, path))
         return None
-    params = _merged_parameters(index, loaded.metadata)
+    params = _merged_parameters(index, metadata)
     code_tol = params.get("code_tol_recommended")
     if code_tol is None:
         warnings.append(_issue("BLIND4D_VIEW_CODE_TOL_DEFAULTED_FROM_RUNTIME", IssueSeverity.WARNING, index.id, path))
@@ -241,19 +269,48 @@ def _entry_from_index(
         "path": str(path),
         "filename": path.name,
         "quad_schema": quad_schema,
-        "index_version": int(loaded.metadata.get("version", 1)),
-        "level": str(params.get("level") or loaded.metadata.get("level") or ""),
+        "index_version": int(metadata.get("version", 1)),
+        "level": str(params.get("level") or metadata.get("level") or ""),
         "tile_keys": list(tile_keys),
-        "star_count": int(loaded.catalog_ra_dec.shape[0]),
-        "quad_count": int(loaded.codes_4d.shape[0]),
-        "sampler_tag": str(params.get("sampler_tag") or loaded.metadata.get("sampler_tag") or ""),
+        "star_count": int(header["star_count"]),
+        "quad_count": int(header["quad_count"]),
+        "sampler_tag": str(params.get("sampler_tag") or metadata.get("sampler_tag") or ""),
         "code_tol_recommended": float(code_tol) if code_tol is not None else None,
-        "catalog_source": str(params.get("catalog_source") or loaded.metadata.get("source_catalog") or ""),
+        "catalog_source": str(params.get("catalog_source") or metadata.get("source_catalog") or ""),
         "sha256": actual_sha,
         "priority": int(priority),
         "file_size_bytes": int(path.stat().st_size),
+        "metadata": metadata,
     }
     return entry
+
+
+def _read_npz_4d_header(path: Path) -> dict[str, Any]:
+    with np.load(path, allow_pickle=False) as data:
+        tile_keys = tuple(str(v) for v in data["tile_keys"].astype(str).tolist())
+        star_count = int(data["catalog_ra_dec"].shape[0])
+        quad_count = int(data["codes_4d"].shape[0])
+    return {
+        "tile_keys": tile_keys,
+        "star_count": star_count,
+        "quad_count": quad_count,
+    }
+
+
+def _metadata_from_index(index: CatalogIndex) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    result.update(index.build_parameters)
+    result.update(index.parameters)
+    if index.algorithm_version:
+        result.setdefault("schema", index.algorithm_version)
+    if "quad_schema" in result:
+        result.setdefault("schema", result["quad_schema"])
+    result.setdefault("version", result.get("quad_version", 1))
+    result.setdefault("level", "S")
+    result.setdefault("sampler_tag", "catalog_ring_coverage")
+    result.setdefault("code_tol_recommended", 0.015)
+    result.setdefault("source_catalog", "unit-test")
+    return result
 
 
 def _merged_parameters(index: CatalogIndex, metadata: dict[str, Any]) -> dict[str, Any]:
@@ -277,6 +334,21 @@ def _view_coverage(indexes: tuple[CatalogIndex, ...]) -> CatalogCoverage:
     if not indexes:
         return CatalogCoverage(status=CoverageStatus.MISSING, provenance="blind4d-view")
     return merge_coverages(index.coverage for index in indexes)
+
+
+def _coverage_inconsistency_reasons(coverage: CatalogCoverage) -> tuple[str, ...]:
+    reasons: list[str] = []
+    if coverage.all_sky and coverage.status is not CoverageStatus.FULL:
+        reasons.append("all_sky_requires_full_status")
+    if coverage.status is CoverageStatus.FULL and not coverage.all_sky:
+        reasons.append("full_status_requires_all_sky")
+    if coverage.status in {CoverageStatus.FULL, CoverageStatus.PARTIAL} and coverage.covered_tiles <= 0 and not coverage.tile_keys:
+        reasons.append("non_empty_status_requires_covered_tiles")
+    if coverage.status is CoverageStatus.FULL and coverage.total_tiles is not None and coverage.covered_tiles < coverage.total_tiles:
+        reasons.append("full_status_requires_complete_tile_count")
+    if coverage.fraction is not None and not 0.0 <= coverage.fraction <= 1.0:
+        reasons.append("fraction_out_of_range")
+    return tuple(reasons)
 
 
 def _view_fingerprint(payload: dict[str, Any], *, library: CatalogLibrary, coverage: CatalogCoverage) -> str:

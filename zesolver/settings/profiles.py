@@ -85,6 +85,15 @@ ZEBLIND4D_V1 = BlindSolverProfile(
         "code_tol": 0.015,
         "max_hits": 2000,
         "max_hits_per_image_quad": 8,
+        "progressive_shards_enabled": True,
+        "shard_cache_size": 1,
+        "shard_order_policy": "north_rings",
+        "shard_budget_s": 4.2,
+        "shard_load_budget_s": 8.0,
+        "shard_max_hypotheses": 4,
+        "min_hypotheses_per_nonempty_shard": 1,
+        "hit_quota_per_tile": 64,
+        "hit_quota_per_image_quad_tile": 2,
     },
 )
 

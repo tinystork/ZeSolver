@@ -37,10 +37,11 @@ import tempfile
 import warnings
 from dataclasses import dataclass
 from collections import OrderedDict
+from contextlib import contextmanager
 import threading
 from itertools import combinations
 from pathlib import Path
-from typing import Iterable, Optional, Callable
+from typing import Iterable, Optional, Callable, Mapping
 
 import numpy as np
 from astropy.io import fits
@@ -652,6 +653,74 @@ _RAW_TILE_LOOKUP_CACHE_LOCK = threading.Lock()
 _STAR_DETECT_DTYPE = np.dtype([('x', 'f4'), ('y', 'f4'), ('flux', 'f4')])
 
 
+@dataclass(frozen=True)
+class AstapStrictDetectionResult:
+    sources: np.ndarray
+    backend_requested: str
+    backend_selected: str
+    backend_used: str
+    device_requested: int | None
+    device_used: int | None
+    fallback_used: bool
+    fallback_reason: str | None
+    duration_total_s: float
+    duration_transfer_to_gpu_s: float
+    duration_gpu_compute_s: float
+    duration_transfer_to_cpu_s: float
+    duration_cpu_compute_s: float
+    gpu_slot_wait_s: float
+    gpu_device_name: str | None
+    gpu_disabled_for_batch: bool
+    gpu_disabled_reason: str | None
+    vram_before_bytes: int | None
+    vram_peak_bytes: int | None
+    vram_after_bytes: int | None
+    cupy_pool_used_bytes: int | None
+    cupy_pool_reserved_bytes: int | None
+    diagnostics: dict[str, object]
+
+    def trace(self) -> dict[str, object]:
+        out = dict(self.diagnostics)
+        out.update(
+            {
+                "backend_requested": self.backend_requested,
+                "backend_selected": self.backend_selected,
+                "backend_used": self.backend_used,
+                "device_requested": self.device_requested,
+                "device_used": self.device_used,
+                "fallback_used": self.fallback_used,
+                "fallback_reason": self.fallback_reason,
+                "duration_total_s": float(self.duration_total_s),
+                "duration_transfer_to_gpu_s": float(self.duration_transfer_to_gpu_s),
+                "duration_gpu_compute_s": float(self.duration_gpu_compute_s),
+                "duration_transfer_to_cpu_s": float(self.duration_transfer_to_cpu_s),
+                "duration_cpu_compute_s": float(self.duration_cpu_compute_s),
+                "gpu_slot_wait_s": float(self.gpu_slot_wait_s),
+                "gpu_device_name": self.gpu_device_name,
+                "gpu_disabled_for_batch": bool(self.gpu_disabled_for_batch),
+                "gpu_disabled_reason": self.gpu_disabled_reason,
+                "vram_before_bytes": self.vram_before_bytes,
+                "vram_peak_bytes": self.vram_peak_bytes,
+                "vram_after_bytes": self.vram_after_bytes,
+                "cupy_pool_used_bytes": self.cupy_pool_used_bytes,
+                "cupy_pool_reserved_bytes": self.cupy_pool_reserved_bytes,
+            }
+        )
+        return out
+
+
+_ZENEAR_GPU_BATCH_DISABLED = False
+_ZENEAR_GPU_BATCH_DISABLED_REASON: str | None = None
+
+
+def reset_zenear_gpu_runtime_state() -> None:
+    """Reset process-local GPU fallback state for tests and fresh batch drivers."""
+    global _ZENEAR_GPU_BATCH_DISABLED, _ZENEAR_GPU_BATCH_DISABLED_REASON, _CUDA_READY_CACHE
+    _ZENEAR_GPU_BATCH_DISABLED = False
+    _ZENEAR_GPU_BATCH_DISABLED_REASON = None
+    _CUDA_READY_CACHE = None
+
+
 def astap_iso_image_for_solve(hdu: fits.PrimaryHDU) -> np.ndarray:
     """Return the native-ADU mono image consumed by ASTAP-ISO strict detection."""
     data = hdu.data
@@ -731,6 +800,242 @@ def _gpu_detect_semaphore(slots: int) -> threading.Semaphore:
             sem = threading.Semaphore(slots)
             _GPU_DETECT_SEMAPHORES[slots] = sem
         return sem
+
+
+def _increment_near_detect_counter(key: str, amount: int = 1) -> None:
+    try:
+        from zesolver.resource_telemetry import increment_batch_counter
+
+        increment_batch_counter(key, amount)
+    except Exception:
+        pass
+
+
+def _record_near_detect_event(phase: str, **payload: object) -> None:
+    try:
+        from zesolver.resource_telemetry import record_batch_event
+
+        record_batch_event(phase, **payload)
+    except Exception:
+        pass
+
+
+def _record_near_detection_payload(payload: Mapping[str, object]) -> None:
+    try:
+        from zesolver.resource_telemetry import record_near_detection
+
+        record_near_detection(payload)
+    except Exception:
+        pass
+
+
+def _load_cupy_runtime():
+    import cupy  # type: ignore
+    from cupy.cuda import runtime as runtime  # type: ignore
+
+    return cupy, runtime
+
+
+def _device_name_from_props(props: object) -> str | None:
+    try:
+        name = props.get("name") if isinstance(props, dict) else None
+        if isinstance(name, (bytes, bytearray)):
+            return name.decode(errors="ignore")
+        if name:
+            return str(name)
+    except Exception:
+        pass
+    return None
+
+
+def _cuda_runtime_probe(device: int | None = None) -> dict[str, object]:
+    cupy, runtime = _load_cupy_runtime()
+    ndev = int(runtime.getDeviceCount())
+    if ndev <= 0:
+        raise RuntimeError("no CUDA device detected")
+    dev = int(device) if device is not None else 0
+    if dev < 0 or dev >= ndev:
+        raise RuntimeError(f"CUDA device {dev} out of range (devices={ndev})")
+    with cupy.cuda.Device(dev):
+        props = runtime.getDeviceProperties(dev)
+        name = _device_name_from_props(props)
+        # Import success is not enough: prove that context, allocation, transfer,
+        # a trivial operation and synchronization all work.
+        arr = cupy.asarray([1.0], dtype=cupy.float32)
+        arr = arr + cupy.asarray([1.0], dtype=cupy.float32)
+        cupy.cuda.Stream.null.synchronize()
+        if float(arr.get()[0]) != 2.0:
+            raise RuntimeError("CUDA runtime probe returned an unexpected value")
+        try:
+            free_b, total_b = runtime.memGetInfo()
+        except Exception:
+            free_b, total_b = None, None
+    return {
+        "device": int(dev),
+        "device_count": int(ndev),
+        "device_name": name,
+        "vram_free_bytes": int(free_b) if free_b is not None else None,
+        "vram_total_bytes": int(total_b) if total_b is not None else None,
+    }
+
+
+def _cupy_memory_snapshot(cupy, runtime, device: int | None) -> dict[str, int | None]:
+    try:
+        dev = int(device) if device is not None else int(runtime.getDevice())
+    except Exception:
+        dev = 0
+    out: dict[str, int | None] = {
+        "device": int(dev),
+        "free_bytes": None,
+        "total_bytes": None,
+        "used_bytes": None,
+        "pool_used_bytes": None,
+        "pool_reserved_bytes": None,
+    }
+    try:
+        with cupy.cuda.Device(dev):
+            free_b, total_b = runtime.memGetInfo()
+            out["free_bytes"] = int(free_b)
+            out["total_bytes"] = int(total_b)
+            out["used_bytes"] = int(total_b) - int(free_b)
+            pool = cupy.get_default_memory_pool()
+            out["pool_used_bytes"] = int(pool.used_bytes())
+            out["pool_reserved_bytes"] = int(pool.total_bytes())
+    except Exception:
+        pass
+    return out
+
+
+@contextmanager
+def _gpu_detection_slot(slots: int, cancel_check: Callable[[], bool] | None = None):
+    sem = _gpu_detect_semaphore(slots)
+    t0 = time.perf_counter()
+    acquired = False
+    try:
+        while not acquired:
+            if cancel_check and cancel_check():
+                raise RuntimeError("cancelled_waiting_for_gpu_slot")
+            acquired = sem.acquire(timeout=0.05)
+        if cancel_check and cancel_check():
+            raise RuntimeError("cancelled_after_gpu_slot_acquired")
+        yield max(0.0, time.perf_counter() - t0)
+    finally:
+        if acquired:
+            sem.release()
+
+
+def _is_cuda_oom(exc: BaseException) -> bool:
+    name = f"{exc.__class__.__module__}.{exc.__class__.__name__}".lower()
+    text = str(exc).lower()
+    return "outofmemory" in name or "out of memory" in text or "cuda_error_out_of_memory" in text
+
+
+def _is_structural_cuda_error(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    if "cancelled" in text:
+        return False
+    if _is_cuda_oom(exc):
+        return True
+    markers = (
+        "no module named 'cupy'",
+        "no module named cupy",
+        "cupy not installed",
+        "no cuda device",
+        "out of range",
+        "invalid device",
+        "driver",
+        "runtime",
+        "nvrtc",
+        "cudaerror",
+        "cuda error",
+    )
+    return any(marker in text for marker in markers)
+
+
+def _permanent_cuda_unavailable_reason(exc: BaseException) -> str | None:
+    text = str(exc).lower()
+    if "no module named 'cupy'" in text or "no module named cupy" in text or "cupy not installed" in text:
+        return "CUPY_NOT_INSTALLED"
+    return None
+
+
+def _disable_gpu_for_batch(reason: str) -> None:
+    global _ZENEAR_GPU_BATCH_DISABLED, _ZENEAR_GPU_BATCH_DISABLED_REASON
+    was_disabled = bool(_ZENEAR_GPU_BATCH_DISABLED)
+    _ZENEAR_GPU_BATCH_DISABLED = True
+    _ZENEAR_GPU_BATCH_DISABLED_REASON = str(reason or "cuda_runtime_error")
+    _increment_near_detect_counter("near_detect_gpu_disabled_for_batch")
+    _record_near_detect_event("near_detect_gpu_disabled_for_batch", reason=_ZENEAR_GPU_BATCH_DISABLED_REASON)
+    if not was_disabled:
+        logging.warning(
+            "ZeNear GPU unavailable: reason=%s CPU selected for the complete batch",
+            _ZENEAR_GPU_BATCH_DISABLED_REASON,
+        )
+
+
+def _astap_compatible_mean_bin_image_cuda(
+    image: np.ndarray,
+    factor: int,
+    *,
+    crop: float = 1.0,
+    device: int | None = None,
+) -> tuple[np.ndarray, int, dict[str, object]]:
+    cupy, runtime = _load_cupy_runtime()
+    dev = int(device) if device is not None else 0
+    factor = max(1, int(factor))
+    crop = min(1.0, max(0.01, float(crop)))
+    timings = {"transfer_to_gpu_s": 0.0, "gpu_compute_s": 0.0, "transfer_to_cpu_s": 0.0}
+    with cupy.cuda.Device(dev):
+        before = _cupy_memory_snapshot(cupy, runtime, dev)
+        t = time.perf_counter()
+        d_data = cupy.asarray(image, dtype=cupy.float32)
+        cupy.cuda.Stream.null.synchronize()
+        timings["transfer_to_gpu_s"] = max(0.0, time.perf_counter() - t)
+
+        t = time.perf_counter()
+        if d_data.ndim == 3:
+            if d_data.shape[0] in (3, 4) and d_data.shape[0] < min(d_data.shape[1], d_data.shape[2]):
+                d_data = cupy.mean(d_data[:3], axis=0, dtype=cupy.float32)
+            else:
+                d_data = cupy.mean(d_data[..., :3], axis=-1, dtype=cupy.float32)
+        elif d_data.ndim != 2:
+            d_data = cupy.squeeze(d_data).astype(cupy.float32, copy=False)
+        if int(d_data.ndim) != 2:
+            raise ValueError("ASTAP-compatible binning expects a 2-D mono image or color image")
+        if factor <= 1:
+            d_binned = d_data.astype(cupy.float32, copy=False)
+            used = 1
+        else:
+            h0, w0 = int(d_data.shape[0]), int(d_data.shape[1])
+            shift_x = int(round(float(w0) * (1.0 - crop) / 2.0))
+            shift_y = int(round(float(h0) * (1.0 - crop) / 2.0))
+            hb = int(math.trunc(float(crop) * float(h0) / float(factor)))
+            wb = int(math.trunc(float(crop) * float(w0) / float(factor)))
+            if hb < 1 or wb < 1:
+                d_binned = d_data.astype(cupy.float32, copy=False)
+                used = 1
+            else:
+                cropped = d_data[shift_y : shift_y + hb * factor, shift_x : shift_x + wb * factor]
+                d_binned = cropped.reshape(hb, factor, wb, factor).mean(axis=(1, 3), dtype=cupy.float32)
+                used = factor
+        cupy.cuda.Stream.null.synchronize()
+        timings["gpu_compute_s"] = max(0.0, time.perf_counter() - t)
+        mid = _cupy_memory_snapshot(cupy, runtime, dev)
+
+        t = time.perf_counter()
+        binned = cupy.asnumpy(d_binned).astype(np.float32, copy=False)
+        cupy.cuda.Stream.null.synchronize()
+        timings["transfer_to_cpu_s"] = max(0.0, time.perf_counter() - t)
+        after = _cupy_memory_snapshot(cupy, runtime, dev)
+    diag: dict[str, object] = {
+        **timings,
+        "vram_before_bytes": before.get("used_bytes"),
+        "vram_peak_bytes": mid.get("used_bytes"),
+        "vram_after_bytes": after.get("used_bytes"),
+        "cupy_pool_used_bytes": after.get("pool_used_bytes"),
+        "cupy_pool_reserved_bytes": after.get("pool_reserved_bytes"),
+    }
+    return binned, int(used), diag
 
 
 def _detect_stars_astap_cli(fits_path: Path, *, snr_min: int = 10, timeout_s: int = 120) -> np.ndarray:
@@ -1277,16 +1582,14 @@ def _astap_select_brightest_stars(stars: list[dict[str, float]], max_stars: int,
     return [star for star, keep in zip(stars, mask) if bool(keep)]
 
 
-def astap_adaptive_image_detection(
-    image: np.ndarray,
+def _astap_adaptive_image_detection_from_binned(
+    binned: np.ndarray,
+    used: int,
     *,
-    bin_factor: int = 2,
     max_stars: int = 500,
     hfd_min: float = 0.8,
     crop: float = 1.0,
 ) -> tuple[np.ndarray, dict[str, object]]:
-    """Reproduce ASTAP CLI solver star detection in strict diagnostics."""
-    binned, used = astap_compatible_mean_bin_image(image, bin_factor, crop=crop)
     data = np.asarray(binned, dtype=np.float32)
     height, width = int(data.shape[0]), int(data.shape[1])
     global_stats = estimate_astap_global_background(data, max_stars=int(max_stars))
@@ -1438,6 +1741,290 @@ def astap_adaptive_image_detection(
         "hfd_min": float(hfd_min),
     }
     return out, diag
+
+
+def _select_astap_strict_backend(requested: str, device: int | None) -> tuple[str, int | None, str | None, dict[str, object] | None]:
+    req = str(requested or "cpu").strip().lower()
+    if req not in {"cpu", "cuda", "auto"}:
+        req = "cpu"
+    if req == "cpu":
+        return "cpu", None, None, None
+    if _ZENEAR_GPU_BATCH_DISABLED:
+        if req == "auto":
+            disabled_reason = str(_ZENEAR_GPU_BATCH_DISABLED_REASON or "")
+            if disabled_reason == "CUPY_NOT_INSTALLED":
+                return "cpu", None, None, None
+            return "cpu", None, disabled_reason or "gpu_disabled_for_batch", None
+        return "cuda", int(device) if device is not None else 0, str(_ZENEAR_GPU_BATCH_DISABLED_REASON or "gpu_disabled_for_batch"), None
+    try:
+        info = _cuda_runtime_probe(device)
+        dev = int(info.get("device", int(device) if device is not None else 0))
+        return "cuda", dev, None, info
+    except Exception as exc:
+        reason = _permanent_cuda_unavailable_reason(exc) or str(exc)
+        if req == "cuda" and _is_structural_cuda_error(exc):
+            _disable_gpu_for_batch(reason)
+        if req == "auto" and _permanent_cuda_unavailable_reason(exc):
+            _disable_gpu_for_batch(reason)
+        if req == "auto":
+            return "cpu", None, reason, None
+        return "cuda", int(device) if device is not None else 0, reason, None
+
+
+def detect_stars_astap_strict(
+    image: np.ndarray,
+    *,
+    backend: str = "cpu",
+    device: int | None = None,
+    gpu_slots: int = 1,
+    bin_factor: int = 2,
+    max_stars: int = 500,
+    hfd_min: float = 0.8,
+    crop: float = 1.0,
+    cancel_check: Callable[[], bool] | None = None,
+) -> AstapStrictDetectionResult:
+    detect_started_at = time.perf_counter()
+    requested = str(backend or "cpu").strip().lower()
+    if requested not in {"cpu", "cuda", "auto"}:
+        requested = "cpu"
+    _increment_near_detect_counter(f"near_detect_backend_requested_{requested}")
+    started = time.perf_counter()
+    selected, selected_device, selection_reason, probe_info = _select_astap_strict_backend(requested, device)
+    _increment_near_detect_counter(f"near_detect_backend_selected_{selected}")
+
+    def _finish(result: AstapStrictDetectionResult, **extra: object) -> AstapStrictDetectionResult:
+        payload = result.trace()
+        payload.update(extra)
+        payload.setdefault("detect_started_at", detect_started_at)
+        payload.setdefault("detect_finished_at", time.perf_counter())
+        payload.setdefault("gpu_slots", int(max(1, int(gpu_slots or 1))))
+        _record_near_detection_payload(payload)
+        return result
+
+    if selected == "cpu":
+        t_cpu = time.perf_counter()
+        binned, used = astap_compatible_mean_bin_image(image, bin_factor, crop=crop)
+        sources, diag = _astap_adaptive_image_detection_from_binned(
+            binned,
+            int(used),
+            max_stars=max_stars,
+            hfd_min=hfd_min,
+            crop=crop,
+        )
+        cpu_s = max(0.0, time.perf_counter() - t_cpu)
+        fallback_used = requested in {"auto", "cuda"} and bool(selection_reason)
+        if fallback_used:
+            _increment_near_detect_counter("near_detect_gpu_fallbacks")
+        _increment_near_detect_counter("near_detect_backend_used_cpu")
+        total = max(0.0, time.perf_counter() - started)
+        diag.update({"cuda_probe_reason": selection_reason, "gpu_stage": "not_used"})
+        return _finish(AstapStrictDetectionResult(
+            sources=sources,
+            backend_requested=requested,
+            backend_selected=selected,
+            backend_used="cpu",
+            device_requested=device,
+            device_used=None,
+            fallback_used=fallback_used,
+            fallback_reason=selection_reason if fallback_used else None,
+            duration_total_s=total,
+            duration_transfer_to_gpu_s=0.0,
+            duration_gpu_compute_s=0.0,
+            duration_transfer_to_cpu_s=0.0,
+            duration_cpu_compute_s=cpu_s,
+            gpu_slot_wait_s=0.0,
+            gpu_device_name=None,
+            gpu_disabled_for_batch=bool(_ZENEAR_GPU_BATCH_DISABLED),
+            gpu_disabled_reason=_ZENEAR_GPU_BATCH_DISABLED_REASON,
+            vram_before_bytes=None,
+            vram_peak_bytes=None,
+            vram_after_bytes=None,
+            cupy_pool_used_bytes=None,
+            cupy_pool_reserved_bytes=None,
+            diagnostics=diag,
+        ))
+
+    if selected == "cuda" and selection_reason:
+        t_cpu = time.perf_counter()
+        binned, used = astap_compatible_mean_bin_image(image, bin_factor, crop=crop)
+        sources, diag = _astap_adaptive_image_detection_from_binned(
+            binned,
+            int(used),
+            max_stars=max_stars,
+            hfd_min=hfd_min,
+            crop=crop,
+        )
+        cpu_s = max(0.0, time.perf_counter() - t_cpu)
+        _increment_near_detect_counter("near_detect_gpu_fallbacks")
+        _increment_near_detect_counter("near_detect_backend_used_cpu")
+        diag.update({"cuda_probe_reason": selection_reason, "gpu_stage": "probe_failed"})
+        return _finish(AstapStrictDetectionResult(
+            sources=sources,
+            backend_requested=requested,
+            backend_selected="cuda",
+            backend_used="cpu",
+            device_requested=device,
+            device_used=None,
+            fallback_used=True,
+            fallback_reason=selection_reason,
+            duration_total_s=max(0.0, time.perf_counter() - started),
+            duration_transfer_to_gpu_s=0.0,
+            duration_gpu_compute_s=0.0,
+            duration_transfer_to_cpu_s=0.0,
+            duration_cpu_compute_s=cpu_s,
+            gpu_slot_wait_s=0.0,
+            gpu_device_name=None,
+            gpu_disabled_for_batch=bool(_ZENEAR_GPU_BATCH_DISABLED),
+            gpu_disabled_reason=_ZENEAR_GPU_BATCH_DISABLED_REASON,
+            vram_before_bytes=None,
+            vram_peak_bytes=None,
+            vram_after_bytes=None,
+            cupy_pool_used_bytes=None,
+            cupy_pool_reserved_bytes=None,
+            diagnostics=diag,
+        ))
+
+    slot_wait_s = 0.0
+    gpu_diag: dict[str, object] = {}
+    gpu_device_name = str(probe_info.get("device_name")) if isinstance(probe_info, dict) and probe_info.get("device_name") else None
+    gpu_slot_wait_started_at: float | None = None
+    gpu_section_started_at: float | None = None
+    gpu_section_finished_at: float | None = None
+    try:
+        gpu_slot_wait_started_at = time.perf_counter()
+        with _gpu_detection_slot(gpu_slots, cancel_check=cancel_check) as waited:
+            slot_wait_s = float(waited)
+            gpu_section_started_at = time.perf_counter()
+            binned, used, gpu_diag = _astap_compatible_mean_bin_image_cuda(
+                image,
+                bin_factor,
+                crop=crop,
+                device=selected_device,
+            )
+            gpu_section_finished_at = time.perf_counter()
+        if cancel_check and cancel_check():
+            raise RuntimeError("cancelled_after_gpu_prepare")
+        t_cpu = time.perf_counter()
+        sources, diag = _astap_adaptive_image_detection_from_binned(
+            binned,
+            int(used),
+            max_stars=max_stars,
+            hfd_min=hfd_min,
+            crop=crop,
+        )
+        cpu_s = max(0.0, time.perf_counter() - t_cpu)
+        diag.update({"gpu_stage": "mean_bin", "cuda_probe": dict(probe_info or {}), "gpu_prepare": dict(gpu_diag)})
+        _increment_near_detect_counter("near_detect_backend_used_cuda")
+        _record_near_detect_event(
+            "near_detect_cuda_used",
+            device=selected_device,
+            slot_wait_ms=round(slot_wait_s * 1000.0, 3),
+            transfer_to_gpu_ms=round(float(gpu_diag.get("transfer_to_gpu_s", 0.0)) * 1000.0, 3),
+            gpu_compute_ms=round(float(gpu_diag.get("gpu_compute_s", 0.0)) * 1000.0, 3),
+            transfer_to_cpu_ms=round(float(gpu_diag.get("transfer_to_cpu_s", 0.0)) * 1000.0, 3),
+        )
+        return _finish(AstapStrictDetectionResult(
+            sources=sources,
+            backend_requested=requested,
+            backend_selected="cuda",
+            backend_used="cuda",
+            device_requested=device,
+            device_used=int(selected_device) if selected_device is not None else 0,
+            fallback_used=False,
+            fallback_reason=None,
+            duration_total_s=max(0.0, time.perf_counter() - started),
+            duration_transfer_to_gpu_s=float(gpu_diag.get("transfer_to_gpu_s", 0.0) or 0.0),
+            duration_gpu_compute_s=float(gpu_diag.get("gpu_compute_s", 0.0) or 0.0),
+            duration_transfer_to_cpu_s=float(gpu_diag.get("transfer_to_cpu_s", 0.0) or 0.0),
+            duration_cpu_compute_s=cpu_s,
+            gpu_slot_wait_s=slot_wait_s,
+            gpu_device_name=gpu_device_name,
+            gpu_disabled_for_batch=bool(_ZENEAR_GPU_BATCH_DISABLED),
+            gpu_disabled_reason=_ZENEAR_GPU_BATCH_DISABLED_REASON,
+            vram_before_bytes=gpu_diag.get("vram_before_bytes") if isinstance(gpu_diag.get("vram_before_bytes"), int) else None,
+            vram_peak_bytes=gpu_diag.get("vram_peak_bytes") if isinstance(gpu_diag.get("vram_peak_bytes"), int) else None,
+            vram_after_bytes=gpu_diag.get("vram_after_bytes") if isinstance(gpu_diag.get("vram_after_bytes"), int) else None,
+            cupy_pool_used_bytes=gpu_diag.get("cupy_pool_used_bytes") if isinstance(gpu_diag.get("cupy_pool_used_bytes"), int) else None,
+            cupy_pool_reserved_bytes=gpu_diag.get("cupy_pool_reserved_bytes") if isinstance(gpu_diag.get("cupy_pool_reserved_bytes"), int) else None,
+            diagnostics=diag,
+        ), gpu_slot_wait_started_at=gpu_slot_wait_started_at, gpu_section_started_at=gpu_section_started_at, gpu_section_finished_at=gpu_section_finished_at)
+    except Exception as exc:
+        if gpu_section_started_at is not None and gpu_section_finished_at is None:
+            gpu_section_finished_at = time.perf_counter()
+        reason = str(exc)
+        if "cancelled" in reason.lower():
+            raise
+        if _is_cuda_oom(exc):
+            _increment_near_detect_counter("near_detect_gpu_oom")
+        else:
+            _increment_near_detect_counter("near_detect_gpu_errors")
+        _increment_near_detect_counter("near_detect_gpu_fallbacks")
+        if _is_structural_cuda_error(exc):
+            _disable_gpu_for_batch(reason)
+        t_cpu = time.perf_counter()
+        binned, used = astap_compatible_mean_bin_image(image, bin_factor, crop=crop)
+        sources, diag = _astap_adaptive_image_detection_from_binned(
+            binned,
+            int(used),
+            max_stars=max_stars,
+            hfd_min=hfd_min,
+            crop=crop,
+        )
+        cpu_s = max(0.0, time.perf_counter() - t_cpu)
+        diag.update({"gpu_stage": "fallback_after_error", "cuda_error": reason, "cuda_error_type": exc.__class__.__name__})
+        _increment_near_detect_counter("near_detect_backend_used_cpu")
+        return _finish(AstapStrictDetectionResult(
+            sources=sources,
+            backend_requested=requested,
+            backend_selected="cuda",
+            backend_used="cpu",
+            device_requested=device,
+            device_used=None,
+            fallback_used=True,
+            fallback_reason=reason,
+            duration_total_s=max(0.0, time.perf_counter() - started),
+            duration_transfer_to_gpu_s=float(gpu_diag.get("transfer_to_gpu_s", 0.0) or 0.0),
+            duration_gpu_compute_s=float(gpu_diag.get("gpu_compute_s", 0.0) or 0.0),
+            duration_transfer_to_cpu_s=float(gpu_diag.get("transfer_to_cpu_s", 0.0) or 0.0),
+            duration_cpu_compute_s=cpu_s,
+            gpu_slot_wait_s=slot_wait_s,
+            gpu_device_name=gpu_device_name,
+            gpu_disabled_for_batch=bool(_ZENEAR_GPU_BATCH_DISABLED),
+            gpu_disabled_reason=_ZENEAR_GPU_BATCH_DISABLED_REASON,
+            vram_before_bytes=gpu_diag.get("vram_before_bytes") if isinstance(gpu_diag.get("vram_before_bytes"), int) else None,
+            vram_peak_bytes=gpu_diag.get("vram_peak_bytes") if isinstance(gpu_diag.get("vram_peak_bytes"), int) else None,
+            vram_after_bytes=gpu_diag.get("vram_after_bytes") if isinstance(gpu_diag.get("vram_after_bytes"), int) else None,
+            cupy_pool_used_bytes=gpu_diag.get("cupy_pool_used_bytes") if isinstance(gpu_diag.get("cupy_pool_used_bytes"), int) else None,
+            cupy_pool_reserved_bytes=gpu_diag.get("cupy_pool_reserved_bytes") if isinstance(gpu_diag.get("cupy_pool_reserved_bytes"), int) else None,
+            diagnostics=diag,
+        ), gpu_slot_wait_started_at=gpu_slot_wait_started_at, gpu_section_started_at=gpu_section_started_at, gpu_section_finished_at=gpu_section_finished_at, gpu_oom=_is_cuda_oom(exc), gpu_error=reason)
+
+
+def astap_adaptive_image_detection(
+    image: np.ndarray,
+    *,
+    bin_factor: int = 2,
+    max_stars: int = 500,
+    hfd_min: float = 0.8,
+    crop: float = 1.0,
+    backend: str = "cpu",
+    device: int | None = None,
+    gpu_slots: int = 1,
+    cancel_check: Callable[[], bool] | None = None,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Reproduce ASTAP CLI solver star detection in strict diagnostics."""
+    result = detect_stars_astap_strict(
+        image,
+        backend=backend,
+        device=device,
+        gpu_slots=gpu_slots,
+        bin_factor=bin_factor,
+        max_stars=max_stars,
+        hfd_min=hfd_min,
+        crop=crop,
+        cancel_check=cancel_check,
+    )
+    return result.sources, result.trace()
 
 
 def astap_sqrt_snr_selection_mask(scores: np.ndarray, nr_stars_required: int) -> np.ndarray:
@@ -3604,8 +4191,17 @@ def solve_near(
     if cancel_check and cancel_check():
         return _failure("cancelled")
     strict_db_target_stars: int | None = None
-    logger.info("near detect start")
+    logger.debug("near detect start")
     t_detect0 = time.perf_counter()
+    _telemetry = None
+    try:
+        from zesolver.resource_telemetry import active_batch_telemetry
+
+        _telemetry = active_batch_telemetry()
+        if _telemetry is not None:
+            _telemetry.mark_near_detect_started()
+    except Exception:
+        _telemetry = None
     detect_backend = str(getattr(cfg, "detect_backend", "auto") or "auto").lower()
     work_image = image
     if detect_backend != "astap" and not strict_astap_iso:
@@ -3625,6 +4221,7 @@ def solve_near(
         detect_k_sigma = min(detect_k_sigma, 3.0)
         detect_max_labels = min(detect_max_labels, 500)
     detect_trace: dict[str, str] = {}
+    astap_detect_diag: dict[str, object] = {}
     detect_gpu_slots = max(1, int(getattr(cfg, "detect_gpu_slots", 1) or 1))
 
     detect_image = work_image
@@ -3666,14 +4263,34 @@ def solve_near(
             stars = _detect_stars_astap_cli(fits_path, snr_min=10, timeout_s=180)
             detect_trace["used"] = "astap"
     elif strict_astap_iso:
-        stars, astap_detect_diag = astap_adaptive_image_detection(
-            image,
-            bin_factor=2,
-            max_stars=500,
-            hfd_min=0.8,
-            crop=1.0,
-        )
-        detect_trace["used"] = "astap_adaptive"
+        try:
+            stars, astap_detect_diag = astap_adaptive_image_detection(
+                image,
+                backend=detect_backend,
+                device=detect_device,
+                gpu_slots=detect_gpu_slots,
+                bin_factor=2,
+                max_stars=500,
+                hfd_min=0.8,
+                crop=1.0,
+                cancel_check=cancel_check,
+            )
+        except RuntimeError as exc:
+            if "cancelled" in str(exc).lower():
+                if _telemetry is not None:
+                    try:
+                        _telemetry.mark_near_detect_finished()
+                    except Exception:
+                        pass
+                return _failure("cancelled")
+            raise
+        detect_trace["requested"] = str(astap_detect_diag.get("backend_requested", detect_backend))
+        detect_trace["selected"] = str(astap_detect_diag.get("backend_selected", "unknown"))
+        detect_trace["used"] = str(astap_detect_diag.get("backend_used", "unknown"))
+        if astap_detect_diag.get("fallback_used"):
+            detect_trace["fallback"] = "cuda_to_cpu"
+        if astap_detect_diag.get("fallback_reason"):
+            detect_trace["error"] = str(astap_detect_diag.get("fallback_reason"))
         detect_trace["raw_candidates"] = str(astap_detect_diag.get("raw_candidates", ""))
         detect_trace["selected_count"] = str(astap_detect_diag.get("selected_count", ""))
     else:
@@ -3707,9 +4324,10 @@ def solve_near(
                 max_labels=detect_max_labels,
                 backend_trace=detect_trace,
             )
-    logger.info(
-        "near detect backend used: requested=%s used=%s device=%s gpu_slots=%d%s%s",
+    logger.debug(
+        "near detect backend used: requested=%s selected=%s used=%s device=%s gpu_slots=%d%s%s",
         detect_backend,
+        detect_trace.get("selected", "unknown"),
         detect_trace.get("used", "unknown"),
         detect_device,
         detect_gpu_slots,
@@ -3779,6 +4397,11 @@ def solve_near(
         stars["y"] = np.asarray(y_full, dtype=np.float32)
 
     t_detect_s = time.perf_counter() - t_detect0
+    if _telemetry is not None:
+        try:
+            _telemetry.mark_near_detect_finished()
+        except Exception:
+            pass
     if stars.size == 0:
         return _failure("no stars detected in the frame")
     logger.info("near detected stars: %d", int(stars.size))
@@ -5141,6 +5764,7 @@ def solve_near(
         "strict_db_selected_stars": int(cat_positions.shape[0]) if strict_astap_iso else None,
         "detect_coord_scale": float(detect_coord_scale),
         "fov_hint_source": str(fov_hint_source),
+        "detector": astap_detect_diag if strict_astap_iso else dict(detect_trace),
     }
 
     # Strict alignment target: near solve must follow ASTAP-like iso quad/hash core.
@@ -5746,6 +6370,16 @@ def solve_near(
     except Exception as exc:
         return _failure(f"unable to write WCS to FITS: {exc}")
     t_write_s = time.perf_counter() - t_write0
+    final_stats.update(
+        {
+            "near_timing_detect_s": float(t_detect_s),
+            "near_timing_pair_s": float(t_pair_s),
+            "near_timing_ransac_s": float(t_ransac_s),
+            "near_timing_fit_s": float(t_fit_s),
+            "near_timing_write_s": float(t_write_s),
+            "near_timing_total_s": float(elapsed),
+        }
+    )
     logger.info(
         "near solve succeeded for %s (rms=%.3f px, inliers=%d, %.1fs)",
         fits_path.name,

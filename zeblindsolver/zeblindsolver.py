@@ -27,6 +27,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import logging
 import math
@@ -60,7 +61,7 @@ from .image_prep import build_pyramid, downsample_image, read_fits_as_luma, remo
 from .fits_utils import parse_angle
 from .matcher import SimilarityStats, SimilarityTransform, estimate_similarity_RANSAC
 from .matcher import _derive_similarity  # quad-based hypothesis helper
-from .quad_code_diagnostic import build_astrometry_quad_records
+from .quad_code_diagnostic import QuadCodeRecord, build_astrometry_quad_records
 from .quad_index_builder import QuadIndex, load_manifest, lookup_hashes, select_tiles_in_cone
 from .quad_index_4d import ASTROMETRY_AB_CODE_4D_SCHEMA, Quad4DIndex
 from .levels import LEVEL_MAP, QuadLevelSpec, set_bucket_cap_overrides
@@ -218,6 +219,15 @@ class SolveConfig:
     blind_astrometry_4d_diagnostic_skip_legacy_inverse: bool = False
     blind_astrometry_4d_diagnostic_skip_mono_validation: bool = False
     blind_astrometry_4d_diagnostic_reuse_image_kdtree: bool = False
+    blind_astrometry_4d_progressive_shards_enabled: bool = True
+    blind_astrometry_4d_shard_cache_size: int = 1
+    blind_astrometry_4d_shard_order_policy: str = "north_rings"
+    blind_astrometry_4d_shard_budget_s: float = 4.2
+    blind_astrometry_4d_shard_load_budget_s: float = 8.0
+    blind_astrometry_4d_shard_max_hypotheses: int = 4
+    blind_astrometry_4d_min_hypotheses_per_nonempty_shard: int = 1
+    blind_astrometry_4d_hit_quota_per_tile: int = 64
+    blind_astrometry_4d_hit_quota_per_image_quad_tile: int = 2
     blind_astrometry_code_rangesearch_adapt_disable_enabled: bool = False
     blind_astrometry_code_rangesearch_adapt_disable_after_candidates: int = 12
     blind_astrometry_code_rangesearch_adapt_disable_after_validations: int = 0
@@ -810,6 +820,15 @@ class SolveConfig:
     blind_final_center_max_tol_deg: float = 10.0
     blind_final_center_tol_factor: float = 1.25
     blind_final_rotation_max_delta_deg: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class _Astrometry4DImageQuadPayload:
+    image_positions: np.ndarray
+    verification_image_positions: np.ndarray
+    image_quads: np.ndarray
+    image_records: tuple[QuadCodeRecord, ...]
+    stats: dict[str, Any]
 
 
 @dataclass
@@ -6382,7 +6401,8 @@ def _astrometry_4d_wcs_header_hash(wcs: WCS) -> str:
     try:
         header = wcs.to_header(relax=True)
         rows = [f"{key}={header[key]!r}" for key in sorted(header.keys())]
-        return f"{zlib.crc32('\\n'.join(rows).encode('utf-8')) & 0xffffffff:08x}"
+        payload = '\\n'.join(rows).encode('utf-8')
+        return f"{zlib.crc32(payload) & 0xffffffff:08x}"
     except Exception:
         return ""
 
@@ -6714,6 +6734,377 @@ def _astrometry_4d_final_thresholds(
     return thresholds
 
 
+def _astrometry_4d_prepare_image_quads(
+    *,
+    config: SolveConfig,
+    obs_stars: np.ndarray,
+    image_positions_solver: np.ndarray,
+    verification_image_positions_solver: np.ndarray | None,
+) -> _Astrometry4DImageQuadPayload:
+    image_positions = np.asarray(image_positions_solver, dtype=np.float64)
+    verification_image_positions = image_positions
+    if verification_image_positions_solver is not None:
+        verification_image_positions = np.asarray(verification_image_positions_solver, dtype=np.float64)
+        if (
+            verification_image_positions.ndim != 2
+            or verification_image_positions.shape[1] != 2
+            or verification_image_positions.shape[0] == 0
+        ):
+            verification_image_positions = image_positions
+    max_quads = max(1, int(getattr(config, "max_quads", 0) or 1))
+    image_strategy = str(getattr(config, "blind_astrometry_4d_image_strategy", "log_spaced") or "log_spaced")
+    t_quad0 = time.perf_counter()
+    image_quads = sample_quads(obs_stars, max_quads=max_quads, strategy=image_strategy)
+    image_records = build_astrometry_quad_records(image_quads, image_positions)
+    quad_build_s = float(time.perf_counter() - t_quad0)
+    stats = {
+        "astrometry_4d_quad_source_stars": int(image_positions.shape[0]),
+        "astrometry_4d_verification_source_stars": int(verification_image_positions.shape[0]),
+        "astrometry_4d_split_quad_verify_sources": bool(
+            verification_image_positions_solver is not None
+            and int(verification_image_positions.shape[0]) != int(image_positions.shape[0])
+        ),
+        "astrometry_4d_image_strategy": image_strategy,
+        "astrometry_4d_image_quads": int(image_quads.shape[0]),
+        "astrometry_4d_image_records": int(len(image_records)),
+        "astrometry_4d_quad_build_s": quad_build_s,
+        "astrometry_4d_image_quad_build_count": 1,
+        "astrometry_4d_image_quad_count": int(image_quads.shape[0]),
+        "image_quad_build_count": 1,
+        "image_quad_build_time": quad_build_s,
+        "image_quad_count": int(image_quads.shape[0]),
+    }
+    return _Astrometry4DImageQuadPayload(
+        image_positions=image_positions,
+        verification_image_positions=verification_image_positions,
+        image_quads=image_quads,
+        image_records=tuple(image_records),
+        stats=stats,
+    )
+
+
+def _astrometry_4d_budget_allows_validation(
+    *,
+    route_budget_s: float,
+    t_total0: float,
+    tested: int,
+    candidate_count: int,
+    max_hypotheses: int,
+    min_hypotheses_per_nonempty_shard: int,
+) -> tuple[bool, bool]:
+    if route_budget_s <= 0.0 or (time.perf_counter() - t_total0) < route_budget_s:
+        return True, False
+    floor = min(
+        max(0, int(min_hypotheses_per_nonempty_shard)),
+        max(0, int(max_hypotheses)),
+        max(0, int(candidate_count)),
+    )
+    if floor > 0 and int(tested) < floor:
+        return True, True
+    return False, False
+
+
+def _solve_astrometry_4d_progressive_shards(
+    *,
+    config: SolveConfig,
+    obs_stars: np.ndarray,
+    image_positions_solver: np.ndarray,
+    verification_image_positions_solver: np.ndarray | None,
+    image_shape: tuple[int, int],
+    scale_bounds_arcsec: tuple[float, float] | None,
+    cancel_check: Optional[Callable[[], bool]],
+    cancel_reason_provider: Optional[Callable[[], str | None]],
+    index_paths: tuple[Path, ...],
+    base_stats: Mapping[str, Any],
+    started_at: float,
+) -> WcsSolution:
+    """Run a bounded one-shard-at-a-time 4D search over a strict manifest."""
+
+    route_budget_s = max(0.0, float(getattr(config, "blind_astrometry_4d_search_budget_s", 0.0) or 0.0))
+    accept_policy = _astrometry_4d_accept_policy(config)
+    stats: dict[str, Any] = dict(base_stats)
+    ordered_paths, order_rows = _astrometry_4d_order_shard_paths(config, index_paths)
+    stats["astrometry_4d_progressive_shards_enabled"] = True
+    stats["astrometry_4d_shard_cache_size"] = max(1, int(getattr(config, "blind_astrometry_4d_shard_cache_size", 1) or 1))
+    stats["astrometry_4d_shard_order_policy"] = str(
+        getattr(config, "blind_astrometry_4d_shard_order_policy", "north_rings") or "north_rings"
+    )
+    shard_budget_s = max(0.0, float(getattr(config, "blind_astrometry_4d_shard_budget_s", 3.0) or 0.0))
+    shard_load_budget_s = max(0.0, float(getattr(config, "blind_astrometry_4d_shard_load_budget_s", 8.0) or 0.0))
+    shard_max_hypotheses = max(1, int(getattr(config, "blind_astrometry_4d_shard_max_hypotheses", 96) or 96))
+    min_hypotheses_per_nonempty_shard = max(
+        0,
+        int(getattr(config, "blind_astrometry_4d_min_hypotheses_per_nonempty_shard", 1) or 0),
+    )
+    stats["astrometry_4d_shard_budget_s"] = float(shard_budget_s)
+    stats["astrometry_4d_shard_load_budget_s"] = float(shard_load_budget_s)
+    stats["astrometry_4d_shard_max_hypotheses"] = int(shard_max_hypotheses)
+    stats["astrometry_4d_min_hypotheses_per_nonempty_shard"] = int(min_hypotheses_per_nonempty_shard)
+    stats["astrometry_4d_shards_total"] = int(len(ordered_paths))
+    stats["astrometry_4d_shard_paths"] = [str(path) for path in ordered_paths]
+    stats["astrometry_4d_shard_order"] = order_rows
+    logger.info(
+        "astrometry 4D progressive shard route active: shard_count=%d shard_cache_size=%d shard_order_policy=%s",
+        int(len(ordered_paths)),
+        int(stats["astrometry_4d_shard_cache_size"]),
+        str(stats["astrometry_4d_shard_order_policy"]),
+    )
+
+    image_quad_payload = _astrometry_4d_prepare_image_quads(
+        config=config,
+        obs_stars=obs_stars,
+        image_positions_solver=image_positions_solver,
+        verification_image_positions_solver=verification_image_positions_solver,
+    )
+    stats.update(image_quad_payload.stats)
+    if not image_quad_payload.image_records:
+        stats["reject_reason_counts"] = {"no_image_4d_records": 1}
+        stats["astrometry_4d_stop_reason"] = "no_image_4d_records"
+        stats["astrometry_4d_total_s"] = float(time.perf_counter() - started_at)
+        return WcsSolution(False, "astrometry 4D runtime failed: no image 4D records", None, stats, None, {})
+    search_budget_started_at = time.perf_counter()
+    stats["astrometry_4d_search_budget_starts_after_image_quads"] = True
+
+    shard_rows: list[dict[str, Any]] = []
+    accepted: list[WcsSolution] = []
+    total_hits = 0
+    total_tested = 0
+    total_accepted = 0
+    first_test_s: float | None = None
+    first_accept_s: float | None = None
+    stop_reason = SolveStopReason.CANDIDATE_EXHAUSTED.value
+    search_budget_spent_s = 0.0
+    search_budget_load_excluded_s = 0.0
+
+    for shard_order, index_path in enumerate(ordered_paths):
+        if cancel_check and cancel_check():
+            reported_reason = None
+            if cancel_reason_provider is not None:
+                try:
+                    reported_reason = cancel_reason_provider()
+                except Exception:
+                    reported_reason = None
+            stop_reason = (
+                SolveStopReason.BLIND_ATTEMPT_BUDGET_EXCEEDED.value
+                if reported_reason == SolveStopReason.BLIND_ATTEMPT_BUDGET_EXCEEDED.value
+                else SolveStopReason.USER_CANCELLED.value
+            )
+            break
+        if route_budget_s > 0.0 and search_budget_spent_s >= route_budget_s:
+            stop_reason = SolveStopReason.ASTROMETRY_4D_SEARCH_BUDGET_EXCEEDED.value
+            break
+        remaining_budget = max(0.001, route_budget_s - search_budget_spent_s) if route_budget_s > 0.0 else 0.0
+        shard_search_budget = remaining_budget
+        if shard_budget_s > 0.0:
+            shard_search_budget = min(shard_search_budget, shard_budget_s) if shard_search_budget > 0.0 else shard_budget_s
+        shard_route_budget = shard_search_budget + shard_load_budget_s
+        shard_config = replace(
+            config,
+            blind_astrometry_4d_index_paths=(str(index_path),),
+            blind_astrometry_4d_progressive_shards_enabled=False,
+            blind_astrometry_4d_accept_policy="first_accept",
+            blind_astrometry_4d_max_accepts=1,
+            blind_astrometry_4d_search_budget_s=shard_route_budget,
+            blind_astrometry_4d_max_hypotheses=min(
+                max(1, int(getattr(config, "blind_astrometry_4d_max_hypotheses", 2000) or 2000)),
+                shard_max_hypotheses,
+            ),
+            blind_astrometry_4d_min_hypotheses_per_nonempty_shard=min_hypotheses_per_nonempty_shard,
+        )
+        logger.info(
+            "astrometry 4D progressive shard %d/%d: %s budget_remaining=%.3fs",
+            shard_order + 1,
+            len(ordered_paths),
+            index_path,
+            shard_search_budget,
+        )
+        shard_started = time.perf_counter()
+        shard_result = _solve_astrometry_4d_runtime_route(
+            config=shard_config,
+            obs_stars=obs_stars,
+            image_positions_solver=image_positions_solver,
+            verification_image_positions_solver=verification_image_positions_solver,
+            image_shape=image_shape,
+            scale_bounds_arcsec=scale_bounds_arcsec,
+            cancel_check=cancel_check,
+            cancel_reason_provider=cancel_reason_provider,
+            image_quad_payload=image_quad_payload,
+        )
+        shard_stats = dict(shard_result.stats or {})
+        shard_total_s = float(time.perf_counter() - shard_started)
+        shard_hits = int(shard_stats.get("astrometry_4d_hits", 0) or 0)
+        shard_tested = int(shard_stats.get("astrometry_4d_hits_tested", 0) or 0)
+        shard_accepted = int(shard_stats.get("astrometry_4d_accepted_candidates", 0) or 0)
+        total_hits += shard_hits
+        total_tested += shard_tested
+        total_accepted += shard_accepted
+        if first_test_s is None and shard_stats.get("astrometry_4d_time_to_first_test_s") is not None:
+            first_test_s = float(shard_started - started_at) + float(shard_stats["astrometry_4d_time_to_first_test_s"])
+        if first_accept_s is None and shard_stats.get("astrometry_4d_time_to_first_accept_s") is not None:
+            first_accept_s = float(shard_started - started_at) + float(shard_stats["astrometry_4d_time_to_first_accept_s"])
+        shard_load_s = float(shard_stats.get("astrometry_4d_index_load_s", 0.0) or 0.0)
+        shard_budget_charged_s = max(0.0, shard_total_s - min(shard_load_s, shard_load_budget_s))
+        search_budget_spent_s += float(shard_budget_charged_s)
+        search_budget_load_excluded_s += float(min(shard_load_s, shard_load_budget_s))
+        row = {
+            "index_order": int(shard_order),
+            "path": str(index_path),
+            "success": bool(shard_result.success),
+            "hits": shard_hits,
+            "tested": shard_tested,
+            "accepted": shard_accepted,
+            "stop_reason": str(shard_stats.get("astrometry_4d_stop_reason", "")),
+            "selected_tile": shard_result.tile_key,
+            "total_s": shard_total_s,
+            "budget_s": float(shard_search_budget),
+            "load_budget_s": float(shard_load_budget_s),
+            "runtime_budget_s": float(shard_route_budget),
+            "budget_charged_s": float(shard_budget_charged_s),
+            "load_s": float(shard_load_s),
+            "image_quad_build_s": float(shard_stats.get("astrometry_4d_quad_build_s", 0.0) or 0.0),
+            "lookup_s": float(shard_stats.get("astrometry_4d_kd_lookup_s", 0.0) or 0.0),
+            "validation_s": float(shard_stats.get("astrometry_4d_validation_s", 0.0) or 0.0),
+            "budget_min_validation_overrun": bool(
+                shard_stats.get("astrometry_4d_budget_min_validation_overrun", False)
+            ),
+            "hits_by_index": dict(shard_stats.get("astrometry_4d_hits_by_index") or {}),
+        }
+        shard_rows.append(row)
+        if shard_result.success:
+            accepted.append(shard_result)
+            stop_reason = SolveStopReason.CONFIDENT_ACCEPT.value
+            break
+        shard_stop = str(shard_stats.get("astrometry_4d_stop_reason", ""))
+        if shard_stop in {
+            SolveStopReason.USER_CANCELLED.value,
+            SolveStopReason.BLIND_ATTEMPT_BUDGET_EXCEEDED.value,
+        }:
+            stop_reason = shard_stop
+            break
+        if shard_stop == SolveStopReason.ASTROMETRY_4D_SEARCH_BUDGET_EXCEEDED.value:
+            if route_budget_s > 0.0 and search_budget_spent_s >= route_budget_s:
+                stop_reason = shard_stop
+                break
+            stop_reason = SolveStopReason.CANDIDATE_EXHAUSTED.value
+        gc.collect()
+
+    selected_result: WcsSolution | None = None
+    if accepted:
+        selected_result = max(accepted, key=lambda result: _astrometry_4d_accept_sort_key(result.stats or {}))
+        if stop_reason == SolveStopReason.CANDIDATE_EXHAUSTED.value:
+            stop_reason = SolveStopReason.BEST_WITHIN_BUDGET.value
+
+    stats["astrometry_4d_shards_opened"] = int(len(shard_rows))
+    stats["astrometry_4d_shards_queried"] = int(len(shard_rows))
+    stats["astrometry_4d_shard_results"] = shard_rows
+    stats["astrometry_4d_hits"] = int(total_hits)
+    stats["astrometry_4d_candidates"] = int(total_hits)
+    stats["astrometry_4d_hits_tested"] = int(total_tested)
+    stats["astrometry_4d_accepted_candidates"] = int(total_accepted)
+    stats["astrometry_4d_stop_reason"] = str(stop_reason)
+    stats["astrometry_4d_total_s"] = float(time.perf_counter() - started_at)
+    stats["astrometry_4d_search_budget_spent_s"] = float(search_budget_spent_s)
+    stats["astrometry_4d_search_budget_load_excluded_s"] = float(search_budget_load_excluded_s)
+    if first_test_s is not None:
+        stats["astrometry_4d_time_to_first_test_s"] = float(first_test_s)
+    if first_accept_s is not None:
+        stats["astrometry_4d_time_to_first_accept_s"] = float(first_accept_s)
+
+    logger.info(
+        "astrometry 4D progressive stats: shards=%d/%d hits=%d tested=%d accepted=%d stop=%s total=%.3fs",
+        int(stats["astrometry_4d_shards_opened"]),
+        int(stats["astrometry_4d_shards_total"]),
+        int(total_hits),
+        int(total_tested),
+        int(total_accepted),
+        str(stop_reason),
+        float(stats["astrometry_4d_total_s"]),
+    )
+    if selected_result is None:
+        return WcsSolution(False, "astrometry 4D runtime failed: no validated hypothesis", None, stats, None, {})
+
+    final_stats = dict(selected_result.stats or {})
+    final_stats.update(stats)
+    final_stats["astrometry_4d_selected_index_path"] = str(final_stats.get("astrometry_4d_selected_index_path") or "")
+    final_stats["astrometry_4d_runtime_accepted"] = True
+    header_updates = dict(selected_result.header_updates or {})
+    header_updates["SOLVMODE"] = "BLIND4DS"
+    return WcsSolution(
+        True,
+        selected_result.message,
+        selected_result.wcs,
+        final_stats,
+        selected_result.tile_key,
+        header_updates,
+    )
+
+
+def _astrometry_4d_order_shard_paths(config: SolveConfig, index_paths: tuple[Path, ...]) -> tuple[tuple[Path, ...], list[dict[str, Any]]]:
+    policy = str(getattr(config, "blind_astrometry_4d_shard_order_policy", "north_rings") or "north_rings").strip().lower()
+    if policy in {"", "manifest", "source", "index_order"}:
+        return tuple(index_paths), [
+            {"index_order": i, "path": str(path), "priority": i, "tile_keys": []}
+            for i, path in enumerate(index_paths)
+        ]
+
+    ring_priority = _astrometry_4d_d50_ring_priority_map(policy=policy)
+    rows: list[dict[str, Any]] = []
+    sortable: list[tuple[int, int, Path, dict[str, Any]]] = []
+    for i, path in enumerate(index_paths):
+        tile_keys = _astrometry_4d_light_tile_keys(path)
+        rings = [_astrometry_4d_d50_ring(tile) for tile in tile_keys]
+        finite_priorities = [ring_priority.get(ring, 10_000) for ring in rings if ring is not None]
+        priority = min(finite_priorities) if finite_priorities else i
+        row = {
+            "index_order": int(i),
+            "path": str(path),
+            "priority": int(priority),
+            "tile_keys": [str(tile) for tile in tile_keys],
+            "rings": [int(ring) for ring in rings if ring is not None],
+        }
+        rows.append(row)
+        sortable.append((int(priority), int(i), path, row))
+    if policy in {"north_south_rings", "north_rings", "south_rings"}:
+        sortable.sort(key=lambda item: (item[0], item[1]))
+    else:
+        sortable.sort(key=lambda item: (item[1],))
+    ordered = tuple(item[2] for item in sortable)
+    order_rows = [item[3] | {"progressive_order": order} for order, item in enumerate(sortable)]
+    return ordered, order_rows
+
+
+def _astrometry_4d_d50_ring_priority_map(*, policy: str = "north_rings") -> dict[int, int]:
+    if policy == "north_rings":
+        sequence = list(range(36, 0, -1))
+    elif policy == "south_rings":
+        sequence = list(range(1, 37))
+    else:
+        sequence = []
+        lo, hi = 1, 36
+        while lo <= hi:
+            sequence.append(hi)
+            if lo != hi:
+                sequence.append(lo)
+            hi -= 1
+            lo += 1
+    return {ring: i for i, ring in enumerate(sequence)}
+
+
+def _astrometry_4d_d50_ring(tile_key: str) -> int | None:
+    try:
+        return int(str(tile_key).split("_", 1)[1][:2])
+    except Exception:
+        return None
+
+
+def _astrometry_4d_light_tile_keys(path: Path) -> tuple[str, ...]:
+    try:
+        with np.load(path, allow_pickle=False) as data:
+            return tuple(str(v) for v in data["tile_keys"].astype(str).tolist())
+    except Exception:
+        return ()
+
+
 def _solve_astrometry_4d_runtime_route(
     *,
     config: SolveConfig,
@@ -6724,6 +7115,7 @@ def _solve_astrometry_4d_runtime_route(
     scale_bounds_arcsec: tuple[float, float] | None,
     cancel_check: Optional[Callable[[], bool]],
     cancel_reason_provider: Optional[Callable[[], str | None]] = None,
+    image_quad_payload: _Astrometry4DImageQuadPayload | None = None,
 ) -> WcsSolution:
     t_total0 = time.perf_counter()
     route_budget_s = max(
@@ -6779,6 +7171,20 @@ def _solve_astrometry_4d_runtime_route(
         stats["astrometry_4d_validation_catalog_policy"],
         stats["astrometry_4d_accept_policy"],
     )
+    if len(index_paths) > 1 and bool(getattr(config, "blind_astrometry_4d_progressive_shards_enabled", True)):
+        return _solve_astrometry_4d_progressive_shards(
+            config=config,
+            obs_stars=obs_stars,
+            image_positions_solver=image_positions_solver,
+            verification_image_positions_solver=verification_image_positions_solver,
+            image_shape=image_shape,
+            scale_bounds_arcsec=scale_bounds_arcsec,
+            cancel_check=cancel_check,
+            cancel_reason_provider=cancel_reason_provider,
+            index_paths=index_paths,
+            base_stats=stats,
+            started_at=t_total0,
+        )
     t_load0 = time.perf_counter()
     disk_indexes: list[Quad4DIndex] = []
     try:
@@ -6806,31 +7212,25 @@ def _solve_astrometry_4d_runtime_route(
         stats["astrometry_4d_index_entries"] = int(disk_indexes[0].codes_4d.shape[0])
         stats["astrometry_4d_index_star_count"] = int(disk_indexes[0].catalog_ra_dec.shape[0])
 
-    image_positions = np.asarray(image_positions_solver, dtype=np.float64)
-    verification_image_positions = image_positions
-    if verification_image_positions_solver is not None:
-        verification_image_positions = np.asarray(verification_image_positions_solver, dtype=np.float64)
-        if (
-            verification_image_positions.ndim != 2
-            or verification_image_positions.shape[1] != 2
-            or verification_image_positions.shape[0] == 0
-        ):
-            verification_image_positions = image_positions
-    stats["astrometry_4d_quad_source_stars"] = int(image_positions.shape[0])
-    stats["astrometry_4d_verification_source_stars"] = int(verification_image_positions.shape[0])
-    stats["astrometry_4d_split_quad_verify_sources"] = bool(
-        verification_image_positions_solver is not None
-        and int(verification_image_positions.shape[0]) != int(image_positions.shape[0])
-    )
-    max_quads = max(1, int(getattr(config, "max_quads", 0) or 1))
-    image_strategy = str(getattr(config, "blind_astrometry_4d_image_strategy", "log_spaced") or "log_spaced")
-    t_quad0 = time.perf_counter()
-    image_quads = sample_quads(obs_stars, max_quads=max_quads, strategy=image_strategy)
-    image_records = build_astrometry_quad_records(image_quads, image_positions)
-    stats["astrometry_4d_image_strategy"] = image_strategy
-    stats["astrometry_4d_image_quads"] = int(image_quads.shape[0])
-    stats["astrometry_4d_image_records"] = int(len(image_records))
-    stats["astrometry_4d_quad_build_s"] = float(time.perf_counter() - t_quad0)
+    if image_quad_payload is None:
+        image_quad_payload = _astrometry_4d_prepare_image_quads(
+            config=config,
+            obs_stars=obs_stars,
+            image_positions_solver=image_positions_solver,
+            verification_image_positions_solver=verification_image_positions_solver,
+        )
+        stats.update(image_quad_payload.stats)
+    else:
+        stats.update(image_quad_payload.stats)
+        stats["astrometry_4d_image_quad_reused"] = True
+        stats["astrometry_4d_image_quad_build_count"] = 0
+        stats["astrometry_4d_quad_build_s"] = 0.0
+        stats["image_quad_build_count"] = 0
+        stats["image_quad_build_time"] = 0.0
+    image_positions = image_quad_payload.image_positions
+    verification_image_positions = image_quad_payload.verification_image_positions
+    image_quads = image_quad_payload.image_quads
+    image_records = image_quad_payload.image_records
     if not image_records:
         stats["reject_reason_counts"] = {"no_image_4d_records": 1}
         return WcsSolution(False, "astrometry 4D runtime failed: no image 4D records", None, stats, None, {})
@@ -6838,6 +7238,10 @@ def _solve_astrometry_4d_runtime_route(
     code_tol = float(getattr(config, "blind_astrometry_4d_code_tol", 0.015) or 0.015)
     max_hits = max(1, int(getattr(config, "blind_astrometry_4d_max_hits", 2000) or 2000))
     max_hits_per_quad = max(1, int(getattr(config, "blind_astrometry_4d_max_hits_per_image_quad", 8) or 8))
+    hit_quota_per_tile = max(0, int(getattr(config, "blind_astrometry_4d_hit_quota_per_tile", 64) or 0))
+    hit_quota_per_image_quad_tile = max(
+        1, int(getattr(config, "blind_astrometry_4d_hit_quota_per_image_quad_tile", 2) or 2)
+    )
     max_hypotheses = max(1, int(getattr(config, "blind_astrometry_4d_max_hypotheses", 2000) or 2000))
     max_accepts = max(1, int(getattr(config, "blind_astrometry_4d_max_accepts", 64) or 64))
     validation_catalog_policy = _astrometry_4d_validation_catalog_policy(config)
@@ -6858,6 +7262,11 @@ def _solve_astrometry_4d_runtime_route(
     stats["astrometry_4d_diagnostic_skip_legacy_inverse"] = bool(skip_legacy_inverse)
     stats["astrometry_4d_diagnostic_skip_mono_validation"] = bool(skip_mono_validation)
     stats["astrometry_4d_diagnostic_reuse_image_kdtree"] = bool(reuse_image_kdtree)
+    min_hypotheses_per_nonempty_shard = max(
+        0,
+        int(getattr(config, "blind_astrometry_4d_min_hypotheses_per_nonempty_shard", 0) or 0),
+    )
+    stats["astrometry_4d_min_hypotheses_per_nonempty_shard"] = int(min_hypotheses_per_nonempty_shard)
     union_catalog = np.empty((0, 2), dtype=np.float64)
     if validation_catalog_policy == "union_candidate_tiles":
         union_catalog = _astrometry_4d_dedup_catalog_world(index.catalog_ra_dec for index in disk_indexes)
@@ -6886,18 +7295,30 @@ def _solve_astrometry_4d_runtime_route(
     candidates: list[dict[str, Any]] = []
     hits_by_index: dict[str, dict[str, Any]] = {}
     for index_order, disk_index in enumerate(disk_indexes):
-        hits = disk_index.search_records(
-            image_records,
-            code_tol=code_tol,
-            max_hits=max_hits,
-            max_hits_per_image_quad=max_hits_per_quad,
-        )
+        if hit_quota_per_tile > 0:
+            hits = disk_index.search_records_diversified(
+                image_records,
+                code_tol=code_tol,
+                max_hits=max_hits,
+                max_hits_per_image_quad=max_hits_per_quad,
+                max_hits_per_tile=hit_quota_per_tile,
+                max_hits_per_image_quad_tile=hit_quota_per_image_quad_tile,
+            )
+        else:
+            hits = disk_index.search_records(
+                image_records,
+                code_tol=code_tol,
+                max_hits=max_hits,
+                max_hits_per_image_quad=max_hits_per_quad,
+            )
+        hits_by_tile = Counter(str(hit.tile_key) for hit in hits)
         hits_by_index[str(disk_index.path)] = {
             "hits": int(len(hits)),
             "index_order": int(index_order),
             "tile_keys": [str(v) for v in disk_index.tile_keys],
             "entries": int(disk_index.codes_4d.shape[0]),
             "stars": int(disk_index.catalog_ra_dec.shape[0]),
+            "hits_by_tile": {str(k): int(v) for k, v in hits_by_tile.items()},
         }
         for local_rank, hit in enumerate(hits, start=1):
             candidates.append(
@@ -6943,6 +7364,8 @@ def _solve_astrometry_4d_runtime_route(
     stats["astrometry_4d_code_tol"] = float(code_tol)
     stats["astrometry_4d_max_hits"] = int(max_hits)
     stats["astrometry_4d_max_hits_per_image_quad"] = int(max_hits_per_quad)
+    stats["astrometry_4d_hit_quota_per_tile"] = int(hit_quota_per_tile)
+    stats["astrometry_4d_hit_quota_per_image_quad_tile"] = int(hit_quota_per_image_quad_tile)
     stats["astrometry_4d_max_hypotheses"] = int(max_hypotheses)
     stats["astrometry_4d_max_accepts"] = int(max_accepts)
     stats["astrometry_4d_hits"] = int(sum(int(v["hits"]) for v in hits_by_index.values()))
@@ -6988,6 +7411,7 @@ def _solve_astrometry_4d_runtime_route(
     validation_cost_s: Counter[str] = Counter()
     t_val0 = time.perf_counter()
     tested = 0
+    budget_min_validation_overrun = False
     stop_reason = SolveStopReason.CANDIDATE_EXHAUSTED.value
     seen_hypotheses: set[tuple[str, tuple[int, ...], tuple[int, ...]]] = set()
     for rank, item in enumerate(candidates, start=1):
@@ -7004,7 +7428,17 @@ def _solve_astrometry_4d_runtime_route(
                 stop_reason = SolveStopReason.USER_CANCELLED.value
             reason_counts[str(stop_reason)] += 1
             break
-        if route_budget_s > 0.0 and (time.perf_counter() - t_total0) >= route_budget_s:
+        budget_allowed, budget_overrun = _astrometry_4d_budget_allows_validation(
+            route_budget_s=route_budget_s,
+            t_total0=t_total0,
+            tested=tested,
+            candidate_count=len(candidates),
+            max_hypotheses=max_hypotheses,
+            min_hypotheses_per_nonempty_shard=min_hypotheses_per_nonempty_shard,
+        )
+        if budget_overrun:
+            budget_min_validation_overrun = True
+        if not budget_allowed:
             reason_counts[SolveStopReason.ASTROMETRY_4D_SEARCH_BUDGET_EXCEEDED.value] += 1
             stop_reason = SolveStopReason.ASTROMETRY_4D_SEARCH_BUDGET_EXCEEDED.value
             break
@@ -7041,6 +7475,8 @@ def _solve_astrometry_4d_runtime_route(
             continue
         seen_hypotheses.add(dedup_key)
         tested += 1
+        if "astrometry_4d_time_to_first_test_s" not in stats:
+            stats["astrometry_4d_time_to_first_test_s"] = float(time.perf_counter() - t_total0)
         index_stats["hypotheses_tested"] = int(index_stats.get("hypotheses_tested", 0) or 0) + 1
         if index_stats.get("first_tested_rank") is None:
             index_stats["first_tested_rank"] = int(rank)
@@ -7277,6 +7713,7 @@ def _solve_astrometry_4d_runtime_route(
             if validation.get("quality") == "GOOD":
                 if first_accepted_rank is None:
                     first_accepted_rank = int(rank)
+                    stats["astrometry_4d_time_to_first_accept_s"] = float(time.perf_counter() - t_total0)
                 if lost_by_hash and first_lost_hash_accepted_rank is None:
                     first_lost_hash_accepted_rank = int(rank)
                 index_stats["accepted_candidates"] = int(index_stats.get("accepted_candidates", 0) or 0) + 1
@@ -7335,6 +7772,7 @@ def _solve_astrometry_4d_runtime_route(
             stop_reason = SolveStopReason.BEST_WITHIN_BUDGET.value
 
     stats["astrometry_4d_hits_tested"] = int(tested)
+    stats["astrometry_4d_budget_min_validation_overrun"] = bool(budget_min_validation_overrun)
     stats["astrometry_4d_first_plausible_rank"] = first_plausible_rank
     stats["astrometry_4d_first_accepted_rank"] = first_accepted_rank
     stats["astrometry_4d_first_lost_hash_rank"] = first_lost_hash_rank
@@ -7796,7 +8234,8 @@ def solve_blind(
                 + ", ".join(levels)
                 + ") — details: "
                 + ", ".join(details)
-                + ". Build the index with zebuildindex (see firstrun.txt)"
+                + '. Build the index with zebuildindex '
+                + '(see README.md, section "Building derived indexes").'
             )
             logger.error(msg)
             return _finish(WcsSolution(False, msg, None, {}, None, {}))

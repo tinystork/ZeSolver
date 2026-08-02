@@ -109,6 +109,19 @@ def _build_family_specs() -> Dict[str, CatalogFamilySpec]:
 FAMILY_SPECS: Dict[str, CatalogFamilySpec] = _build_family_specs()
 
 
+def _glob_family_files(root: Path, spec: CatalogFamilySpec) -> Tuple[Path, ...]:
+    expected_prefix = f"{spec.prefix}_".lower()
+    expected_suffix = f".{spec.extension}".lower()
+    matches = [
+        path
+        for path in root.iterdir()
+        if path.is_file()
+        and path.name.lower().startswith(expected_prefix)
+        and path.name.lower().endswith(expected_suffix)
+    ]
+    return tuple(sorted(matches, key=lambda item: item.name.lower()))
+
+
 @dataclass(frozen=True)
 class SkyBox:
     ra_segments: Tuple[Tuple[float, float], ...]
@@ -190,6 +203,10 @@ class _TileCache:
             if len(store) > self._max_entries:
                 store.popitem(last=False)
         return value
+
+    def clear(self) -> None:
+        with self._lock:
+            self._store.clear()
 
 
 def _normalize_ra(value):
@@ -276,7 +293,7 @@ class CatalogDB:
                 raise KeyError(f"unknown family {key!r}")
             pattern = spec.glob_pattern()
             ring_files: Dict[int, List[Tuple[int, Path]]] = defaultdict(list)
-            for path in sorted(self.root.glob(pattern)):
+            for path in _glob_family_files(self.root, spec):
                 tile_code = path.stem.split("_", 1)[1]
                 ring_index = int(tile_code[:2])
                 tile_index = int(tile_code[2:])
@@ -405,6 +422,11 @@ class CatalogDB:
         for tile in self._tiles:
             summary[tile.spec.key] = summary.get(tile.spec.key, 0) + 1
         return summary
+
+    def clear_cache(self) -> None:
+        self._cache.clear()
+        with self._prefetch_lock:
+            self._prefetched.clear()
 
     def _iter_candidate_tiles(
         self,

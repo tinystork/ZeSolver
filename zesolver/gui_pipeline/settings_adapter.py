@@ -30,8 +30,14 @@ def build_product_settings(state: GuiSettingsState) -> ProductSettings:
         input_formats=tuple(state.formats),
         blind_enabled=state.use_blind,
         blind_only=False,
+        interface_mode=str(getattr(state, "interface_mode", "expert") or "expert"),
+        move_unresolved_files=bool(getattr(state, "move_unresolved_files", False)),
+        gpu_mode=str(getattr(state.legacy_config, "near_detect_backend", "auto") or "auto"),
+        near_detect_device=getattr(state.legacy_config, "near_detect_device", None),
+        near_detect_gpu_slots=max(1, int(getattr(state.legacy_config, "near_detect_gpu_slots", 1) or 1)),
         near_catalog_mode=str(getattr(state.legacy_config, "near_catalog_mode", "auto") or "auto"),
         blind4d_catalog_mode=str(getattr(state.legacy_config, "blind4d_catalog_mode", "auto") or "auto"),
+        instrument_mode=str(getattr(state, "instrument_mode", getattr(state.legacy_config, "instrument_mode", "auto")) or "auto"),
         downsample=state.downsample,
         fov_deg=state.fov_deg,
         hint_ra_deg=state.hint_ra_deg,
@@ -80,11 +86,13 @@ def build_gui_solve_request(
         product_settings=product,
         runtime_options=runtime,
         worker_strategy=state.worker_strategy,
+        startup_stagger_ms=max(0, int(getattr(state, "startup_stagger_ms", 0) or 0)),
         requires_raster_sidecar=state.requires_raster_sidecar,
         requires_adaptive_hints=state.requires_adaptive_hints,
         blind4d_all_sky=state.blind4d_all_sky,
         legacy_config=state.legacy_config,
         catalog_resources=state.catalog_resources,
+        move_unresolved_files=bool(getattr(state, "move_unresolved_files", False)),
     )
 
 
@@ -115,8 +123,10 @@ def build_gui_solve_request_from_legacy_config(
         worker_strategy=_worker_strategy_from_environment(paths),
         requires_raster_sidecar=_has_raster(paths),
         requires_adaptive_hints=False,
-        blind4d_all_sky=False,
+        blind4d_all_sky=_blind4d_all_sky_from_resources(catalog_resources),
         log_level=str(getattr(config, "log_level", "INFO") or "INFO"),
+        interface_mode=str(getattr(config, "interface_mode", "expert") or "expert"),
+        instrument_mode=str(getattr(config, "instrument_mode", "auto") or "auto"),
         fov_deg=float(getattr(config, "fov_deg", 1.5) or 1.5),
         downsample=int(getattr(config, "downsample", 1) or 1),
         hint_ra_deg=getattr(config, "hint_ra_deg", None),
@@ -134,6 +144,7 @@ def build_gui_solve_request_from_legacy_config(
         astrometry_use_hints=bool(getattr(config, "astrometry_use_hints", True)),
         legacy_config=config,
         catalog_resources=catalog_resources,
+        move_unresolved_files=bool(getattr(config, "move_unresolved_files", False)),
     )
     request = build_gui_solve_request(paths, state, cancel_token=cancel_token)
     product = replace(
@@ -160,6 +171,7 @@ def build_engine_selection_request(request: GuiSolveRequest) -> EngineSelectionR
         requires_raster_sidecar=request.requires_raster_sidecar,
         requires_adaptive_hints=request.requires_adaptive_hints,
         unknown_capabilities=tuple(unknown),
+        blind4d_enabled=request.use_blind,
         blind4d_all_sky=request.blind4d_all_sky,
     )
 
@@ -175,6 +187,15 @@ def _representative_path(paths: tuple[Path, ...]) -> Path | None:
 
 def _has_raster(paths: Sequence[Path]) -> bool:
     return any(Path(path).suffix.lower() in RASTER_EXTENSIONS for path in paths)
+
+
+def _blind4d_all_sky_from_resources(catalog_resources: object | None) -> bool | None:
+    if catalog_resources is None:
+        return None
+    value = getattr(catalog_resources, "all_sky_blind4d", None)
+    if value is None:
+        return None
+    return bool(value)
 
 
 def _worker_strategy_from_environment(paths: Sequence[Path]) -> str:

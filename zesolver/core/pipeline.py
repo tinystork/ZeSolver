@@ -15,13 +15,16 @@ from zesolver.catalog_resources import (
     Blind4DRuntimeError,
     Blind4DRuntimeSelection,
     CatalogResourceResolutionError,
+    NearBatchRuntime,
     NearCatalogMode,
+    NearCatalogRuntime,
     NearCatalogRuntimeError,
     SolverCatalogResources,
     resolve_catalog_resources,
     resolve_blind4d_runtime,
     resolve_near_catalog_runtime,
 )
+from zesolver.resource_telemetry import increment_batch_counter
 from zesolver.settings import ProductSettings, RuntimeOptions, build_solver_configuration
 from zesolver.zeblindsolver import near_solve
 
@@ -30,6 +33,7 @@ from .models import EngineSolveResult, SolveRequest, SolveResult, SolveStatus
 from .preflight import run_preflight
 from .result_adapter import failure_result, result_from_engine
 from .telemetry import PipelineTelemetry
+from .terminal_reasons import TerminalReasonCode
 from .wcs_io import write_wcs_safely
 
 
@@ -46,16 +50,24 @@ class BlindSolverPort(Protocol):
 class ExistingNearSolverPort:
     """Thin adapter over the existing Near wrapper."""
 
+    def __init__(self, near_runtime: NearCatalogRuntime | NearBatchRuntime | None = None) -> None:
+        increment_batch_counter("near_port_constructor_count")
+        self._near_runtime = near_runtime
+
     def solve(self, request: SolveRequest, *, resources: SolverCatalogResources, configuration) -> EngineSolveResult:
         values = configuration.legacy_solve_config_values
         try:
-            runtime = resolve_near_catalog_runtime(
-                resources,
-                mode=str(values.get("near_catalog_mode", "auto") or "auto"),
-                legacy_index_root=resources.legacy_index_root,
-                blind_only=bool(configuration.product_settings.blind_only),
-                legacy_cache_size=int(values.get("near_tile_cache_size", 128) or 128),
-            )
+            if self._near_runtime is None:
+                runtime = resolve_near_catalog_runtime(
+                    resources,
+                    mode=str(values.get("near_catalog_mode", "auto") or "auto"),
+                    legacy_index_root=resources.legacy_index_root,
+                    blind_only=bool(configuration.product_settings.blind_only),
+                    legacy_cache_size=int(values.get("near_tile_cache_size", 128) or 128),
+                )
+            else:
+                acquire = getattr(self._near_runtime, "acquire", None)
+                runtime = acquire() if callable(acquire) else self._near_runtime
         except NearCatalogRuntimeError as exc:
             return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="NEAR", error=f"{exc.code}: {exc}")
         if runtime.provider is None:
@@ -71,9 +83,15 @@ class ExistingNearSolverPort:
             max_tile_candidates=int(values.get("near_max_tile_candidates", 48) or 48),
             tile_cache_size=int(values.get("near_tile_cache_size", 128) or 128),
             detect_backend=str(values.get("near_detect_backend") or "auto"),
+            detect_device=(
+                int(values["near_detect_device"])
+                if values.get("near_detect_device") is not None
+                else None
+            ),
             detect_k_sigma=float(values.get("near_detect_k_sigma", 4.5) or 4.5),
             detect_min_area=int(values.get("near_detect_min_area", 8) or 8),
             detect_max_labels=int(values.get("near_detect_max_labels", 1200) or 1200),
+            detect_gpu_slots=int(values.get("near_detect_gpu_slots", 1) or 1),
             ransac_trials=int(values.get("near_ransac_trials", 1200) or 1200),
             search_margin=float(values.get("near_search_margin", 1.2) or 1.2),
             pixel_tolerance=float(values.get("near_pixel_tolerance", 3.0) or 3.0),
@@ -84,14 +102,22 @@ class ExistingNearSolverPort:
             try_parity_flip=bool(values.get("near_try_parity_flip", True)),
             astap_iso_strict=bool(values.get("near_astap_iso_strict", True)),
         )
-        result = near_solve(
-            str(target),
-            str(index_root) if index_root is not None else None,
-            catalog_provider=runtime.provider,
-            config=near_cfg,
-            skip_if_valid=False,
-            fallback_to_blind=False,
-        )
+        try:
+            result = near_solve(
+                str(target),
+                str(index_root) if index_root is not None else None,
+                catalog_provider=runtime.provider,
+                config=near_cfg,
+                skip_if_valid=False,
+                fallback_to_blind=False,
+                cancel_check=_cancel_check(configuration),
+            )
+        except Exception as exc:
+            if "cancelled" in str(exc).lower():
+                return EngineSolveResult(status=SolveStatus.CANCELLED, backend="NEAR", error="cancelled")
+            raise
+        if str(result.get("message") or "").strip().lower() == "cancelled":
+            return EngineSolveResult(status=SolveStatus.CANCELLED, backend="NEAR", error="cancelled")
         stats = result.get("stats") if isinstance(result, dict) else {}
         stats = stats if isinstance(stats, dict) else {}
         stats.update(runtime.telemetry(include_paths=False))
@@ -118,6 +144,9 @@ class ExistingNearSolverPort:
 
 
 class UnconfiguredBlindSolverPort:
+    def __init__(self) -> None:
+        increment_batch_counter("blind_port_constructor_count")
+
     def solve(self, request: SolveRequest, *, resources: SolverCatalogResources, configuration) -> EngineSolveResult:
         return EngineSolveResult(status=SolveStatus.CATALOG_UNAVAILABLE, backend="BLIND4D", error="blind_port_unconfigured")
 
@@ -135,6 +164,7 @@ class SolverPipeline:
         near_solver: NearSolverPort | None = None,
         blind_solver: BlindSolverPort | None = None,
     ) -> None:
+        increment_batch_counter("solver_pipeline_constructor_count")
         self.configuration = build_solver_configuration(
             product_settings=product_settings,
             runtime_options=runtime_options,
@@ -170,10 +200,6 @@ class SolverPipeline:
         telemetry.catalog_coverage_fraction = resources.blind4d_coverage_fraction
         telemetry.warnings.extend(resources.warnings)
         catalog_status = telemetry.catalog_status
-        blind4d_runtime = self._blind4d_runtime(resources)
-        telemetry.blind4d_runtime.update(blind4d_runtime.telemetry(include_paths=False))
-        telemetry.warnings.extend(blind4d_runtime.warnings)
-
         if self._cancelled():
             return self._finish_failure(request, telemetry, SolveStatus.CANCELLED, catalog_status, "cancelled_before_near")
 
@@ -203,7 +229,8 @@ class SolverPipeline:
             try:
                 near_result = self.near_solver.solve(request, resources=resources, configuration=self.configuration)
             except Exception as exc:
-                near_result = EngineSolveResult(status=SolveStatus.FAILED, backend="NEAR", error=str(exc))
+                status = SolveStatus.CANCELLED if "cancelled" in str(exc).lower() else SolveStatus.FAILED
+                near_result = EngineSolveResult(status=status, backend="NEAR", error=str(exc))
             telemetry.near_result = near_result.status.value
             if near_result.solved:
                 final = self._finalize_success(request, near_result, resources, telemetry)
@@ -213,11 +240,16 @@ class SolverPipeline:
         if self._cancelled():
             return self._finish_failure(request, telemetry, SolveStatus.CANCELLED, catalog_status, "cancelled_between_near_and_blind")
 
-        requested_blind4d_mode = blind4d_runtime.mode_requested
+        try:
+            requested_blind4d_mode = Blind4DCatalogMode.normalize(
+                getattr(self.configuration.product_settings, "blind4d_catalog_mode", "auto")
+            )
+        except Exception:
+            requested_blind4d_mode = Blind4DCatalogMode.AUTO
         should_attempt_blind = bool(self.configuration.product_settings.blind_enabled) and (
-            blind4d_runtime.available
+            resources.blind4d_available
             or requested_blind4d_mode is not Blind4DCatalogMode.AUTO
-            or (resources.source == "library" and blind4d_runtime.error_code != BLIND4D_LIBRARY_NO_INDEXES)
+            or resources.source == "library"
         )
         if should_attempt_blind:
             telemetry.blind_attempted = True
@@ -226,13 +258,31 @@ class SolverPipeline:
             except Exception as exc:
                 blind_result = EngineSolveResult(status=SolveStatus.FAILED, backend="BLIND4D", error=str(exc))
             telemetry.blind_result = blind_result.status.value
+            if isinstance(blind_result.raw, dict):
+                telemetry.blind4d_runtime.update(
+                    {key: value for key, value in blind_result.raw.items() if str(key).startswith("blind4d_")}
+                )
             if blind_result.solved:
                 final = self._finalize_success(request, blind_result, resources, telemetry)
                 self.last_telemetry = dict(telemetry.finish(final_status=final.status.value, wcs_written=final.wcs_written))
                 return final
 
         status = SolveStatus.UNSOLVED if (should_attempt_near or should_attempt_blind) else SolveStatus.CATALOG_UNAVAILABLE
-        return self._finish_failure(request, telemetry, status, catalog_status, "no_solver_produced_solution")
+        reason = TerminalReasonCode.ALL_ENABLED_SOLVERS_EXHAUSTED.value if status is SolveStatus.UNSOLVED else TerminalReasonCode.RUNTIME_ERROR.value
+        if (
+            should_attempt_near
+            and not should_attempt_blind
+            and bool(getattr(self.configuration.product_settings, "blind_enabled", True))
+        ):
+            reason = TerminalReasonCode.NEAR_UNRESOLVED_BLIND_UNAVAILABLE.value
+        return self._finish_failure(
+            request,
+            telemetry,
+            status,
+            catalog_status,
+            "no_solver_produced_solution",
+            terminal_reason_code=reason,
+        )
 
     def _resources(self) -> SolverCatalogResources:
         if self.catalog_resources is not None:
@@ -319,6 +369,7 @@ class SolverPipeline:
                     backend=engine_result.backend,
                     warnings=engine_result.warnings,
                     error=written.error,
+                    terminal_reason_code=TerminalReasonCode.WRITE_ERROR.value,
                 )
                 return result_from_engine(
                     request,
@@ -343,6 +394,7 @@ class SolverPipeline:
             warnings=engine_result.warnings,
             error=error,
             raw=engine_result.raw,
+            terminal_reason_code=engine_result.terminal_reason_code,
         )
         return result_from_engine(
             request,
@@ -360,7 +412,10 @@ class SolverPipeline:
         status: SolveStatus,
         catalog_status: str | None,
         error: str | None,
+        terminal_reason_code: str | None = None,
     ) -> SolveResult:
+        if terminal_reason_code is None:
+            terminal_reason_code = _default_terminal_reason(status, error)
         result = failure_result(
             request,
             status=status,
@@ -368,6 +423,7 @@ class SolverPipeline:
             catalog_status=catalog_status,
             warnings=tuple(telemetry.warnings),
             error=error,
+            terminal_reason_code=terminal_reason_code,
         )
         self.last_telemetry = dict(telemetry.finish(final_status=result.status.value, wcs_written=result.wcs_written))
         return result
@@ -378,4 +434,41 @@ def _header_updates_from_engine(engine_result: EngineSolveResult) -> dict[str, o
     value = raw.get("header_updates") if isinstance(raw, dict) else None
     if isinstance(value, dict):
         return dict(value)
+    return None
+
+
+def _cancel_check(configuration):
+    token = configuration.runtime_options.cancel_token
+    if token is None:
+        return None
+
+    def _check() -> bool:
+        if callable(token):
+            return bool(token())
+        is_set = getattr(token, "is_set", None)
+        if callable(is_set):
+            return bool(is_set())
+        return bool(token)
+
+    return _check
+
+
+def _default_terminal_reason(status: SolveStatus, error: str | None) -> str | None:
+    text = str(error or "").lower()
+    if status is SolveStatus.CANCELLED:
+        return TerminalReasonCode.CANCELLED.value
+    if status is SolveStatus.INVALID_INPUT:
+        if "skip" in text or "wcs" in text:
+            return TerminalReasonCode.SKIPPED_EXISTING_WCS.value
+        if "missing" in text or "no such file" in text:
+            return TerminalReasonCode.INPUT_MISSING.value
+        return TerminalReasonCode.INPUT_UNREADABLE.value
+    if status is SolveStatus.CATALOG_UNAVAILABLE:
+        return TerminalReasonCode.RUNTIME_ERROR.value
+    if status is SolveStatus.FAILED:
+        if "permission" in text:
+            return TerminalReasonCode.PERMISSION_ERROR.value
+        if "write" in text or "wcs" in text:
+            return TerminalReasonCode.WRITE_ERROR.value
+        return TerminalReasonCode.RUNTIME_ERROR.value
     return None

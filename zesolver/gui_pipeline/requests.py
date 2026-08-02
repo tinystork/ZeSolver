@@ -23,11 +23,14 @@ class GuiSettingsState:
     formats: tuple[str, ...] = ()
     max_files: int | None = None
     worker_strategy: str = "threads"
+    startup_stagger_ms: int = 0
     requires_raster_sidecar: bool = False
     requires_adaptive_hints: bool = False
-    blind4d_all_sky: bool = False
+    blind4d_all_sky: bool | None = None
     log_level: str = "INFO"
     language: str = "auto"
+    interface_mode: str = "expert"
+    instrument_mode: str = "auto"
     fov_deg: float = 1.5
     downsample: int = 1
     hint_ra_deg: float | None = None
@@ -45,6 +48,7 @@ class GuiSettingsState:
     astrometry_use_hints: bool = True
     legacy_config: object | None = None
     catalog_resources: object | None = None
+    move_unresolved_files: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,19 +64,21 @@ class GuiSolveRequest:
     product_settings: ProductSettings
     runtime_options: RuntimeOptions
     worker_strategy: str = "threads"
+    startup_stagger_ms: int = 0
     requires_raster_sidecar: bool = False
     requires_adaptive_hints: bool = False
-    blind4d_all_sky: bool = False
+    blind4d_all_sky: bool | None = None
     legacy_config: object | None = None
     catalog_resources: object | None = None
     metadata_overrides: Mapping[str, object] = field(default_factory=dict)
+    move_unresolved_files: bool = False
 
     def for_phase(self, phase: str) -> "GuiSolveRequest":
         if phase == "blind":
             product = replace(self.product_settings, blind_enabled=True, blind_only=True)
             return replace(self, product_settings=product)
         if phase == "near":
-            product = replace(self.product_settings, blind_only=False)
+            product = replace(self.product_settings, blind_enabled=False, blind_only=False)
             return replace(self, product_settings=product)
         return self
 
@@ -115,3 +121,4 @@ class GuiRunSummary:
     duration_s: float
     warnings: tuple[str, ...] = ()
     selection: EngineSelection | None = None
+    telemetry: Mapping[str, object] | None = None

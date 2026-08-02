@@ -82,8 +82,17 @@ def validate_library(library) -> CatalogValidationReport:
         for source_id in index.source_ids:
             if source_id not in source_ids:
                 issues.append(_issue("INDEX_SOURCE_UNKNOWN", IssueSeverity.WARNING, index.id, index.path.resolved))
+        trust_verified_integrity = index.status in {CatalogDataStatus.FAST_VERIFIED, CatalogDataStatus.FULL_VERIFIED}
         for integrity_file in index.integrity_files:
-            if not _check_integrity_file(integrity_file.resolved_path, integrity_file.sha256, issues, index.id, "INDEX"):
+            if not _check_integrity_file(
+                integrity_file.resolved_path,
+                integrity_file.sha256,
+                issues,
+                index.id,
+                "INDEX",
+                expected_size=integrity_file.size_bytes,
+                trust_verified=trust_verified_integrity,
+            ):
                 index_ok = False
         if index.coverage.fraction is not None and not 0.0 <= index.coverage.fraction <= 1.0:
             issues.append(_issue("COVERAGE_INCONSISTENT", IssueSeverity.ERROR, index.id, index.path.resolved))
@@ -141,7 +150,7 @@ def _status_from(
             return CatalogStatus.MISSING
         return CatalogStatus.MISSING
     if capabilities.near and capabilities.blind4d:
-        return CatalogStatus.READY_FULL if coverage.all_sky and capabilities.all_sky_blind4d else CatalogStatus.READY_PARTIAL
+        return CatalogStatus.READY_FULL if coverage.all_sky else CatalogStatus.READY_PARTIAL
     if capabilities.near:
         return CatalogStatus.NEAR_ONLY if declared_indexes else CatalogStatus.SOURCE_ONLY
     if capabilities.blind4d:
@@ -169,13 +178,24 @@ def _check_integrity_file(
     issues: list[CatalogIssue],
     component_id: str,
     prefix: str,
+    *,
+    expected_size: int | None = None,
+    trust_verified: bool = False,
 ) -> bool:
     if path is None:
         return True
     if not path.exists():
         issues.append(_issue(f"{prefix}_PATH_MISSING", IssueSeverity.ERROR, component_id, path))
         return False
-    if expected_sha256:
+    if expected_size is not None:
+        try:
+            if int(path.stat().st_size) != int(expected_size):
+                issues.append(_issue(f"{prefix}_SIZE_MISMATCH", IssueSeverity.ERROR, component_id, path))
+                return False
+        except OSError:
+            issues.append(_issue(f"{prefix}_PATH_MISSING", IssueSeverity.ERROR, component_id, path))
+            return False
+    if expected_sha256 and not trust_verified:
         actual = sha256_file(path)
         if actual.lower() != expected_sha256.lower():
             issues.append(_issue(f"{prefix}_SHA256_MISMATCH", IssueSeverity.ERROR, component_id, path))

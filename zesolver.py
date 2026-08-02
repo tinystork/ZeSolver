@@ -54,6 +54,7 @@ import concurrent.futures
 import json
 import logging
 import math
+import multiprocessing
 import os
 import re
 import shutil
@@ -74,6 +75,18 @@ from astropy.io import fits
 ROOT_DIR = Path(__file__).resolve().parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
+
+def _process_pool_context():
+    start_method = str(os.environ.get("ZE_PROCESS_START_METHOD", "") or "").strip().lower()
+    if start_method:
+        try:
+            return multiprocessing.get_context(start_method)
+        except ValueError:
+            logging.warning("Invalid ZE_PROCESS_START_METHOD=%s; using platform default", start_method)
+    return multiprocessing.get_context()
+
+
 LOG_FILE = ROOT_DIR / "zesolver.log"
 APP_ICON_CANDIDATES = (
     "ZSicon.ico",
@@ -194,6 +207,7 @@ from zesolver.settings_store import (
     DEFAULT_SEARCH_RADIUS_ATTEMPTS,
     DEFAULT_SEARCH_RADIUS_SCALE,
     QUAD_STORAGE_CHOICES,
+    SETTINGS_SCHEMA_VERSION,
     TILE_COMPRESSION_CHOICES,
     PersistentSettings,
     load_persistent_settings,
@@ -215,9 +229,36 @@ from zesolver.catalog_resources import (
 )
 from zesolver.catalog_library import (
     CatalogLibrary,
+    CatalogDistributionService,
+    DistributionCancelled,
+    DistributionError,
     CatalogLibraryError,
+    CatalogLibraryManagementCancelled,
+    CatalogLibraryManagementError,
+    CatalogLibraryManagementService,
+    LibraryCreateOptions,
+    LibraryInstallOptions,
+    LibraryRepairPlan,
     CatalogStatus,
+    build_storage_plan,
+    cache_reclaimable_bytes,
+    cleanup_distribution_cache,
+    default_cache_root,
+    default_library_parent,
+    format_bytes_binary,
     IssueSeverity,
+    open_in_file_manager,
+    resolve_library_destination,
+    validate_library_parent,
+    build_blind4d_manifest_view,
+)
+from zesolver.catalog_library.verification_cache import (
+    FAST_LEVEL,
+    FULL_LEVEL,
+    STATUS_VALID,
+    build_lightweight_catalog_fingerprint,
+    catalog_verification_record,
+    restore_cached_catalog_verification,
 )
 from zesolver.cancellation import (
     CompositeCancellationToken,
@@ -236,20 +277,37 @@ from zesolver.gui_catalog_validation import (
     validate_legacy_near_index_root,
 )
 from zesolver.gui_settings_sections import (
+    apply_settings_preset,
     build_blind_group,
     build_presets_fov_reco_groups,
     wire_settings_tab_callbacks,
 )
+from zesolver.gui_startup_wizard import (
+    STARTUP_WIZARD_VERSION,
+    StartupWizardCompletionRequest,
+    StartupWizardCompletionResult,
+    ZeSolverStartupWizard,
+    default_gpu_runtime_context,
+    decide_startup_wizard,
+    mark_startup_wizard_completed,
+    should_allow_legacy_family_prompt,
+)
+from zesolver.gui_theme import ThemeController, normalize_theme_mode
+from zesolver.gpu_support import EffectiveBackend, build_gpu_provisioning_plan, probe_gpu_capability
 from zesolver.gui_pipeline import GuiEngineSelectionError, GuiSolveController
 from zesolver.gui_pipeline.legacy_runner import LegacyGuiRunner
 from zesolver.gui_pipeline.lifecycle import RunLifecycle
 from zesolver.gui_pipeline.pipeline_runner import PipelineGuiRunner
 from zesolver.gui_pipeline.settings_adapter import build_gui_solve_request_from_legacy_config
+from zesolver.output_contract import UNRESOLVED_DIRECTORY_NAME, is_inside_unresolved_directory
+from zesolver.unresolved_output import move_unresolved_results
+from zesolver.core.terminal_reasons import TerminalReasonCode
 from zeblindsolver.metadata_solver import NearSolveConfig as NearIndexConfig
 from zeblindsolver.index_manifest_4d import (
     IndexManifestError,
     Loaded4DManifest,
     load_4d_index_manifest,
+    load_4d_index_manifest_payload,
 )
 from zeblindsolver.profiles import (
     HISTORICAL_PROFILE,
@@ -265,7 +323,6 @@ from zeblindsolver.db_convert import (
 from zeblindsolver.zeblindsolver import SolveConfig as BlindSolveConfig, solve_blind as python_solve_blind
 from zeblindsolver.quad_index_builder import quad_table_metadata, validate_index as validate_zeblind_index
 from zeblindsolver import presets as preset_utils
-from tools import benchmark_solver as bench
 
 
 FITS_EXTENSIONS = {".fit", ".fits", ".fts"}
@@ -345,11 +402,61 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_level_debug": "Debug",
         "log_level_warning": "Warning",
         "interface_menu": "Interface",
+        "appearance_menu": "Apparence",
+        "appearance_system": "Système",
+        "appearance_light": "Clair",
+        "appearance_dark": "Sombre",
+        "advanced_tools_menu": "Outils avancés",
+        "historical_index_maintenance_action": "Maintenance des index historiques",
+        "historical_index_maintenance_title": "Maintenance des index historiques",
+        "historical_index_maintenance_warning": "Cette fenêtre reconstruit des artefacts historiques à partir des anciens chemins database/index. Elle ne fait pas partie d'un run normal, peut être longue et modifie des fichiers d'index sur disque.",
+        "library_manager_action": "Gestionnaire de Bibliothèques ZeSolver…",
+        "library_manager_title": "Gestionnaire de Bibliothèques ZeSolver",
+        "library_manager_open": "Gérer les bibliothèques…",
+        "library_manager_install_title": "Installer une bibliothèque prête à l’emploi",
+        "library_manager_install_desc": "Télécharger ou ouvrir un paquet ZeSolver déjà préparé, le vérifier puis l’installer automatiquement.",
+        "library_manager_create_title": "Créer depuis une base ASTAP existante",
+        "library_manager_create_desc": "Détecter les bases disponibles et préparer automatiquement ZeNear et ZeBlind 4D.",
+        "library_manager_repair_title": "Vérifier ou réparer une bibliothèque",
+        "library_manager_repair_desc": "Analyser une bibliothèque existante et reconstruire uniquement les éléments manquants ou invalides.",
+        "library_manager_package_label": "Paquet Bibliothèque ZeSolver",
+        "library_manager_destination_label": "Destination",
+        "library_manager_source_label": "Dossier contenant les bases ASTAP",
+        "library_manager_existing_label": "Bibliothèque ZeSolver",
+        "library_manager_install_button": "Installer",
+        "library_manager_create_button": "Créer la bibliothèque",
+        "library_manager_analyze_button": "Analyser",
+        "library_manager_repair_button": "Réparer les éléments manquants",
+        "library_manager_cancel_button": "Annuler",
+        "library_manager_back_button": "Retour",
+        "library_manager_reference_policy": "Référencer les bases ASTAP existantes — recommandé",
+        "library_manager_copy_policy": "Copier les bases dans la Bibliothèque ZeSolver",
+        "library_manager_standard_mode": "Standard — recommandé",
+        "library_manager_custom_mode": "Personnalisé",
+        "library_manager_advanced_toggle": "Afficher les paramètres avancés",
+        "library_manager_detected_bases": "Bases détectées",
+        "library_manager_log": "Journal",
+        "library_manager_stage": "Étape en cours",
+        "library_manager_elapsed": "Temps écoulé",
+        "library_manager_progress": "Progression globale",
+        "library_manager_no_worker_on_open": "Aucune opération en cours.",
+        "library_manager_success": "Bibliothèque prête : {path}",
+        "library_manager_failed": "Opération échouée : {error}",
+        "library_manager_cancelled": "Construction annulée",
+        "library_manager_confirm_cancel_title": "Annuler l’opération ?",
+        "library_manager_confirm_cancel_body": "Une écriture est en cours. Annuler maintenant arrêtera proprement le worker et le staging ne sera pas présenté comme valide.",
+        "library_manager_credits": "Crédits : ASTAP par Han Kleijn ; Astrometry.net par ses auteurs. Conservez les notices de licence lors de toute redistribution.",
+        "library_manager_disk_required": "Espace disque requis",
+        "library_manager_partial_coverage": "Couverture Blind 4D partielle",
+        "library_manager_ready": "Bibliothèque prête",
+        "library_manager_repair_plan": "Actions prévues",
+        "library_manager_no_families": "Aucune famille ASTAP prise en charge détectée. Choisissez une racine contenant au moins une base ASTAP installée.",
         "interface_mode_expert": "Expert",
         "interface_mode_easy": "Easy",
         "interface_mode_wizard": "Wizard",
         "window_title": "ZeSolver – Traitement par lot",
         "browse_button": "Parcourir…",
+        "close_button": "Fermer",
         "input_label": "Dossier d'images",
         "scan_button": "Analyser les fichiers",
         "options_box": "Paramètres solveur",
@@ -382,8 +489,14 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "simple_wizard_yes": "oui",
         "simple_wizard_no": "non",
         "simple_clean_wcs_label": "Nettoyer WCS avant run (FITS, via zewcscleaner)",
+        "move_unresolved_files_label": "Ranger les images non résolues dans unresolved_by_zesolver",
+        "move_unresolved_files_help": "Après un batch terminé normalement, seules les non-résolutions scientifiques terminales seront déplacées. Les fichiers annulés ou en erreur technique resteront en place.",
         "simple_clean_failed": "Nettoyage WCS impossible: {error}",
         "simple_clean_done": "Nettoyage WCS: {files} fichier(s) modifié(s), {cards} carte(s) supprimée(s).",
+        "simple_clean_started": "Nettoyage WCS démarré: {files} fichier(s).",
+        "simple_clean_progress": "Nettoyage WCS: {done} / {total} — {remaining} restant(s)",
+        "simple_clean_cancelled": "Nettoyage WCS annulé: {done} traité(s), {remaining} restant(s).",
+        "simple_clean_summary": "Nettoyage WCS terminé: prévus={planned}, traités={processed}, modifiés={changed}, cartes={cards}, erreurs={errors}, restants={remaining}, durée={duration}s, statut={status}.",
         "simple_wizard_done": "Assistant terminé. Tu peux lancer un run quand tu veux.",
         "files_header": "Fichier",
         "status_header": "Statut",
@@ -391,26 +504,24 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_box": "Journal",
         "run_button": "Résoudre",
         "stop_button": "Stop",
-        "dev_tab": "Développement",
-        "dev_bucket_label": "Limite max. paires/quads",
+        "dev_bucket_label": "Limite paires/quads historique",
         "dev_bucket_hint": "0 = auto (recommandé)",
-        "dev_vote_label": "Percentile votes (quads)",
-        "dev_detect_sigma_label": "Sigma détection (k·σ)",
-        "dev_detect_sigma_hint": "Multiplier l'écart-type du bruit (défaut 3.0)",
-        "dev_detect_area_label": "Surface min. (px)",
-        "dev_detect_area_hint": "Ignorer les blobs sous ce seuil (défaut 5)",
-        "dev_bucket_cap_s_label": "Cap niveau S",
-        "dev_bucket_cap_m_label": "Cap niveau M",
-        "dev_bucket_cap_l_label": "Cap niveau L",
-        "dev_workers_label": "Threads (solveur)",
+        "dev_vote_label": "Percentile votes historique",
+        "dev_detect_sigma_label": "Sigma détection Blind historique",
+        "dev_detect_sigma_hint": "Agit uniquement sur le backend Blind historique (défaut 3.0).",
+        "dev_detect_area_label": "Surface min. Blind historique (px)",
+        "dev_detect_area_hint": "Agit uniquement sur le backend Blind historique (défaut 5).",
+        "dev_bucket_cap_s_label": "Cap historique niveau S",
+        "dev_bucket_cap_m_label": "Cap historique niveau M",
+        "dev_bucket_cap_l_label": "Cap historique niveau L",
         "dev_workers_auto": "Auto (0 — recommandé)",
-        "dev_workers_hint": "Auto adapte les threads selon la machine (CPU/RAM). Le mode manuel peut être plus rapide mais moins stable.",
-        "dev_family_group": "Bases supplémentaires",
+        "dev_workers_hint": "Auto adapte les threads selon la machine (CPU/RAM).",
+        "dev_family_group": "Familles historiques",
         "dev_family_auto": "Auto (toutes les bases disponibles)",
-        "dev_family_hint": "Décoche Auto pour choisir quelles bases utiliser quand le solveur est en mode Auto.",
+        "dev_family_hint": "Décoche Auto pour choisir quelles familles legacy utiliser quand le solveur reste en mode Auto.",
         "dev_family_missing": "Aucune base détectée (index absent).",
         "dev_family_none_error": "Sélectionne au moins une base quand Auto est désactivé.",
-        "dev_hash_group": "Reconstruction des hashes",
+        "dev_hash_group": "Maintenance des index historiques",
         "dev_hash_button": "Recréer hash {level}",
         "dev_hash_value_hint": "Nombre max de quads par tuile utilisé pendant la reconstruction.",
         "dev_hash_started": "Recréation hash {level} démarrée.",
@@ -516,6 +627,9 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_detect_label": "Dispositif détection (GPU/CPU)",
         "settings_perf_detect_auto_option": "Auto (GPU si disponible, sinon CPU)",
         "settings_perf_detect_cpu_option": "CPU",
+        "settings_perf_gpu_diag_btn": "Diagnostic acceleration GPU",
+        "settings_perf_gpu_diag_ready": "GPU disponible pour ZeNear: {reason}",
+        "settings_perf_gpu_diag_cpu": "CPU selectionne: {reason}",
         "settings_perf_io_label": "Concurrence I/O (Auto=0)",
         "settings_perf_near_warm_label": "Near rapide (séquence)",
         # Fast solver (near) tab
@@ -545,6 +659,51 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
     },
         "en": {
         "language_menu": "Language",
+        "advanced_tools_menu": "Advanced tools",
+        "historical_index_maintenance_action": "Historical index maintenance",
+        "historical_index_maintenance_title": "Historical index maintenance",
+        "historical_index_maintenance_warning": "This window rebuilds historical artifacts from the legacy database/index paths. It is not part of a normal solve run, can be long-running, and modifies index files on disk.",
+        "library_manager_action": "ZeSolver Library Manager…",
+        "library_manager_title": "ZeSolver Library Manager",
+        "library_manager_open": "Manage libraries…",
+        "library_manager_install_title": "Install a ready-to-use library",
+        "library_manager_install_desc": "Open a prepared ZeSolver package, verify it, then install it automatically.",
+        "library_manager_create_title": "Create from an existing ASTAP database",
+        "library_manager_create_desc": "Detect available databases and prepare ZeNear and ZeBlind 4D automatically.",
+        "library_manager_repair_title": "Verify or repair a library",
+        "library_manager_repair_desc": "Analyze an existing library and rebuild only missing or invalid elements.",
+        "library_manager_package_label": "ZeSolver library package",
+        "library_manager_destination_label": "Destination",
+        "library_manager_source_label": "Folder containing ASTAP databases",
+        "library_manager_existing_label": "ZeSolver library",
+        "library_manager_install_button": "Install",
+        "library_manager_create_button": "Create library",
+        "library_manager_analyze_button": "Analyze",
+        "library_manager_repair_button": "Repair missing elements",
+        "library_manager_cancel_button": "Cancel",
+        "library_manager_back_button": "Back",
+        "library_manager_reference_policy": "Reference existing ASTAP databases — recommended",
+        "library_manager_copy_policy": "Copy databases into the ZeSolver library",
+        "library_manager_standard_mode": "Standard — recommended",
+        "library_manager_custom_mode": "Custom",
+        "library_manager_advanced_toggle": "Show advanced settings",
+        "library_manager_detected_bases": "Detected databases",
+        "library_manager_log": "Log",
+        "library_manager_stage": "Current step",
+        "library_manager_elapsed": "Elapsed time",
+        "library_manager_progress": "Global progress",
+        "library_manager_no_worker_on_open": "No operation running.",
+        "library_manager_success": "Library ready: {path}",
+        "library_manager_failed": "Operation failed: {error}",
+        "library_manager_cancelled": "Build cancelled",
+        "library_manager_confirm_cancel_title": "Cancel operation?",
+        "library_manager_confirm_cancel_body": "A write is in progress. Cancelling now will stop the worker cleanly and the staging area will not be presented as valid.",
+        "library_manager_credits": "Credits: ASTAP by Han Kleijn; Astrometry.net by its authors. Preserve licence notices when redistributing.",
+        "library_manager_disk_required": "Required disk space",
+        "library_manager_partial_coverage": "Partial Blind 4D coverage",
+        "library_manager_ready": "Library ready",
+        "library_manager_repair_plan": "Planned actions",
+        "library_manager_no_families": "No supported ASTAP family detected. Choose a root containing at least one installed ASTAP database.",
         "language_action_fr": "French",
         "language_action_en": "English",
         "log_menu": "Log Level",
@@ -552,11 +711,16 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_level_debug": "Debug",
         "log_level_warning": "Warning",
         "interface_menu": "Interface",
+        "appearance_menu": "Appearance",
+        "appearance_system": "System",
+        "appearance_light": "Light",
+        "appearance_dark": "Dark",
         "interface_mode_expert": "Expert",
         "interface_mode_easy": "Easy",
         "interface_mode_wizard": "Wizard",
         "window_title": "ZeSolver – Batch Solver",
         "browse_button": "Browse…",
+        "close_button": "Close",
         "input_label": "Image folder",
         "scan_button": "Scan files",
         "options_box": "Solver settings",
@@ -589,8 +753,14 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "simple_wizard_yes": "yes",
         "simple_wizard_no": "no",
         "simple_clean_wcs_label": "Clean WCS before run (FITS, via zewcscleaner)",
+        "move_unresolved_files_label": "Move unresolved images to unresolved_by_zesolver",
+        "move_unresolved_files_help": "After a normally completed batch, only terminal scientific non-solves are moved. Cancelled files and technical errors stay in place.",
         "simple_clean_failed": "WCS cleanup failed: {error}",
         "simple_clean_done": "WCS cleanup: {files} file(s) changed, {cards} card(s) removed.",
+        "simple_clean_started": "WCS cleanup started: {files} file(s).",
+        "simple_clean_progress": "WCS cleanup: {done} / {total} — {remaining} remaining",
+        "simple_clean_cancelled": "WCS cleanup cancelled: {done} processed, {remaining} remaining.",
+        "simple_clean_summary": "WCS cleanup completed: planned={planned}, processed={processed}, changed={changed}, cards={cards}, errors={errors}, remaining={remaining}, duration={duration}s, status={status}.",
         "simple_wizard_done": "Wizard completed. You can start a run whenever you want.",
         "files_header": "File",
         "status_header": "Status",
@@ -598,26 +768,24 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "log_box": "Log",
         "run_button": "Solve",
         "stop_button": "Stop",
-        "dev_tab": "Development",
-        "dev_bucket_label": "Max quad pairs per bucket",
+        "dev_bucket_label": "Historical max quad pairs",
         "dev_bucket_hint": "0 = auto (recommended)",
-        "dev_vote_label": "Vote percentile (quads)",
-        "dev_detect_sigma_label": "Detection sigma (k·σ)",
-        "dev_detect_sigma_hint": "Multiplier applied to noise sigma (default 3.0)",
-        "dev_detect_area_label": "Min blob area (px)",
-        "dev_detect_area_hint": "Reject detections smaller than N pixels (default 5)",
-        "dev_bucket_cap_s_label": "Bucket cap (S)",
-        "dev_bucket_cap_m_label": "Bucket cap (M)",
-        "dev_bucket_cap_l_label": "Bucket cap (L)",
-        "dev_workers_label": "Worker threads",
+        "dev_vote_label": "Historical vote percentile",
+        "dev_detect_sigma_label": "Historical Blind detection sigma",
+        "dev_detect_sigma_hint": "Only affects the historical Blind backend (default 3.0).",
+        "dev_detect_area_label": "Historical Blind min area (px)",
+        "dev_detect_area_hint": "Only affects the historical Blind backend (default 5).",
+        "dev_bucket_cap_s_label": "Historical bucket cap S",
+        "dev_bucket_cap_m_label": "Historical bucket cap M",
+        "dev_bucket_cap_l_label": "Historical bucket cap L",
         "dev_workers_auto": "Auto (0 — recommended)",
-        "dev_workers_hint": "Auto adapts worker threads to the machine (CPU/RAM). Manual mode can be faster but less stable.",
-        "dev_family_group": "Additional catalogs",
+        "dev_workers_hint": "Auto adapts worker threads to the machine (CPU/RAM).",
+        "dev_family_group": "Historical families",
         "dev_family_auto": "Auto (use every available family)",
-        "dev_family_hint": "Uncheck Auto to pick which catalog families are used when the solver stays on Auto.",
+        "dev_family_hint": "Uncheck Auto to pick which legacy catalog families are used when the solver stays on Auto.",
         "dev_family_missing": "No catalog families detected (index missing).",
         "dev_family_none_error": "Select at least one catalog family when Auto is disabled.",
-        "dev_hash_group": "Hash tables",
+        "dev_hash_group": "Historical index maintenance",
         "dev_hash_button": "Rebuild hash {level}",
         "dev_hash_value_hint": "Maximum quads per tile used while rebuilding.",
         "dev_hash_started": "Hash rebuild {level} started.",
@@ -723,6 +891,9 @@ GUI_TRANSLATIONS: dict[str, dict[str, str]] = {
         "settings_perf_detect_label": "Star detection device",
         "settings_perf_detect_auto_option": "Auto (GPU if available, else CPU)",
         "settings_perf_detect_cpu_option": "CPU",
+        "settings_perf_gpu_diag_btn": "GPU acceleration diagnostic",
+        "settings_perf_gpu_diag_ready": "GPU available for ZeNear: {reason}",
+        "settings_perf_gpu_diag_cpu": "CPU selected: {reason}",
         "settings_perf_io_label": "I/O concurrency (Auto=0)",
         "settings_perf_near_warm_label": "Fast near (sequential warm-start)",
         # Fast solver (near) tab
@@ -894,6 +1065,55 @@ for _lang, _mapping in _GUI_ZEBLIND_4D_I18N.items():
 
 _GUI_CATALOG_LIBRARY_I18N = {
     "fr": {
+        "database_tab": "Bibliothèque ZeSolver",
+        "database_tab_title": "Bibliothèque ZeSolver",
+        "official_library_tab_heading": "Bibliothèque ZeSolver D50",
+        "official_library_current_group": "Bibliothèque actuelle",
+        "official_library_distribution_group": "Distribution officielle",
+        "official_library_advanced_group": "Options avancées",
+        "official_library_none": "Aucune bibliothèque ZeSolver installée\n\nLa bibliothèque recommandée fournit :\n✓ ZeNear\n✓ ZeBlind\n✓ couverture ciel complet",
+        "official_library_location": "Emplacement :\n{path}",
+        "official_library_verify": "Vérifier",
+        "official_library_repair": "Réparer",
+        "official_library_open_folder": "Ouvrir le dossier",
+        "official_library_check_release": "Rechercher",
+        "official_library_install_recommended": "Installer la bibliothèque recommandée",
+        "official_library_cancel": "Annuler",
+        "official_library_show_log": "Journal détaillé",
+        "official_library_distribution_unknown": "Version disponible : recherche non effectuée.",
+        "official_library_checking": "Recherche de la distribution officielle…",
+        "official_library_available": "Version disponible : {version}\nTéléchargement : {size}\nEspace requis : {installed}",
+        "official_library_install_parent_label": "Parent d'installation",
+        "official_library_install_destination_label": "Emplacement d'installation",
+        "official_library_change_location": "Modifier…",
+        "official_library_choose_parent_title": "Choisir le dossier parent des bibliothèques ZeSolver",
+        "official_library_storage_waiting": "Recherche de la distribution nécessaire pour calculer l'espace disque.",
+        "official_library_download_remaining": "Téléchargement restant : {size}",
+        "official_library_installed_size": "Taille installée : {size}",
+        "official_library_temp_peak": "Espace temporaire maximal estimé : {size}",
+        "official_library_volume_cache": "Cache",
+        "official_library_volume_library": "Bibliothèque",
+        "official_library_volume_combined": "Cache + bibliothèque",
+        "official_library_volume_line": "{role} — volume {volume} : {required} requis, {available} disponibles — {state}",
+        "official_library_space_ok": "OK",
+        "official_library_space_insufficient": "espace insuffisant",
+        "official_library_space_blocked": "Espace disque insuffisant pour lancer l'installation.",
+        "official_library_cache_path": "Cache :\n{path}",
+        "official_library_open_cache": "Ouvrir le cache",
+        "official_library_clear_cache": "Vider cette version",
+        "official_library_cache_busy": "Impossible de vider le cache pendant une opération.",
+        "official_library_cache_empty": "Aucun fichier validé de cette version à supprimer dans le cache.",
+        "official_library_clear_cache_title": "Vider le cache de cette version",
+        "official_library_clear_cache_confirm": "Supprimer les fichiers téléchargés validés de cette version ?\nEspace récupérable : {size}",
+        "official_library_cache_cleared": "Cache nettoyé : {size} libérés.",
+        "official_library_cache_clear_failed": "Nettoyage du cache impossible : {error}",
+        "official_library_destination_error_title": "Destination invalide",
+        "official_library_destination_invalid": "Destination invalide : {error}",
+        "official_library_installed_detail": "Emplacement :\n{path}\n\nFichiers téléchargés conservés : {cache}",
+        "official_library_network_unavailable": "Réseau indisponible ou Release inaccessible : {error}",
+        "official_library_installed": "Bibliothèque officielle installée et activée.",
+        "official_library_cancelled": "Installation annulée. Les téléchargements partiels sont conservés pour reprise.",
+        "official_library_failed": "Installation échouée : {error}",
         "settings_catalog_library_label": "Bibliothèque ZeSolver",
         "settings_catalog_library_browse": "Parcourir…",
         "settings_catalog_library_validate": "Vérifier",
@@ -921,13 +1141,19 @@ _GUI_CATALOG_LIBRARY_I18N = {
         "simple_wizard_invalid_library": "La bibliothèque sélectionnée est invalide. Vérifiez-la ou choisissez une autre racine.",
         "simple_wizard_legacy_compat": "Configuration historique valide utilisée en compatibilité.",
         "catalog_compat_group_title": "Compatibilité historique et diagnostic",
-        "catalog_compat_warning": "Ces réglages servent au rollback, au diagnostic et aux anciennes installations. Ils ne sont pas nécessaires lorsque la Bibliothèque ZeSolver est valide.",
+        "catalog_compat_warning": "Ces paramètres concernent uniquement le backend historique et les anciens index S/M/L. Ils ne modifient pas la chaîne produit ZeBlind 4D actuelle.",
+        "legacy_blind_group_title": "Paramètres Blind historique S/M/L",
+        "legacy_blind_scope_warning": "Ces paramètres n'affectent pas ZeBlind 4D.",
         "catalog_compat_tools_title": "Outils avancés et maintenance des catalogues",
         "catalog_compat_tools_warning": "Ces actions peuvent construire ou vérifier des artefacts historiques. Elles ne sont pas utilisées par le parcours normal Bibliothèque ZeSolver.",
         "settings_legacy_astap_label": "Base ASTAP historique",
         "settings_legacy_astap_tooltip": "Dossier contenant des fichiers *.1476 ou *.290.",
         "settings_legacy_index_label": "Index Near historique",
         "settings_legacy_index_tooltip": "Dossier contenant manifest.json et les artefacts Near historiques.",
+        "settings_blind4d_source_label": "Source des index Blind 4D",
+        "settings_blind4d_source_auto": "Auto — bibliothèque active",
+        "settings_blind4d_source_external": "Manifeste externe",
+        "settings_blind4d_source_help": "Le mode Auto utilise la bibliothèque ZeSolver active. Le manifeste externe est réservé au diagnostic et aux configurations avancées.",
         "settings_blind4d_external_label": "Manifeste Blind 4D externe",
         "settings_blind4d_external_tooltip": "Fichier JSON strict utilisé uniquement en rollback external-manifest.",
         "settings_near_mode_label": "Near",
@@ -963,6 +1189,55 @@ _GUI_CATALOG_LIBRARY_I18N = {
         "catalog_library_status_log": "CatalogLibrary status: {status}",
     },
     "en": {
+        "database_tab": "ZeSolver Library",
+        "database_tab_title": "ZeSolver Library",
+        "official_library_tab_heading": "ZeSolver D50 Library",
+        "official_library_current_group": "Current library",
+        "official_library_distribution_group": "Official distribution",
+        "official_library_advanced_group": "Advanced options",
+        "official_library_none": "No ZeSolver library installed\n\nThe recommended library provides:\n✓ ZeNear\n✓ ZeBlind\n✓ full-sky coverage",
+        "official_library_location": "Location:\n{path}",
+        "official_library_verify": "Verify",
+        "official_library_repair": "Repair",
+        "official_library_open_folder": "Open folder",
+        "official_library_check_release": "Check",
+        "official_library_install_recommended": "Install recommended library",
+        "official_library_cancel": "Cancel",
+        "official_library_show_log": "Detailed log",
+        "official_library_distribution_unknown": "Available version: not checked yet.",
+        "official_library_checking": "Searching official distribution…",
+        "official_library_available": "Available version: {version}\nDownload: {size}\nRequired space: {installed}",
+        "official_library_install_parent_label": "Install parent",
+        "official_library_install_destination_label": "Install location",
+        "official_library_change_location": "Change…",
+        "official_library_choose_parent_title": "Choose the ZeSolver libraries parent folder",
+        "official_library_storage_waiting": "Check the official distribution to compute disk space.",
+        "official_library_download_remaining": "Download remaining: {size}",
+        "official_library_installed_size": "Installed size: {size}",
+        "official_library_temp_peak": "Estimated maximum temporary space: {size}",
+        "official_library_volume_cache": "Cache",
+        "official_library_volume_library": "Library",
+        "official_library_volume_combined": "Cache + library",
+        "official_library_volume_line": "{role} — volume {volume}: {required} required, {available} available — {state}",
+        "official_library_space_ok": "OK",
+        "official_library_space_insufficient": "insufficient space",
+        "official_library_space_blocked": "Disk space is insufficient to start installation.",
+        "official_library_cache_path": "Cache:\n{path}",
+        "official_library_open_cache": "Open cache",
+        "official_library_clear_cache": "Clear this version",
+        "official_library_cache_busy": "Cannot clear the cache while an operation is running.",
+        "official_library_cache_empty": "No verified file for this version is present in the cache.",
+        "official_library_clear_cache_title": "Clear this version cache",
+        "official_library_clear_cache_confirm": "Delete verified downloaded files for this version?\nRecoverable space: {size}",
+        "official_library_cache_cleared": "Cache cleared: {size} freed.",
+        "official_library_cache_clear_failed": "Could not clear cache: {error}",
+        "official_library_destination_error_title": "Invalid destination",
+        "official_library_destination_invalid": "Invalid destination: {error}",
+        "official_library_installed_detail": "Location:\n{path}\n\nDownloaded files kept: {cache}",
+        "official_library_network_unavailable": "Network unavailable or release unreachable: {error}",
+        "official_library_installed": "Official library installed and activated.",
+        "official_library_cancelled": "Installation cancelled. Partial downloads are kept for resume.",
+        "official_library_failed": "Installation failed: {error}",
         "settings_catalog_library_label": "ZeSolver library",
         "settings_catalog_library_browse": "Browse…",
         "settings_catalog_library_validate": "Verify",
@@ -990,13 +1265,19 @@ _GUI_CATALOG_LIBRARY_I18N = {
         "simple_wizard_invalid_library": "The selected library is invalid. Verify it or choose another root.",
         "simple_wizard_legacy_compat": "Valid legacy configuration is being used for compatibility.",
         "catalog_compat_group_title": "Legacy compatibility and diagnostics",
-        "catalog_compat_warning": "These settings are for rollback, diagnostics, and older installations. They are not needed when the ZeSolver library is valid.",
+        "catalog_compat_warning": "These settings only affect the historical backend and legacy S/M/L indexes. They do not modify the current ZeBlind 4D product chain.",
+        "legacy_blind_group_title": "Historical S/M/L Blind settings",
+        "legacy_blind_scope_warning": "These settings do not affect ZeBlind 4D.",
         "catalog_compat_tools_title": "Advanced tools and catalog maintenance",
         "catalog_compat_tools_warning": "These actions can build or verify historical artifacts. They are not used by the normal ZeSolver library path.",
         "settings_legacy_astap_label": "Historical ASTAP source",
         "settings_legacy_astap_tooltip": "Folder containing *.1476 or *.290 files.",
         "settings_legacy_index_label": "Historical Near index",
         "settings_legacy_index_tooltip": "Folder containing manifest.json and historical Near artifacts.",
+        "settings_blind4d_source_label": "Blind 4D index source",
+        "settings_blind4d_source_auto": "Auto — active library",
+        "settings_blind4d_source_external": "External manifest",
+        "settings_blind4d_source_help": "Auto uses the active ZeSolver library. External manifests are reserved for diagnostics and advanced configurations.",
         "settings_blind4d_external_label": "External Blind 4D manifest",
         "settings_blind4d_external_tooltip": "Strict JSON file used only for explicit external-manifest rollback.",
         "settings_near_mode_label": "Near",
@@ -1038,161 +1319,47 @@ for _lang, _mapping in _GUI_CATALOG_LIBRARY_I18N.items():
         if _k not in base:
             base[_k] = _v
 
-_GUI_BENCHMARK_I18N = {
+_GUI_S6B3_I18N = {
     "fr": {
-        "benchmark_tab": "Benchmark",
-        "benchmark_sources_group": "Sources d'entrée",
-        "benchmark_inputs_hint": "Un chemin, motif glob ou fichier @liste par ligne.",
-        "benchmark_inputs_placeholder": "D:\\captures\\*.fit\n@liste.txt\nC:\\session",
-        "benchmark_add_file_btn": "Ajouter fichiers…",
-        "benchmark_add_dir_btn": "Ajouter dossier…",
-        "benchmark_add_list_btn": "Ajouter fichier liste…",
-        "benchmark_browse_file_btn": "Parcourir…",
-        "benchmark_save_file_btn": "Enregistrer…",
-        "benchmark_index_label": "Index ZeBlind",
-        "benchmark_grid_label": "Fichier de grille (JSON)",
-        "benchmark_output_json_label": "Rapport JSON",
-        "benchmark_output_csv_label": "Rapport CSV",
-        "benchmark_options_group": "Options générales",
-        "benchmark_limit_label": "Limite d'entrées",
-        "benchmark_log_level_label": "Niveau de log",
-        "benchmark_allow_write_label": "Écrire le WCS dans les fichiers d'origine",
-        "benchmark_continue_label": "Essayer toutes les variantes même après un succès",
-        "benchmark_tile_cache_label": "Cache tuiles (0 = auto)",
-        "benchmark_sip_label": "Ordre SIP",
-        "benchmark_parity_label": "Tester l'inversion de parité",
-        "benchmark_full_mode_label": "Mode complet (désactive Fast)",
-        "benchmark_base_group": "Paramètres SolveConfig",
-        "benchmark_max_candidates_label": "Candidats max",
-        "benchmark_max_stars_label": "Étoiles image max",
-        "benchmark_max_quads_label": "Quads max",
-        "benchmark_detect_sigma_label": "Detection k-sigma",
-        "benchmark_detect_area_label": "Surface mini détectée",
-        "benchmark_bucket_cap_s_label": "Limite seau S",
-        "benchmark_bucket_cap_m_label": "Limite seau M",
-        "benchmark_bucket_cap_l_label": "Limite seau L",
-        "benchmark_bucket_override_label": "Limite globale seaux",
-        "benchmark_vote_label": "Percentile de vote",
-        "benchmark_downsample_label": "Downsample",
-        "benchmark_quality_rms_label": "Qualité RMS (px)",
-        "benchmark_quality_inliers_label": "Qualité inliers",
-        "benchmark_pixel_tol_label": "Tolérance pixel",
-        "benchmark_hints_group": "Indices (optionnel)",
-        "benchmark_ra_label": "Indice RA (°)",
-        "benchmark_dec_label": "Indice Dec (°)",
-        "benchmark_radius_label": "Indice rayon (°)",
-        "benchmark_focal_label": "Indice focale (mm)",
-        "benchmark_pixel_label": "Indice taille pixel (µm)",
-        "benchmark_scale_label": "Indice résolution (\"/px)",
-        "benchmark_scale_min_label": "Résolution mini",
-        "benchmark_scale_max_label": "Résolution maxi",
-        "benchmark_hint_placeholder": "Auto",
-        "benchmark_log_placeholder": "Les journaux du benchmark s'affichent ici.",
-        "benchmark_run_button": "Lancer le benchmark",
-        "benchmark_stop_button": "Stop",
-        "benchmark_status_idle": "En attente",
-        "benchmark_status_starting": "Initialisation du benchmark…",
-        "benchmark_status_running": "{done}/{total} — {name}",
-        "benchmark_status_done": "Terminé : {summary}",
-        "benchmark_status_cancelled": "Benchmark interrompu",
-        "benchmark_status_failed": "Échec : {error}",
-        "benchmark_log_done": "Benchmark terminé : {summary}",
-        "benchmark_log_cancelled": "Benchmark interrompu par l'utilisateur",
-        "benchmark_log_failed": "Erreur benchmark : {error}",
-        "benchmark_dialog_open_file": "Choisir un fichier",
-        "benchmark_dialog_save_file": "Enregistrer sous",
-        "benchmark_dialog_filter_all": "Tous les fichiers (*)",
-        "benchmark_dialog_filter_json": "Fichiers {ext} (*.{ext_lower})",
-        "benchmark_dialog_filter_csv": "Fichiers {ext} (*.{ext_lower})",
-        "benchmark_dialog_add_files": "Sélectionner des fichiers FITS",
-        "benchmark_dialog_add_directory": "Sélectionner un dossier",
-        "benchmark_dialog_add_list": "Sélectionner un fichier liste",
-        "benchmark_error_inputs": "Ajoutez au moins une source (fichier, dossier, glob ou fichier @liste).",
-        "benchmark_error_index": "Sélectionnez un dossier d'index.",
-        "benchmark_error_index_missing": "Dossier d'index introuvable : {path}",
-        "benchmark_error_grid_missing": "Fichier de grille introuvable : {path}",
-        "benchmark_error_number": "Valeur invalide pour {field}.",
+        "easy_astap_label": "Base ASTAP — ZeNear uniquement",
+        "easy_astap_help": "Facultative lorsqu’une Bibliothèque ZeSolver complète est active. En l’absence de bibliothèque, elle permet d’utiliser ZeNear uniquement.",
+        "easy_astap_verify": "Vérifier",
+        "easy_astap_clear": "Effacer",
+        "easy_astap_valid": "Base ASTAP valide — familles détectées : {families}",
+        "easy_astap_invalid": "Base ASTAP invalide — {error}",
+        "easy_astap_not_verified": "Base ASTAP non vérifiée",
+        "easy_astap_unused_library_active": "Base ASTAP autonome mémorisée — non utilisée pour ce run, car la Bibliothèque ZeSolver est active.",
+        "instrument_label": "Instrument / optique",
+        "instrument_auto": "Auto — métadonnées FITS",
+        "instrument_custom": "Personnalisé",
+        "instrument_auto_help": "ZeSolver utilise les informations propres à chaque FITS. Si elles sont insuffisantes, ZeBlind prendra le relais lorsqu’une Bibliothèque ZeSolver complète est active.",
+        "chain_full_local": "Chaîne locale : ZeNear -> ZeBlind 4D\nSource : Bibliothèque ZeSolver active",
+        "chain_near_only_astap": "Chaîne locale : ZeNear uniquement\nSource : base ASTAP autonome",
+        "chain_unavailable": "Aucun catalogue Near utilisable",
+        "simple_wizard_astap_ready": "Base ASTAP valide détectée. L’assistant démarrera en ZeNear uniquement.",
     },
     "en": {
-        "benchmark_tab": "Benchmark",
-        "benchmark_sources_group": "Input sources",
-        "benchmark_inputs_hint": "One path, glob, or @list file per line.",
-        "benchmark_inputs_placeholder": "D:\\captures\\*.fit\n@night1.lst\nC:\\session",
-        "benchmark_add_file_btn": "Add files…",
-        "benchmark_add_dir_btn": "Add folder…",
-        "benchmark_add_list_btn": "Add list file…",
-        "benchmark_browse_file_btn": "Browse…",
-        "benchmark_save_file_btn": "Save as…",
-        "benchmark_index_label": "Index root",
-        "benchmark_grid_label": "Sweep grid (JSON)",
-        "benchmark_output_json_label": "Output JSON",
-        "benchmark_output_csv_label": "Output CSV",
-        "benchmark_options_group": "General options",
-        "benchmark_limit_label": "Input limit",
-        "benchmark_log_level_label": "Log level",
-        "benchmark_allow_write_label": "Write WCS into originals",
-        "benchmark_continue_label": "Try all sweeps even after success",
-        "benchmark_tile_cache_label": "Tile cache size (0 = auto)",
-        "benchmark_sip_label": "SIP order",
-        "benchmark_parity_label": "Allow parity flip",
-        "benchmark_full_mode_label": "Full mode (disable fast heuristics)",
-        "benchmark_base_group": "SolveConfig overrides",
-        "benchmark_max_candidates_label": "Max candidates",
-        "benchmark_max_stars_label": "Max image stars",
-        "benchmark_max_quads_label": "Max quads",
-        "benchmark_detect_sigma_label": "Detect k-sigma",
-        "benchmark_detect_area_label": "Detect min area",
-        "benchmark_bucket_cap_s_label": "Bucket cap S",
-        "benchmark_bucket_cap_m_label": "Bucket cap M",
-        "benchmark_bucket_cap_l_label": "Bucket cap L",
-        "benchmark_bucket_override_label": "Bucket limit override",
-        "benchmark_vote_label": "Vote percentile",
-        "benchmark_downsample_label": "Downsample",
-        "benchmark_quality_rms_label": "Quality RMS (px)",
-        "benchmark_quality_inliers_label": "Quality inliers",
-        "benchmark_pixel_tol_label": "Pixel tolerance",
-        "benchmark_hints_group": "Hints (optional)",
-        "benchmark_ra_label": "RA hint (deg)",
-        "benchmark_dec_label": "Dec hint (deg)",
-        "benchmark_radius_label": "Radius hint (deg)",
-        "benchmark_focal_label": "Focal length (mm)",
-        "benchmark_pixel_label": "Pixel size (µm)",
-        "benchmark_scale_label": "Pixel scale (arcsec/px)",
-        "benchmark_scale_min_label": "Pixel scale min",
-        "benchmark_scale_max_label": "Pixel scale max",
-        "benchmark_hint_placeholder": "Auto",
-        "benchmark_log_placeholder": "Benchmark logs will appear here.",
-        "benchmark_run_button": "Run benchmark",
-        "benchmark_stop_button": "Stop",
-        "benchmark_status_idle": "Idle",
-        "benchmark_status_starting": "Preparing benchmark…",
-        "benchmark_status_running": "{done}/{total} — {name}",
-        "benchmark_status_done": "Done: {summary}",
-        "benchmark_status_cancelled": "Benchmark cancelled",
-        "benchmark_status_failed": "Failed: {error}",
-        "benchmark_log_done": "Benchmark complete: {summary}",
-        "benchmark_log_cancelled": "Benchmark cancelled by user",
-        "benchmark_log_failed": "Benchmark error: {error}",
-        "benchmark_dialog_open_file": "Select file",
-        "benchmark_dialog_save_file": "Save file",
-        "benchmark_dialog_filter_all": "All files (*)",
-        "benchmark_dialog_filter_json": "{ext} files (*.{ext_lower})",
-        "benchmark_dialog_filter_csv": "{ext} files (*.{ext_lower})",
-        "benchmark_dialog_add_files": "Select FITS files",
-        "benchmark_dialog_add_directory": "Select folder",
-        "benchmark_dialog_add_list": "Select list file",
-        "benchmark_error_inputs": "Add at least one input source (file, folder, glob, or @list).",
-        "benchmark_error_index": "Select an index directory.",
-        "benchmark_error_index_missing": "Index directory not found: {path}",
-        "benchmark_error_grid_missing": "Grid file not found: {path}",
-        "benchmark_error_number": "Invalid value for {field}.",
+        "easy_astap_label": "ASTAP database — ZeNear only",
+        "easy_astap_help": "Optional when a complete ZeSolver library is active. Without a library, it enables ZeNear-only solving.",
+        "easy_astap_verify": "Verify",
+        "easy_astap_clear": "Clear",
+        "easy_astap_valid": "ASTAP database valid — detected families: {families}",
+        "easy_astap_invalid": "ASTAP database invalid — {error}",
+        "easy_astap_not_verified": "ASTAP database not verified",
+        "easy_astap_unused_library_active": "Standalone ASTAP database remembered — not used for this run because the ZeSolver library is active.",
+        "instrument_label": "Instrument / optics",
+        "instrument_auto": "Auto — FITS metadata",
+        "instrument_custom": "Custom",
+        "instrument_auto_help": "ZeSolver uses metadata from each FITS file. If it is insufficient, ZeBlind can take over when a complete ZeSolver library is active.",
+        "chain_full_local": "Local chain: ZeNear -> ZeBlind 4D\nSource: active ZeSolver library",
+        "chain_near_only_astap": "Local chain: ZeNear only\nSource: standalone ASTAP database",
+        "chain_unavailable": "No usable Near catalog",
+        "simple_wizard_astap_ready": "Valid ASTAP database detected. The assistant will start in ZeNear-only mode.",
     },
 }
-for _lang, _mapping in _GUI_BENCHMARK_I18N.items():
+for _lang, _mapping in _GUI_S6B3_I18N.items():
     base = GUI_TRANSLATIONS.setdefault(_lang, {})
-    for _k, _v in _mapping.items():
-        if _k not in base:
-            base[_k] = _v
+    base.update(_mapping)
 
 
 def _available_family_specs() -> list[CatalogFamilySpec]:
@@ -1351,6 +1518,9 @@ class SolveConfig:
     near_allow_second_rescue: bool = False
     near_catalog_mode: str = "auto"
     blind4d_catalog_mode: str = "auto"
+    move_unresolved_files: bool = False
+    interface_mode: str = "expert"
+    instrument_mode: str = "auto"
     # Blind solver (Python) tunables (mirrors settings panel). These were
     # previously only used by the settings tester; we surface them here so the
     # batch run uses and logs the same values as the GUI:
@@ -1449,6 +1619,8 @@ class SolveConfig:
 
 
 def resolve_catalog_resources_for_config(config: SolveConfig) -> SolverCatalogResources:
+    near_mode = NearCatalogMode.normalize(getattr(config, "near_catalog_mode", "auto"))
+    blind_mode = Blind4DCatalogMode.normalize(getattr(config, "blind4d_catalog_mode", "auto"))
     return resolve_catalog_resources(
         catalog_library=config.catalog_library_path,
         legacy_db_root=config.db_root,
@@ -1456,27 +1628,43 @@ def resolve_catalog_resources_for_config(config: SolveConfig) -> SolverCatalogRe
         legacy_blind4d_manifest=config.blind_4d_manifest_path,
         legacy_index_root=config.blind_index_path,
         enable_environment_discovery=False,
+        prefer_legacy_near=near_mode is NearCatalogMode.ASTAP_NATIVE,
+        strict_legacy_blind4d_manifest=(
+            blind_mode is Blind4DCatalogMode.EXTERNAL_MANIFEST
+            or bool(getattr(config, "blind_only", False))
+        ),
     )
 
 
 def apply_catalog_resources_to_config(config: SolveConfig) -> tuple[SolveConfig, SolverCatalogResources]:
     resources = resolve_catalog_resources_for_config(config)
     updates: dict[str, object] = {}
+    blind_mode = Blind4DCatalogMode.normalize(getattr(config, "blind4d_catalog_mode", "auto"))
     if resources.source in {"library", "environment"} and resources.near is not None:
         updates["db_root"] = resources.near.root
         updates["families"] = resources.near.families or None
-    if config.blind_backend_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
-        try:
-            blind4d_runtime = resolve_blind4d_runtime(
-                resources,
-                mode=getattr(config, "blind4d_catalog_mode", "auto"),
-                external_manifest_path=config.blind_4d_manifest_path,
+    if (
+        blind_mode is Blind4DCatalogMode.AUTO
+        and resources.blind4d_manifest_path is None
+        and config.blind_4d_manifest_path is not None
+    ):
+        updates["blind_4d_manifest_path"] = None
+        updates["blind_4d_loaded_manifest"] = None
+    if (
+        resources.source == "library"
+        and resources.catalog_library is not None
+        and resources.blind4d_indexes
+        and config.blind_backend_profile == ZEBLIND_4D_EXPERIMENTAL_PROFILE
+    ):
+        view = build_blind4d_manifest_view(resources.catalog_library)
+        if not view.errors:
+            manifest_path = (resources.library_path / "catalog.json") if resources.library_path is not None else None
+            updates["blind_4d_manifest_path"] = manifest_path
+            updates["blind_4d_loaded_manifest"] = load_4d_index_manifest_payload(
+                view.payload,
+                manifest_path=manifest_path,
+                validate_indexes=False,
             )
-        except Blind4DRuntimeError:
-            blind4d_runtime = None
-        if blind4d_runtime is not None and blind4d_runtime.available and blind4d_runtime.loaded_manifest is not None:
-            updates["blind_4d_manifest_path"] = blind4d_runtime.loaded_manifest.manifest_path
-            updates["blind_4d_loaded_manifest"] = blind4d_runtime.loaded_manifest
     resolved = replace(config, **updates) if updates else config
     return resolved, resources
 
@@ -1516,6 +1704,25 @@ class ImageSolveResult:
     duration_s: Optional[float] = None
     catalog_family: Optional[str] = None
     run_info: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    terminal_reason_code: Optional[str] = None
+    moved_to: Optional[Path] = None
+    move_error: Optional[str] = None
+
+    @property
+    def input_path(self) -> Path:
+        return self.path
+
+    @property
+    def output_path(self) -> None:
+        return None
+
+    @property
+    def error(self) -> Optional[str]:
+        return self.message
+
+    @property
+    def wcs_written(self) -> bool:
+        return self.status == "solved"
 
 
 _PROC_NEAR_SOLVER: Optional["ImageSolver"] = None
@@ -1535,6 +1742,9 @@ def _result_to_payload(result: ImageSolveResult) -> dict[str, Any]:
         "duration_s": result.duration_s,
         "catalog_family": result.catalog_family,
         "run_info": list(result.run_info or []),
+        "terminal_reason_code": result.terminal_reason_code,
+        "moved_to": str(result.moved_to) if result.moved_to else None,
+        "move_error": result.move_error,
     }
 
 
@@ -1550,6 +1760,9 @@ def _payload_to_result(payload: Mapping[str, Any]) -> ImageSolveResult:
         duration_s=(float(payload["duration_s"]) if payload.get("duration_s") is not None else None),
         catalog_family=(str(payload["catalog_family"]) if payload.get("catalog_family") is not None else None),
         run_info=list(payload.get("run_info") or []),
+        terminal_reason_code=(str(payload["terminal_reason_code"]) if payload.get("terminal_reason_code") is not None else None),
+        moved_to=(Path(str(payload["moved_to"])) if payload.get("moved_to") else None),
+        move_error=(str(payload["move_error"]) if payload.get("move_error") is not None else None),
     )
 
 
@@ -1565,9 +1778,12 @@ def _near_worker_init(config: SolveConfig, cancel_token: Optional[ProcessCancell
         if backend in {"auto", "cuda"}:
             ndev, _names, _err = _cuda_runtime_summary()
             if ndev <= 0:
-                # GPU is optional: enforce CPU fallback at worker level when CUDA is unavailable.
-                cfg = replace(config, near_detect_backend="cpu")
-                _PROC_NEAR_WORKER_BACKEND = "cpu"
+                # GPU is optional. Auto may be resolved to CPU here, but an
+                # explicit CUDA request must reach the detector so telemetry can
+                # report requested=cuda, selected=cuda, used=cpu fallback.
+                if backend == "auto":
+                    cfg = replace(config, near_detect_backend="cpu")
+                    _PROC_NEAR_WORKER_BACKEND = "cpu"
             elif backend == "auto":
                 # In hybrid mode, prefer explicit CUDA when available.
                 cfg = replace(config, near_detect_backend="cuda")
@@ -1835,6 +2051,8 @@ def _gpu_memory_snapshot(device: Optional[int], *, allow_cupy: bool = False) -> 
 def _iter_image_files(input_dir: Path, extensions: Sequence[str]) -> Iterator[Path]:
     allowed = {ext.lower() for ext in extensions}
     for path in sorted(input_dir.rglob("*")):
+        if is_inside_unresolved_directory(path):
+            continue
         if path.is_file() and path.suffix.lower() in allowed:
             yield path
 
@@ -2318,10 +2536,16 @@ class ImageSolver:
                 warnings=("blind4d_profile_not_selected",),
             )
         try:
+            mode = getattr(self.config, "blind4d_catalog_mode", "auto")
+            requested = Blind4DCatalogMode.normalize(mode)
             return resolve_blind4d_runtime(
                 self.catalog_resources,
-                mode=getattr(self.config, "blind4d_catalog_mode", "auto"),
-                external_manifest_path=self.config.blind_4d_manifest_path,
+                mode=mode,
+                external_manifest_path=(
+                    self.config.blind_4d_manifest_path
+                    if requested is Blind4DCatalogMode.EXTERNAL_MANIFEST
+                    else self.catalog_resources.blind4d_manifest_path
+                ),
             )
         except Blind4DRuntimeError as exc:
             try:
@@ -4406,7 +4630,8 @@ class BatchSolver:
             )
             return
         # Propagate cancellation to the solver for cooperative early exit
-        process_cancel_controller = ProcessCancellationController()
+        process_context = _process_pool_context()
+        process_cancel_controller = ProcessCancellationController(context=process_context)
         thread_cancel_token = ThreadCancellationToken(cancel_event) if cancel_event is not None else None
         run_cancel_token = (
             CompositeCancellationToken((thread_cancel_token, process_cancel_controller.token))
@@ -4469,7 +4694,11 @@ class BatchSolver:
             )
 
         def _queue_result(result: ImageSolveResult) -> None:
+            if result.path in emitted_paths:
+                logging.warning("Duplicate terminal result ignored for %s", result.path)
+                return
             emitted_paths.add(result.path)
+            unresolved.pop(result.path, None)
             yield_queue.append(result)
             if on_result is not None:
                 try:
@@ -4488,7 +4717,12 @@ class BatchSolver:
             return cancelled_now
 
         def _cancelled_result(path: Path) -> ImageSolveResult:
-            return ImageSolveResult(path=path, status="cancelled", message="cancelled")
+            return ImageSolveResult(
+                path=path,
+                status="cancelled",
+                message="cancelled",
+                terminal_reason_code=TerminalReasonCode.CANCELLED.value,
+            )
 
         def _run_phase(
             phase_paths: Sequence[Path],
@@ -4564,12 +4798,18 @@ class BatchSolver:
                 _queue_result(result)
                 return
             if result.status == "solved" or (result.status == "skipped" and "WCS already present" in (result.message or "")):
+                unresolved.pop(path, None)
                 _queue_result(result)
                 return
             if (self.config.blind_enabled and self.config.overwrite) or astrometry_fallback_ready:
+                if path in emitted_paths:
+                    return
                 unresolved[path] = result
             else:
-                _queue_result(result)
+                if path in emitted_paths:
+                    return
+                result.terminal_reason_code = TerminalReasonCode.NEAR_UNRESOLVED_BLIND_UNAVAILABLE.value
+                unresolved[path] = result
 
         def _run_phase_near_process(
             phase_paths: Sequence[Path],
@@ -4581,6 +4821,7 @@ class BatchSolver:
             cancelled = False
             pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=max(1, int(phase_workers)),
+                mp_context=process_context,
                 initializer=_near_worker_init,
                 initargs=(self.config, process_cancel_controller.token),
             )
@@ -4675,11 +4916,13 @@ class BatchSolver:
             cancelled = False
             cpu_pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=cpu_w,
+                mp_context=process_context,
                 initializer=_near_worker_init_with_backend,
                 initargs=(self.config, "cpu", process_cancel_controller.token),
             )
             gpu_pool = concurrent.futures.ProcessPoolExecutor(
                 max_workers=gpu_w,
+                mp_context=process_context,
                 initializer=_near_worker_init_with_backend,
                 initargs=(self.config, "cuda", process_cancel_controller.token),
             )
@@ -4801,6 +5044,14 @@ class BatchSolver:
                 mode = "process" if fits_only and workers_base > 1 else "thread"
             if env_mode == "auto" and fits_only and workers_base > 2 and cuda_devices > 0:
                 mode = "hybrid"
+            if env_mode == "auto" and fits_only and cuda_devices > 0 and requested_detect_backend in {"cuda", "auto"}:
+                # CUDA contexts and forked process pools are a bad mix on the
+                # Linux qualification host: workers can hit
+                # cudaErrorInitializationError and silently fall back.  Keep
+                # GPU detection in the thread scheduler so the announced backend
+                # can be the backend actually used.
+                mode = "thread"
+                source = "gpu-detect-thread"
 
             eff = workers_base
             cur_cpu = int(os.cpu_count() or 1)
@@ -4881,6 +5132,9 @@ class BatchSolver:
             if mode == "process" and sys.platform == "darwin":
                 # Keep macOS spawn overhead reasonable in default auto mode.
                 eff = min(eff, 6)
+            if env_mode == "auto" and fits_only and cuda_devices > 0 and requested_detect_backend in {"cuda", "auto"}:
+                mode = "thread"
+                source = "gpu-detect-thread"
             eff = min(int(eff), int(max_workers_cap))
             eff = max(1, int(eff))
             if eff <= 1:
@@ -5063,8 +5317,12 @@ class BatchSolver:
                             message=msg,
                             metadata_source="astrometry",
                         )
-                    final_unresolved.pop(path, None)
-                    _queue_result(result)
+                    if job.success:
+                        final_unresolved.pop(path, None)
+                        _queue_result(result)
+                    else:
+                        result.terminal_reason_code = TerminalReasonCode.ALL_ENABLED_SOLVERS_EXHAUSTED.value
+                        final_unresolved[path] = result
                 for item in yield_queue:
                     yield item
                 yield_queue.clear()
@@ -5085,6 +5343,44 @@ class BatchSolver:
         if final_unresolved:
             for p in self.files:
                 if p in final_unresolved:
+                    if not final_unresolved[p].terminal_reason_code:
+                        final_unresolved[p].terminal_reason_code = TerminalReasonCode.ALL_ENABLED_SOLVERS_EXHAUSTED.value
+            move_summary = move_unresolved_results(
+                input_root=self.config.input_dir,
+                results=tuple(final_unresolved.values()),
+                terminal_status="completed",
+                requested=bool(getattr(self.config, "move_unresolved_files", False)),
+                log_warning=logging.warning,
+            )
+            if bool(getattr(self.config, "move_unresolved_files", False)):
+                logging.info(
+                    "Rangement des non-résolus : éligibles=%d déplacés=%d erreurs=%d destination=%s",
+                    move_summary.eligible,
+                    move_summary.moved,
+                    move_summary.move_failed,
+                    move_summary.directory,
+                )
+            elif move_summary.eligible:
+                logging.info(
+                    "%d image(s) restent non résolues. Rangement automatique désactivé.",
+                    move_summary.eligible,
+                )
+            moved_by_rel = {
+                record.original_relative_path: record
+                for record in move_summary.records
+                if record.move_status == "moved" and record.destination_relative_path
+            }
+            for p in self.files:
+                if p in final_unresolved:
+                    result = final_unresolved[p]
+                    try:
+                        rel = p.resolve().relative_to(self.config.input_dir.resolve()).as_posix()
+                    except Exception:
+                        rel = p.name
+                    record = moved_by_rel.get(rel)
+                    if record is not None and record.destination_relative_path:
+                        result.moved_to = self.config.input_dir / record.destination_relative_path
+                        result.message = f"Non résolu — déplacé vers {record.destination_relative_path}"
                     _queue_result(final_unresolved[p])
             for item in yield_queue:
                 yield item
@@ -5106,6 +5402,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--overwrite", action="store_true", help="Overwrite existing WCS solutions")
     parser.add_argument("--formats", help="Comma-separated list of file extensions to consider")
     parser.add_argument("--max-files", type=int, help="Limit the number of files to process")
+    parser.add_argument(
+        "--move-unresolved",
+        dest="move_unresolved_files",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Move terminal scientifically unresolved files to unresolved_by_zesolver after a completed batch",
+    )
     parser.add_argument("--mag-limit", type=float, help="Optional catalogue magnitude limit")
     parser.add_argument("--cache-size", type=int, default=12, help="Catalog tile cache size")
     parser.add_argument("--ra-hint", type=float, help="RA hint in degrees for the blind solver")
@@ -5356,6 +5659,11 @@ def _should_launch_gui(args: argparse.Namespace) -> bool:
     return not (args.db_root and args.input_dir)
 
 
+def _save_theme_preference(settings: PersistentSettings, mode: str) -> None:
+    settings.ui_theme = normalize_theme_mode(mode)
+    save_persistent_settings(settings)
+
+
 def _normalize_family_args(values: Optional[Sequence[str]]) -> Optional[List[str]]:
     if not values:
         return None
@@ -5406,6 +5714,11 @@ def run_cli(args: argparse.Namespace) -> int:
                 legacy_blind4d_manifest=args.blind_4d_manifest,
                 legacy_index_root=args.blind_index,
                 enable_environment_discovery=False,
+                prefer_legacy_near=str(getattr(args, "near_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-") == "astap-native",
+                strict_legacy_blind4d_manifest=(
+                    str(getattr(args, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-") == "external-manifest"
+                    or bool(getattr(args, "blind_only", False))
+                ),
             )
         except CatalogResourceResolutionError as exc:
             raise SystemExit(f"Catalog library error: {exc}") from exc
@@ -5470,6 +5783,7 @@ def run_cli(args: argparse.Namespace) -> int:
         blind_4d_manifest_path=args.blind_4d_manifest,
         blind_4d_loaded_manifest=loaded_4d_manifest,
         blind4d_catalog_mode=str(getattr(args, "blind4d_catalog_mode", "auto") or "auto"),
+        move_unresolved_files=bool(getattr(args, "move_unresolved_files", False)),
         catalog_library_path=args.catalog_library,
         near_max_tile_candidates=max(1, int(args.near_max_tile_candidates or 48)),
         near_tile_cache_size=max(1, int(args.near_tile_cache_size or 128)),
@@ -5551,6 +5865,7 @@ def launch_gui(args: argparse.Namespace) -> int:
         from PySide6 import QtCore, QtGui, QtWidgets
     except ImportError as exc:  # pragma: no cover - optional dependency
         raise SystemExit("PySide6>=6 is required for the GUI. Install it and retry.") from exc
+    from zesolver.gui_wcs_cleanup import WcsCleanupConfig, WcsCleanupRunner
     prefill_families = _normalize_family_args(args.family)
     persistent_settings = load_persistent_settings()
     stored_level = str(getattr(persistent_settings, "log_level", args.log_level) or "INFO").upper()
@@ -5578,6 +5893,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._cancel_event = threading.Event()
             self._translate = translator
             self._controller: Optional[GuiSolveController] = None
+            self._last_summary = None
 
         def request_cancel(self) -> None:
             self.info.emit("STOP_RUNNER_RECEIVED")
@@ -5650,7 +5966,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                     yield from batch.run(cancel_event=cancel_event, on_result=_on_result)
 
                 controller = GuiSolveController(
-                    pipeline_runner_factory=lambda: PipelineGuiRunner(result_callback=self.progress.emit),
+                    pipeline_runner_factory=lambda: PipelineGuiRunner(
+                        result_callback=self.progress.emit,
+                        progress_callback=lambda progress: self.info.emit(str(getattr(progress, "current_phase", "") or "")),
+                    ),
                     legacy_runner_factory=lambda: LegacyGuiRunner(
                         run_legacy=_legacy_results,
                         result_callback=self.progress.emit,
@@ -5658,7 +5977,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     selection_logger=_selection_log,
                 )
                 self._controller = controller
-                controller.run(gui_request)
+                self._last_summary = controller.run(gui_request)
                 if self._cancel_event.is_set():
                     self.info.emit(self._translate("runner_stop_wait"))
             except GuiEngineSelectionError as exc:
@@ -5997,59 +6316,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                 except Exception:
                     pass
 
-    class BenchmarkRunner(QtCore.QThread):
-        log = QtCore.Signal(str)
-        progress = QtCore.Signal(int, int, str)
-        finished = QtCore.Signal(bool, str)
-
-        def __init__(self, inputs: list[str], args: argparse.Namespace) -> None:
-            super().__init__()
-            self._inputs = list(inputs)
-            self._args = args
-            self._cancel = threading.Event()
-
-        def cancel(self) -> None:
-            self._cancel.set()
-
-        def _emit_progress(self, done: int, total: int, attempt: bench.AttemptResult) -> None:
-            name = Path(attempt.image).name if attempt and attempt.image else ""
-            try:
-                self.progress.emit(done, total, name)
-            except Exception:
-                pass
-
-        def run(self) -> None:
-            try:
-                sweeps = bench.load_sweeps(self._args.grid)
-                images = bench.resolve_inputs(self._inputs, self._args.limit)
-            except Exception as exc:
-                self.finished.emit(False, str(exc))
-                return
-            if not images:
-                self.finished.emit(False, "no inputs matched the provided sources")
-                return
-            base_config = bench.build_base_config(self._args)
-            try:
-                results = bench.run_benchmark(
-                    images,
-                    sweeps,
-                    base_config,
-                    self._args,
-                    log=self.log.emit,
-                    cancel_check=self._cancel.is_set,
-                    progress=self._emit_progress,
-                )
-                bench.write_outputs(results, sweeps, base_config, self._args)
-            except Exception as exc:
-                self.finished.emit(False, str(exc))
-                return
-            if self._cancel.is_set():
-                self.finished.emit(False, "cancelled")
-                return
-            solved_images = {entry.image for entry in results if entry.success}
-            summary = f"{len(results)} attempts, {len(solved_images)} successes"
-            self.finished.emit(True, summary)
-
     class NearRunner(QtCore.QThread):
         log = QtCore.Signal(str)
         finished = QtCore.Signal(bool, str)
@@ -6194,12 +6460,557 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception as exc:
                 self.error.emit(str(exc))
 
+    class CatalogLibraryManagementWorker(QtCore.QThread):
+        progress = QtCore.Signal(object)
+        finished = QtCore.Signal(bool, object, str)
+
+        def __init__(self, operation: str, payload: object) -> None:
+            super().__init__()
+            self.operation = operation
+            self.payload = payload
+            self._cancel_event = threading.Event()
+
+        def request_cancel(self) -> None:
+            self._cancel_event.set()
+
+        def run(self) -> None:
+            service = CatalogLibraryManagementService(
+                progress_callback=self.progress.emit,
+                cancel_callback=self._cancel_event.is_set,
+            )
+            try:
+                if self.operation == "create":
+                    result = service.create_from_astap(self.payload)  # type: ignore[arg-type]
+                elif self.operation == "install":
+                    result = service.install_package(self.payload)  # type: ignore[arg-type]
+                elif self.operation == "repair":
+                    result = service.repair_library(self.payload)  # type: ignore[arg-type]
+                else:
+                    raise CatalogLibraryManagementError(f"UNKNOWN_LIBRARY_OPERATION: {self.operation}")
+                self.finished.emit(True, result, "")
+            except CatalogLibraryManagementCancelled as exc:
+                self.finished.emit(False, None, str(exc))
+            except Exception as exc:
+                self.finished.emit(False, None, str(exc))
+
+    class CatalogDistributionInstallWorker(QtCore.QThread):
+        progress = QtCore.Signal(object)
+        discovered = QtCore.Signal(object, object)
+        finished = QtCore.Signal(bool, object, str)
+
+        def __init__(self, *, destination: Path | None, install_parent: Path | None, settings: PersistentSettings) -> None:
+            super().__init__()
+            self.destination = destination
+            self.install_parent = install_parent
+            self.settings = settings
+            self._cancel_event = threading.Event()
+
+        def request_cancel(self) -> None:
+            self._cancel_event.set()
+
+        def run(self) -> None:  # pragma: no cover - GUI thread
+            service = CatalogDistributionService(
+                progress_callback=self.progress.emit,
+                cancel_callback=self._cancel_event.is_set,
+            )
+            try:
+                release, manifest = service.fetch_latest_distribution()
+                self.discovered.emit(release, manifest)
+                plan = service.build_install_plan(release, manifest, destination=self.destination, parent=self.install_parent)
+                result = service.install_distribution(
+                    plan,
+                    settings=self.settings,
+                    save_settings=save_persistent_settings,
+                )
+                self.finished.emit(True, result, "")
+            except (DistributionCancelled, CatalogLibraryManagementCancelled) as exc:
+                self.finished.emit(False, None, str(exc))
+            except (DistributionError, CatalogLibraryManagementError) as exc:
+                self.finished.emit(False, None, str(exc))
+            except Exception as exc:
+                self.finished.emit(False, None, str(exc))
+
+    class LibraryManagerWindow(QtWidgets.QDialog):
+        librarySelected = QtCore.Signal(str)
+
+        def __init__(self, parent, translator: Callable[..., str]) -> None:
+            super().__init__(parent)
+            self._text = translator
+            self._service_factory = CatalogLibraryManagementService
+            self._worker: CatalogLibraryManagementWorker | None = None
+            self._repair_plan: LibraryRepairPlan | None = None
+            self._started_at: float | None = None
+            self.setModal(False)
+            self.resize(920, 680)
+            self._build_ui()
+            self.apply_language()
+
+        def apply_language(self) -> None:
+            self.setWindowTitle(self._text("library_manager_title"))
+            self.home_install_btn.setText(self._text("library_manager_install_title"))
+            self.home_install_desc.setText(self._text("library_manager_install_desc"))
+            self.home_create_btn.setText(self._text("library_manager_create_title"))
+            self.home_create_desc.setText(self._text("library_manager_create_desc"))
+            self.home_repair_btn.setText(self._text("library_manager_repair_title"))
+            self.home_repair_desc.setText(self._text("library_manager_repair_desc"))
+            self.install_group.setTitle(self._text("library_manager_install_title"))
+            self.create_group.setTitle(self._text("library_manager_create_title"))
+            self.repair_group.setTitle(self._text("library_manager_repair_title"))
+            self.install_package_label.setText(self._text("library_manager_package_label"))
+            self.install_destination_label.setText(self._text("library_manager_destination_label"))
+            self.create_source_label.setText(self._text("library_manager_source_label"))
+            self.create_destination_label.setText(self._text("library_manager_destination_label"))
+            self.repair_library_label.setText(self._text("library_manager_existing_label"))
+            for button in self._browse_buttons:
+                button.setText(self._text("browse_button"))
+            self.install_btn.setText(self._text("library_manager_install_button"))
+            self.create_btn.setText(self._text("library_manager_create_button"))
+            self.analyze_btn.setText(self._text("library_manager_analyze_button"))
+            self.repair_btn.setText(self._text("library_manager_repair_button"))
+            self.cancel_btn.setText(self._text("library_manager_cancel_button"))
+            self.back_install_btn.setText(self._text("library_manager_back_button"))
+            self.back_create_btn.setText(self._text("library_manager_back_button"))
+            self.back_repair_btn.setText(self._text("library_manager_back_button"))
+            self.reference_radio.setText(self._text("library_manager_reference_policy"))
+            self.copy_radio.setText(self._text("library_manager_copy_policy"))
+            self.standard_radio.setText(self._text("library_manager_standard_mode"))
+            self.custom_radio.setText(self._text("library_manager_custom_mode"))
+            self.advanced_toggle.setText(self._text("library_manager_advanced_toggle"))
+            self.detected_group.setTitle(self._text("library_manager_detected_bases"))
+            self.stage_label_title.setText(self._text("library_manager_stage"))
+            self.elapsed_label_title.setText(self._text("library_manager_elapsed"))
+            self.progress_label_title.setText(self._text("library_manager_progress"))
+            self.log_group.setTitle(self._text("library_manager_log"))
+            self.credits_label.setText(self._text("library_manager_credits"))
+            self.close_btn.setText(self._text("close_button"))
+            if self.stage_value.text() == "":
+                self.stage_value.setText(self._text("library_manager_no_worker_on_open"))
+
+        def _build_ui(self) -> None:
+            layout = QtWidgets.QVBoxLayout(self)
+            self.stack = QtWidgets.QStackedWidget()
+            layout.addWidget(self.stack, 1)
+            self._browse_buttons: list[QtWidgets.QPushButton] = []
+
+            self.home_page = QtWidgets.QWidget()
+            home_layout = QtWidgets.QVBoxLayout(self.home_page)
+            self.home_install_btn, self.home_install_desc = self._home_card(home_layout, self._show_install)
+            self.home_create_btn, self.home_create_desc = self._home_card(home_layout, self._show_create)
+            self.home_repair_btn, self.home_repair_desc = self._home_card(home_layout, self._show_repair)
+            home_layout.addStretch(1)
+            self.stack.addWidget(self.home_page)
+
+            self.install_page = QtWidgets.QWidget()
+            install_layout = QtWidgets.QVBoxLayout(self.install_page)
+            self.install_group = QtWidgets.QGroupBox()
+            install_form = QtWidgets.QFormLayout(self.install_group)
+            self.install_package_label = QtWidgets.QLabel()
+            self.install_package_edit = QtWidgets.QLineEdit()
+            install_package_browse = self._browse_button(lambda: self._pick_path(self.install_package_edit, directory=False))
+            install_form.addRow(self.install_package_label, self._path_row(self.install_package_edit, install_package_browse))
+            self.install_destination_label = QtWidgets.QLabel()
+            self.install_destination_edit = QtWidgets.QLineEdit()
+            install_dest_browse = self._browse_button(lambda: self._pick_path(self.install_destination_edit, directory=True))
+            install_form.addRow(self.install_destination_label, self._path_row(self.install_destination_edit, install_dest_browse))
+            install_layout.addWidget(self.install_group)
+            install_buttons = QtWidgets.QHBoxLayout()
+            self.back_install_btn = QtWidgets.QPushButton()
+            self.back_install_btn.clicked.connect(self._show_home)
+            self.install_btn = QtWidgets.QPushButton()
+            self.install_btn.clicked.connect(self._start_install)
+            install_buttons.addWidget(self.back_install_btn)
+            install_buttons.addStretch(1)
+            install_buttons.addWidget(self.install_btn)
+            install_layout.addLayout(install_buttons)
+            self.stack.addWidget(self.install_page)
+
+            self.create_page = QtWidgets.QWidget()
+            create_layout = QtWidgets.QVBoxLayout(self.create_page)
+            self.create_group = QtWidgets.QGroupBox()
+            create_form = QtWidgets.QFormLayout(self.create_group)
+            self.create_source_label = QtWidgets.QLabel()
+            self.create_source_edit = QtWidgets.QLineEdit()
+            self.create_source_edit.textChanged.connect(lambda _text: self._refresh_detected_families())
+            create_source_browse = self._browse_button(lambda: self._pick_path(self.create_source_edit, directory=True))
+            create_form.addRow(self.create_source_label, self._path_row(self.create_source_edit, create_source_browse))
+            self.detected_group = QtWidgets.QGroupBox()
+            detected_layout = QtWidgets.QVBoxLayout(self.detected_group)
+            self.family_list = QtWidgets.QListWidget()
+            self.family_list.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+            detected_layout.addWidget(self.family_list)
+            create_form.addRow(self.detected_group)
+            self.create_destination_label = QtWidgets.QLabel()
+            self.create_destination_edit = QtWidgets.QLineEdit()
+            create_dest_browse = self._browse_button(lambda: self._pick_path(self.create_destination_edit, directory=True))
+            create_form.addRow(self.create_destination_label, self._path_row(self.create_destination_edit, create_dest_browse))
+            self.reference_radio = QtWidgets.QRadioButton()
+            self.copy_radio = QtWidgets.QRadioButton()
+            self.reference_radio.setChecked(True)
+            storage_box = QtWidgets.QWidget()
+            storage_layout = QtWidgets.QVBoxLayout(storage_box)
+            storage_layout.setContentsMargins(0, 0, 0, 0)
+            storage_layout.addWidget(self.reference_radio)
+            storage_layout.addWidget(self.copy_radio)
+            create_form.addRow(storage_box)
+            self.standard_radio = QtWidgets.QRadioButton()
+            self.custom_radio = QtWidgets.QRadioButton()
+            self.standard_radio.setChecked(True)
+            mode_box = QtWidgets.QWidget()
+            mode_layout = QtWidgets.QHBoxLayout(mode_box)
+            mode_layout.setContentsMargins(0, 0, 0, 0)
+            mode_layout.addWidget(self.standard_radio)
+            mode_layout.addWidget(self.custom_radio)
+            create_form.addRow(mode_box)
+            self.advanced_toggle = QtWidgets.QCheckBox()
+            self.advanced_toggle.toggled.connect(lambda checked: self.advanced_box.setVisible(bool(checked)))
+            create_form.addRow(self.advanced_toggle)
+            self.advanced_box = QtWidgets.QWidget()
+            advanced_form = QtWidgets.QFormLayout(self.advanced_box)
+            self.custom_mag_spin = QtWidgets.QDoubleSpinBox()
+            self.custom_mag_spin.setRange(0.0, 25.0)
+            self.custom_mag_spin.setDecimals(2)
+            self.custom_mag_spin.setSpecialValueText(self._text("special_auto"))
+            self.custom_max_stars_spin = QtWidgets.QSpinBox()
+            self.custom_max_stars_spin.setRange(0, 20000)
+            self.custom_max_stars_spin.setSpecialValueText(self._text("special_auto"))
+            self.custom_max_quads_spin = QtWidgets.QSpinBox()
+            self.custom_max_quads_spin.setRange(0, 100000)
+            self.custom_max_quads_spin.setSpecialValueText(self._text("special_auto"))
+            self.custom_workers_spin = QtWidgets.QSpinBox()
+            self.custom_workers_spin.setRange(0, max(64, os.cpu_count() or 1))
+            self.custom_workers_spin.setSpecialValueText(self._text("special_auto"))
+            advanced_form.addRow("Magnitude max", self.custom_mag_spin)
+            advanced_form.addRow("Étoiles max", self.custom_max_stars_spin)
+            advanced_form.addRow("Quads max", self.custom_max_quads_spin)
+            advanced_form.addRow("Workers", self.custom_workers_spin)
+            self.advanced_box.setVisible(False)
+            create_form.addRow(self.advanced_box)
+            create_layout.addWidget(self.create_group)
+            create_buttons = QtWidgets.QHBoxLayout()
+            self.back_create_btn = QtWidgets.QPushButton()
+            self.back_create_btn.clicked.connect(self._show_home)
+            self.create_btn = QtWidgets.QPushButton()
+            self.create_btn.clicked.connect(self._start_create)
+            create_buttons.addWidget(self.back_create_btn)
+            create_buttons.addStretch(1)
+            create_buttons.addWidget(self.create_btn)
+            create_layout.addLayout(create_buttons)
+            self.stack.addWidget(self.create_page)
+
+            self.repair_page = QtWidgets.QWidget()
+            repair_layout = QtWidgets.QVBoxLayout(self.repair_page)
+            self.repair_group = QtWidgets.QGroupBox()
+            repair_form = QtWidgets.QFormLayout(self.repair_group)
+            self.repair_library_label = QtWidgets.QLabel()
+            self.repair_library_edit = QtWidgets.QLineEdit()
+            repair_browse = self._browse_button(lambda: self._pick_path(self.repair_library_edit, directory=True))
+            repair_form.addRow(self.repair_library_label, self._path_row(self.repair_library_edit, repair_browse))
+            repair_buttons_top = QtWidgets.QHBoxLayout()
+            self.analyze_btn = QtWidgets.QPushButton()
+            self.analyze_btn.clicked.connect(self._analyze_library)
+            self.repair_btn = QtWidgets.QPushButton()
+            self.repair_btn.clicked.connect(self._start_repair)
+            self.repair_btn.setEnabled(False)
+            repair_buttons_top.addWidget(self.analyze_btn)
+            repair_buttons_top.addWidget(self.repair_btn)
+            repair_buttons_top.addStretch(1)
+            repair_form.addRow(repair_buttons_top)
+            self.diagnostic_table = QtWidgets.QTableWidget(0, 3)
+            self.diagnostic_table.setHorizontalHeaderLabels(["Élément", "État", "Détail"])
+            self.diagnostic_table.horizontalHeader().setStretchLastSection(True)
+            repair_layout.addWidget(self.repair_group)
+            repair_layout.addWidget(self.diagnostic_table)
+            self.repair_plan_label = QtWidgets.QLabel()
+            self.repair_plan_label.setWordWrap(True)
+            repair_layout.addWidget(self.repair_plan_label)
+            repair_buttons = QtWidgets.QHBoxLayout()
+            self.back_repair_btn = QtWidgets.QPushButton()
+            self.back_repair_btn.clicked.connect(self._show_home)
+            repair_buttons.addWidget(self.back_repair_btn)
+            repair_buttons.addStretch(1)
+            repair_layout.addLayout(repair_buttons)
+            self.stack.addWidget(self.repair_page)
+
+            status_grid = QtWidgets.QGridLayout()
+            self.stage_label_title = QtWidgets.QLabel()
+            self.stage_value = QtWidgets.QLabel("")
+            self.elapsed_label_title = QtWidgets.QLabel()
+            self.elapsed_value = QtWidgets.QLabel("0s")
+            self.progress_label_title = QtWidgets.QLabel()
+            self.progress = QtWidgets.QProgressBar()
+            self.progress.setRange(0, 100)
+            self.progress.setValue(0)
+            status_grid.addWidget(self.stage_label_title, 0, 0)
+            status_grid.addWidget(self.stage_value, 0, 1)
+            status_grid.addWidget(self.elapsed_label_title, 1, 0)
+            status_grid.addWidget(self.elapsed_value, 1, 1)
+            status_grid.addWidget(self.progress_label_title, 2, 0)
+            status_grid.addWidget(self.progress, 2, 1)
+            layout.addLayout(status_grid)
+            self.log_group = QtWidgets.QGroupBox()
+            log_layout = QtWidgets.QVBoxLayout(self.log_group)
+            self.operation_log = QtWidgets.QPlainTextEdit()
+            self.operation_log.setReadOnly(True)
+            self.operation_log.document().setMaximumBlockCount(1000)
+            log_layout.addWidget(self.operation_log)
+            layout.addWidget(self.log_group)
+            self.credits_label = QtWidgets.QLabel()
+            self.credits_label.setWordWrap(True)
+            layout.addWidget(self.credits_label)
+            bottom = QtWidgets.QHBoxLayout()
+            bottom.addStretch(1)
+            self.cancel_btn = QtWidgets.QPushButton()
+            self.cancel_btn.setEnabled(False)
+            self.cancel_btn.clicked.connect(self._cancel_worker)
+            bottom.addWidget(self.cancel_btn)
+            close_btn = QtWidgets.QPushButton()
+            close_btn.setText(self._text("close_button"))
+            close_btn.clicked.connect(self.close)
+            self.close_btn = close_btn
+            bottom.addWidget(close_btn)
+            layout.addLayout(bottom)
+            self._timer = QtCore.QTimer(self)
+            self._timer.setInterval(500)
+            self._timer.timeout.connect(self._refresh_elapsed)
+
+        def _home_card(self, layout, callback):
+            box = QtWidgets.QGroupBox()
+            card_layout = QtWidgets.QVBoxLayout(box)
+            button = QtWidgets.QPushButton()
+            button.clicked.connect(callback)
+            desc = QtWidgets.QLabel()
+            desc.setWordWrap(True)
+            card_layout.addWidget(button)
+            card_layout.addWidget(desc)
+            layout.addWidget(box)
+            return button, desc
+
+        def _browse_button(self, callback):
+            button = QtWidgets.QPushButton()
+            button.clicked.connect(callback)
+            self._browse_buttons.append(button)
+            return button
+
+        def _path_row(self, edit, button):
+            row = QtWidgets.QWidget()
+            layout = QtWidgets.QHBoxLayout(row)
+            layout.setContentsMargins(0, 0, 0, 0)
+            layout.addWidget(edit, 1)
+            layout.addWidget(button)
+            return row
+
+        def _pick_path(self, edit, *, directory: bool) -> None:
+            if directory:
+                value = QtWidgets.QFileDialog.getExistingDirectory(self, self._text("browse_button"), edit.text().strip() or "")
+            else:
+                value, _filter = QtWidgets.QFileDialog.getOpenFileName(self, self._text("browse_button"), edit.text().strip() or "")
+            if value:
+                edit.setText(value)
+
+        def _show_home(self) -> None:
+            self.stack.setCurrentWidget(self.home_page)
+
+        def _show_install(self) -> None:
+            self.stack.setCurrentWidget(self.install_page)
+
+        def _show_create(self) -> None:
+            self.stack.setCurrentWidget(self.create_page)
+            self._refresh_detected_families()
+
+        def _show_repair(self) -> None:
+            self.stack.setCurrentWidget(self.repair_page)
+
+        def _refresh_detected_families(self) -> None:
+            self.family_list.clear()
+            text = self.create_source_edit.text().strip()
+            if not text:
+                self.create_btn.setEnabled(False)
+                return
+            try:
+                service = self._service_factory()
+                families = service.detect_astap_families(text)
+            except Exception as exc:
+                item = QtWidgets.QListWidgetItem(str(exc))
+                item.setFlags(item.flags() & ~QtCore.Qt.ItemIsUserCheckable)
+                self.family_list.addItem(item)
+                self.create_btn.setEnabled(False)
+                return
+            if not families:
+                item = QtWidgets.QListWidgetItem(self._text("library_manager_no_families"))
+                item.setFlags(item.flags() & ~QtCore.Qt.ItemIsUserCheckable)
+                self.family_list.addItem(item)
+                self.create_btn.setEnabled(False)
+                return
+            for info in families:
+                item = QtWidgets.QListWidgetItem(f"{info.family.upper()} — {info.shard_count} shards — {info.size_bytes} bytes")
+                item.setData(QtCore.Qt.UserRole, info.family)
+                item.setFlags(item.flags() | QtCore.Qt.ItemIsUserCheckable)
+                item.setCheckState(QtCore.Qt.Checked)
+                self.family_list.addItem(item)
+            self.create_btn.setEnabled(True)
+
+        def _detected_family_values(self) -> tuple[str, ...]:
+            values: list[str] = []
+            for row in range(self.family_list.count()):
+                item = self.family_list.item(row)
+                data = item.data(QtCore.Qt.UserRole)
+                if data:
+                    values.append(str(data).strip().lower())
+            return tuple(dict.fromkeys(value for value in values if value))
+
+        def _selected_families(self) -> tuple[str, ...]:
+            detected = self._detected_family_values()
+            if self.standard_radio.isChecked():
+                return detected
+            values: list[str] = []
+            for row in range(self.family_list.count()):
+                item = self.family_list.item(row)
+                data = item.data(QtCore.Qt.UserRole)
+                if data and item.checkState() == QtCore.Qt.Checked:
+                    values.append(str(data).strip().lower())
+            return tuple(values)
+
+        def _start_install(self) -> None:
+            options = LibraryInstallOptions(
+                package_path=Path(self.install_package_edit.text().strip()),
+                destination=Path(self.install_destination_edit.text().strip()),
+            )
+            self._start_worker("install", options)
+
+        def _start_create(self) -> None:
+            custom = bool(self.custom_radio.isChecked() and self.advanced_toggle.isChecked())
+            families = self._selected_families()
+            if not families:
+                self._append_log(self._text("library_manager_no_families"))
+                return
+            options = LibraryCreateOptions(
+                astap_root=Path(self.create_source_edit.text().strip()),
+                destination=Path(self.create_destination_edit.text().strip()),
+                families=families,
+                storage_policy="copy" if self.copy_radio.isChecked() else "reference",
+                mode="custom" if self.custom_radio.isChecked() else "standard",
+                mag_cap=(float(self.custom_mag_spin.value()) if custom and self.custom_mag_spin.value() > 0 else None),
+                source_max_stars=(int(self.custom_max_stars_spin.value()) if custom and self.custom_max_stars_spin.value() > 0 else None),
+                max_quads_per_tile=(int(self.custom_max_quads_spin.value()) if custom and self.custom_max_quads_spin.value() > 0 else None),
+                workers=(int(self.custom_workers_spin.value()) if custom and self.custom_workers_spin.value() > 0 else None),
+            )
+            self._start_worker("create", options)
+
+        def _analyze_library(self) -> None:
+            try:
+                service = self._service_factory()
+                analysis = service.analyze_library(Path(self.repair_library_edit.text().strip()))
+            except Exception as exc:
+                self._append_log(self._text("library_manager_failed", error=str(exc)))
+                return
+            self._repair_plan = analysis.repair_plan
+            self._populate_diagnostics(analysis.items)
+            actions = list(analysis.repair_plan.actions)
+            self.repair_plan_label.setText(
+                self._text("library_manager_repair_plan") + ":\n" + ("\n".join(f"- {item}" for item in actions) if actions else "-")
+            )
+            self.repair_btn.setEnabled(bool(actions))
+
+        def _populate_diagnostics(self, items) -> None:
+            self.diagnostic_table.setRowCount(0)
+            for item in items:
+                row = self.diagnostic_table.rowCount()
+                self.diagnostic_table.insertRow(row)
+                self.diagnostic_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(item.element)))
+                self.diagnostic_table.setItem(row, 1, QtWidgets.QTableWidgetItem(str(item.state)))
+                self.diagnostic_table.setItem(row, 2, QtWidgets.QTableWidgetItem(str(item.detail)))
+
+        def _start_repair(self) -> None:
+            if self._repair_plan is None:
+                self._analyze_library()
+            if self._repair_plan is not None:
+                self._start_worker("repair", self._repair_plan)
+
+        def _start_worker(self, operation: str, payload: object) -> None:
+            if self._worker is not None and self._worker.isRunning():
+                return
+            self._worker = CatalogLibraryManagementWorker(operation, payload)
+            self._worker.progress.connect(self._on_progress)
+            self._worker.finished.connect(self._on_finished)
+            self._set_busy(True)
+            self._started_at = time.monotonic()
+            self._timer.start()
+            self.operation_log.clear()
+            self._append_log(operation)
+            self._worker.start()
+
+        def _set_busy(self, busy: bool) -> None:
+            for widget in (self.install_btn, self.create_btn, self.analyze_btn, self.repair_btn, self.back_install_btn, self.back_create_btn, self.back_repair_btn):
+                widget.setEnabled(not busy)
+            self.cancel_btn.setEnabled(busy)
+
+        def _on_progress(self, progress) -> None:
+            self.stage_value.setText(str(getattr(progress, "message", "") or getattr(progress, "stage", "")))
+            total = int(getattr(progress, "overall_total", 0) or 0)
+            current = int(getattr(progress, "overall_current", 0) or 0)
+            if total > 0:
+                self.progress.setValue(max(0, min(100, int((current / total) * 100))))
+            family = getattr(progress, "family", None)
+            if family:
+                self._append_log(f"{family}: {getattr(progress, 'message', '')}")
+
+        def _on_finished(self, ok: bool, result: object, error: str) -> None:
+            self._timer.stop()
+            self._set_busy(False)
+            self._worker = None
+            if ok and result is not None:
+                path = str(getattr(result, "library_root", ""))
+                self.stage_value.setText(self._text("library_manager_ready"))
+                self.progress.setValue(100)
+                self._append_log(self._text("library_manager_success", path=path))
+                if path:
+                    self.librarySelected.emit(path)
+            elif "CANCELLED" in str(error).upper() or "CANCEL" in str(error).upper():
+                self.stage_value.setText(self._text("library_manager_cancelled"))
+                self._append_log(self._text("library_manager_cancelled"))
+            else:
+                self.stage_value.setText(self._text("library_manager_failed", error=error))
+                self._append_log(self._text("library_manager_failed", error=error))
+
+        def _cancel_worker(self) -> None:
+            if self._worker is None or not self._worker.isRunning():
+                return
+            answer = QtWidgets.QMessageBox.question(
+                self,
+                self._text("library_manager_confirm_cancel_title"),
+                self._text("library_manager_confirm_cancel_body"),
+            )
+            if answer != QtWidgets.QMessageBox.Yes:
+                return
+            self._worker.request_cancel()
+            self.cancel_btn.setEnabled(False)
+
+        def _refresh_elapsed(self) -> None:
+            if self._started_at is None:
+                return
+            self.elapsed_value.setText(f"{int(time.monotonic() - self._started_at)}s")
+
+        def _append_log(self, text: str) -> None:
+            self.operation_log.appendPlainText(str(text))
+
+        def closeEvent(self, event) -> None:
+            if self._worker is not None and self._worker.isRunning():
+                self._worker.request_cancel()
+                self._worker.wait(5000)
+            super().closeEvent(event)
+
     class ZeSolverWindow(QtWidgets.QMainWindow):
         def __init__(self, settings: PersistentSettings) -> None:
             super().__init__()
             self._language = GUI_DEFAULT_LANGUAGE
             self.resize(1280, 760)
             self._worker: Optional[SolveRunner] = None
+            self._wcs_cleanup_worker: Optional[WcsCleanupRunner] = None
+            self._wcs_cleanup_run_seq = 0
+            self._wcs_cleanup_active_id: Optional[int] = None
+            self._wcs_cleanup_terminal: Optional[str] = None
+            self._wcs_cleanup_terminal_payload: object | None = None
+            self._resume_after_wcs_cleanup = False
             self._pending_files: List[Path] = []
             self._item_by_path: dict[Path, QtWidgets.QTreeWidgetItem] = {}
             self._dev_family_checks: dict[str, QtWidgets.QCheckBox] = {}
@@ -6220,25 +7031,45 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._run_lifecycle = RunLifecycle()
             self._active_run_failed = False
             self._active_run_error_message: Optional[str] = None
+            self._closing = False
             self._language_actions: dict[str, QtGui.QAction] = {}
             self._interface_actions: dict[str, QtGui.QAction] = {}
+            self._theme_actions: dict[str, QtGui.QAction] = {}
+            self._theme_controller: ThemeController | None = getattr(QtWidgets.QApplication.instance(), "zesolver_theme_controller", None)
             self._interface_mode = str(getattr(settings, "interface_mode", "easy") or "easy").strip().lower()
             if self._interface_mode not in {"easy", "expert"}:
                 self._interface_mode = "easy"
             self._settings = settings
             self._settings.solver_workers = self._dev_workers_choice
+            self._instrument_initializing = False
+            self._instrument_applying_snapshot = False
+            self._instrument_mode = str(getattr(settings, "instrument_mode", "auto") or "auto").strip().lower()
+            if self._instrument_mode not in {"auto", "preset", "custom"}:
+                self._instrument_mode = "auto"
+            self._instrument_preset_id = getattr(settings, "last_preset_id", None)
+            self._syncing_astap_root = False
+            self._astap_validation_state = "not_verified"
             self._syncing_blind_profile_gui = False
             self._blind_4d_verified_manifest: Loaded4DManifest | None = None
             self._blind_4d_manifest_state = "not_verified"
+            self._hash_maintenance_dialog: Optional[QtWidgets.QDialog] = None
+            self._catalog_library_manager_dialog: Optional[QtWidgets.QDialog] = None
             self._catalog_library_state = "AUCUNE_BIBLIOTHEQUE"
             self._catalog_library_validated_path: Optional[str] = None
             self._catalog_library_validated_resources: SolverCatalogResources | None = None
             self._catalog_library_validation_error: Optional[str] = None
+            self._catalog_distribution_worker: Optional[CatalogDistributionInstallWorker] = None
+            self._startup_wizard_dialog: Optional[QtWidgets.QDialog] = None
+            self._startup_wizard_decision = None
+            self._startup_wizard_auto_scheduled = False
+            self._input_directory_scan_pending = False
+            self._catalog_distribution_release = None
+            self._catalog_distribution_manifest = None
+            self._dl_worker = None
             self._current_log_level = str(getattr(settings, "log_level", "INFO") or "INFO").upper()
             self._index_worker: Optional[IndexBuilder] = None
             self._blind_worker: Optional[BlindRunner] = None
             self._near_worker: Optional[NearRunner] = None
-            self._benchmark_worker: Optional[BenchmarkRunner] = None
             self._scanner: Optional[FileScanner] = None
             self._scan_buffer: list[tuple[Path, str, str]] = []
             self._scan_flush_threshold = 250
@@ -6259,6 +7090,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._build_ui()
             self._set_log_level(self._current_log_level, persist=False)
             self._populate_settings_ui()
+            if self._settings.sample_fits:
+                self._apply_input_directory(self._settings.sample_fits, trigger_scan=False, show_error=False)
             self._prefill_from_args(args)
             self._apply_language()
             self._apply_interface_mode()
@@ -6283,9 +7116,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.database_tab = self._build_database_tab()
             self.database_scroll = self._wrap_scroll_area(self.database_tab)
             self.tabs.addTab(self.database_scroll, self._text("database_tab"))
-            self.dev_tab = self._build_dev_tab()
-            self.dev_scroll = self._wrap_scroll_area(self.dev_tab)
-            self.tabs.addTab(self.dev_scroll, self._text("dev_tab"))
             self.settings_tab = self._build_settings_tab()
             self.settings_scroll = self._wrap_scroll_area(self.settings_tab)
             self.tabs.addTab(self.settings_scroll, self._text("settings_tab"))
@@ -6293,9 +7123,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.performance_tab = self._build_performance_tab()
             self.performance_scroll = self._wrap_scroll_area(self.performance_tab)
             self.tabs.addTab(self.performance_scroll, self._text("performance_tab"))
-            self.benchmark_tab = self._build_benchmark_tab()
-            self.benchmark_scroll = self._wrap_scroll_area(self.benchmark_tab)
-            self.tabs.addTab(self.benchmark_scroll, self._text("benchmark_tab"))
             # Add Fast solver (near) tab for quality/tolerance settings
             try:
                 self.fast_tab = self._build_fast_solver_tab()
@@ -6361,9 +7188,31 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._interface_group.addAction(action)
                 self._interface_actions[mode] = action
             self.interface_menu.addSeparator()
+            self.appearance_menu = self.interface_menu.addMenu("")
+            self._theme_actions.clear()
+            self._theme_group = QtGui.QActionGroup(self)
+            self._theme_group.setExclusive(True)
+            for mode in ("system", "light", "dark"):
+                action = QtGui.QAction(self)
+                action.setCheckable(True)
+                action.triggered.connect(
+                    lambda checked, theme=mode: self._on_theme_selected(theme) if checked else None
+                )
+                self.appearance_menu.addAction(action)
+                self._theme_group.addAction(action)
+                self._theme_actions[mode] = action
+            self.interface_menu.addSeparator()
             self.interface_wizard_action = QtGui.QAction(self)
             self.interface_wizard_action.triggered.connect(self._run_startup_wizard_from_menu)
             self.interface_menu.addAction(self.interface_wizard_action)
+
+            self.tools_menu = menu_bar.addMenu("")
+            self.catalog_library_manager_action = QtGui.QAction(self)
+            self.catalog_library_manager_action.triggered.connect(self._open_catalog_library_manager)
+            self.tools_menu.addAction(self.catalog_library_manager_action)
+            self.historical_index_maintenance_action = QtGui.QAction(self)
+            self.historical_index_maintenance_action.triggered.connect(self._open_historical_index_maintenance_dialog)
+            self.tools_menu.addAction(self.historical_index_maintenance_action)
 
             self.log_menu = menu_bar.addMenu("")
             self._log_level_actions.clear()
@@ -6392,6 +7241,40 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
             self._apply_interface_mode()
 
+        def _on_theme_selected(self, mode: str) -> None:
+            normalized = normalize_theme_mode(mode)
+            self._settings.ui_theme = normalized
+            controller = self._theme_controller or getattr(QtWidgets.QApplication.instance(), "zesolver_theme_controller", None)
+
+            def _save(theme: str) -> None:
+                self._settings.ui_theme = theme
+                save_persistent_settings(self._settings)
+
+            if controller is None:
+                app = QtWidgets.QApplication.instance()
+                if app is None:
+                    return
+                controller = ThemeController(app, initial_mode=normalized, save_callback=_save)
+                setattr(app, "zesolver_theme_controller", controller)
+                self._theme_controller = controller
+                controller.apply(normalized, source="user", persist=True)
+            else:
+                try:
+                    controller.save_callback = _save
+                    controller.apply(normalized, source="user", persist=True)
+                except Exception as exc:
+                    logging.warning("UI_THEME_SAVE_FAILED error=%s", exc)
+            self._sync_theme_actions()
+
+        def _sync_theme_actions(self) -> None:
+            mode = normalize_theme_mode(getattr(self._settings, "ui_theme", "system"))
+            for key, action in self._theme_actions.items():
+                try:
+                    action.blockSignals(True)
+                    action.setChecked(key == mode)
+                finally:
+                    action.blockSignals(False)
+
         def _set_tab_visible(self, tab_widget: QtWidgets.QWidget, visible: bool) -> None:
             try:
                 idx = self.tabs.indexOf(tab_widget)
@@ -6412,14 +7295,23 @@ def launch_gui(args: argparse.Namespace) -> int:
             if hasattr(self, "settings_scroll"):
                 self._set_tab_visible(self.settings_scroll, True)
             # Advanced tabs hidden in easy mode
-            for name in ("dev_scroll", "performance_scroll", "benchmark_scroll", "fast_scroll", "astrometry_scroll"):
+            for name in ("performance_scroll", "fast_scroll", "astrometry_scroll"):
                 tab = getattr(self, name, None)
                 if tab is not None:
                     self._set_tab_visible(tab, expert)
+            for name in ("catalog_compat_group", "blind_group", "catalog_maintenance_group"):
+                widget = getattr(self, name, None)
+                if widget is not None:
+                    widget.setVisible(expert)
+            if hasattr(self, "tools_menu"):
+                try:
+                    self.tools_menu.menuAction().setVisible(expert)
+                except Exception:
+                    pass
             if not expert and hasattr(self, "solver_scroll"):
                 try:
                     current = self.tabs.currentWidget()
-                    hidden_tabs = [getattr(self, n, None) for n in ("database_scroll", "dev_scroll", "performance_scroll", "benchmark_scroll", "fast_scroll", "astrometry_scroll")]
+                    hidden_tabs = [getattr(self, n, None) for n in ("database_scroll", "performance_scroll", "fast_scroll", "astrometry_scroll")]
                     if current in hidden_tabs:
                         self._activate_tab(self.solver_scroll)
                 except Exception:
@@ -6443,6 +7335,116 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _apply_settings_mode_visibility(self) -> None:
             expert = (self._interface_mode == "expert")
             apply_settings_easy_visibility(self, expert=expert)
+            self._update_simplified_capability_summary()
+
+        def _set_astap_root(
+            self,
+            path: object,
+            *,
+            source: str,
+            validate: bool = False,
+            update_widgets: bool = True,
+        ) -> None:
+            text = str(path or "").strip()
+            if text:
+                try:
+                    text = str(Path(text).expanduser())
+                except Exception:
+                    pass
+            self._settings.db_root = text or None
+            if getattr(self, "_syncing_astap_root", False):
+                return
+            self._syncing_astap_root = True
+            try:
+                if update_widgets:
+                    for name in ("easy_astap_edit", "settings_db_edit", "db_tab_edit"):
+                        widget = getattr(self, name, None)
+                        if widget is None or widget.text().strip() == text:
+                            continue
+                        blocker = QtCore.QSignalBlocker(widget)
+                        widget.setText(text)
+                        del blocker
+                self._astap_validation_state = "not_verified"
+                self._set_astap_status("not_verified")
+                self._schedule_db_scan(text, delay_ms=800)
+            finally:
+                self._syncing_astap_root = False
+            if validate and text:
+                self._verify_astap_root_from_gui(show_error=False)
+            self._update_simplified_capability_summary()
+
+        def _set_astap_status(self, key: str, *, validation: GuiCatalogPathValidation | None = None) -> None:
+            self._astap_validation_state = key
+            label = getattr(self, "easy_astap_status_label", None)
+            if label is None:
+                return
+            if key == "valid":
+                families = ", ".join(sorted(f.upper() for f in getattr(self, "_db_family_latest", set()) if f)) or "-"
+                text = self._text("easy_astap_valid", families=families)
+                style = "color: #2b8a3e;"
+            elif key == "invalid":
+                text = self._text("easy_astap_invalid", error=(validation.message if validation else "ASTAP_ROOT_INVALID"))
+                style = "color: #c92a2a;"
+            elif key == "unused_library":
+                text = self._text("easy_astap_unused_library_active")
+                style = "color: #6c757d;"
+            else:
+                text = self._text("easy_astap_not_verified")
+                style = "color: #6c757d;"
+            label.setText(text)
+            label.setStyleSheet(style)
+
+        def _verify_astap_root_from_gui(self, *, show_error: bool = True) -> bool:
+            text = ""
+            if hasattr(self, "easy_astap_edit"):
+                text = self.easy_astap_edit.text().strip()
+            if not text and hasattr(self, "settings_db_edit"):
+                text = self.settings_db_edit.text().strip()
+            validation = validate_astap_root(text)
+            if validation.ok:
+                self._set_astap_root(validation.path or text, source="verify", validate=False)
+                self._set_astap_status("valid", validation=validation)
+                self._schedule_db_scan(str(validation.path or text), delay_ms=0)
+                return True
+            self._set_astap_status("invalid", validation=validation)
+            if show_error:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._format_catalog_path_error(validation, field_key="field_legacy_astap"))
+            return False
+
+        def _clear_astap_root(self) -> None:
+            self._set_astap_root("", source="clear", validate=False)
+
+        def _standalone_astap_text(self) -> str:
+            if hasattr(self, "easy_astap_edit"):
+                return self.easy_astap_edit.text().strip()
+            if hasattr(self, "settings_db_edit"):
+                return self.settings_db_edit.text().strip()
+            return str(getattr(self._settings, "db_root", "") or "").strip()
+
+        def _update_simplified_capability_summary(self) -> None:
+            label = getattr(self, "effective_chain_label", None)
+            if label is None:
+                return
+            catalog_text = self._catalog_library_path_from_ui() if hasattr(self, "settings_catalog_library_edit") else ""
+            if catalog_text:
+                resources = self._catalog_library_validated_resources
+                if resources is not None and resources.near_available and resources.blind4d_available:
+                    label.setText(self._text("chain_full_local"))
+                    if self._standalone_astap_text():
+                        self._set_astap_status("unused_library")
+                    return
+                if resources is not None and resources.near_available:
+                    label.setText(self._text("solver.status.blind_disabled"))
+                    if self._standalone_astap_text():
+                        self._set_astap_status("unused_library")
+                    return
+            astap_text = self._standalone_astap_text()
+            if astap_text and validate_astap_root(astap_text).ok:
+                label.setText(self._text("chain_near_only_astap"))
+                if getattr(self, "_astap_validation_state", "not_verified") == "not_verified":
+                    self._set_astap_status("valid")
+                return
+            label.setText(self._text("chain_unavailable"))
 
         def _current_blind_profile(self) -> str:
             profile = str(getattr(self._settings, "blind_backend_profile", ZEBLIND_4D_EXPERIMENTAL_PROFILE) or ZEBLIND_4D_EXPERIMENTAL_PROFILE).strip().lower()
@@ -6471,24 +7473,36 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _set_manifest_status(self, key: str, *, manifest: Loaded4DManifest | None = None, error: Exception | str | None = None) -> None:
             self._blind_4d_manifest_state = key
-            label = getattr(self, "blind_4d_manifest_status_label", None)
-            if label is None:
+            labels = tuple(
+                dict.fromkeys(
+                    label
+                    for label in (
+                        getattr(self, "blind_4d_manifest_status_label", None),
+                        getattr(self, "settings_blind_4d_manifest_status_label", None),
+                    )
+                    if label is not None
+                )
+            )
+            if not labels:
                 return
             if key == "valid" and manifest is not None:
                 tiles = ", ".join(manifest.tile_keys)
                 if len(tiles) > 80:
                     tiles = tiles[:77] + "..."
-                label.setText(self._text("blind_4d_indexes_verified", count=len(manifest.entries), tiles=tiles))
-                label.setStyleSheet("color: #2b8a3e;")
+                text = self._text("blind_4d_indexes_verified", count=len(manifest.entries), tiles=tiles)
+                style = "color: #2b8a3e;"
             elif key == "invalid":
-                label.setText(f"{self._text('blind_4d_manifest_invalid')}: {error}")
-                label.setStyleSheet("color: #c92a2a;")
+                text = f"{self._text('blind_4d_manifest_invalid')}: {error}"
+                style = "color: #c92a2a;"
             elif key == "verifying":
-                label.setText(self._text("blind_4d_verifying"))
-                label.setStyleSheet("color: #5c7cfa;")
+                text = self._text("blind_4d_verifying")
+                style = "color: #5c7cfa;"
             else:
-                label.setText(self._text("blind_4d_not_verified"))
-                label.setStyleSheet("color: #6c757d;")
+                text = self._text("blind_4d_not_verified")
+                style = "color: #6c757d;"
+            for label in labels:
+                label.setText(text)
+                label.setStyleSheet(style)
 
         def _sync_blind_profile_controls(self) -> None:
             if self._syncing_blind_profile_gui:
@@ -6519,11 +7533,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.blind_4d_profile_combo.setCurrentIndex(max(0, idx))
                     self.blind_4d_profile_combo.setEnabled(blind_enabled)
                     self.blind_4d_profile_combo.blockSignals(False)
-                manifest_enabled = blind_enabled and is_4d and expert
-                for name in ("blind_4d_manifest_label", "blind_4d_manifest_edit", "blind_4d_manifest_browse_btn", "blind_4d_manifest_verify_btn", "blind_4d_manifest_status_label"):
+                external_enabled = blind_enabled and is_4d and expert and self._current_blind4d_catalog_mode_from_ui() == "external-manifest"
+                for name in ("settings_blind_4d_manifest_edit", "settings_blind_4d_manifest_browse_btn", "settings_blind_4d_manifest_verify_btn"):
                     widget = getattr(self, name, None)
                     if widget is not None:
-                        widget.setEnabled(manifest_enabled)
+                        widget.setEnabled(external_enabled)
+                self._update_blind4d_source_visibility()
                 if hasattr(self, "effective_chain_label"):
                     chain_key = "solver.chain.4d" if is_4d else "solver.chain.historical"
                     self.effective_chain_label.setText(self._text(chain_key))
@@ -6535,11 +7550,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             if normalized not in {HISTORICAL_PROFILE, ZEBLIND_4D_EXPERIMENTAL_PROFILE}:
                 normalized = ZEBLIND_4D_EXPERIMENTAL_PROFILE
             if normalized == ZEBLIND_4D_EXPERIMENTAL_PROFILE:
-                manifest_path = self._manifest_text_or_default()
-                if hasattr(self, "blind_4d_manifest_edit") and not self.blind_4d_manifest_edit.text().strip():
-                    self.blind_4d_manifest_edit.setText(manifest_path)
-                self._settings.blind_4d_manifest_path = manifest_path
-                if self.blind_check.isChecked():
+                if self._current_blind4d_catalog_mode_from_ui() == "external-manifest" and self.blind_check.isChecked():
+                    manifest_path = self._manifest_text_or_default()
+                    self._settings.blind_4d_manifest_path = manifest_path
                     loaded = self._verify_4d_manifest_from_gui(show_error=(source == "easy"), rollback_on_failure=(source == "easy"))
                     if loaded is None and source == "easy":
                         return
@@ -6571,7 +7584,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._set_blind_profile_from_gui(str(data or ZEBLIND_4D_EXPERIMENTAL_PROFILE), source="expert")
 
         def _pick_4d_manifest_file(self) -> None:
-            start = self.blind_4d_manifest_edit.text().strip() or str(resolve_default_4d_manifest_path())
+            start = self._manifest_text_or_default()
             path, _ = QtWidgets.QFileDialog.getOpenFileName(
                 self,
                 self._text("blind_4d_manifest_label"),
@@ -6626,13 +7639,177 @@ def launch_gui(args: argparse.Namespace) -> int:
             return loaded
 
         def _run_startup_wizard_from_menu(self) -> None:
-            ok = self._run_simple_startup_wizard()
-            if ok:
-                QtWidgets.QMessageBox.information(
-                    self,
-                    self._text("simple_wizard_title"),
-                    self._text("simple_wizard_done"),
-                )
+            self._open_startup_wizard(manual=True)
+
+        def _startup_wizard_policy_decision(self):
+            decision = decide_startup_wizard(self._settings)
+            self._startup_wizard_decision = decision
+            return decision
+
+        def schedule_startup_wizard_if_needed(self, *, delay_ms: int = 250) -> None:
+            if self._startup_wizard_auto_scheduled:
+                return
+            self._startup_wizard_auto_scheduled = True
+
+            def _open_if_needed() -> None:
+                try:
+                    decision = self._startup_wizard_policy_decision()
+                except Exception as exc:
+                    self._log_settings(f"Startup wizard diagnostic failed: {exc}")
+                    return
+                if decision.should_show:
+                    self._open_startup_wizard(manual=False, decision=decision)
+
+            QtCore.QTimer.singleShot(max(0, int(delay_ms)), _open_if_needed)
+
+        def _open_startup_wizard(self, *, manual: bool, decision=None) -> None:
+            if ZeSolverStartupWizard is None:
+                return
+            if decision is None:
+                decision = self._startup_wizard_policy_decision()
+            if manual:
+                decision = decide_startup_wizard(self._settings)
+            dialog = ZeSolverStartupWizard(
+                settings=self._settings,
+                decision=decision,
+                save_settings=save_persistent_settings,
+                parent=self,
+                completion_handler=self._complete_startup_wizard_transaction,
+            )
+            dialog.librarySelected.connect(self._on_startup_wizard_library_selected)
+            dialog.astapSelected.connect(self._on_startup_wizard_astap_selected)
+            dialog.imageDirectorySelected.connect(self._on_startup_wizard_image_directory_selected)
+            dialog.completed.connect(self._on_startup_wizard_completed)
+            self._startup_wizard_dialog = dialog
+            dialog.show()
+            try:
+                dialog.raise_()
+                dialog.activateWindow()
+            except Exception:
+                pass
+
+        def _on_startup_wizard_library_selected(self, path: str) -> None:
+            value = str(path or "").strip()
+            if not value:
+                return
+            self._activate_catalog_library_product_mode(value, source="startup-wizard")
+
+        def _on_startup_wizard_astap_selected(self, path: str) -> None:
+            value = str(path or "").strip()
+            if not value:
+                return
+            self._set_astap_root(value, source="startup-wizard", validate=True)
+            self._settings.near_catalog_mode = "astap-native"
+            self._settings.blind4d_catalog_mode = "auto"
+            mark_startup_wizard_completed(self._settings)
+            try:
+                save_persistent_settings(self._settings)
+            except Exception as exc:
+                self._log_settings(self._text("library_manager_failed", error=str(exc)))
+            self._update_simplified_capability_summary()
+
+        def _on_startup_wizard_image_directory_selected(self, path: str) -> None:
+            self._apply_input_directory(path, trigger_scan=True)
+
+        def _complete_startup_wizard_transaction(self, request: StartupWizardCompletionRequest) -> StartupWizardCompletionResult:
+            source = str(getattr(request, "source", "") or "")
+            try:
+                if source in {"existing_library", "official", "local_package"}:
+                    library_path = str(getattr(request, "catalog_library_path", "") or "").strip()
+                    if not library_path:
+                        return StartupWizardCompletionResult(False, "Aucune bibliotheque valide n'a ete selectionnee.")
+                    ok = self._activate_catalog_library_product_mode(
+                        library_path,
+                        source=f"startup-wizard:{source}",
+                        persist=False,
+                        show_error=False,
+                    )
+                    if not ok:
+                        return StartupWizardCompletionResult(
+                            False,
+                            self._catalog_library_validation_error or "La bibliotheque selectionnee n'a pas pu etre activee.",
+                        )
+                elif source == "astap":
+                    astap_path = str(getattr(request, "astap_path", "") or "").strip()
+                    if not astap_path:
+                        return StartupWizardCompletionResult(False, "Aucune base ASTAP valide n'a ete selectionnee.")
+                    validation = validate_astap_root(astap_path)
+                    if not validation.ok:
+                        return StartupWizardCompletionResult(
+                            False,
+                            self._format_catalog_path_error(validation, field_key="field_astap_root"),
+                        )
+                    self._set_astap_root(astap_path, source="startup-wizard", validate=True)
+                    if hasattr(self, "near_catalog_mode_combo"):
+                        self._set_combo_current_data(self.near_catalog_mode_combo, "astap-native", "astap-native")
+                    if hasattr(self, "blind4d_catalog_mode_combo"):
+                        self._set_combo_current_data(self.blind4d_catalog_mode_combo, "auto", "auto")
+                    self._settings.near_catalog_mode = "astap-native"
+                    self._settings.blind4d_catalog_mode = "auto"
+                    self._update_blind4d_source_visibility()
+                    self._update_catalog_rollback_status()
+                else:
+                    return StartupWizardCompletionResult(False, f"Parcours wizard inconnu: {source or '-'}")
+                image_directory = str(getattr(request, "image_directory", "") or "").strip()
+                if image_directory:
+                    if not self._apply_input_directory(image_directory, trigger_scan=True, persist=False):
+                        return StartupWizardCompletionResult(False, "Le dossier d'images indique n'existe pas ou n'est pas un repertoire.")
+                else:
+                    self._settings.sample_fits = None
+                self._settings.solver_blind_enabled = bool(getattr(request, "blind_enabled", True))
+                mark_startup_wizard_completed(self._settings)
+                save_persistent_settings(self._settings)
+                self._update_simplified_capability_summary()
+                return StartupWizardCompletionResult(True)
+            except Exception as exc:
+                self._log_settings(self._text("library_manager_failed", error=str(exc)))
+                return StartupWizardCompletionResult(False, str(exc))
+
+        def _on_startup_wizard_completed(self, source: str) -> None:
+            self._log_settings(f"Startup wizard completed: {source}")
+
+        def _apply_input_directory(self, path: str, *, trigger_scan: bool = True, show_error: bool = True, persist: bool = True) -> bool:
+            value = str(path or "").strip()
+            if not value:
+                return False
+            try:
+                directory = Path(value).expanduser()
+            except Exception:
+                if show_error:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_input_missing", path=value))
+                return False
+            if not directory.is_dir():
+                if show_error:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("error_input_missing", path=directory))
+                return False
+            try:
+                normalized = str(directory.resolve())
+            except Exception:
+                normalized = str(directory)
+            self._settings.sample_fits = normalized
+            if hasattr(self, "settings_sample_edit"):
+                self.settings_sample_edit.setText(normalized)
+            if hasattr(self, "input_edit"):
+                self.input_edit.setText(normalized)
+            if persist:
+                try:
+                    save_persistent_settings(self._settings)
+                except Exception as exc:
+                    self._log_settings(self._text("library_manager_failed", error=str(exc)))
+            if trigger_scan:
+                self._schedule_input_directory_scan()
+            return True
+
+        def _schedule_input_directory_scan(self) -> None:
+            if self._input_directory_scan_pending:
+                return
+            self._input_directory_scan_pending = True
+
+            def _scan_once() -> None:
+                self._input_directory_scan_pending = False
+                self.scan_files()
+
+            QtCore.QTimer.singleShot(0, _scan_once)
 
         def _set_log_level(self, level: str, *, persist: bool = True) -> None:
             normalized = str(level or "INFO").upper()
@@ -6676,6 +7853,448 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _build_database_tab(self) -> QtWidgets.QWidget:
             widget = QtWidgets.QWidget()
             column = QtWidgets.QVBoxLayout(widget)
+            self.catalog_library_title = QtWidgets.QLabel(self._text("official_library_tab_heading"))
+            font = self.catalog_library_title.font()
+            font.setPointSize(max(font.pointSize() + 4, 14))
+            font.setBold(True)
+            self.catalog_library_title.setFont(font)
+            column.addWidget(self.catalog_library_title)
+
+            self.catalog_library_current_group = QtWidgets.QGroupBox(self._text("official_library_current_group"))
+            current_layout = QtWidgets.QVBoxLayout(self.catalog_library_current_group)
+            self.catalog_library_current_status = QtWidgets.QLabel()
+            self.catalog_library_current_status.setWordWrap(True)
+            current_layout.addWidget(self.catalog_library_current_status)
+            self.catalog_library_current_path = QtWidgets.QLabel()
+            self.catalog_library_current_path.setWordWrap(True)
+            current_layout.addWidget(self.catalog_library_current_path)
+            current_buttons = QtWidgets.QHBoxLayout()
+            self.catalog_library_verify_btn = QtWidgets.QPushButton(self._text("official_library_verify"))
+            self.catalog_library_repair_btn = QtWidgets.QPushButton(self._text("official_library_repair"))
+            self.catalog_library_open_folder_btn = QtWidgets.QPushButton(self._text("official_library_open_folder"))
+            current_buttons.addWidget(self.catalog_library_verify_btn)
+            current_buttons.addWidget(self.catalog_library_repair_btn)
+            current_buttons.addWidget(self.catalog_library_open_folder_btn)
+            current_buttons.addStretch(1)
+            current_layout.addLayout(current_buttons)
+            column.addWidget(self.catalog_library_current_group)
+
+            self.catalog_distribution_group = QtWidgets.QGroupBox(self._text("official_library_distribution_group"))
+            distribution_layout = QtWidgets.QVBoxLayout(self.catalog_distribution_group)
+            self.catalog_distribution_status = QtWidgets.QLabel(self._text("official_library_distribution_unknown"))
+            self.catalog_distribution_status.setWordWrap(True)
+            distribution_layout.addWidget(self.catalog_distribution_status)
+            destination_form = QtWidgets.QFormLayout()
+            self.catalog_distribution_parent_edit = QtWidgets.QLineEdit()
+            self.catalog_distribution_parent_edit.setReadOnly(True)
+            self.catalog_distribution_parent_edit.setMinimumWidth(260)
+            self.catalog_distribution_destination_edit = QtWidgets.QLineEdit()
+            self.catalog_distribution_destination_edit.setReadOnly(True)
+            self.catalog_distribution_destination_edit.setMinimumWidth(260)
+            parent_row = QtWidgets.QWidget()
+            parent_row_layout = QtWidgets.QHBoxLayout(parent_row)
+            parent_row_layout.setContentsMargins(0, 0, 0, 0)
+            parent_row_layout.addWidget(self.catalog_distribution_parent_edit, 1)
+            self.catalog_distribution_change_parent_btn = QtWidgets.QPushButton(self._text("official_library_change_location"))
+            parent_row_layout.addWidget(self.catalog_distribution_change_parent_btn)
+            destination_form.addRow(self._text("official_library_install_parent_label"), parent_row)
+            destination_form.addRow(self._text("official_library_install_destination_label"), self.catalog_distribution_destination_edit)
+            distribution_layout.addLayout(destination_form)
+            self.catalog_distribution_storage = QtWidgets.QLabel(self._text("official_library_storage_waiting"))
+            self.catalog_distribution_storage.setWordWrap(True)
+            distribution_layout.addWidget(self.catalog_distribution_storage)
+            self.catalog_distribution_cache_path = QtWidgets.QLabel()
+            self.catalog_distribution_cache_path.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
+            self.catalog_distribution_cache_path.setWordWrap(True)
+            distribution_layout.addWidget(self.catalog_distribution_cache_path)
+            self.catalog_distribution_progress = QtWidgets.QProgressBar()
+            self.catalog_distribution_progress.setRange(0, 100)
+            self.catalog_distribution_progress.setValue(0)
+            distribution_layout.addWidget(self.catalog_distribution_progress)
+            self.catalog_distribution_detail = QtWidgets.QLabel("")
+            self.catalog_distribution_detail.setWordWrap(True)
+            distribution_layout.addWidget(self.catalog_distribution_detail)
+            distribution_buttons = QtWidgets.QHBoxLayout()
+            self.catalog_distribution_check_btn = QtWidgets.QPushButton(self._text("official_library_check_release"))
+            self.catalog_distribution_install_btn = QtWidgets.QPushButton(self._text("official_library_install_recommended"))
+            self.catalog_distribution_cancel_btn = QtWidgets.QPushButton(self._text("official_library_cancel"))
+            self.catalog_distribution_cancel_btn.setEnabled(False)
+            distribution_buttons.addWidget(self.catalog_distribution_check_btn)
+            distribution_buttons.addWidget(self.catalog_distribution_install_btn)
+            distribution_buttons.addWidget(self.catalog_distribution_cancel_btn)
+            distribution_buttons.addStretch(1)
+            distribution_layout.addLayout(distribution_buttons)
+            self.catalog_distribution_log = QtWidgets.QPlainTextEdit()
+            self.catalog_distribution_log.setReadOnly(True)
+            self.catalog_distribution_log.setMaximumBlockCount(500)
+            self.catalog_distribution_log.setVisible(False)
+            distribution_layout.addWidget(self.catalog_distribution_log)
+            self.catalog_distribution_log_toggle = QtWidgets.QCheckBox(self._text("official_library_show_log"))
+            self.catalog_distribution_log_toggle.toggled.connect(self.catalog_distribution_log.setVisible)
+            distribution_layout.addWidget(self.catalog_distribution_log_toggle)
+            column.addWidget(self.catalog_distribution_group)
+
+            self.catalog_advanced_group = QtWidgets.QGroupBox(self._text("official_library_advanced_group"))
+            advanced_layout = QtWidgets.QHBoxLayout(self.catalog_advanced_group)
+            self.catalog_advanced_manager_btn = QtWidgets.QPushButton(self._text("library_manager_open"))
+            self.catalog_advanced_manager_btn.clicked.connect(self._open_catalog_library_manager)
+            advanced_layout.addWidget(self.catalog_advanced_manager_btn)
+            self.catalog_distribution_open_cache_btn = QtWidgets.QPushButton(self._text("official_library_open_cache"))
+            self.catalog_distribution_clear_cache_btn = QtWidgets.QPushButton(self._text("official_library_clear_cache"))
+            advanced_layout.addWidget(self.catalog_distribution_open_cache_btn)
+            advanced_layout.addWidget(self.catalog_distribution_clear_cache_btn)
+            advanced_layout.addStretch(1)
+            column.addWidget(self.catalog_advanced_group)
+            column.addStretch(1)
+
+            def _refresh_current() -> None:
+                path_text = self._catalog_library_path_from_ui() or ""
+                if not path_text:
+                    self.catalog_library_current_status.setText(self._text("official_library_none"))
+                    self.catalog_library_current_path.setText("")
+                    return
+                resources = self._catalog_library_validated_resources
+                if resources is None:
+                    self._restore_catalog_library_verification_from_cache()
+                    resources = self._catalog_library_validated_resources
+                if resources is not None:
+                    self.catalog_library_current_status.setText(self._catalog_library_status_summary(resources))
+                else:
+                    self.catalog_library_current_status.setText(self._text("settings_catalog_library_unverified"))
+                self.catalog_library_current_path.setText(self._text("official_library_location", path=path_text))
+
+            def _verify_current() -> None:
+                resources = self._validate_catalog_library_from_gui(show_error=True)
+                if resources is not None:
+                    self.catalog_library_current_status.setText(self._catalog_library_status_summary(resources))
+                    self.catalog_library_current_path.setText(
+                        self._text("official_library_location", path=self._catalog_library_path_from_ui() or "")
+                    )
+
+            def _open_current_folder() -> None:
+                path_text = self._catalog_library_path_from_ui() or ""
+                if path_text:
+                    try:
+                        open_in_file_manager(Path(path_text).expanduser())
+                    except Exception as exc:
+                        self.catalog_distribution_log.appendPlainText(str(exc))
+
+            def _preferred_install_parent() -> Path:
+                saved = str(getattr(self._settings, "catalog_library_install_parent", "") or "").strip()
+                if saved:
+                    return Path(saved).expanduser()
+                current_path = self._catalog_library_path_from_ui()
+                if current_path:
+                    return Path(current_path).expanduser().parent
+                return default_library_parent()
+
+            def _distribution_plan_preview():
+                release = self._catalog_distribution_release
+                manifest = self._catalog_distribution_manifest
+                if release is None or manifest is None:
+                    return None
+                return CatalogDistributionService().build_install_plan(release, manifest, parent=_preferred_install_parent())
+
+            def _storage_summary_text(storage) -> str:
+                lines = [
+                    self._text("official_library_download_remaining", size=format_bytes_binary(storage.download_remaining_bytes)),
+                    self._text("official_library_installed_size", size=format_bytes_binary(storage.installed_size_bytes)),
+                    self._text("official_library_temp_peak", size=format_bytes_binary(storage.temporary_peak_bytes)),
+                ]
+                for item in storage.requirements:
+                    role_key = "official_library_volume_cache" if item.role == "cache" else (
+                        "official_library_volume_library" if item.role == "library" else "official_library_volume_combined"
+                    )
+                    available = format_bytes_binary(item.available_bytes)
+                    state = self._text("official_library_space_ok" if item.sufficient else "official_library_space_insufficient")
+                    lines.append(
+                        self._text(
+                            "official_library_volume_line",
+                            role=self._text(role_key),
+                            volume=item.volume,
+                            required=format_bytes_binary(item.required_bytes),
+                            available=available,
+                            state=state,
+                        )
+                    )
+                return "\n".join(lines)
+
+            def _refresh_distribution_paths() -> None:
+                parent = _preferred_install_parent()
+                self.catalog_distribution_parent_edit.setText(str(parent))
+                self.catalog_distribution_parent_edit.setToolTip(str(parent))
+                self.catalog_distribution_destination_edit.setText("")
+                self.catalog_distribution_destination_edit.setToolTip("")
+                self.catalog_distribution_cache_path.setText(
+                    self._text("official_library_cache_path", path=str(default_cache_root()))
+                )
+                self.catalog_distribution_cache_path.setToolTip(str(default_cache_root()))
+                self._catalog_distribution_install_allowed = False
+                plan = _distribution_plan_preview()
+                self._catalog_distribution_install_plan_preview = plan
+                if plan is None:
+                    self.catalog_distribution_storage.setText(self._text("official_library_storage_waiting"))
+                    self.catalog_distribution_install_btn.setEnabled(False)
+                    return
+                self.catalog_distribution_destination_edit.setText(str(plan.destination))
+                self.catalog_distribution_destination_edit.setToolTip(str(plan.destination))
+                self.catalog_distribution_cache_path.setText(self._text("official_library_cache_path", path=str(plan.cache_dir)))
+                self.catalog_distribution_cache_path.setToolTip(str(plan.cache_dir))
+                validation = validate_library_parent(
+                    parent,
+                    plan.manifest,
+                    cache_dir=plan.cache_dir,
+                    cache_root=default_cache_root(),
+                    application_roots=[ROOT_DIR, *_runtime_resource_dirs()],
+                    probe=False,
+                )
+                if not validation.ok:
+                    self.catalog_distribution_storage.setText(
+                        self._text("official_library_destination_invalid", error=f"{validation.code}: {validation.message}")
+                    )
+                    self.catalog_distribution_install_btn.setEnabled(False)
+                    return
+                storage = build_storage_plan(plan)
+                self._catalog_distribution_storage_plan = storage
+                self.catalog_distribution_storage.setText(_storage_summary_text(storage))
+                self._catalog_distribution_install_allowed = bool(storage.sufficient)
+                self.catalog_distribution_install_btn.setEnabled(bool(storage.sufficient and self._catalog_distribution_worker is None))
+
+            def _set_distribution_busy(busy: bool) -> None:
+                self.catalog_distribution_check_btn.setEnabled(not busy)
+                self.catalog_distribution_install_btn.setEnabled((not busy) and bool(getattr(self, "_catalog_distribution_install_allowed", False)))
+                self.catalog_distribution_cancel_btn.setEnabled(busy)
+                self.catalog_advanced_manager_btn.setEnabled(not busy)
+                self.catalog_distribution_change_parent_btn.setEnabled(not busy)
+                self.catalog_distribution_open_cache_btn.setEnabled(not busy)
+                self.catalog_distribution_clear_cache_btn.setEnabled(not busy)
+
+            class _DiscoverWorker(QtCore.QThread):
+                finished = QtCore.Signal(bool, object, object, str)
+
+                def run(self) -> None:  # pragma: no cover - GUI thread
+                    try:
+                        release, manifest = CatalogDistributionService().fetch_latest_distribution()
+                        self.finished.emit(True, release, manifest, "")
+                    except Exception as exc:
+                        self.finished.emit(False, None, None, str(exc))
+
+            self._catalog_discover_worker = None
+
+            def _on_discover_finished(ok: bool, release: object, manifest: object, error: str) -> None:
+                self._catalog_discover_worker = None
+                self.catalog_distribution_check_btn.setEnabled(True)
+                if not ok:
+                    self.catalog_distribution_status.setText(self._text("official_library_network_unavailable", error=error))
+                    return
+                self._catalog_distribution_release = release
+                self._catalog_distribution_manifest = manifest
+                total = sum(int(getattr(component, "size_bytes", 0) or 0) for component in getattr(manifest, "required_components", ()))
+                self.catalog_distribution_status.setText(
+                    self._text(
+                        "official_library_available",
+                        version=getattr(manifest, "version", "?"),
+                        size=_format_bytes(total),
+                        installed=_format_bytes(getattr(manifest, "installed_size_bytes", None)),
+                    )
+                )
+                _refresh_distribution_paths()
+
+            def _check_release() -> None:
+                if self._catalog_discover_worker is not None:
+                    return
+                self.catalog_distribution_status.setText(self._text("official_library_checking"))
+                self.catalog_distribution_check_btn.setEnabled(False)
+                worker = _DiscoverWorker(self)
+                worker.finished.connect(_on_discover_finished)
+                self._catalog_discover_worker = worker
+                worker.start()
+
+            def _on_distribution_progress(progress: object) -> None:
+                stage = str(getattr(progress, "stage", "") or "")
+                message = str(getattr(progress, "message", "") or stage)
+                component = getattr(progress, "component", None)
+                total = int(getattr(progress, "overall_total", 0) or 0)
+                current = int(getattr(progress, "overall_current", 0) or 0)
+                bytes_total = int(getattr(progress, "bytes_total", 0) or 0)
+                bytes_current = int(getattr(progress, "bytes_current", 0) or 0)
+                if total > 0:
+                    self.catalog_distribution_progress.setValue(max(0, min(100, int((current / total) * 100))))
+                if bytes_total > 0:
+                    self.catalog_distribution_detail.setText(
+                        f"{message} - {_format_bytes(bytes_current)} / {_format_bytes(bytes_total)}"
+                    )
+                else:
+                    self.catalog_distribution_detail.setText(message)
+                self.catalog_distribution_status.setText(message)
+                self.catalog_distribution_log.appendPlainText(f"{stage}: {component or ''} {message}".strip())
+
+            def _on_distribution_discovered(release: object, manifest: object) -> None:
+                self._catalog_distribution_release = release
+                self._catalog_distribution_manifest = manifest
+                self.catalog_distribution_log.appendPlainText(
+                    f"release={getattr(release, 'tag', '?')} version={getattr(manifest, 'version', '?')}"
+                )
+                _refresh_distribution_paths()
+
+            def _on_distribution_finished(ok: bool, result: object, error: str) -> None:
+                _set_distribution_busy(False)
+                self._catalog_distribution_worker = None
+                if ok and result is not None:
+                    library_result = getattr(result, "library_result", None)
+                    library_root = str(getattr(library_result, "library_root", "") or "")
+                    if library_root:
+                        if hasattr(self, "settings_catalog_library_edit"):
+                            self.settings_catalog_library_edit.setText(library_root)
+                        self._settings.catalog_library_path = library_root
+                    self.catalog_distribution_progress.setValue(100)
+                    self.catalog_distribution_status.setText(self._text("official_library_installed"))
+                    try:
+                        plan = self._catalog_distribution_install_plan_preview
+                        cache_size = cache_reclaimable_bytes(plan.cache_dir, plan.components) if plan is not None else 0
+                    except Exception:
+                        cache_size = 0
+                    self.catalog_distribution_detail.setText(
+                        self._text(
+                            "official_library_installed_detail",
+                            path=library_root,
+                            cache=format_bytes_binary(cache_size),
+                        )
+                    )
+                    _verify_current()
+                    _refresh_distribution_paths()
+                elif "CANCEL" in str(error).upper():
+                    self.catalog_distribution_status.setText(self._text("official_library_cancelled"))
+                    _refresh_distribution_paths()
+                else:
+                    self.catalog_distribution_status.setText(self._text("official_library_failed", error=error))
+                    self.catalog_distribution_log.appendPlainText(error)
+                    _refresh_distribution_paths()
+
+            def _install_recommended() -> None:
+                if self._catalog_distribution_worker is not None:
+                    return
+                plan = _distribution_plan_preview()
+                if plan is None:
+                    return
+                validation = validate_library_parent(
+                    _preferred_install_parent(),
+                    plan.manifest,
+                    cache_dir=plan.cache_dir,
+                    cache_root=default_cache_root(),
+                    application_roots=[ROOT_DIR, *_runtime_resource_dirs()],
+                    probe=True,
+                )
+                if not validation.ok:
+                    self.catalog_distribution_status.setText(
+                        self._text("official_library_destination_invalid", error=f"{validation.code}: {validation.message}")
+                    )
+                    _refresh_distribution_paths()
+                    return
+                storage = build_storage_plan(plan)
+                if not storage.sufficient:
+                    self.catalog_distribution_status.setText(self._text("official_library_space_blocked"))
+                    self.catalog_distribution_storage.setText(_storage_summary_text(storage))
+                    _refresh_distribution_paths()
+                    return
+                self.catalog_distribution_log.clear()
+                self.catalog_distribution_progress.setValue(0)
+                _set_distribution_busy(True)
+                worker = CatalogDistributionInstallWorker(destination=None, install_parent=validation.parent, settings=self._settings)
+                worker.progress.connect(_on_distribution_progress)
+                worker.discovered.connect(_on_distribution_discovered)
+                worker.finished.connect(_on_distribution_finished)
+                self._catalog_distribution_worker = worker
+                worker.start()
+
+            def _cancel_distribution() -> None:
+                if self._catalog_distribution_worker is not None:
+                    self._catalog_distribution_worker.request_cancel()
+                    self.catalog_distribution_cancel_btn.setEnabled(False)
+
+            def _choose_install_parent() -> None:
+                current = str(_preferred_install_parent())
+                chosen = QtWidgets.QFileDialog.getExistingDirectory(
+                    self,
+                    self._text("official_library_choose_parent_title"),
+                    current,
+                )
+                if not chosen:
+                    return
+                manifest = self._catalog_distribution_manifest
+                if manifest is None:
+                    self._settings.catalog_library_install_parent = str(Path(chosen).expanduser())
+                    save_persistent_settings(self._settings)
+                    _refresh_distribution_paths()
+                    return
+                validation = validate_library_parent(
+                    chosen,
+                    manifest,
+                    cache_root=default_cache_root(),
+                    application_roots=[ROOT_DIR, *_runtime_resource_dirs()],
+                    probe=True,
+                )
+                if not validation.ok:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        self._text("official_library_destination_error_title"),
+                        self._text("official_library_destination_invalid", error=f"{validation.code}: {validation.message}"),
+                    )
+                    return
+                self._settings.catalog_library_install_parent = str(validation.parent)
+                save_persistent_settings(self._settings)
+                _refresh_distribution_paths()
+
+            def _open_cache_folder() -> None:
+                plan = _distribution_plan_preview()
+                cache_path = plan.cache_dir if plan is not None else default_cache_root()
+                try:
+                    cache_path.mkdir(parents=True, exist_ok=True)
+                    open_in_file_manager(cache_path)
+                except Exception as exc:
+                    self.catalog_distribution_log.appendPlainText(str(exc))
+
+            def _clear_version_cache() -> None:
+                if self._catalog_distribution_worker is not None:
+                    self.catalog_distribution_status.setText(self._text("official_library_cache_busy"))
+                    return
+                plan = _distribution_plan_preview()
+                if plan is None:
+                    return
+                reclaimable = cache_reclaimable_bytes(plan.cache_dir, plan.components)
+                if reclaimable <= 0:
+                    self.catalog_distribution_status.setText(self._text("official_library_cache_empty"))
+                    return
+                answer = QtWidgets.QMessageBox.question(
+                    self,
+                    self._text("official_library_clear_cache_title"),
+                    self._text("official_library_clear_cache_confirm", size=format_bytes_binary(reclaimable)),
+                )
+                if answer != QtWidgets.QMessageBox.Yes:
+                    return
+                try:
+                    removed = cleanup_distribution_cache(plan.cache_dir, plan.components, active=False)
+                    self.catalog_distribution_status.setText(
+                        self._text("official_library_cache_cleared", size=format_bytes_binary(removed))
+                    )
+                    _refresh_distribution_paths()
+                except Exception as exc:
+                    self.catalog_distribution_status.setText(self._text("official_library_cache_clear_failed", error=str(exc)))
+
+            self.catalog_library_verify_btn.clicked.connect(_verify_current)
+            self.catalog_library_repair_btn.clicked.connect(self._open_catalog_library_manager)
+            self.catalog_library_open_folder_btn.clicked.connect(_open_current_folder)
+            self.catalog_distribution_change_parent_btn.clicked.connect(_choose_install_parent)
+            self.catalog_distribution_open_cache_btn.clicked.connect(_open_cache_folder)
+            self.catalog_distribution_clear_cache_btn.clicked.connect(_clear_version_cache)
+            self.catalog_distribution_check_btn.clicked.connect(_check_release)
+            self.catalog_distribution_install_btn.clicked.connect(_install_recommended)
+            self.catalog_distribution_cancel_btn.clicked.connect(_cancel_distribution)
+            _refresh_current()
+            _refresh_distribution_paths()
+            _check_release()
+            return widget
+
             form = QtWidgets.QFormLayout()
             # Database root selector (kept in sync with Settings tab)
             self.db_tab_label = QtWidgets.QLabel()
@@ -6978,15 +8597,7 @@ def launch_gui(args: argparse.Namespace) -> int:
 
             self.db_tab_browse.clicked.connect(lambda: self._pick_settings_directory(self.db_tab_edit))
             # Keep Settings tab DB field in sync
-            def _sync_db_text(text: str) -> None:
-                try:
-                    if hasattr(self, "settings_db_edit"):
-                        if self.settings_db_edit.text().strip() != text.strip():
-                            self.settings_db_edit.setText(text)
-                except Exception:
-                    pass
-            self.db_tab_edit.textChanged.connect(_sync_db_text)
-            self.db_tab_edit.textChanged.connect(self._on_db_root_text_changed)
+            self.db_tab_edit.textChanged.connect(lambda text: self._set_astap_root(text, source="database-tab", validate=False))
             return widget
 
         def _schedule_db_scan(self, path_text: str, *, delay_ms: int = 800) -> None:
@@ -7079,6 +8690,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._last_family_notice = set()
                 self._last_family_prompt = set()
                 return
+            if not should_allow_legacy_family_prompt(self._settings, getattr(self, "_startup_wizard_decision", None)):
+                self._last_family_notice = set(missing)
+                self._log_settings(
+                    "Legacy index rebuild prompt suppressed; active catalog mode is not explicit legacy-index."
+                )
+                return
             if not hasattr(self, "_last_family_notice"):
                 self._last_family_notice = set()
             if missing == getattr(self, "_last_family_notice", set()):
@@ -7097,163 +8714,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             )
             if reply == QtWidgets.QMessageBox.Yes:
                 self._on_build_index_clicked()
-
-        def _build_dev_tab(self) -> QtWidgets.QWidget:
-            widget = QtWidgets.QWidget()
-            form = QtWidgets.QFormLayout(widget)
-            self.dev_bucket_label = QtWidgets.QLabel()
-            self.dev_bucket_spin = QtWidgets.QSpinBox()
-            self.dev_bucket_spin.setRange(0, 20000)
-            self.dev_bucket_spin.setSingleStep(256)
-            self.dev_bucket_spin.setAccelerated(True)
-            self.dev_bucket_spin.setValue(int(self._settings.dev_bucket_limit_override or 0))
-            self.dev_bucket_spin.setSpecialValueText("")
-            form.addRow(self.dev_bucket_label, self.dev_bucket_spin)
-            self.dev_vote_label = QtWidgets.QLabel()
-            self.dev_vote_spin = QtWidgets.QSpinBox()
-            self.dev_vote_spin.setRange(5, 95)
-            self.dev_vote_spin.setSingleStep(5)
-            self.dev_vote_spin.setValue(int(self._settings.dev_vote_percentile or 40))
-            form.addRow(self.dev_vote_label, self.dev_vote_spin)
-            self.dev_cap_s_label = QtWidgets.QLabel()
-            self.dev_cap_s_spin = QtWidgets.QSpinBox()
-            self.dev_cap_s_spin.setRange(512, 20000)
-            self.dev_cap_s_spin.setSingleStep(256)
-            self.dev_cap_s_spin.setValue(int(self._settings.dev_bucket_cap_S or 6000))
-            form.addRow(self.dev_cap_s_label, self.dev_cap_s_spin)
-            self.dev_cap_s_spin.valueChanged.connect(lambda _: self._update_hash_button_labels())
-            self.dev_cap_m_label = QtWidgets.QLabel()
-            self.dev_cap_m_spin = QtWidgets.QSpinBox()
-            self.dev_cap_m_spin.setRange(256, 20000)
-            self.dev_cap_m_spin.setSingleStep(256)
-            self.dev_cap_m_spin.setValue(int(self._settings.dev_bucket_cap_M or 4096))
-            form.addRow(self.dev_cap_m_label, self.dev_cap_m_spin)
-            self.dev_cap_m_spin.valueChanged.connect(lambda _: self._update_hash_button_labels())
-            self.dev_cap_l_label = QtWidgets.QLabel()
-            self.dev_cap_l_spin = QtWidgets.QSpinBox()
-            self.dev_cap_l_spin.setRange(1024, 40000)
-            self.dev_cap_l_spin.setSingleStep(512)
-            self.dev_cap_l_spin.setValue(int(self._settings.dev_bucket_cap_L or 8192))
-            form.addRow(self.dev_cap_l_label, self.dev_cap_l_spin)
-            self.dev_cap_l_spin.valueChanged.connect(lambda _: self._update_hash_button_labels())
-            self.dev_sigma_label = QtWidgets.QLabel()
-            self.dev_sigma_spin = QtWidgets.QDoubleSpinBox()
-            self.dev_sigma_spin.setRange(0.5, 10.0)
-            self.dev_sigma_spin.setDecimals(2)
-            self.dev_sigma_spin.setSingleStep(0.1)
-            self.dev_sigma_spin.setValue(float(self._settings.dev_detect_k_sigma or 3.0))
-            form.addRow(self.dev_sigma_label, self.dev_sigma_spin)
-            self.dev_area_label = QtWidgets.QLabel()
-            self.dev_area_spin = QtWidgets.QSpinBox()
-            self.dev_area_spin.setRange(1, 100)
-            self.dev_area_spin.setValue(int(self._settings.dev_detect_min_area or 5))
-            form.addRow(self.dev_area_label, self.dev_area_spin)
-            self.downsample_label_widget = QtWidgets.QLabel()
-            self.downsample_spin = QtWidgets.QSpinBox()
-            self.downsample_spin.setRange(1, 4)
-            self.downsample_spin.setValue(int(self._settings.solver_downsample or args.downsample or 1))
-            form.addRow(self.downsample_label_widget, self.downsample_spin)
-            self.cache_label_widget = QtWidgets.QLabel()
-            self.cache_spin = QtWidgets.QSpinBox()
-            self.cache_spin.setRange(2, 64)
-            self.cache_spin.setValue(int(self._settings.solver_cache_size or args.cache_size or 12))
-            form.addRow(self.cache_label_widget, self.cache_spin)
-            self.dev_workers_label = QtWidgets.QLabel()
-            self.dev_workers_combo = QtWidgets.QComboBox()
-            self._populate_dev_workers_combo()
-            form.addRow(self.dev_workers_label, self.dev_workers_combo)
-            self.dev_workers_hint_label = QtWidgets.QLabel()
-            self.dev_workers_hint_label.setWordWrap(True)
-            form.addRow(self.dev_workers_hint_label)
-            # Catalog family overrides (auto/custom)
-            self.dev_family_group = QtWidgets.QGroupBox()
-            self.dev_family_group.setTitle(self._text("dev_family_group"))
-            family_layout = QtWidgets.QVBoxLayout(self.dev_family_group)
-            self.dev_family_auto_check = QtWidgets.QCheckBox()
-            self.dev_family_auto_check.setChecked(bool(self._settings.dev_family_auto))
-            self.dev_family_auto_check.setText(self._text("dev_family_auto"))
-            self.dev_family_auto_check.toggled.connect(self._update_dev_family_box_enabled)
-            family_layout.addWidget(self.dev_family_auto_check)
-            self.dev_family_hint = QtWidgets.QLabel()
-            self.dev_family_hint.setWordWrap(True)
-            self.dev_family_hint.setText(self._text("dev_family_hint"))
-            family_layout.addWidget(self.dev_family_hint)
-            self.dev_family_box = QtWidgets.QWidget()
-            self.dev_family_box_layout = QtWidgets.QVBoxLayout(self.dev_family_box)
-            self.dev_family_box_layout.setContentsMargins(0, 0, 0, 0)
-            family_layout.addWidget(self.dev_family_box)
-            form.addRow(self.dev_family_group)
-            self._refresh_dev_family_choices([])
-            # Hash rebuild shortcuts
-            self.dev_hash_group = QtWidgets.QGroupBox()
-            self.dev_hash_group.setTitle(self._text("dev_hash_group"))
-            hash_layout = QtWidgets.QVBoxLayout(self.dev_hash_group)
-            self.dev_hash_buttons: dict[str, QtWidgets.QPushButton] = {}
-            self.dev_hash_quads_spin: dict[str, QtWidgets.QSpinBox] = {}
-            for level in ("S", "M", "L"):
-                row = QtWidgets.QHBoxLayout()
-                btn = QtWidgets.QPushButton()
-                btn.clicked.connect(lambda _, lvl=level: self._rebuild_hash_level(lvl))
-                row.addWidget(btn)
-                spin = QtWidgets.QSpinBox()
-                spin.setRange(100, 100000)
-                default_quads = getattr(self._settings, f"dev_hash_quads_{level}", None)
-                if not default_quads:
-                    default_quads = self._settings.max_quads_per_tile or DEFAULT_MAX_QUADS_PER_TILE
-                spin.setValue(int(default_quads))
-                spin.setSuffix(" quads")
-                spin.setToolTip(self._text("dev_hash_value_hint"))
-                row.addWidget(spin)
-                row.addStretch(1)
-                hash_layout.addLayout(row)
-                self.dev_hash_buttons[level] = btn
-                self.dev_hash_quads_spin[level] = spin
-            form.addRow(self.dev_hash_group)
-            self.dev_save_btn = QtWidgets.QPushButton(self._text("settings_save_btn"))
-            form.addRow(self.dev_save_btn)
-            self.dev_save_btn.clicked.connect(self._save_dev_settings)
-            form.addItem(QtWidgets.QSpacerItem(20, 20, QtWidgets.QSizePolicy.Minimum, QtWidgets.QSizePolicy.Expanding))
-            self._update_hash_button_labels()
-            self._update_dev_family_box_enabled()
-            return widget
-
-        def _save_dev_settings(self) -> None:
-            try:
-                self._settings.dev_bucket_limit_override = int(self.dev_bucket_spin.value())
-                self._settings.dev_vote_percentile = int(self.dev_vote_spin.value())
-                self._settings.dev_bucket_cap_S = int(self.dev_cap_s_spin.value())
-                self._settings.dev_bucket_cap_M = int(self.dev_cap_m_spin.value())
-                self._settings.dev_bucket_cap_L = int(self.dev_cap_l_spin.value())
-                self._settings.dev_detect_k_sigma = float(self.dev_sigma_spin.value())
-                self._settings.dev_detect_min_area = int(self.dev_area_spin.value())
-                self._settings.solver_downsample = int(self.downsample_spin.value())
-                self._settings.solver_cache_size = int(self.cache_spin.value())
-                auto_mode = bool(self.dev_family_auto_check.isChecked())
-                self._settings.dev_family_auto = auto_mode
-                if auto_mode:
-                    self._settings.dev_family_selection = None
-                else:
-                    selection = self._selected_dev_families()
-                    if not selection:
-                        QtWidgets.QMessageBox.warning(
-                            self,
-                            self._text("dialog_config_title"),
-                            self._text("dev_family_none_error"),
-                        )
-                        return
-                    self._settings.dev_family_selection = selection
-                if hasattr(self, "dev_hash_quads_spin"):
-                    for level, spin in self.dev_hash_quads_spin.items():
-                        try:
-                            value = max(100, int(spin.value()))
-                        except Exception:
-                            value = DEFAULT_MAX_QUADS_PER_TILE
-                        setattr(self._settings, f"dev_hash_quads_{level}", value)
-                self._settings.solver_workers = self._clamp_worker_choice(self._dev_workers_choice)
-                save_persistent_settings(self._settings)
-                self._log(self._text("settings.saved"))
-            except Exception as exc:
-                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
 
         def _refresh_dev_family_choices(self, families: Sequence[str]) -> None:
             if not hasattr(self, "dev_family_box_layout"):
@@ -7346,60 +8806,17 @@ def launch_gui(args: argparse.Namespace) -> int:
             return min(cap, max(1, effective))
 
         def _selected_worker_value(self) -> int:
-            if hasattr(self, "_dev_workers_choice"):
-                return int(self._dev_workers_choice)
             try:
-                return int(self.workers_spin.value())
+                if hasattr(self, "workers_spin"):
+                    return int(self.workers_spin.value())
             except Exception:
-                return 0
+                pass
+            return int(getattr(self, "_dev_workers_choice", 0) or 0)
 
         def _effective_workers_for_run(self) -> int:
             return self._effective_workers_for_choice(self._selected_worker_value())
 
-        def _populate_dev_workers_combo(self) -> None:
-            if not hasattr(self, "dev_workers_combo"):
-                return
-            combo = self.dev_workers_combo
-            combo.blockSignals(True)
-            combo.clear()
-            combo.addItem(self._text("dev_workers_auto"), 0)
-            cap = self._max_worker_cap()
-            for value in range(1, cap + 1):
-                combo.addItem(str(value), value)
-            choice = self._clamp_worker_choice(self._dev_workers_choice)
-            self._dev_workers_choice = choice
-            idx = combo.findData(choice)
-            if idx < 0:
-                idx = 0
-            combo.setCurrentIndex(idx)
-            if not getattr(self, "_dev_workers_combo_connected", False):
-                combo.currentIndexChanged.connect(self._on_dev_workers_changed)
-                self._dev_workers_combo_connected = True
-            combo.blockSignals(False)
-            self._sync_workers_spin_from_dev_choice()
-
-        def _select_dev_workers_combo_value(self, value: int) -> None:
-            if not hasattr(self, "dev_workers_combo"):
-                return
-            combo = self.dev_workers_combo
-            idx = combo.findData(value)
-            if idx < 0:
-                return
-            combo.blockSignals(True)
-            combo.setCurrentIndex(idx)
-            combo.blockSignals(False)
-
-        def _on_dev_workers_changed(self) -> None:
-            if not hasattr(self, "dev_workers_combo"):
-                return
-            data = self.dev_workers_combo.currentData()
-            if data is None:
-                return
-            self._dev_workers_choice = self._clamp_worker_choice(data)
-            self._settings.solver_workers = self._dev_workers_choice
-            self._sync_workers_spin_from_dev_choice()
-
-        def _sync_workers_spin_from_dev_choice(self) -> None:
+        def _sync_workers_spin_from_settings(self) -> None:
             if not hasattr(self, "workers_spin"):
                 return
             value = self._clamp_worker_choice(self._dev_workers_choice)
@@ -7414,7 +8831,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                 return
             value = max(0, min(self._max_worker_cap(), int(value)))
             self._dev_workers_choice = value
-            self._select_dev_workers_combo_value(value)
             self._settings.solver_workers = self._dev_workers_choice
 
         def _level_quads_from_settings(self, settings: Optional[PersistentSettings] = None) -> dict[str, int]:
@@ -7436,6 +8852,165 @@ def launch_gui(args: argparse.Namespace) -> int:
             for level, button in self.dev_hash_buttons.items():
                 button.setText(self._text("dev_hash_button", level=level))
 
+        def _open_historical_index_maintenance_dialog(self) -> None:
+            if self._hash_maintenance_dialog is None:
+                self._hash_maintenance_dialog = self._build_historical_index_maintenance_dialog()
+            dialog = self._hash_maintenance_dialog
+            dialog.setWindowTitle(self._text("historical_index_maintenance_title"))
+            self._update_hash_button_labels()
+            dialog.show()
+            try:
+                dialog.raise_()
+                dialog.activateWindow()
+            except Exception:
+                pass
+
+        def _open_catalog_library_manager(self) -> None:
+            if self._catalog_library_manager_dialog is None:
+                dialog = LibraryManagerWindow(self, self._text)
+                dialog.librarySelected.connect(self._on_catalog_library_manager_selected)
+                self._catalog_library_manager_dialog = dialog
+            dialog = self._catalog_library_manager_dialog
+            if hasattr(dialog, "apply_language"):
+                dialog.apply_language()
+            if hasattr(self, "settings_catalog_library_edit") and hasattr(dialog, "repair_library_edit"):
+                current = self.settings_catalog_library_edit.text().strip()
+                if current:
+                    dialog.repair_library_edit.setText(current)
+            dialog.show()
+            try:
+                dialog.raise_()
+                dialog.activateWindow()
+            except Exception:
+                pass
+
+        def _on_catalog_library_manager_selected(self, path: str) -> None:
+            self._activate_catalog_library_product_mode(path, source="library-manager")
+
+        def _activate_catalog_library_product_mode(
+            self,
+            path: str,
+            *,
+            source: str,
+            persist: bool = True,
+            show_error: bool = True,
+        ) -> bool:
+            value = str(path or "").strip()
+            if not value:
+                return False
+            try:
+                value = str(Path(value).expanduser())
+            except Exception:
+                pass
+            previous_settings = replace(self._settings)
+            previous_text = (
+                self.settings_catalog_library_edit.text().strip()
+                if hasattr(self, "settings_catalog_library_edit")
+                else str(getattr(self._settings, "catalog_library_path", "") or "").strip()
+            )
+            if hasattr(self, "settings_catalog_library_edit"):
+                self.settings_catalog_library_edit.setText(value)
+            resources = self._validate_catalog_library_from_gui(show_error=False)
+            if resources is None:
+                if hasattr(self, "settings_catalog_library_edit"):
+                    self.settings_catalog_library_edit.setText(previous_text)
+                self._settings = previous_settings
+                if show_error:
+                    QtWidgets.QMessageBox.warning(
+                        self,
+                        self._text("dialog_config_title"),
+                        self._catalog_library_validation_error or "CATALOG_LIBRARY_INVALID",
+                    )
+                return False
+            try:
+                self._restore_catalog_auto_modes()
+                self._settings.catalog_library_path = value
+                settings = self._read_settings_from_ui()
+                settings.catalog_library_path = value
+                settings.near_catalog_mode = "auto"
+                settings.blind4d_catalog_mode = "auto"
+                try:
+                    fingerprint = build_lightweight_catalog_fingerprint(value)
+                    settings.catalog_library_verification = catalog_verification_record(
+                        fingerprint=fingerprint,
+                        verification_level=FULL_LEVEL,
+                        verification_status=STATUS_VALID,
+                    )
+                except Exception:
+                    settings.catalog_library_verification = getattr(self._settings, "catalog_library_verification", None)
+                self._settings = settings
+                self._catalog_library_validated_path = value
+                self._catalog_library_validated_resources = resources
+                self._catalog_library_validation_error = None
+                if hasattr(self, "settings_catalog_library_edit"):
+                    self.settings_catalog_library_edit.setText(value)
+                self._set_catalog_library_status(
+                    resources.library_status.value if resources.library_status else "INVALID",
+                    resources=resources,
+                )
+                if persist:
+                    save_persistent_settings(self._settings)
+                self._update_simplified_capability_summary()
+                self._log_settings(f"Catalog library product activation: source={source} path={value}")
+                return True
+            except Exception as exc:
+                self._settings = previous_settings
+                if hasattr(self, "settings_catalog_library_edit"):
+                    self.settings_catalog_library_edit.setText(previous_text)
+                self._catalog_library_validated_path = None
+                self._catalog_library_validated_resources = None
+                self._catalog_library_validation_error = str(exc)
+                self._log_settings(self._text("library_manager_failed", error=str(exc)))
+                if show_error:
+                    QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
+                return False
+
+        def _build_historical_index_maintenance_dialog(self) -> QtWidgets.QDialog:
+            dialog = QtWidgets.QDialog(self)
+            dialog.setWindowTitle(self._text("historical_index_maintenance_title"))
+            dialog.setModal(False)
+            layout = QtWidgets.QVBoxLayout(dialog)
+            warning = QtWidgets.QLabel(self._text("historical_index_maintenance_warning"))
+            warning.setWordWrap(True)
+            warning.setStyleSheet("color: #8a6d3b;")
+            layout.addWidget(warning)
+            self.historical_index_maintenance_warning_label = warning
+            self.dev_hash_group = QtWidgets.QGroupBox()
+            self.dev_hash_group.setTitle(self._text("dev_hash_group"))
+            hash_layout = QtWidgets.QVBoxLayout(self.dev_hash_group)
+            self.dev_hash_buttons: dict[str, QtWidgets.QPushButton] = {}
+            self.dev_hash_quads_spin: dict[str, QtWidgets.QSpinBox] = {}
+            for level in ("S", "M", "L"):
+                row = QtWidgets.QHBoxLayout()
+                btn = QtWidgets.QPushButton()
+                btn.clicked.connect(lambda _checked=False, lvl=level: self._rebuild_hash_level(lvl))
+                row.addWidget(btn)
+                spin = QtWidgets.QSpinBox()
+                spin.setRange(100, 100000)
+                default_quads = getattr(self._settings, f"dev_hash_quads_{level}", None)
+                if not default_quads:
+                    default_quads = self._settings.max_quads_per_tile or DEFAULT_MAX_QUADS_PER_TILE
+                spin.setValue(int(default_quads))
+                spin.setSuffix(" quads")
+                spin.setToolTip(self._text("dev_hash_value_hint"))
+                row.addWidget(spin)
+                row.addStretch(1)
+                hash_layout.addLayout(row)
+                self.dev_hash_buttons[level] = btn
+                self.dev_hash_quads_spin[level] = spin
+            layout.addWidget(self.dev_hash_group)
+            button_row = QtWidgets.QHBoxLayout()
+            button_row.addStretch(1)
+            self.hash_maintenance_save_btn = QtWidgets.QPushButton(self._text("settings_save_btn"))
+            self.hash_maintenance_save_btn.clicked.connect(self._on_save_settings_clicked)
+            self.hash_maintenance_close_btn = QtWidgets.QPushButton(self._text("close_button"))
+            self.hash_maintenance_close_btn.clicked.connect(dialog.close)
+            button_row.addWidget(self.hash_maintenance_save_btn)
+            button_row.addWidget(self.hash_maintenance_close_btn)
+            layout.addLayout(button_row)
+            self._update_hash_button_labels()
+            return dialog
+
         def _rebuild_hash_level(self, level: str) -> None:
             level_key = str(level).strip().upper()
             if level_key not in {"S", "M", "L"}:
@@ -7446,6 +9021,12 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self._text("dialog_config_title"),
                     self._text("dev_hash_busy"),
                 )
+                return
+            try:
+                self._settings = self._read_settings_from_ui()
+                save_persistent_settings(self._settings)
+            except ValueError as exc:
+                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
             if not self._settings.index_root:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), self._text("settings_index_missing"))
@@ -7617,6 +9198,16 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.effective_chain_label = QtWidgets.QLabel()
             self.effective_chain_label.setWordWrap(True)
             form.addRow(self.effective_chain_label)
+            self.instrument_label_widget = QtWidgets.QLabel()
+            self.instrument_combo = QtWidgets.QComboBox()
+            self.instrument_combo.setEditable(False)
+            self._populate_instrument_combo()
+            self.instrument_combo.currentIndexChanged.connect(lambda _idx: self._on_instrument_combo_changed())
+            self.instrument_help_label = QtWidgets.QLabel()
+            self.instrument_help_label.setWordWrap(True)
+            self.instrument_help_label.setStyleSheet("color: #6c757d;")
+            form.addRow(self.instrument_label_widget, self.instrument_combo)
+            form.addRow(self.instrument_help_label)
             self.fov_spin = QtWidgets.QDoubleSpinBox()
             self.fov_spin.setRange(0.0, 20.0)
             self.fov_spin.setDecimals(2)
@@ -7686,12 +9277,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.scale_max_hint_spin.setSingleStep(0.1)
             self.scale_max_hint_spin.setSpecialValueText(GUI_TRANSLATIONS[GUI_DEFAULT_LANGUAGE]["special_auto"])
             self.scale_max_hint_spin.setValue(self._settings.solver_hint_resolution_max_arcsec or 0.0)
-            self.workers_spin = QtWidgets.QSpinBox()
-            cap_workers = self._max_worker_cap()
-            self.workers_spin.setRange(0, cap_workers)
-            self.workers_spin.setSpecialValueText(self._text("dev_workers_auto"))
-            self.workers_spin.setValue(self._clamp_worker_choice(self._dev_workers_choice))
-            self.workers_spin.valueChanged.connect(self._on_workers_spin_changed)
+            self.downsample_label_widget = QtWidgets.QLabel()
+            self.downsample_spin = QtWidgets.QSpinBox()
+            self.downsample_spin.setRange(1, 4)
+            self.downsample_spin.setValue(int(self._settings.solver_downsample or args.downsample or 1))
             self.max_files_spin = QtWidgets.QSpinBox()
             self.max_files_spin.setRange(0, 10000)
             self.max_files_spin.setValue(self._settings.solver_max_files or args.max_files or 0)
@@ -7721,32 +9310,18 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.blind_4d_profile_combo.addItem(self._text("blind_4d_profile_historical"), HISTORICAL_PROFILE)
             self.blind_4d_profile_combo.addItem(self._text("blind_4d_profile_experimental"), ZEBLIND_4D_EXPERIMENTAL_PROFILE)
             self.blind_4d_profile_combo.currentIndexChanged.connect(self._on_blind_profile_combo_changed)
-            self.blind_4d_manifest_label = QtWidgets.QLabel()
-            self.blind_4d_manifest_edit = QtWidgets.QLineEdit(str(resolve_default_4d_manifest_path(getattr(self._settings, "blind_4d_manifest_path", None))))
-            self.blind_4d_manifest_edit.textChanged.connect(lambda _text: self._set_manifest_status("not_verified"))
-            self.blind_4d_manifest_browse_btn = QtWidgets.QPushButton()
-            self.blind_4d_manifest_browse_btn.clicked.connect(self._pick_4d_manifest_file)
-            self.blind_4d_manifest_verify_btn = QtWidgets.QPushButton()
-            self.blind_4d_manifest_verify_btn.clicked.connect(lambda: self._verify_4d_manifest_from_gui(show_error=True, rollback_on_failure=False))
-            manifest_row = QtWidgets.QWidget()
-            manifest_layout = QtWidgets.QHBoxLayout(manifest_row)
-            manifest_layout.setContentsMargins(0, 0, 0, 0)
-            manifest_layout.addWidget(self.blind_4d_manifest_edit, 1)
-            manifest_layout.addWidget(self.blind_4d_manifest_browse_btn)
-            manifest_layout.addWidget(self.blind_4d_manifest_verify_btn)
-            self.blind_4d_manifest_status_label = QtWidgets.QLabel()
-            self.blind_4d_manifest_status_label.setWordWrap(True)
             self.blind_4d_expert_container = QtWidgets.QWidget()
             expert_layout = QtWidgets.QFormLayout(self.blind_4d_expert_container)
             expert_layout.setContentsMargins(0, 0, 0, 0)
             expert_layout.addRow(self.blind_4d_profile_label, self.blind_4d_profile_combo)
-            expert_layout.addRow(self.blind_4d_manifest_label, manifest_row)
-            expert_layout.addRow(self.blind_4d_manifest_status_label)
             self.simple_mode_check = QtWidgets.QCheckBox()
             self.simple_mode_check.setChecked(True)
             self.simple_mode_check.toggled.connect(lambda _checked: self._apply_simple_mode_visibility())
             self.simple_clean_wcs_check = QtWidgets.QCheckBox()
             self.simple_clean_wcs_check.setChecked(False)
+            self.move_unresolved_check = QtWidgets.QCheckBox()
+            self.move_unresolved_check.setChecked(bool(getattr(self._settings, "move_unresolved_files", False)))
+            self.move_unresolved_check.setToolTip(self._text("move_unresolved_files_help"))
             self.fov_label_widget = QtWidgets.QLabel()
             self.search_scale_label_widget = QtWidgets.QLabel()
             self.search_attempts_label_widget = QtWidgets.QLabel()
@@ -7759,7 +9334,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.scale_hint_label_widget = QtWidgets.QLabel()
             self.scale_min_hint_label_widget = QtWidgets.QLabel()
             self.scale_max_hint_label_widget = QtWidgets.QLabel()
-            self.workers_label_widget = QtWidgets.QLabel()
             self.max_files_label_widget = QtWidgets.QLabel()
             self.formats_label_widget = QtWidgets.QLabel()
             self.families_label_widget = QtWidgets.QLabel()
@@ -7775,7 +9349,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.scale_hint_label_widget, self.scale_hint_spin)
             form.addRow(self.scale_min_hint_label_widget, self.scale_min_hint_spin)
             form.addRow(self.scale_max_hint_label_widget, self.scale_max_hint_spin)
-            form.addRow(self.workers_label_widget, self.workers_spin)
+            form.addRow(self.downsample_label_widget, self.downsample_spin)
             form.addRow(self.max_files_label_widget, self.max_files_spin)
             form.addRow(self.formats_label_widget, self.formats_edit)
             form.addRow(self.families_label_widget, self.families_combo)
@@ -7786,6 +9360,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             form.addRow(self.overwrite_check)
             form.addRow(self.simple_mode_check)
             form.addRow(self.simple_clean_wcs_check)
+            form.addRow(self.move_unresolved_check)
             self._set_manifest_status("not_verified")
             self._sync_blind_profile_controls()
             self._apply_simple_mode_visibility()
@@ -7853,6 +9428,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.settings_catalog_library_validate_btn.clicked.connect(lambda: self._validate_catalog_library_from_gui(show_error=True))
             self.settings_catalog_library_clear_btn = QtWidgets.QPushButton()
             self.settings_catalog_library_clear_btn.clicked.connect(self._clear_catalog_library_selection)
+            self.settings_catalog_library_manage_btn = QtWidgets.QPushButton()
+            self.settings_catalog_library_manage_btn.clicked.connect(self._open_catalog_library_manager)
             catalog_row = QtWidgets.QWidget()
             catalog_layout = QtWidgets.QHBoxLayout(catalog_row)
             catalog_layout.setContentsMargins(0, 0, 0, 0)
@@ -7860,6 +9437,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             catalog_layout.addWidget(self.settings_catalog_library_browse)
             catalog_layout.addWidget(self.settings_catalog_library_validate_btn)
             catalog_layout.addWidget(self.settings_catalog_library_clear_btn)
+            catalog_layout.addWidget(self.settings_catalog_library_manage_btn)
             form.addRow(self.settings_catalog_library_label, catalog_row)
             self.settings_catalog_library_status_label = QtWidgets.QLabel()
             self.settings_catalog_library_status_label.setWordWrap(True)
@@ -7868,6 +9446,31 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.settings_catalog_library_help_label.setWordWrap(True)
             self.settings_catalog_library_help_label.setStyleSheet("color: #6c757d;")
             form.addRow(self.settings_catalog_library_help_label)
+
+            self.easy_astap_label = QtWidgets.QLabel()
+            self.easy_astap_edit = QtWidgets.QLineEdit(self._settings.db_root or "")
+            self.easy_astap_browse = QtWidgets.QPushButton()
+            self.easy_astap_browse.clicked.connect(lambda: self._pick_settings_directory(self.easy_astap_edit))
+            self.easy_astap_verify_btn = QtWidgets.QPushButton()
+            self.easy_astap_verify_btn.clicked.connect(lambda: self._verify_astap_root_from_gui(show_error=True))
+            self.easy_astap_clear_btn = QtWidgets.QPushButton()
+            self.easy_astap_clear_btn.clicked.connect(self._clear_astap_root)
+            easy_astap_row = QtWidgets.QWidget()
+            easy_astap_layout = QtWidgets.QHBoxLayout(easy_astap_row)
+            easy_astap_layout.setContentsMargins(0, 0, 0, 0)
+            easy_astap_layout.addWidget(self.easy_astap_edit, 1)
+            easy_astap_layout.addWidget(self.easy_astap_browse)
+            easy_astap_layout.addWidget(self.easy_astap_verify_btn)
+            easy_astap_layout.addWidget(self.easy_astap_clear_btn)
+            form.addRow(self.easy_astap_label, easy_astap_row)
+            self.easy_astap_help_label = QtWidgets.QLabel(self._text("easy_astap_help"))
+            self.easy_astap_help_label.setWordWrap(True)
+            self.easy_astap_help_label.setStyleSheet("color: #6c757d;")
+            form.addRow(self.easy_astap_help_label)
+            self.easy_astap_status_label = QtWidgets.QLabel()
+            self.easy_astap_status_label.setWordWrap(True)
+            form.addRow(self.easy_astap_status_label)
+            self.easy_astap_edit.textChanged.connect(lambda text: self._set_astap_root(text, source="easy", validate=False))
             column.addLayout(form)
 
             self.catalog_compat_group = QtWidgets.QGroupBox(self._text("catalog_compat_group_title"))
@@ -7920,11 +9523,14 @@ def launch_gui(args: argparse.Namespace) -> int:
 
             self.blind4d_catalog_mode_label = QtWidgets.QLabel()
             self.blind4d_catalog_mode_combo = QtWidgets.QComboBox()
-            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_auto"), "auto")
-            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_library_view"), "library-view")
-            self.blind4d_catalog_mode_combo.addItem(self._text("settings_mode_external_manifest"), "external-manifest")
+            self.blind4d_catalog_mode_combo.addItem(self._text("settings_blind4d_source_auto"), "auto")
+            self.blind4d_catalog_mode_combo.addItem(self._text("settings_blind4d_source_external"), "external-manifest")
             self.blind4d_catalog_mode_combo.currentIndexChanged.connect(lambda _idx: self._on_catalog_mode_combo_changed())
             legacy_form.addRow(self.blind4d_catalog_mode_label, self.blind4d_catalog_mode_combo)
+            self.blind4d_source_help_label = QtWidgets.QLabel(self._text("settings_blind4d_source_help"))
+            self.blind4d_source_help_label.setWordWrap(True)
+            self.blind4d_source_help_label.setStyleSheet("color: #6c757d;")
+            legacy_form.addRow(self.blind4d_source_help_label)
 
             self.settings_blind_4d_manifest_label = QtWidgets.QLabel()
             self.settings_blind_4d_manifest_edit = QtWidgets.QLineEdit(str(resolve_default_4d_manifest_path(getattr(self._settings, "blind_4d_manifest_path", None))))
@@ -7940,7 +9546,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_edit, 1)
             compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_browse_btn)
             compat_manifest_layout.addWidget(self.settings_blind_4d_manifest_verify_btn)
-            legacy_form.addRow(self.settings_blind_4d_manifest_label, compat_manifest_row)
+            self.settings_blind_4d_manifest_row = compat_manifest_row
+            legacy_form.addRow(self.settings_blind_4d_manifest_label, self.settings_blind_4d_manifest_row)
+            self.settings_blind_4d_manifest_status_label = QtWidgets.QLabel()
+            self.settings_blind_4d_manifest_status_label.setWordWrap(True)
+            legacy_form.addRow(self.settings_blind_4d_manifest_status_label)
+            self.blind_4d_manifest_status_label = self.settings_blind_4d_manifest_status_label
 
             self.settings_restore_auto_modes_btn = QtWidgets.QPushButton(self._text("settings_restore_auto_modes"))
             self.settings_restore_auto_modes_btn.clicked.connect(self._restore_catalog_auto_modes)
@@ -8004,6 +9615,94 @@ def launch_gui(args: argparse.Namespace) -> int:
             sample_layout.addWidget(self.settings_sample_edit)
             sample_layout.addWidget(self.settings_sample_browse)
             legacy_form.addRow(self.settings_sample_label, sample_row)
+
+            self.legacy_blind_group = QtWidgets.QGroupBox(self._text("legacy_blind_group_title"))
+            legacy_blind_layout = QtWidgets.QVBoxLayout(self.legacy_blind_group)
+            self.legacy_blind_scope_label = QtWidgets.QLabel(self._text("legacy_blind_scope_warning"))
+            self.legacy_blind_scope_label.setWordWrap(True)
+            self.legacy_blind_scope_label.setStyleSheet("color: #8a6d3b;")
+            legacy_blind_layout.addWidget(self.legacy_blind_scope_label)
+            legacy_blind_form = QtWidgets.QFormLayout()
+            legacy_blind_layout.addLayout(legacy_blind_form)
+
+            self.cache_label_widget = QtWidgets.QLabel()
+            self.cache_spin = QtWidgets.QSpinBox()
+            self.cache_spin.setRange(2, 64)
+            self.cache_spin.setValue(int(self._settings.solver_cache_size or args.cache_size or 12))
+            legacy_blind_form.addRow(self.cache_label_widget, self.cache_spin)
+
+            self.dev_bucket_label = QtWidgets.QLabel()
+            self.dev_bucket_spin = QtWidgets.QSpinBox()
+            self.dev_bucket_spin.setRange(0, 20000)
+            self.dev_bucket_spin.setSingleStep(256)
+            self.dev_bucket_spin.setAccelerated(True)
+            self.dev_bucket_spin.setValue(int(self._settings.dev_bucket_limit_override or 0))
+            self.dev_bucket_spin.setSpecialValueText("")
+            legacy_blind_form.addRow(self.dev_bucket_label, self.dev_bucket_spin)
+
+            self.dev_vote_label = QtWidgets.QLabel()
+            self.dev_vote_spin = QtWidgets.QSpinBox()
+            self.dev_vote_spin.setRange(5, 95)
+            self.dev_vote_spin.setSingleStep(5)
+            self.dev_vote_spin.setValue(int(self._settings.dev_vote_percentile or 40))
+            legacy_blind_form.addRow(self.dev_vote_label, self.dev_vote_spin)
+
+            self.dev_cap_s_label = QtWidgets.QLabel()
+            self.dev_cap_s_spin = QtWidgets.QSpinBox()
+            self.dev_cap_s_spin.setRange(512, 20000)
+            self.dev_cap_s_spin.setSingleStep(256)
+            self.dev_cap_s_spin.setValue(int(self._settings.dev_bucket_cap_S or 6000))
+            legacy_blind_form.addRow(self.dev_cap_s_label, self.dev_cap_s_spin)
+
+            self.dev_cap_m_label = QtWidgets.QLabel()
+            self.dev_cap_m_spin = QtWidgets.QSpinBox()
+            self.dev_cap_m_spin.setRange(256, 20000)
+            self.dev_cap_m_spin.setSingleStep(256)
+            self.dev_cap_m_spin.setValue(int(self._settings.dev_bucket_cap_M or 4096))
+            legacy_blind_form.addRow(self.dev_cap_m_label, self.dev_cap_m_spin)
+
+            self.dev_cap_l_label = QtWidgets.QLabel()
+            self.dev_cap_l_spin = QtWidgets.QSpinBox()
+            self.dev_cap_l_spin.setRange(1024, 40000)
+            self.dev_cap_l_spin.setSingleStep(512)
+            self.dev_cap_l_spin.setValue(int(self._settings.dev_bucket_cap_L or 8192))
+            legacy_blind_form.addRow(self.dev_cap_l_label, self.dev_cap_l_spin)
+
+            self.dev_sigma_label = QtWidgets.QLabel()
+            self.dev_sigma_spin = QtWidgets.QDoubleSpinBox()
+            self.dev_sigma_spin.setRange(0.5, 10.0)
+            self.dev_sigma_spin.setDecimals(2)
+            self.dev_sigma_spin.setSingleStep(0.1)
+            self.dev_sigma_spin.setValue(float(self._settings.dev_detect_k_sigma or 3.0))
+            legacy_blind_form.addRow(self.dev_sigma_label, self.dev_sigma_spin)
+
+            self.dev_area_label = QtWidgets.QLabel()
+            self.dev_area_spin = QtWidgets.QSpinBox()
+            self.dev_area_spin.setRange(1, 100)
+            self.dev_area_spin.setValue(int(self._settings.dev_detect_min_area or 5))
+            legacy_blind_form.addRow(self.dev_area_label, self.dev_area_spin)
+
+            self.dev_family_group = QtWidgets.QGroupBox()
+            self.dev_family_group.setTitle(self._text("dev_family_group"))
+            family_layout = QtWidgets.QVBoxLayout(self.dev_family_group)
+            self.dev_family_auto_check = QtWidgets.QCheckBox()
+            self.dev_family_auto_check.setChecked(bool(self._settings.dev_family_auto))
+            self.dev_family_auto_check.setText(self._text("dev_family_auto"))
+            self.dev_family_auto_check.toggled.connect(self._update_dev_family_box_enabled)
+            family_layout.addWidget(self.dev_family_auto_check)
+            self.dev_family_hint = QtWidgets.QLabel()
+            self.dev_family_hint.setWordWrap(True)
+            self.dev_family_hint.setText(self._text("dev_family_hint"))
+            family_layout.addWidget(self.dev_family_hint)
+            self.dev_family_box = QtWidgets.QWidget()
+            self.dev_family_box_layout = QtWidgets.QVBoxLayout(self.dev_family_box)
+            self.dev_family_box_layout.setContentsMargins(0, 0, 0, 0)
+            family_layout.addWidget(self.dev_family_box)
+            legacy_blind_layout.addWidget(self.dev_family_group)
+            self._refresh_dev_family_choices([])
+            self._update_dev_family_box_enabled()
+
+            compat_body_layout.addWidget(self.legacy_blind_group)
             compat_layout.addWidget(self.catalog_compat_body)
             self.catalog_compat_group.toggled.connect(self.catalog_compat_body.setVisible)
             self.catalog_compat_body.setVisible(False)
@@ -8063,6 +9762,17 @@ def launch_gui(args: argparse.Namespace) -> int:
             widget = QtWidgets.QWidget()
             column = QtWidgets.QVBoxLayout(widget)
             form = QtWidgets.QFormLayout()
+            self.workers_label_widget = QtWidgets.QLabel()
+            self.workers_spin = QtWidgets.QSpinBox()
+            cap_workers = self._max_worker_cap()
+            self.workers_spin.setRange(0, cap_workers)
+            self.workers_spin.setSpecialValueText(self._text("dev_workers_auto"))
+            self.workers_spin.setValue(self._clamp_worker_choice(self._dev_workers_choice))
+            self.workers_spin.valueChanged.connect(self._on_workers_spin_changed)
+            form.addRow(self.workers_label_widget, self.workers_spin)
+            self.workers_hint_label = QtWidgets.QLabel()
+            self.workers_hint_label.setWordWrap(True)
+            form.addRow(self.workers_hint_label)
             # Near tile cache size
             self.perf_near_cache_label = QtWidgets.QLabel()
             self.perf_near_cache_spin = QtWidgets.QSpinBox()
@@ -8081,6 +9791,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.perf_detect_combo = QtWidgets.QComboBox()
             self._populate_detect_devices(self.perf_detect_combo)
             form.addRow(self.perf_detect_label, self.perf_detect_combo)
+            self.perf_gpu_diag_btn = QtWidgets.QPushButton()
+            self.perf_gpu_diag_btn.clicked.connect(self._run_gpu_diagnostic_from_settings)
+            self.perf_gpu_diag_label = QtWidgets.QLabel()
+            self.perf_gpu_diag_label.setWordWrap(True)
+            gpu_diag_row = QtWidgets.QHBoxLayout()
+            gpu_diag_row.addWidget(self.perf_gpu_diag_btn)
+            gpu_diag_row.addWidget(self.perf_gpu_diag_label, 1)
+            form.addRow(gpu_diag_row)
             # I/O concurrency (0 = Auto)
             self.perf_io_label = QtWidgets.QLabel()
             self.perf_io_spin = QtWidgets.QSpinBox()
@@ -8100,221 +9818,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             btn_row.addWidget(self.performance_save_btn)
             column.addLayout(form)
             column.addLayout(btn_row)
-            return widget
-
-        def _build_benchmark_tab(self) -> QtWidgets.QWidget:
-            widget = QtWidgets.QWidget()
-            layout = QtWidgets.QVBoxLayout(widget)
-
-            # Input sources group
-            self.bench_sources_group = QtWidgets.QGroupBox(self._text("benchmark_sources_group"))
-            sources_layout = QtWidgets.QVBoxLayout(self.bench_sources_group)
-            self.bench_inputs_label = QtWidgets.QLabel(self._text("benchmark_inputs_hint"))
-            self.bench_inputs_edit = QtWidgets.QPlainTextEdit()
-            self.bench_inputs_edit.setPlaceholderText(self._text("benchmark_inputs_placeholder"))
-            self.bench_inputs_edit.setTabChangesFocus(True)
-            sources_layout.addWidget(self.bench_inputs_label)
-            sources_layout.addWidget(self.bench_inputs_edit)
-            btn_row = QtWidgets.QHBoxLayout()
-            self.bench_add_file_btn = QtWidgets.QPushButton(self._text("benchmark_add_file_btn"))
-            self.bench_add_dir_btn = QtWidgets.QPushButton(self._text("benchmark_add_dir_btn"))
-            self.bench_add_list_btn = QtWidgets.QPushButton(self._text("benchmark_add_list_btn"))
-            self.bench_add_file_btn.clicked.connect(self._on_benchmark_add_files_clicked)
-            self.bench_add_dir_btn.clicked.connect(self._on_benchmark_add_directory_clicked)
-            self.bench_add_list_btn.clicked.connect(self._on_benchmark_add_list_clicked)
-            btn_row.addWidget(self.bench_add_file_btn)
-            btn_row.addWidget(self.bench_add_dir_btn)
-            btn_row.addWidget(self.bench_add_list_btn)
-            btn_row.addStretch(1)
-            sources_layout.addLayout(btn_row)
-
-            def _wrap_path_row(line_edit: QtWidgets.QLineEdit, button: QtWidgets.QPushButton) -> QtWidgets.QWidget:
-                container = QtWidgets.QWidget()
-                row = QtWidgets.QHBoxLayout(container)
-                row.setContentsMargins(0, 0, 0, 0)
-                row.addWidget(line_edit)
-                row.addWidget(button)
-                return container
-
-            path_form = QtWidgets.QFormLayout()
-            self.bench_path_form = path_form
-
-            self.bench_index_edit = QtWidgets.QLineEdit()
-            self.bench_index_btn = QtWidgets.QPushButton(self._text("browse_button"))
-            self.bench_index_btn.clicked.connect(lambda: self._pick_directory(self.bench_index_edit))
-            self.bench_index_row = _wrap_path_row(self.bench_index_edit, self.bench_index_btn)
-            path_form.addRow(self._text("benchmark_index_label"), self.bench_index_row)
-
-            self.bench_grid_edit = QtWidgets.QLineEdit()
-            self.bench_grid_btn = QtWidgets.QPushButton(self._text("benchmark_browse_file_btn"))
-            self.bench_grid_btn.clicked.connect(lambda: self._benchmark_pick_file(self.bench_grid_edit, save=False))
-            self.bench_grid_row = _wrap_path_row(self.bench_grid_edit, self.bench_grid_btn)
-            path_form.addRow(self._text("benchmark_grid_label"), self.bench_grid_row)
-
-            self.bench_output_json_edit = QtWidgets.QLineEdit()
-            self.bench_output_json_btn = QtWidgets.QPushButton(self._text("benchmark_save_file_btn"))
-            self.bench_output_json_btn.clicked.connect(lambda: self._benchmark_pick_file(self.bench_output_json_edit, save=True, suffix="json"))
-            self.bench_output_json_row = _wrap_path_row(self.bench_output_json_edit, self.bench_output_json_btn)
-            path_form.addRow(
-                self._text("benchmark_output_json_label"),
-                self.bench_output_json_row,
-            )
-
-            self.bench_output_csv_edit = QtWidgets.QLineEdit()
-            self.bench_output_csv_btn = QtWidgets.QPushButton(self._text("benchmark_save_file_btn"))
-            self.bench_output_csv_btn.clicked.connect(lambda: self._benchmark_pick_file(self.bench_output_csv_edit, save=True, suffix="csv"))
-            self.bench_output_csv_row = _wrap_path_row(self.bench_output_csv_edit, self.bench_output_csv_btn)
-            path_form.addRow(
-                self._text("benchmark_output_csv_label"),
-                self.bench_output_csv_row,
-            )
-            sources_layout.addLayout(path_form)
-            layout.addWidget(self.bench_sources_group)
-
-            # General options
-            self.bench_options_group = QtWidgets.QGroupBox(self._text("benchmark_options_group"))
-            options_form = QtWidgets.QFormLayout(self.bench_options_group)
-            self.bench_options_form = options_form
-            self.bench_limit_spin = QtWidgets.QSpinBox()
-            self.bench_limit_spin.setRange(0, 10000)
-            self.bench_limit_spin.setSpecialValueText(self._text("special_auto"))
-            options_form.addRow(self._text("benchmark_limit_label"), self.bench_limit_spin)
-            self.bench_log_combo = QtWidgets.QComboBox()
-            self.bench_log_combo.addItem(self._text("log_level_info"), "INFO")
-            self.bench_log_combo.addItem(self._text("log_level_debug"), "DEBUG")
-            self.bench_log_combo.addItem(self._text("log_level_warning"), "WARNING")
-            options_form.addRow(self._text("benchmark_log_level_label"), self.bench_log_combo)
-            self.bench_allow_write_check = QtWidgets.QCheckBox(self._text("benchmark_allow_write_label"))
-            options_form.addRow(QtWidgets.QLabel(""), self.bench_allow_write_check)
-            self.bench_continue_check = QtWidgets.QCheckBox(self._text("benchmark_continue_label"))
-            options_form.addRow(QtWidgets.QLabel(""), self.bench_continue_check)
-            self.bench_tile_cache_spin = QtWidgets.QSpinBox()
-            self.bench_tile_cache_spin.setRange(0, 4096)
-            self.bench_tile_cache_spin.setSpecialValueText(self._text("special_auto"))
-            options_form.addRow(self._text("benchmark_tile_cache_label"), self.bench_tile_cache_spin)
-            self.bench_sip_combo = QtWidgets.QComboBox()
-            self.bench_sip_combo.addItem("2", 2)
-            self.bench_sip_combo.addItem("3", 3)
-            options_form.addRow(self._text("benchmark_sip_label"), self.bench_sip_combo)
-            self.bench_parity_check = QtWidgets.QCheckBox(self._text("benchmark_parity_label"))
-            options_form.addRow(QtWidgets.QLabel(""), self.bench_parity_check)
-            self.bench_full_mode_check = QtWidgets.QCheckBox(self._text("benchmark_full_mode_label"))
-            options_form.addRow(QtWidgets.QLabel(""), self.bench_full_mode_check)
-            layout.addWidget(self.bench_options_group)
-
-            # Base SolveConfig overrides
-            self.bench_base_group = QtWidgets.QGroupBox(self._text("benchmark_base_group"))
-            base_form = QtWidgets.QFormLayout(self.bench_base_group)
-            self.bench_base_form = base_form
-            self.bench_max_candidates_spin = QtWidgets.QSpinBox()
-            self.bench_max_candidates_spin.setRange(1, 100)
-            base_form.addRow(self._text("benchmark_max_candidates_label"), self.bench_max_candidates_spin)
-            self.bench_max_stars_spin = QtWidgets.QSpinBox()
-            self.bench_max_stars_spin.setRange(100, 5000)
-            base_form.addRow(self._text("benchmark_max_stars_label"), self.bench_max_stars_spin)
-            self.bench_max_quads_spin = QtWidgets.QSpinBox()
-            self.bench_max_quads_spin.setRange(1000, 40000)
-            self.bench_max_quads_spin.setSingleStep(500)
-            base_form.addRow(self._text("benchmark_max_quads_label"), self.bench_max_quads_spin)
-            self.bench_detect_sigma_spin = QtWidgets.QDoubleSpinBox()
-            self.bench_detect_sigma_spin.setRange(0.5, 10.0)
-            self.bench_detect_sigma_spin.setSingleStep(0.1)
-            base_form.addRow(self._text("benchmark_detect_sigma_label"), self.bench_detect_sigma_spin)
-            self.bench_detect_area_spin = QtWidgets.QSpinBox()
-            self.bench_detect_area_spin.setRange(1, 100)
-            base_form.addRow(self._text("benchmark_detect_area_label"), self.bench_detect_area_spin)
-            self.bench_bucket_cap_s_spin = QtWidgets.QSpinBox()
-            self.bench_bucket_cap_s_spin.setRange(0, 50000)
-            base_form.addRow(self._text("benchmark_bucket_cap_s_label"), self.bench_bucket_cap_s_spin)
-            self.bench_bucket_cap_m_spin = QtWidgets.QSpinBox()
-            self.bench_bucket_cap_m_spin.setRange(0, 50000)
-            base_form.addRow(self._text("benchmark_bucket_cap_m_label"), self.bench_bucket_cap_m_spin)
-            self.bench_bucket_cap_l_spin = QtWidgets.QSpinBox()
-            self.bench_bucket_cap_l_spin.setRange(0, 50000)
-            base_form.addRow(self._text("benchmark_bucket_cap_l_label"), self.bench_bucket_cap_l_spin)
-            self.bench_bucket_override_spin = QtWidgets.QSpinBox()
-            self.bench_bucket_override_spin.setRange(0, 10000)
-            base_form.addRow(self._text("benchmark_bucket_override_label"), self.bench_bucket_override_spin)
-            self.bench_vote_spin = QtWidgets.QSpinBox()
-            self.bench_vote_spin.setRange(5, 95)
-            base_form.addRow(self._text("benchmark_vote_label"), self.bench_vote_spin)
-            self.bench_downsample_spin = QtWidgets.QSpinBox()
-            self.bench_downsample_spin.setRange(1, 4)
-            base_form.addRow(self._text("benchmark_downsample_label"), self.bench_downsample_spin)
-            self.bench_quality_rms_spin = QtWidgets.QDoubleSpinBox()
-            self.bench_quality_rms_spin.setRange(0.1, 5.0)
-            self.bench_quality_rms_spin.setSingleStep(0.1)
-            base_form.addRow(self._text("benchmark_quality_rms_label"), self.bench_quality_rms_spin)
-            self.bench_quality_inliers_spin = QtWidgets.QSpinBox()
-            self.bench_quality_inliers_spin.setRange(10, 500)
-            base_form.addRow(self._text("benchmark_quality_inliers_label"), self.bench_quality_inliers_spin)
-            self.bench_pixel_tol_spin = QtWidgets.QDoubleSpinBox()
-            self.bench_pixel_tol_spin.setRange(0.5, 10.0)
-            self.bench_pixel_tol_spin.setSingleStep(0.1)
-            base_form.addRow(self._text("benchmark_pixel_tol_label"), self.bench_pixel_tol_spin)
-            layout.addWidget(self.bench_base_group)
-
-            # Hints group
-            self.bench_hints_group = QtWidgets.QGroupBox(self._text("benchmark_hints_group"))
-            hints_form = QtWidgets.QFormLayout(self.bench_hints_group)
-            self.bench_hints_form = hints_form
-            self.bench_ra_edit = QtWidgets.QLineEdit()
-            self.bench_ra_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_ra_label"), self.bench_ra_edit)
-            self.bench_dec_edit = QtWidgets.QLineEdit()
-            self.bench_dec_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_dec_label"), self.bench_dec_edit)
-            self.bench_radius_edit = QtWidgets.QLineEdit()
-            self.bench_radius_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_radius_label"), self.bench_radius_edit)
-            self.bench_focal_edit = QtWidgets.QLineEdit()
-            self.bench_focal_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_focal_label"), self.bench_focal_edit)
-            self.bench_pixel_edit = QtWidgets.QLineEdit()
-            self.bench_pixel_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_pixel_label"), self.bench_pixel_edit)
-            self.bench_scale_edit = QtWidgets.QLineEdit()
-            self.bench_scale_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_scale_label"), self.bench_scale_edit)
-            self.bench_scale_min_edit = QtWidgets.QLineEdit()
-            self.bench_scale_min_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_scale_min_label"), self.bench_scale_min_edit)
-            self.bench_scale_max_edit = QtWidgets.QLineEdit()
-            self.bench_scale_max_edit.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-            hints_form.addRow(self._text("benchmark_scale_max_label"), self.bench_scale_max_edit)
-            layout.addWidget(self.bench_hints_group)
-
-            # Progress + controls
-            self.bench_progress = QtWidgets.QProgressBar()
-            self.bench_progress.setRange(0, 1)
-            self.bench_progress.setValue(0)
-            self.bench_status_label = QtWidgets.QLabel(self._text("benchmark_status_idle"))
-            status_row = QtWidgets.QHBoxLayout()
-            status_row.addWidget(self.bench_progress, stretch=1)
-            status_row.addWidget(self.bench_status_label)
-            layout.addLayout(status_row)
-
-            self.bench_log_edit = QtWidgets.QPlainTextEdit()
-            self.bench_log_edit.setReadOnly(True)
-            self.bench_log_edit.setPlaceholderText(self._text("benchmark_log_placeholder"))
-            try:
-                self.bench_log_edit.document().setMaximumBlockCount(2000)
-            except Exception:
-                pass
-            layout.addWidget(self.bench_log_edit)
-
-            btns = QtWidgets.QHBoxLayout()
-            btns.addStretch(1)
-            self.bench_run_btn = QtWidgets.QPushButton(self._text("benchmark_run_button"))
-            self.bench_run_btn.clicked.connect(self._on_benchmark_run_clicked)
-            self.bench_stop_btn = QtWidgets.QPushButton(self._text("benchmark_stop_button"))
-            self.bench_stop_btn.setEnabled(False)
-            self.bench_stop_btn.clicked.connect(self._on_benchmark_stop_clicked)
-            btns.addWidget(self.bench_run_btn)
-            btns.addWidget(self.bench_stop_btn)
-            layout.addLayout(btns)
-
-            layout.addStretch(1)
             return widget
 
         def _build_fast_solver_tab(self) -> QtWidgets.QWidget:
@@ -8427,16 +9930,16 @@ def launch_gui(args: argparse.Namespace) -> int:
             # Offer an explicit Auto mode (best UX): GPU if available, otherwise CPU.
             combo.addItem(self._text("settings_perf_detect_auto_option"), ("auto", 0))
             combo.addItem(self._text("settings_perf_detect_cpu_option"), ("cpu", -1))
-            # Try CUDA via CuPy
+            # Try CUDA via the GUI-free diagnostic service.
             try:
-                import cupy  # type: ignore
-                from cupy.cuda import runtime as _rt  # type: ignore
-                n = int(_rt.getDeviceCount())
+                report = probe_gpu_capability(default_gpu_runtime_context())
+                n = int(report.device_count or 0)
+                if report.effective_backend == EffectiveBackend.CUDA and n > 0:
+                    names = list(report.device_names)
+                else:
+                    names = []
                 for i in range(n):
-                    props = _rt.getDeviceProperties(i)
-                    name = props.get('name') if isinstance(props, dict) else None
-                    if isinstance(name, (bytes, bytearray)):
-                        name = name.decode(errors='ignore')
+                    name = names[i] if i < len(names) else "GPU"
                     label = f"CUDA: {name or 'GPU'} (id {i})"
                     combo.addItem(label, ("cuda", i))
             except Exception:
@@ -8492,6 +9995,10 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._catalog_library_validated_path = None
             self._catalog_library_validated_resources = None
             self._catalog_library_validation_error = None
+            current = str(getattr(self._settings, "catalog_library_path", "") or "").strip()
+            incoming = str(text or "").strip()
+            if incoming != current:
+                self._settings.catalog_library_verification = None
             if str(text or "").strip():
                 self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
             else:
@@ -8506,6 +10013,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             if hasattr(self, "settings_catalog_library_edit"):
                 self.settings_catalog_library_edit.setText("")
             self._settings.catalog_library_path = None
+            self._settings.catalog_library_verification = None
             self._catalog_library_validated_path = None
             self._catalog_library_validated_resources = None
             self._catalog_library_validation_error = None
@@ -8525,12 +10033,16 @@ def launch_gui(args: argparse.Namespace) -> int:
             if combo is not None:
                 value = combo.currentData()
                 if isinstance(value, str) and value.strip():
-                    return value.strip().lower()
+                    normalized = value.strip().lower().replace("_", "-")
+                    return "external-manifest" if normalized == "external-manifest" else "auto"
             return str(getattr(self._settings, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-")
 
         def _on_catalog_mode_combo_changed(self) -> None:
             self._settings.near_catalog_mode = self._current_near_catalog_mode_from_ui()
             self._settings.blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
+            if self._settings.blind4d_catalog_mode == "external-manifest":
+                self._set_manifest_status("not_verified")
+            self._update_blind4d_source_visibility()
             self._update_catalog_rollback_status()
 
         def _restore_catalog_auto_modes(self) -> None:
@@ -8540,8 +10052,23 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._set_combo_current_data(self.blind4d_catalog_mode_combo, "auto", "auto")
             self._settings.near_catalog_mode = "auto"
             self._settings.blind4d_catalog_mode = "auto"
+            self._update_blind4d_source_visibility()
             self._update_catalog_rollback_status()
             self._log_settings(self._text("settings_restore_auto_modes"))
+
+        def _update_blind4d_source_visibility(self) -> None:
+            external = self._current_blind4d_catalog_mode_from_ui() == "external-manifest"
+            for name in (
+                "settings_blind_4d_manifest_label",
+                "settings_blind_4d_manifest_row",
+                "settings_blind_4d_manifest_edit",
+                "settings_blind_4d_manifest_browse_btn",
+                "settings_blind_4d_manifest_verify_btn",
+                "settings_blind_4d_manifest_status_label",
+            ):
+                widget = getattr(self, name, None)
+                if widget is not None:
+                    widget.setVisible(external)
 
         def _update_catalog_rollback_status(self) -> None:
             label = getattr(self, "catalog_rollback_status_label", None)
@@ -8683,6 +10210,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             path_text = self._catalog_library_path_from_ui()
             if not path_text:
                 self._settings.catalog_library_path = None
+                self._settings.catalog_library_verification = None
                 self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
                 return None
             if hasattr(self, "settings_catalog_library_edit"):
@@ -8703,6 +10231,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     codes = ", ".join(issue.code for issue in hard) or report.status.value
                     raise CatalogLibraryError(f"CATALOG_LIBRARY_INVALID: {codes}")
                 resources = resolve_catalog_resources(catalog_library=library)
+                fingerprint = build_lightweight_catalog_fingerprint(path)
             except Exception as exc:
                 self._catalog_library_validated_path = None
                 self._catalog_library_validated_resources = None
@@ -8713,12 +10242,77 @@ def launch_gui(args: argparse.Namespace) -> int:
                     QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return None
             self._settings.catalog_library_path = path_text
+            if show_error:
+                self._settings.catalog_library_verification = catalog_verification_record(
+                    fingerprint=fingerprint,
+                    verification_level=FULL_LEVEL,
+                    verification_status=STATUS_VALID,
+                )
+                try:
+                    save_persistent_settings(self._settings)
+                except Exception:
+                    pass
             self._catalog_library_validated_path = path_text
             self._catalog_library_validated_resources = resources
             self._catalog_library_validation_error = None
             state = resources.library_status.value if resources.library_status else "INVALID"
             self._set_catalog_library_status(state, resources=resources)
             return resources
+
+        def _restore_catalog_library_verification_from_cache(self) -> None:
+            path_text = self._catalog_library_path_from_ui()
+            if not path_text:
+                self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
+                return
+            cached = getattr(self._settings, "catalog_library_verification", None)
+            if not isinstance(cached, dict):
+                try:
+                    fp = build_lightweight_catalog_fingerprint(path_text)
+                except Exception as exc:
+                    self._set_catalog_library_status("INVALID", message=f"Bibliothèque invalide: {exc}")
+                    return
+                self._set_catalog_library_status(
+                    "READY_FULL" if fp.all_sky else "READY_PARTIAL",
+                    message=(
+                        f"Vérification rapide réussie\n"
+                        f"Blind 4D : {fp.blind4d_index_count} index / {fp.total_tiles or 0} tuiles\n"
+                        f"Couverture globale Blind 4D : {'oui' if fp.all_sky else 'non'}\n"
+                        f"payload_hash_count={fp.payload_hash_count}"
+                    ),
+                )
+                return
+            state = restore_cached_catalog_verification(path_text, cached)
+            if state.status == STATUS_VALID and state.fingerprint is not None:
+                fp = state.fingerprint
+                message = (
+                    f"{state.message}\n"
+                    f"Blind 4D : {fp.blind4d_index_count} index / {fp.total_tiles or 0} tuiles\n"
+                    f"Couverture globale Blind 4D : {'oui' if fp.all_sky else 'non'}\n"
+                    f"payload_hash_count={fp.payload_hash_count}"
+                )
+                self._set_catalog_library_status("READY_FULL" if fp.all_sky else "READY_PARTIAL", message=message)
+                self._log_settings(
+                    "CatalogLibrary verification cache restored: "
+                    f"level={state.record.get('verification_level') if state.record else FAST_LEVEL} "
+                    f"indexes={fp.blind4d_index_count} coverage={fp.covered_tiles}/{fp.total_tiles} "
+                    f"all_sky={fp.all_sky} payload_hash_count={fp.payload_hash_count} "
+                    f"duration_s={state.duration_s:.3f}"
+                )
+                return
+            if state.fingerprint is not None and not cached:
+                fp = state.fingerprint
+                self._set_catalog_library_status(
+                    "READY_FULL" if fp.all_sky else "READY_PARTIAL",
+                    message=(
+                        f"Vérification rapide réussie\n"
+                        f"Blind 4D : {fp.blind4d_index_count} index / {fp.total_tiles or 0} tuiles\n"
+                        f"Couverture globale Blind 4D : {'oui' if fp.all_sky else 'non'}\n"
+                        f"payload_hash_count={fp.payload_hash_count}"
+                    ),
+                )
+                return
+            reason = state.invalidation_reason or state.message
+            self._set_catalog_library_status("INVALID", message=f"{state.message}: {reason}")
 
         def _pick_settings_sample(self) -> None:
             path, _ = QtWidgets.QFileDialog.getOpenFileName(
@@ -8738,10 +10332,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 finally:
                     self.settings_catalog_library_edit.blockSignals(False)
                 if settings.catalog_library_path:
-                    self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
+                    self._restore_catalog_library_verification_from_cache()
                 else:
                     self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
-            self.settings_db_edit.setText(settings.db_root or "")
+            self._set_astap_root(settings.db_root or "", source="populate", validate=False)
             self.settings_index_edit.setText(settings.index_root or "")
             if hasattr(self, "near_catalog_mode_combo"):
                 self._set_combo_current_data(
@@ -8772,6 +10366,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                     TILE_COMPRESSION_CHOICES[0],
                 )
             self.settings_sample_edit.setText(settings.sample_fits or "")
+            if hasattr(self, "downsample_spin"):
+                self.downsample_spin.setValue(int(settings.solver_downsample or 1))
+            if hasattr(self, "cache_spin"):
+                self.cache_spin.setValue(int(settings.solver_cache_size or 12))
             # Blind group
             if hasattr(self, 'settings_blind_max_stars_spin'):
                 self.settings_blind_max_stars_spin.setValue(settings.blind_max_stars)
@@ -8796,13 +10394,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             except Exception:
                 pass
             try:
+                manifest_text = str(resolve_default_4d_manifest_path(getattr(settings, "blind_4d_manifest_path", None)))
                 if hasattr(self, "blind_4d_manifest_edit"):
-                    manifest_text = str(resolve_default_4d_manifest_path(getattr(settings, "blind_4d_manifest_path", None)))
                     self.blind_4d_manifest_edit.setText(manifest_text)
-                    if hasattr(self, "settings_blind_4d_manifest_edit"):
-                        self.settings_blind_4d_manifest_edit.setText(manifest_text)
+                if hasattr(self, "settings_blind_4d_manifest_edit"):
+                    self.settings_blind_4d_manifest_edit.setText(manifest_text)
                 self._set_manifest_status("not_verified")
                 self._sync_blind_profile_controls()
+                self._update_blind4d_source_visibility()
             except Exception:
                 pass
             # Astrometry tab fields
@@ -8835,13 +10434,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.dev_sigma_spin.setValue(float(settings.dev_detect_k_sigma or 3.0))
             if hasattr(self, "dev_area_spin"):
                 self.dev_area_spin.setValue(int(settings.dev_detect_min_area or 5))
-            if hasattr(self, "dev_workers_label"):
-                self.dev_workers_label.setText(self._text("dev_workers_label"))
-            if hasattr(self, "dev_workers_hint_label"):
-                self.dev_workers_hint_label.setText(self._text("dev_workers_hint"))
             self._dev_workers_choice = self._clamp_worker_choice(settings.solver_workers or 0)
-            if hasattr(self, "dev_workers_combo"):
-                self._populate_dev_workers_combo()
+            self._sync_workers_spin_from_settings()
             if hasattr(self, "dev_family_auto_check"):
                 self.dev_family_auto_check.setChecked(bool(getattr(settings, "dev_family_auto", True)))
             if hasattr(self, "dev_family_hint"):
@@ -8897,56 +10491,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.fast_detect_max_labels_spin.setValue(int(getattr(settings, 'near_detect_max_labels', 1200) or 1200))
             except Exception:
                 pass
-            self._populate_benchmark_tab_from_settings()
-
-        def _populate_benchmark_tab_from_settings(self) -> None:
-            if not hasattr(self, "bench_inputs_edit"):
-                return
-            settings = self._settings
-            self.bench_inputs_edit.setPlainText(settings.benchmark_inputs or "")
-            self.bench_index_edit.setText(settings.benchmark_index_root or settings.index_root or "")
-            self.bench_grid_edit.setText(settings.benchmark_grid_path or "")
-            self.bench_output_json_edit.setText(settings.benchmark_output_json or "")
-            self.bench_output_csv_edit.setText(settings.benchmark_output_csv or "")
-            self.bench_allow_write_check.setChecked(bool(settings.benchmark_allow_write))
-            self.bench_continue_check.setChecked(bool(settings.benchmark_continue_all))
-            self.bench_limit_spin.setValue(max(0, int(settings.benchmark_limit or 0)))
-            log_value = (settings.benchmark_log_level or "INFO").upper()
-            idx = self.bench_log_combo.findData(log_value)
-            if idx >= 0:
-                self.bench_log_combo.setCurrentIndex(idx)
-            self.bench_tile_cache_spin.setValue(max(0, int(settings.benchmark_tile_cache_size or 0)))
-            sip = settings.benchmark_sip_order if settings.benchmark_sip_order in (2, 3) else 2
-            sip_idx = self.bench_sip_combo.findData(sip)
-            if sip_idx >= 0:
-                self.bench_sip_combo.setCurrentIndex(sip_idx)
-            self.bench_parity_check.setChecked(bool(settings.benchmark_try_parity))
-            self.bench_full_mode_check.setChecked(bool(settings.benchmark_full_mode))
-            self.bench_max_candidates_spin.setValue(int(settings.blind_max_candidates or 10))
-            self.bench_max_stars_spin.setValue(int(settings.blind_max_stars or 500))
-            self.bench_max_quads_spin.setValue(int(settings.blind_max_quads or 8000))
-            self.bench_detect_sigma_spin.setValue(float(settings.dev_detect_k_sigma or 3.0))
-            self.bench_detect_area_spin.setValue(int(settings.dev_detect_min_area or 5))
-            self.bench_bucket_cap_s_spin.setValue(int(settings.dev_bucket_cap_S or 6000))
-            self.bench_bucket_cap_m_spin.setValue(int(settings.dev_bucket_cap_M or 4096))
-            self.bench_bucket_cap_l_spin.setValue(int(settings.dev_bucket_cap_L or 8192))
-            self.bench_bucket_override_spin.setValue(int(settings.dev_bucket_limit_override or 0))
-            self.bench_vote_spin.setValue(int(settings.dev_vote_percentile or 40))
-            self.bench_downsample_spin.setValue(int(settings.solver_downsample or 1))
-            self.bench_quality_rms_spin.setValue(float(settings.blind_quality_rms or 1.2))
-            self.bench_quality_inliers_spin.setValue(int(settings.blind_quality_inliers or 40))
-            self.bench_pixel_tol_spin.setValue(float(settings.blind_pixel_tolerance or 2.5))
-            def _fmt(value: Optional[float]) -> str:
-                return "" if value is None else f"{value}"
-            self.bench_ra_edit.setText(_fmt(settings.solver_hint_ra_deg))
-            self.bench_dec_edit.setText(_fmt(settings.solver_hint_dec_deg))
-            self.bench_radius_edit.setText(_fmt(settings.solver_hint_radius_deg))
-            self.bench_focal_edit.setText(_fmt(settings.solver_hint_focal_mm))
-            self.bench_pixel_edit.setText(_fmt(settings.solver_hint_pixel_um))
-            self.bench_scale_edit.setText(_fmt(settings.solver_hint_resolution_arcsec))
-            self.bench_scale_min_edit.setText(_fmt(settings.solver_hint_resolution_min_arcsec))
-            self.bench_scale_max_edit.setText(_fmt(settings.solver_hint_resolution_max_arcsec))
-
         def _set_combo_current_data(self, combo: QtWidgets.QComboBox, value: str, default: str) -> None:
             target = (value or default or "").strip().lower()
             idx = combo.findData(target)
@@ -8956,6 +10500,98 @@ def launch_gui(args: argparse.Namespace) -> int:
                 idx = 0
             if idx >= 0:
                 combo.setCurrentIndex(idx)
+
+        def _instrument_combo_id_for_settings(self) -> str:
+            mode = self._current_instrument_mode()
+            if mode == "auto":
+                return "__auto__"
+            if mode == "custom":
+                return "__custom__"
+            return str(getattr(self, "_instrument_preset_id", None) or getattr(self._settings, "last_preset_id", None) or "seestar_s50")
+
+        def _current_instrument_mode(self) -> str:
+            mode = str(getattr(self, "_instrument_mode", getattr(self._settings, "instrument_mode", "auto")) or "auto").strip().lower()
+            if mode not in {"auto", "preset", "custom"}:
+                mode = "auto"
+            return mode
+
+        def _populate_instrument_combo(self) -> None:
+            combo = getattr(self, "instrument_combo", None)
+            if combo is None:
+                return
+            current = combo.currentData() or self._instrument_combo_id_for_settings()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem(self._text("instrument_auto"), "__auto__")
+            for preset in preset_utils.list_presets():
+                combo.addItem(preset.label, preset.id)
+            combo.addItem(self._text("instrument_custom"), "__custom__")
+            idx = combo.findData(current)
+            if idx < 0:
+                idx = combo.findData(self._instrument_combo_id_for_settings())
+            if idx < 0:
+                idx = combo.findData("__auto__")
+            combo.setCurrentIndex(max(0, idx))
+            combo.blockSignals(False)
+            self._update_instrument_visibility()
+
+        def _on_instrument_combo_changed(self) -> None:
+            combo = getattr(self, "instrument_combo", None)
+            if combo is None or getattr(self, "_instrument_initializing", False):
+                return
+            data = combo.currentData()
+            value = str(data or "__auto__")
+            if value == "__auto__":
+                self._instrument_mode = "auto"
+            elif value == "__custom__":
+                self._instrument_mode = "custom"
+                self._instrument_preset_id = None
+            else:
+                self._instrument_mode = "preset"
+                self._instrument_preset_id = value
+                apply_settings_preset(self, preset_utils, value)
+                if hasattr(self, "presets_combo"):
+                    self._set_combo_current_data(self.presets_combo, value, value)
+            self._settings.instrument_mode = self._instrument_mode
+            self._settings.last_preset_id = self._instrument_preset_id
+            self._update_instrument_visibility()
+            self._persist_instrument_snapshot()
+
+        def _update_instrument_visibility(self) -> None:
+            mode = self._current_instrument_mode()
+            if hasattr(self, "instrument_help_label"):
+                if mode == "auto":
+                    self.instrument_help_label.setText(self._text("instrument_auto_help"))
+                elif mode == "preset":
+                    preset_id = str(getattr(self, "_instrument_preset_id", "") or "")
+                    preset = {p.id: p for p in preset_utils.list_presets()}.get(preset_id)
+                    if preset:
+                        scale = preset_utils.compute_scale_and_fov(
+                            preset.focal_mm,
+                            preset.pixel_um,
+                            preset.res_w,
+                            preset.res_h,
+                            reducer=preset.reducer,
+                            binning=1,
+                        )["scale_arcsec_per_px"]
+                        self.instrument_help_label.setText(f"{preset.focal_mm:.0f} mm - {preset.pixel_um:.2f} um - environ {scale:.2f}\"/px")
+                    else:
+                        self.instrument_help_label.setText("")
+                else:
+                    self.instrument_help_label.setText(self._text("instrument_custom"))
+            expert_fields_enabled = mode != "auto"
+            for name in (
+                "fov_focal_spin",
+                "fov_pixel_spin",
+                "fov_res_w_spin",
+                "fov_res_h_spin",
+                "fov_reducer_spin",
+                "fov_binning_spin",
+                "compute_button",
+            ):
+                widget = getattr(self, name, None)
+                if widget is not None:
+                    widget.setEnabled(expert_fields_enabled)
 
         def _update_quad_storage_combo_labels(self) -> None:
             if not hasattr(self, "settings_quad_storage_combo"):
@@ -8981,26 +10617,65 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self._text(f"settings_tile_compression_option_{key}"),
                     )
 
+        def _update_gpu_diagnostic_label_from_settings(self) -> None:
+            label = getattr(self, "perf_gpu_diag_label", None)
+            if label is None:
+                return
+            reason = str(getattr(self._settings, "gpu_last_reason_code", "") or "-")
+            if bool(getattr(self._settings, "gpu_available", False)):
+                label.setText(self._text("settings_perf_gpu_diag_ready", reason=reason))
+            else:
+                label.setText(self._text("settings_perf_gpu_diag_cpu", reason=reason))
+
+        def _run_gpu_diagnostic_from_settings(self) -> None:
+            context = default_gpu_runtime_context()
+            try:
+                report = probe_gpu_capability(context)
+                plan = build_gpu_provisioning_plan(report, context)
+            except Exception as exc:
+                QtWidgets.QMessageBox.warning(self, "GPU", str(exc))
+                return
+            self._settings.gpu_diagnostic_schema_version = 1
+            self._settings.gpu_diagnostic_completed = True
+            self._settings.gpu_available = report.effective_backend == EffectiveBackend.CUDA
+            self._settings.gpu_last_reason_code = report.reason_code.value
+            if self._settings.gpu_available:
+                self._settings.gpu_user_cpu_selected = False
+            try:
+                save_persistent_settings(self._settings)
+            except Exception as exc:
+                logging.warning("GPU_DIAGNOSTIC_SAVE_FAILED error=%s", exc)
+            self._update_gpu_diagnostic_label_from_settings()
+            details = report.human_message
+            if plan.command:
+                details += "\n\nInstallation guidee disponible depuis l'assistant de demarrage en contexte source autorise."
+            QtWidgets.QMessageBox.information(self, "Diagnostic acceleration GPU", details)
+
         def _read_settings_from_ui(self) -> PersistentSettings:
             catalog_library_path = self._catalog_library_path_from_ui()
             catalog_resources_for_save = None
+            simplified_interface = str(getattr(self, "_interface_mode", "easy") or "easy").strip().lower() in {"easy", "wizard", "simple", "simplified"}
             if catalog_library_path:
                 catalog_resources_for_save = self._validate_catalog_library_from_gui(show_error=False)
                 if catalog_resources_for_save is None:
-                    raise ValueError(self._catalog_library_validation_error or "CATALOG_LIBRARY_INVALID")
+                    db_candidate = self._standalone_astap_text()
+                    if not (simplified_interface and db_candidate and validate_astap_root(db_candidate).ok):
+                        raise ValueError(self._catalog_library_validation_error or "CATALOG_LIBRARY_INVALID")
+                    catalog_library_path = None
             near_catalog_mode = self._current_near_catalog_mode_from_ui()
             blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
             db_root = self.settings_db_edit.text().strip()
             if not db_root and catalog_resources_for_save is None:
                 raise ValueError(self._text("error_database_required"))
             index_root = self.settings_index_edit.text().strip()
-            if not index_root and catalog_resources_for_save is None:
+            legacy_index_required = near_catalog_mode == "legacy-index"
+            if not index_root and legacy_index_required:
                 raise ValueError(self._text("settings_index_missing"))
             if db_root and (catalog_resources_for_save is None or near_catalog_mode == "legacy-index"):
                 validation = validate_astap_root(db_root)
                 if not validation.ok:
                     raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_astap"))
-            if index_root and (catalog_resources_for_save is None or near_catalog_mode == "legacy-index"):
+            if index_root and legacy_index_required:
                 validation = validate_legacy_near_index_root(index_root)
                 if not validation.ok:
                     raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_index"))
@@ -9047,9 +10722,19 @@ def launch_gui(args: argparse.Namespace) -> int:
                 data = self.settings_tile_compression_combo.currentData()
                 if isinstance(data, str) and data.strip():
                     tile_compression_value = data.strip().lower()
+            dev_family_auto = bool(self.dev_family_auto_check.isChecked()) if hasattr(self, "dev_family_auto_check") else bool(getattr(self._settings, "dev_family_auto", True))
+            dev_family_selection = None
+            if not dev_family_auto:
+                dev_family_selection = self._selected_dev_families()
+                if not dev_family_selection:
+                    raise ValueError(self._text("dev_family_none_error"))
 
             return PersistentSettings(
+                schema_version=getattr(self._settings, "schema_version", SETTINGS_SCHEMA_VERSION),
                 catalog_library_path=catalog_library_path,
+                catalog_library_install_parent=getattr(self._settings, "catalog_library_install_parent", None),
+                startup_wizard_version=int(getattr(self._settings, "startup_wizard_version", 0) or 0),
+                startup_wizard_completed=bool(getattr(self._settings, "startup_wizard_completed", False)),
                 db_root=db_root or None,
                 index_root=index_root or None,
                 mag_cap=float(self.settings_mag_spin.value()),
@@ -9059,7 +10744,8 @@ def launch_gui(args: argparse.Namespace) -> int:
                 tile_compression=tile_compression_value,
                 log_level=self._current_log_level,
                 sample_fits=self.settings_sample_edit.text().strip() or None,
-                last_preset_id=(self.presets_combo.currentData() if hasattr(self, 'presets_combo') else None),
+                instrument_mode=self._current_instrument_mode(),
+                last_preset_id=(getattr(self, "_instrument_preset_id", None) if hasattr(self, 'presets_combo') else None),
                 last_fov_focal_mm=float(self.fov_focal_spin.value()) if hasattr(self, 'fov_focal_spin') else 0.0,
                 last_fov_pixel_um=float(self.fov_pixel_spin.value()) if hasattr(self, 'fov_pixel_spin') else 0.0,
                 last_fov_res_w=int(self.fov_res_w_spin.value()) if hasattr(self, 'fov_res_w_spin') else 0,
@@ -9099,7 +10785,15 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_search_margin=float(self.fast_search_margin_spin.value()) if hasattr(self, 'fast_search_margin_spin') else 1.2,
                 # Backend + astrometry
                 solver_backend=(self.backend_combo.currentData() if hasattr(self, 'backend_combo') else "local"),
+                move_unresolved_files=bool(self.move_unresolved_check.isChecked()) if hasattr(self, "move_unresolved_check") else bool(getattr(self._settings, "move_unresolved_files", False)),
                 interface_mode=str(getattr(self, "_interface_mode", "easy") or "easy"),
+                ui_theme=normalize_theme_mode(getattr(self._settings, "ui_theme", "system")),
+                gpu_diagnostic_schema_version=int(getattr(self._settings, "gpu_diagnostic_schema_version", 1) or 1),
+                gpu_diagnostic_completed=bool(getattr(self._settings, "gpu_diagnostic_completed", False)),
+                gpu_available=bool(getattr(self._settings, "gpu_available", False)),
+                gpu_user_cpu_selected=bool(getattr(self._settings, "gpu_user_cpu_selected", False)),
+                gpu_restart_required=bool(getattr(self._settings, "gpu_restart_required", False)),
+                gpu_last_reason_code=(getattr(self._settings, "gpu_last_reason_code", None) or None),
                 blind_backend_profile=self._current_blind_profile(),
                 blind_4d_manifest_path=manifest_text_for_save,
                 astrometry_api_url=(self.ast_api_url_edit.text().strip() if hasattr(self, 'ast_api_url_edit') else "https://nova.astrometry.net/api"),
@@ -9108,25 +10802,58 @@ def launch_gui(args: argparse.Namespace) -> int:
                 astrometry_timeout_s=int(self.ast_timeout_spin.value()) if hasattr(self, 'ast_timeout_spin') else 600,
                 astrometry_use_hints=bool(self.ast_use_hints_check.isChecked()) if hasattr(self, 'ast_use_hints_check') else True,
                 astrometry_fallback_local=bool(self.ast_fallback_local_check.isChecked()) if hasattr(self, 'ast_fallback_local_check') else True,
+                solver_downsample=int(self.downsample_spin.value()) if hasattr(self, "downsample_spin") else int(getattr(self._settings, "solver_downsample", 1) or 1),
+                solver_workers=self._selected_worker_value(),
+                solver_cache_size=int(self.cache_spin.value()) if hasattr(self, "cache_spin") else int(getattr(self._settings, "solver_cache_size", 12) or 12),
                 dev_bucket_limit_override=int(self.dev_bucket_spin.value()) if hasattr(self, "dev_bucket_spin") else 0,
                 dev_vote_percentile=int(self.dev_vote_spin.value()) if hasattr(self, "dev_vote_spin") else 40,
+                dev_bucket_cap_S=int(self.dev_cap_s_spin.value()) if hasattr(self, "dev_cap_s_spin") else int(getattr(self._settings, "dev_bucket_cap_S", 0) or 0),
+                dev_bucket_cap_M=int(self.dev_cap_m_spin.value()) if hasattr(self, "dev_cap_m_spin") else int(getattr(self._settings, "dev_bucket_cap_M", 0) or 0),
+                dev_bucket_cap_L=int(self.dev_cap_l_spin.value()) if hasattr(self, "dev_cap_l_spin") else int(getattr(self._settings, "dev_bucket_cap_L", 0) or 0),
                 dev_detect_k_sigma=float(self.dev_sigma_spin.value()) if hasattr(self, "dev_sigma_spin") else 3.0,
                 dev_detect_min_area=int(self.dev_area_spin.value()) if hasattr(self, "dev_area_spin") else 5,
+                dev_hash_quads_S=(
+                    int(self.dev_hash_quads_spin["S"].value())
+                    if hasattr(self, "dev_hash_quads_spin") and "S" in self.dev_hash_quads_spin
+                    else getattr(self._settings, "dev_hash_quads_S", None)
+                ),
+                dev_hash_quads_M=(
+                    int(self.dev_hash_quads_spin["M"].value())
+                    if hasattr(self, "dev_hash_quads_spin") and "M" in self.dev_hash_quads_spin
+                    else getattr(self._settings, "dev_hash_quads_M", None)
+                ),
+                dev_hash_quads_L=(
+                    int(self.dev_hash_quads_spin["L"].value())
+                    if hasattr(self, "dev_hash_quads_spin") and "L" in self.dev_hash_quads_spin
+                    else getattr(self._settings, "dev_hash_quads_L", None)
+                ),
+                dev_family_auto=dev_family_auto,
+                dev_family_selection=dev_family_selection,
                 db_family_cache=list(self._settings.db_family_cache or []) if getattr(self._settings, "db_family_cache", None) else None,
-                benchmark_inputs=self.bench_inputs_edit.toPlainText().strip() or None,
-                benchmark_index_root=self.bench_index_edit.text().strip() or None,
-                benchmark_grid_path=self.bench_grid_edit.text().strip() or None,
-                benchmark_output_json=self.bench_output_json_edit.text().strip() or None,
-                benchmark_output_csv=self.bench_output_csv_edit.text().strip() or None,
-                benchmark_allow_write=bool(self.bench_allow_write_check.isChecked()),
-                benchmark_continue_all=bool(self.bench_continue_check.isChecked()),
-                benchmark_limit=int(self.bench_limit_spin.value() or 0),
-                benchmark_log_level=str(self.bench_log_combo.currentData() or "INFO").upper(),
-                benchmark_tile_cache_size=int(self.bench_tile_cache_spin.value() or 0),
-                benchmark_sip_order=int(self.bench_sip_combo.currentData() or 2),
-                benchmark_full_mode=bool(self.bench_full_mode_check.isChecked()),
-                benchmark_try_parity=bool(self.bench_parity_check.isChecked()),
+                catalog_library_verification=dict(getattr(self._settings, "catalog_library_verification", None) or {}) or None,
             )
+
+        def _apply_instrument_snapshot_to_settings(self, settings: PersistentSettings) -> PersistentSettings:
+            if not hasattr(self, "fov_focal_spin"):
+                return settings
+            settings.instrument_mode = self._current_instrument_mode()
+            settings.last_preset_id = getattr(self, "_instrument_preset_id", None)
+            settings.last_fov_focal_mm = float(self.fov_focal_spin.value())
+            settings.last_fov_pixel_um = float(self.fov_pixel_spin.value())
+            settings.last_fov_res_w = int(self.fov_res_w_spin.value())
+            settings.last_fov_res_h = int(self.fov_res_h_spin.value())
+            settings.last_fov_reducer = float(self.fov_reducer_spin.value())
+            settings.last_fov_binning = int(self.fov_binning_spin.value())
+            return settings
+
+        def _persist_instrument_snapshot(self) -> None:
+            if getattr(self, "_instrument_initializing", False) or getattr(self, "_instrument_applying_snapshot", False):
+                return
+            try:
+                self._settings = self._apply_instrument_snapshot_to_settings(self._settings)
+                save_persistent_settings(self._settings)
+            except Exception:
+                pass
 
         def _apply_solver_hints_from_optics(
             self,
@@ -9210,7 +10937,11 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _log_settings(self, message: str) -> None:
             timestamp = time.strftime("%H:%M:%S")
-            self.settings_log_view.appendPlainText(f"[{timestamp}] {message}")
+            log_view = getattr(self, "settings_log_view", None)
+            if log_view is None:
+                logging.info("GUI settings log before widget ready: %s", message)
+                return
+            log_view.appendPlainText(f"[{timestamp}] {message}")
             # Avoid echoing into root logger (prevents feedback via the forwarding handler)
 
         def _log_index_health(self, index_root_text: str) -> None:
@@ -9581,10 +11312,12 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.progress_bar.setMinimum(0)
             self.progress_bar.setValue(0)
             self.status_label = QtWidgets.QLabel("")
+            self.near_backend_label = QtWidgets.QLabel("")
             row.addWidget(self.start_btn)
             row.addWidget(self.stop_btn)
             row.addWidget(self.progress_bar, 1)
             row.addWidget(self.status_label)
+            row.addWidget(self.near_backend_label)
             return row
 
         def _switch_language(self, code: str) -> None:
@@ -9604,16 +11337,17 @@ def launch_gui(args: argparse.Namespace) -> int:
                     label_key = f"language_action_{code}"
                     action.setText(self._text(label_key))
                     action.setChecked(code == self._language)
-            if hasattr(self, "dev_scroll"):
-                idx = self.tabs.indexOf(self.dev_scroll)
-                if idx >= 0:
-                    self.tabs.setTabText(idx, self._text("dev_tab"))
             if hasattr(self, "interface_menu"):
                 self.interface_menu.setTitle(self._text("interface_menu"))
                 if "expert" in self._interface_actions:
                     self._interface_actions["expert"].setText(self._text("interface_mode_expert"))
                 if "easy" in self._interface_actions:
                     self._interface_actions["easy"].setText(self._text("interface_mode_easy"))
+                if hasattr(self, "appearance_menu"):
+                    self.appearance_menu.setTitle(self._text("appearance_menu"))
+                    for mode, action in self._theme_actions.items():
+                        action.setText(self._text(f"appearance_{mode}"))
+                    self._sync_theme_actions()
                 if hasattr(self, "interface_wizard_action"):
                     self.interface_wizard_action.setText(self._text("interface_mode_wizard"))
             if hasattr(self, "log_menu"):
@@ -9622,6 +11356,14 @@ def launch_gui(args: argparse.Namespace) -> int:
                     label_key = f"log_level_{level.lower()}"
                     action.setText(self._text(label_key))
                 self._sync_log_level_actions()
+            if hasattr(self, "tools_menu"):
+                self.tools_menu.setTitle(self._text("advanced_tools_menu"))
+            if hasattr(self, "catalog_library_manager_action"):
+                self.catalog_library_manager_action.setText(self._text("library_manager_action"))
+            if hasattr(self, "historical_index_maintenance_action"):
+                self.historical_index_maintenance_action.setText(self._text("historical_index_maintenance_action"))
+            if self._catalog_library_manager_dialog is not None and hasattr(self._catalog_library_manager_dialog, "apply_language"):
+                self._catalog_library_manager_dialog.apply_language()
             self._apply_interface_mode()
             if hasattr(self, "dev_bucket_label"):
                 self.dev_bucket_label.setText(self._text("dev_bucket_label"))
@@ -9643,12 +11385,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.dev_area_label.setText(self._text("dev_detect_area_label"))
             if hasattr(self, "dev_area_spin"):
                 self.dev_area_spin.setToolTip(self._text("dev_detect_area_hint"))
-            if hasattr(self, "dev_workers_label"):
-                self.dev_workers_label.setText(self._text("dev_workers_label"))
-            if hasattr(self, "dev_workers_hint_label"):
-                self.dev_workers_hint_label.setText(self._text("dev_workers_hint"))
-            if hasattr(self, "dev_workers_combo"):
-                self.dev_workers_combo.setItemText(0, self._text("dev_workers_auto"))
             if hasattr(self, "dev_family_group"):
                 self.dev_family_group.setTitle(self._text("dev_family_group"))
             if hasattr(self, "dev_family_auto_check"):
@@ -9657,9 +11393,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.dev_family_hint.setText(self._text("dev_family_hint"))
             if hasattr(self, "dev_hash_group"):
                 self.dev_hash_group.setTitle(self._text("dev_hash_group"))
+            if hasattr(self, "historical_index_maintenance_warning_label"):
+                self.historical_index_maintenance_warning_label.setText(self._text("historical_index_maintenance_warning"))
+            if hasattr(self, "hash_maintenance_save_btn"):
+                self.hash_maintenance_save_btn.setText(self._text("settings_save_btn"))
+            if hasattr(self, "hash_maintenance_close_btn"):
+                self.hash_maintenance_close_btn.setText(self._text("close_button"))
             self._update_hash_button_labels()
-            if hasattr(self, "dev_save_btn"):
-                self.dev_save_btn.setText(self._text("settings_save_btn"))
             browse_label = self._text("browse_button")
             self.browse_in_btn.setText(browse_label)
             self.input_label.setText(self._text("input_label"))
@@ -9669,6 +11409,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.backend_label_widget.setText(self._text("solver.backend.label"))
             if hasattr(self, "backend_note_label"):
                 self.backend_note_label.setText(self._text("solver.backend.note"))
+            if hasattr(self, "instrument_label_widget"):
+                self.instrument_label_widget.setText(self._text("instrument_label"))
+            if hasattr(self, "instrument_combo"):
+                self._populate_instrument_combo()
             self.fov_label_widget.setText(self._text("fov_label"))
             self.search_scale_label_widget.setText(self._text("search_scale_label"))
             self.search_attempts_label_widget.setText(self._text("search_attempts_label"))
@@ -9682,8 +11426,14 @@ def launch_gui(args: argparse.Namespace) -> int:
             self.scale_min_hint_label_widget.setText(self._text("scale_min_hint_label"))
             self.scale_max_hint_label_widget.setText(self._text("scale_max_hint_label"))
             self.downsample_label_widget.setText(self._text("downsample_label"))
-            self.workers_label_widget.setText(self._text("threads_label"))
-            self.cache_label_widget.setText(self._text("cache_label"))
+            if hasattr(self, "workers_label_widget"):
+                self.workers_label_widget.setText(self._text("threads_label"))
+            if hasattr(self, "workers_spin"):
+                self.workers_spin.setSpecialValueText(self._text("dev_workers_auto"))
+            if hasattr(self, "workers_hint_label"):
+                self.workers_hint_label.setText(self._text("dev_workers_hint"))
+            if hasattr(self, "cache_label_widget"):
+                self.cache_label_widget.setText(self._text("cache_label"))
             self.max_files_label_widget.setText(self._text("max_files_label"))
             self.formats_label_widget.setText(self._text("formats_label"))
             self.families_label_widget.setText(self._text("families_label"))
@@ -9730,6 +11480,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.simple_mode_check.setText(self._text("simple_mode_label"))
             if hasattr(self, "simple_clean_wcs_check"):
                 self.simple_clean_wcs_check.setText(self._text("simple_clean_wcs_label"))
+            if hasattr(self, "move_unresolved_check"):
+                self.move_unresolved_check.setText(self._text("move_unresolved_files_label"))
+                self.move_unresolved_check.setToolTip(self._text("move_unresolved_files_help"))
             self._sync_blind_profile_controls()
             self.files_view.setHeaderLabels(
                 [
@@ -9762,10 +11515,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                         idx = self.tabs.indexOf(self.performance_scroll)
                         if idx >= 0:
                             self.tabs.setTabText(idx, self._text("performance_tab"))
-                    if hasattr(self, "benchmark_scroll"):
-                        idx = self.tabs.indexOf(self.benchmark_scroll)
-                        if idx >= 0:
-                            self.tabs.setTabText(idx, self._text("benchmark_tab"))
                     if hasattr(self, "fast_scroll"):
                         idx = self.tabs.indexOf(self.fast_scroll)
                         if idx >= 0:
@@ -9785,10 +11534,18 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.settings_catalog_library_validate_btn.setText(self._text("settings_catalog_library_validate"))
             if hasattr(self, "settings_catalog_library_clear_btn"):
                 self.settings_catalog_library_clear_btn.setText(self._text("settings_catalog_library_clear"))
+            if hasattr(self, "settings_catalog_library_manage_btn"):
+                self.settings_catalog_library_manage_btn.setText(self._text("library_manager_open"))
             if hasattr(self, "settings_catalog_library_edit"):
                 self.settings_catalog_library_edit.setToolTip(self._text("settings_catalog_library_tooltip"))
             if hasattr(self, "settings_catalog_library_help_label"):
                 self.settings_catalog_library_help_label.setText(self._text("settings_catalog_library_help"))
+            if hasattr(self, "easy_astap_label"):
+                self.easy_astap_label.setText(self._text("easy_astap_label"))
+                self.easy_astap_browse.setText(browse_label)
+                self.easy_astap_verify_btn.setText(self._text("easy_astap_verify"))
+                self.easy_astap_clear_btn.setText(self._text("easy_astap_clear"))
+                self.easy_astap_help_label.setText(self._text("easy_astap_help"))
             if hasattr(self, "settings_catalog_library_status_label"):
                 if self._catalog_library_validated_resources is not None:
                     self._set_catalog_library_status(
@@ -9798,7 +11555,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                         resources=self._catalog_library_validated_resources,
                     )
                 elif self.settings_catalog_library_edit.text().strip():
-                    self._set_catalog_library_status("INVALID", message=self._text("settings_catalog_library_unverified"))
+                    self._restore_catalog_library_verification_from_cache()
                 else:
                     self._set_catalog_library_status("AUCUNE_BIBLIOTHEQUE")
             if hasattr(self, "settings_db_label"):
@@ -9813,6 +11570,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.catalog_compat_group.setTitle(self._text("catalog_compat_group_title"))
             if hasattr(self, "catalog_compat_warning_label"):
                 self.catalog_compat_warning_label.setText(self._text("catalog_compat_warning"))
+            if hasattr(self, "legacy_blind_group"):
+                self.legacy_blind_group.setTitle(self._text("legacy_blind_group_title"))
+            if hasattr(self, "legacy_blind_scope_label"):
+                self.legacy_blind_scope_label.setText(self._text("legacy_blind_scope_warning"))
             if hasattr(self, "catalog_maintenance_group"):
                 self.catalog_maintenance_group.setTitle(self._text("catalog_compat_tools_title"))
             if hasattr(self, "catalog_maintenance_warning_label"):
@@ -9820,7 +11581,9 @@ def launch_gui(args: argparse.Namespace) -> int:
             if hasattr(self, "near_catalog_mode_label"):
                 self.near_catalog_mode_label.setText(self._text("settings_near_mode_label"))
             if hasattr(self, "blind4d_catalog_mode_label"):
-                self.blind4d_catalog_mode_label.setText(self._text("settings_blind4d_mode_label"))
+                self.blind4d_catalog_mode_label.setText(self._text("settings_blind4d_source_label"))
+            if hasattr(self, "blind4d_source_help_label"):
+                self.blind4d_source_help_label.setText(self._text("settings_blind4d_source_help"))
             if hasattr(self, "settings_blind_4d_manifest_label"):
                 self.settings_blind_4d_manifest_label.setText(self._text("settings_blind4d_external_label"))
             if hasattr(self, "settings_blind_4d_manifest_edit"):
@@ -9840,13 +11603,13 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self.near_catalog_mode_combo.setItemText(idx, self._text(key))
             if hasattr(self, "blind4d_catalog_mode_combo"):
                 for value, key in (
-                    ("auto", "settings_mode_auto"),
-                    ("library-view", "settings_mode_library_view"),
-                    ("external-manifest", "settings_mode_external_manifest"),
+                    ("auto", "settings_blind4d_source_auto"),
+                    ("external-manifest", "settings_blind4d_source_external"),
                 ):
                     idx = self.blind4d_catalog_mode_combo.findData(value)
                     if idx >= 0:
                         self.blind4d_catalog_mode_combo.setItemText(idx, self._text(key))
+                self._update_blind4d_source_visibility()
             if hasattr(self, "settings_restore_auto_modes_btn"):
                 self.settings_restore_auto_modes_btn.setText(self._text("settings_restore_auto_modes"))
             self._update_catalog_rollback_status()
@@ -9958,6 +11721,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.perf_near_max_tiles_label.setText(self._text("settings_perf_near_max_tiles_label"))
             if hasattr(self, "perf_detect_label"):
                 self.perf_detect_label.setText(self._text("settings_perf_detect_label"))
+            if hasattr(self, "perf_gpu_diag_btn"):
+                self.perf_gpu_diag_btn.setText(self._text("settings_perf_gpu_diag_btn"))
+                self._update_gpu_diagnostic_label_from_settings()
             if hasattr(self, "perf_io_label"):
                 self.perf_io_label.setText(self._text("settings_perf_io_label"))
             if hasattr(self, "perf_near_warm_check"):
@@ -9996,86 +11762,6 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self.fast_detect_max_labels_label.setText(self._text("fast_detect_max_labels_label"))
             if hasattr(self, "fast_save_btn"):
                 self.fast_save_btn.setText(self._text("fast_save_btn"))
-            if hasattr(self, "bench_sources_group"):
-                self.bench_sources_group.setTitle(self._text("benchmark_sources_group"))
-                self.bench_inputs_label.setText(self._text("benchmark_inputs_hint"))
-                self.bench_inputs_edit.setPlaceholderText(self._text("benchmark_inputs_placeholder"))
-                self.bench_add_file_btn.setText(self._text("benchmark_add_file_btn"))
-                self.bench_add_dir_btn.setText(self._text("benchmark_add_dir_btn"))
-                self.bench_add_list_btn.setText(self._text("benchmark_add_list_btn"))
-                self.bench_index_btn.setText(self._text("browse_button"))
-                self.bench_grid_btn.setText(self._text("benchmark_browse_file_btn"))
-                self.bench_output_json_btn.setText(self._text("benchmark_save_file_btn"))
-                self.bench_output_csv_btn.setText(self._text("benchmark_save_file_btn"))
-                if hasattr(self, "bench_path_form"):
-                    label = self.bench_path_form.labelForField(self.bench_index_row)
-                    if label:
-                        label.setText(self._text("benchmark_index_label"))
-                    label = self.bench_path_form.labelForField(self.bench_grid_row)
-                    if label:
-                        label.setText(self._text("benchmark_grid_label"))
-                    label = self.bench_path_form.labelForField(self.bench_output_json_row)
-                    if label:
-                        label.setText(self._text("benchmark_output_json_label"))
-                    label = self.bench_path_form.labelForField(self.bench_output_csv_row)
-                    if label:
-                        label.setText(self._text("benchmark_output_csv_label"))
-                self.bench_options_group.setTitle(self._text("benchmark_options_group"))
-                if hasattr(self, "bench_options_form"):
-                    label = self.bench_options_form.labelForField(self.bench_limit_spin)
-                    if label:
-                        label.setText(self._text("benchmark_limit_label"))
-                    label = self.bench_options_form.labelForField(self.bench_log_combo)
-                    if label:
-                        label.setText(self._text("benchmark_log_level_label"))
-                    label = self.bench_options_form.labelForField(self.bench_tile_cache_spin)
-                    if label:
-                        label.setText(self._text("benchmark_tile_cache_label"))
-                    label = self.bench_options_form.labelForField(self.bench_sip_combo)
-                    if label:
-                        label.setText(self._text("benchmark_sip_label"))
-                self.bench_allow_write_check.setText(self._text("benchmark_allow_write_label"))
-                self.bench_continue_check.setText(self._text("benchmark_continue_label"))
-                self.bench_parity_check.setText(self._text("benchmark_parity_label"))
-                self.bench_full_mode_check.setText(self._text("benchmark_full_mode_label"))
-                self.bench_base_group.setTitle(self._text("benchmark_base_group"))
-                if hasattr(self, "bench_base_form"):
-                    def _set_base_label(widget: QtWidgets.QWidget, key: str) -> None:
-                        label = self.bench_base_form.labelForField(widget)
-                        if label:
-                            label.setText(self._text(key))
-                    _set_base_label(self.bench_max_candidates_spin, "benchmark_max_candidates_label")
-                    _set_base_label(self.bench_max_stars_spin, "benchmark_max_stars_label")
-                    _set_base_label(self.bench_max_quads_spin, "benchmark_max_quads_label")
-                    _set_base_label(self.bench_detect_sigma_spin, "benchmark_detect_sigma_label")
-                    _set_base_label(self.bench_detect_area_spin, "benchmark_detect_area_label")
-                    _set_base_label(self.bench_bucket_cap_s_spin, "benchmark_bucket_cap_s_label")
-                    _set_base_label(self.bench_bucket_cap_m_spin, "benchmark_bucket_cap_m_label")
-                    _set_base_label(self.bench_bucket_cap_l_spin, "benchmark_bucket_cap_l_label")
-                    _set_base_label(self.bench_bucket_override_spin, "benchmark_bucket_override_label")
-                    _set_base_label(self.bench_vote_spin, "benchmark_vote_label")
-                    _set_base_label(self.bench_downsample_spin, "benchmark_downsample_label")
-                    _set_base_label(self.bench_quality_rms_spin, "benchmark_quality_rms_label")
-                    _set_base_label(self.bench_quality_inliers_spin, "benchmark_quality_inliers_label")
-                    _set_base_label(self.bench_pixel_tol_spin, "benchmark_pixel_tol_label")
-                self.bench_hints_group.setTitle(self._text("benchmark_hints_group"))
-                if hasattr(self, "bench_hints_form"):
-                    def _set_hint_label(widget: QtWidgets.QWidget, key: str) -> None:
-                        label = self.bench_hints_form.labelForField(widget)
-                        if label:
-                            label.setText(self._text(key))
-                        widget.setPlaceholderText(self._text("benchmark_hint_placeholder"))
-                    _set_hint_label(self.bench_ra_edit, "benchmark_ra_label")
-                    _set_hint_label(self.bench_dec_edit, "benchmark_dec_label")
-                    _set_hint_label(self.bench_radius_edit, "benchmark_radius_label")
-                    _set_hint_label(self.bench_focal_edit, "benchmark_focal_label")
-                    _set_hint_label(self.bench_pixel_edit, "benchmark_pixel_label")
-                    _set_hint_label(self.bench_scale_edit, "benchmark_scale_label")
-                    _set_hint_label(self.bench_scale_min_edit, "benchmark_scale_min_label")
-                    _set_hint_label(self.bench_scale_max_edit, "benchmark_scale_max_label")
-                self.bench_log_edit.setPlaceholderText(self._text("benchmark_log_placeholder"))
-                self.bench_run_btn.setText(self._text("benchmark_run_button"))
-                self.bench_stop_btn.setText(self._text("benchmark_stop_button"))
             self._retranslate_status_items()
 
         def _retranslate_status_items(self) -> None:
@@ -10118,8 +11804,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                     self.settings_catalog_library_edit.setText(catalog_library)
             if cli_args.db_root:
                 db_root = str(cli_args.db_root)
-                self._settings.db_root = db_root
-                self.settings_db_edit.setText(db_root)
+                self._set_astap_root(db_root, source="cli", validate=False)
             if cli_args.blind_index:
                 index_root = str(cli_args.blind_index)
                 self._settings.index_root = index_root
@@ -10149,214 +11834,10 @@ def launch_gui(args: argparse.Namespace) -> int:
                 options=opts,
             )
             if directory:
-                line_edit.setText(directory)
-                if trigger_scan:
-                    self.scan_files()
-
-        def _benchmark_pick_file(
-            self,
-            line_edit: QtWidgets.QLineEdit,
-            *,
-            save: bool,
-            suffix: str | None = None,
-        ) -> None:
-            start = line_edit.text().strip() or str(Path.home())
-            caption = self._text("benchmark_dialog_save_file") if save else self._text("benchmark_dialog_open_file")
-            filters: list[str] = [self._text("benchmark_dialog_filter_all")]
-            if suffix:
-                key = f"benchmark_dialog_filter_{suffix.lower()}"
-                filters.insert(0, self._text(key, ext=suffix.upper(), ext_lower=suffix.lower()))
-            filter_text = ";;".join(filters)
-            if save:
-                path, _ = QtWidgets.QFileDialog.getSaveFileName(self, caption, start, filter_text)
-            else:
-                path, _ = QtWidgets.QFileDialog.getOpenFileName(self, caption, start, filter_text)
-            if path:
-                line_edit.setText(path)
-
-        def _append_benchmark_input(self, entry: str) -> None:
-            entry = entry.strip()
-            if not entry:
-                return
-            current = self.bench_inputs_edit.toPlainText().splitlines()
-            current = [line.strip() for line in current if line.strip()]
-            if entry not in current:
-                current.append(entry)
-            self.bench_inputs_edit.setPlainText("\n".join(current))
-
-        def _on_benchmark_add_files_clicked(self) -> None:
-            files, _ = QtWidgets.QFileDialog.getOpenFileNames(
-                self,
-                self._text("benchmark_dialog_add_files"),
-                self.bench_index_edit.text().strip() or str(Path.home()),
-                "FITS (*.fit *.fits *.fts *.fit.gz *.fits.gz *.fts.gz);;All Files (*)",
-            )
-            for path in files:
-                self._append_benchmark_input(path)
-
-        def _on_benchmark_add_directory_clicked(self) -> None:
-            directory = QtWidgets.QFileDialog.getExistingDirectory(
-                self,
-                self._text("benchmark_dialog_add_directory"),
-                self.bench_index_edit.text().strip() or str(Path.home()),
-            )
-            if directory:
-                self._append_benchmark_input(directory)
-
-        def _on_benchmark_add_list_clicked(self) -> None:
-            path, _ = QtWidgets.QFileDialog.getOpenFileName(
-                self,
-                self._text("benchmark_dialog_add_list"),
-                self.bench_index_edit.text().strip() or str(Path.home()),
-                "Text (*.txt *.lst);;All Files (*)",
-            )
-            if path:
-                self._append_benchmark_input(f"@{path}")
-
-        def _on_benchmark_run_clicked(self) -> None:
-            if self._benchmark_worker:
-                return
-            try:
-                inputs, args = self._collect_benchmark_job()
-            except ValueError as exc:
-                QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
-                return
-            self.bench_log_edit.clear()
-            self.bench_progress.setMaximum(1)
-            self.bench_progress.setValue(0)
-            self.bench_status_label.setText(self._text("benchmark_status_starting"))
-            self._benchmark_worker = BenchmarkRunner(inputs, args)
-            self._benchmark_worker.log.connect(self._append_benchmark_log)
-            self._benchmark_worker.progress.connect(self._on_benchmark_progress)
-            self._benchmark_worker.finished.connect(self._on_benchmark_finished)
-            self._set_benchmark_running(True)
-            self._benchmark_worker.start()
-
-        def _on_benchmark_stop_clicked(self) -> None:
-            if not self._benchmark_worker:
-                return
-            try:
-                self._benchmark_worker.cancel()
-            except Exception:
-                pass
-            self.bench_stop_btn.setEnabled(False)
-
-        def _append_benchmark_log(self, message: str) -> None:
-            self.bench_log_edit.appendPlainText(message)
-
-        def _benchmark_inputs_from_ui(self) -> list[str]:
-            return [line.strip() for line in self.bench_inputs_edit.toPlainText().splitlines() if line.strip()]
-
-        def _parse_optional_float(self, text: str, *, label_key: str) -> float | None:
-            value = text.strip()
-            if not value:
-                return None
-            try:
-                return float(value)
-            except ValueError:
-                raise ValueError(self._text("benchmark_error_number", field=self._text(label_key)))
-
-        def _collect_benchmark_job(self) -> tuple[list[str], argparse.Namespace]:
-            entries = self._benchmark_inputs_from_ui()
-            if not entries:
-                raise ValueError(self._text("benchmark_error_inputs"))
-            index_root = self.bench_index_edit.text().strip() or (self._settings.index_root or "")
-            if not index_root:
-                raise ValueError(self._text("benchmark_error_index"))
-            index_path = Path(index_root).expanduser()
-            if not index_path.exists():
-                raise ValueError(self._text("benchmark_error_index_missing", path=index_path))
-            grid_text = self.bench_grid_edit.text().strip()
-            grid_path = Path(grid_text).expanduser() if grid_text else None
-            if grid_path and not grid_path.exists():
-                raise ValueError(self._text("benchmark_error_grid_missing", path=grid_path))
-            out_json = Path(self.bench_output_json_edit.text().strip()).expanduser() if self.bench_output_json_edit.text().strip() else None
-            out_csv = Path(self.bench_output_csv_edit.text().strip()).expanduser() if self.bench_output_csv_edit.text().strip() else None
-            limit_value = self.bench_limit_spin.value()
-            limit = limit_value if limit_value > 0 else None
-            tile_cache = self.bench_tile_cache_spin.value()
-            tile_cache_value = tile_cache if tile_cache > 0 else None
-            log_level = str(self.bench_log_combo.currentData() or "INFO").upper()
-            sip_order = int(self.bench_sip_combo.currentData() or 2)
-            ra_hint = self._parse_optional_float(self.bench_ra_edit.text(), label_key="benchmark_ra_label")
-            dec_hint = self._parse_optional_float(self.bench_dec_edit.text(), label_key="benchmark_dec_label")
-            radius_hint = self._parse_optional_float(self.bench_radius_edit.text(), label_key="benchmark_radius_label")
-            focal_hint = self._parse_optional_float(self.bench_focal_edit.text(), label_key="benchmark_focal_label")
-            pixel_hint = self._parse_optional_float(self.bench_pixel_edit.text(), label_key="benchmark_pixel_label")
-            scale_hint = self._parse_optional_float(self.bench_scale_edit.text(), label_key="benchmark_scale_label")
-            scale_min_hint = self._parse_optional_float(self.bench_scale_min_edit.text(), label_key="benchmark_scale_min_label")
-            scale_max_hint = self._parse_optional_float(self.bench_scale_max_edit.text(), label_key="benchmark_scale_max_label")
-            args = argparse.Namespace(
-                inputs=entries,
-                index_root=index_path,
-                grid=grid_path,
-                continue_after_success=self.bench_continue_check.isChecked(),
-                allow_write=self.bench_allow_write_check.isChecked(),
-                limit=limit,
-                output_json=out_json,
-                output_csv=out_csv,
-                log_level=log_level,
-                max_candidates=self.bench_max_candidates_spin.value(),
-                max_stars=self.bench_max_stars_spin.value(),
-                max_quads=self.bench_max_quads_spin.value(),
-                detect_k_sigma=self.bench_detect_sigma_spin.value(),
-                detect_min_area=self.bench_detect_area_spin.value(),
-                bucket_cap_s=self.bench_bucket_cap_s_spin.value(),
-                bucket_cap_m=self.bench_bucket_cap_m_spin.value(),
-                bucket_cap_l=self.bench_bucket_cap_l_spin.value(),
-                sip_order=sip_order,
-                quality_rms=self.bench_quality_rms_spin.value(),
-                quality_inliers=self.bench_quality_inliers_spin.value(),
-                pixel_tolerance=self.bench_pixel_tol_spin.value(),
-                downsample=self.bench_downsample_spin.value(),
-                vote_percentile=self.bench_vote_spin.value(),
-                bucket_limit_override=self.bench_bucket_override_spin.value(),
-                tile_cache_size=tile_cache_value,
-                focal_length_mm=focal_hint,
-                pixel_size_um=pixel_hint,
-                pixel_scale_arcsec=scale_hint,
-                pixel_scale_min_arcsec=scale_min_hint,
-                pixel_scale_max_arcsec=scale_max_hint,
-                ra_hint_deg=ra_hint,
-                dec_hint_deg=dec_hint,
-                radius_hint_deg=radius_hint,
-                no_parity_flip=not self.bench_parity_check.isChecked(),
-                full_mode=self.bench_full_mode_check.isChecked(),
-            )
-            return entries, args
-
-        def _set_benchmark_running(self, running: bool) -> None:
-            self.bench_run_btn.setEnabled(not running)
-            self.bench_stop_btn.setEnabled(running)
-            self.bench_sources_group.setEnabled(not running)
-            self.bench_options_group.setEnabled(not running)
-            self.bench_base_group.setEnabled(not running)
-            self.bench_hints_group.setEnabled(not running)
-
-        def _on_benchmark_progress(self, done: int, total: int, name: str) -> None:
-            total = max(1, total)
-            self.bench_progress.setMaximum(total)
-            self.bench_progress.setValue(min(done, total))
-            self.bench_status_label.setText(
-                self._text("benchmark_status_running", done=done, total=total, name=name or "")
-            )
-
-        def _on_benchmark_finished(self, success: bool, message: str) -> None:
-            self._set_benchmark_running(False)
-            self.bench_progress.setValue(self.bench_progress.maximum())
-            if self._benchmark_worker:
-                self._benchmark_worker.deleteLater()
-            self._benchmark_worker = None
-            if success:
-                self.bench_status_label.setText(self._text("benchmark_status_done", summary=message))
-                self._append_benchmark_log(self._text("benchmark_log_done", summary=message))
-            else:
-                if message.strip().lower() == "cancelled":
-                    self.bench_status_label.setText(self._text("benchmark_status_cancelled"))
-                    self._append_benchmark_log(self._text("benchmark_log_cancelled"))
+                if trigger_scan and line_edit is self.input_edit:
+                    self._apply_input_directory(directory, trigger_scan=True)
                 else:
-                    self.bench_status_label.setText(self._text("benchmark_status_failed", error=message))
-                    self._append_benchmark_log(self._text("benchmark_log_failed", error=message))
+                    line_edit.setText(directory)
 
         def scan_files(self) -> None:
             # Cancel previous scan if any
@@ -10455,24 +11936,34 @@ def launch_gui(args: argparse.Namespace) -> int:
         def _build_config(self) -> SolveConfig:
             catalog_library_path = self._catalog_library_path_from_ui()
             catalog_resources_for_config: SolverCatalogResources | None = None
+            simplified_interface = str(getattr(self, "_interface_mode", "easy") or "easy").strip().lower() in {"easy", "wizard", "simple", "simplified"}
+            near_catalog_mode = self._current_near_catalog_mode_from_ui()
+            blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
             if catalog_library_path:
                 catalog_resources_for_config = self._validate_catalog_library_from_gui(show_error=False)
                 if catalog_resources_for_config is None:
-                    raise ValueError(self._catalog_library_validation_error or "CATALOG_LIBRARY_INVALID")
-            near_catalog_mode = self._current_near_catalog_mode_from_ui()
-            blind4d_catalog_mode = self._current_blind4d_catalog_mode_from_ui()
+                    db_candidate = self._standalone_astap_text()
+                    if simplified_interface and db_candidate and validate_astap_root(db_candidate).ok:
+                        self._log_settings(self._text("chain_near_only_astap"))
+                        catalog_library_path = None
+                    else:
+                        raise ValueError(self._catalog_library_validation_error or "CATALOG_LIBRARY_INVALID")
             db_root_text = self._settings.db_root
             if hasattr(self, "settings_db_edit"):
                 db_root_text = self.settings_db_edit.text().strip() or db_root_text
             if not db_root_text and catalog_resources_for_config is None:
                 raise ValueError(self._text("error_database_required"))
-            if catalog_resources_for_config is not None and catalog_resources_for_config.near is not None:
+            if (
+                catalog_resources_for_config is not None
+                and catalog_resources_for_config.near is not None
+                and near_catalog_mode != "astap-native"
+            ):
                 db_root = catalog_resources_for_config.near.root
             else:
                 db_root = Path(db_root_text).expanduser() if db_root_text else Path(catalog_library_path or ".").expanduser()
             if catalog_resources_for_config is None and not db_root.is_dir():
                 raise ValueError(self._text("error_database_missing", path=db_root))
-            if db_root_text and (catalog_resources_for_config is None or near_catalog_mode == "legacy-index"):
+            if db_root_text and (catalog_resources_for_config is None or near_catalog_mode in {"astap-native", "legacy-index"}):
                 validation = validate_astap_root(db_root_text)
                 if not validation.ok:
                     raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_astap"))
@@ -10491,15 +11982,24 @@ def launch_gui(args: argparse.Namespace) -> int:
             index_root_text = self._settings.index_root
             if hasattr(self, "settings_index_edit"):
                 index_root_text = self.settings_index_edit.text().strip() or index_root_text
-            if not index_root_text and catalog_resources_for_config is None:
+            legacy_index_required = near_catalog_mode == "legacy-index"
+            if not index_root_text and legacy_index_required:
                 raise ValueError(self._text("settings_index_missing"))
             index_root = Path(index_root_text).expanduser() if index_root_text else None
-            if catalog_resources_for_config is None and (index_root is None or not index_root.is_dir()):
+            if legacy_index_required and (index_root is None or not index_root.is_dir()):
                 raise ValueError(self._text("settings_index_missing"))
-            if index_root_text and (catalog_resources_for_config is None or near_catalog_mode == "legacy-index"):
+            if index_root_text and legacy_index_required:
                 validation = validate_legacy_near_index_root(index_root_text)
                 if not validation.ok:
                     raise ValueError(self._format_catalog_path_error(validation, field_key="field_legacy_index"))
+            effective_near_catalog_mode = near_catalog_mode
+            if (
+                simplified_interface
+                and catalog_resources_for_config is None
+                and db_root_text
+                and near_catalog_mode == "auto"
+            ):
+                effective_near_catalog_mode = "astap-native"
             manifest_text_for_run = (
                 self._manifest_text_or_default()
                 if hasattr(self, "blind_4d_manifest_edit") or hasattr(self, "settings_blind_4d_manifest_edit")
@@ -10524,12 +12024,15 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._settings.solver_family = str(sel_fam).strip().lower() or None
                 self._settings.solver_blind_enabled = bool(self.blind_check.isChecked())
                 self._settings.solver_overwrite = bool(self.overwrite_check.isChecked())
+                if hasattr(self, "move_unresolved_check"):
+                    self._settings.move_unresolved_files = bool(self.move_unresolved_check.isChecked())
                 self._settings.catalog_library_path = catalog_library_path
                 self._settings.db_root = db_root_text or None
                 self._settings.index_root = index_root_text or None
                 self._settings.near_catalog_mode = near_catalog_mode
                 self._settings.blind4d_catalog_mode = blind4d_catalog_mode
                 self._settings.interface_mode = str(getattr(self, "_interface_mode", "easy") or "easy")
+                self._settings.instrument_mode = self._current_instrument_mode()
                 self._settings.blind_backend_profile = self._current_blind_profile()
                 self._settings.blind_4d_manifest_path = manifest_text_for_run
                 self._settings.solver_hint_ra_deg = (
@@ -10598,11 +12101,19 @@ def launch_gui(args: argparse.Namespace) -> int:
             ra_hint = None if self.ra_hint_spin.value() <= -0.5 else float(self.ra_hint_spin.value())
             dec_hint = None if self.dec_hint_spin.value() <= -90.5 else float(self.dec_hint_spin.value())
             radius_hint = None if self.radius_hint_spin.value() <= 0.0 else float(self.radius_hint_spin.value())
-            focal_hint = None if self.focal_hint_spin.value() <= 0.0 else float(self.focal_hint_spin.value())
-            pixel_hint = None if self.pixel_hint_spin.value() <= 0.0 else float(self.pixel_hint_spin.value())
-            scale_hint = None if self.scale_hint_spin.value() <= 0.0 else float(self.scale_hint_spin.value())
-            scale_min_hint = None if self.scale_min_hint_spin.value() <= 0.0 else float(self.scale_min_hint_spin.value())
-            scale_max_hint = None if self.scale_max_hint_spin.value() <= 0.0 else float(self.scale_max_hint_spin.value())
+            instrument_mode = self._current_instrument_mode()
+            if instrument_mode == "auto":
+                focal_hint = None
+                pixel_hint = None
+                scale_hint = None
+                scale_min_hint = None
+                scale_max_hint = None
+            else:
+                focal_hint = None if self.focal_hint_spin.value() <= 0.0 else float(self.focal_hint_spin.value())
+                pixel_hint = None if self.pixel_hint_spin.value() <= 0.0 else float(self.pixel_hint_spin.value())
+                scale_hint = None if self.scale_hint_spin.value() <= 0.0 else float(self.scale_hint_spin.value())
+                scale_min_hint = None if self.scale_min_hint_spin.value() <= 0.0 else float(self.scale_min_hint_spin.value())
+                scale_max_hint = None if self.scale_max_hint_spin.value() <= 0.0 else float(self.scale_max_hint_spin.value())
             return SolveConfig(
                 db_root=db_root,
                 input_dir=self._current_input_dir,
@@ -10622,6 +12133,9 @@ def launch_gui(args: argparse.Namespace) -> int:
                 blind_backend_profile=self._current_blind_profile(),
                 blind_4d_manifest_path=manifest_text_for_run,
                 blind4d_catalog_mode=blind4d_catalog_mode,
+                move_unresolved_files=bool(self.move_unresolved_check.isChecked()) if hasattr(self, "move_unresolved_check") else bool(getattr(self._settings, "move_unresolved_files", False)),
+                interface_mode=str(getattr(self, "_interface_mode", "easy") or "easy"),
+                instrument_mode=instrument_mode,
                 catalog_library_path=catalog_library_path,
                 hint_ra_deg=ra_hint,
                 hint_dec_deg=dec_hint,
@@ -10654,7 +12168,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 near_try_parity_flip=bool(self._settings.near_try_parity_flip),
                 near_defer_blind_fallback=bool(getattr(self._settings, 'near_defer_blind_fallback', False)),
                 near_allow_second_rescue=bool(getattr(self._settings, 'near_allow_second_rescue', False)),
-                near_catalog_mode=near_catalog_mode,
+                near_catalog_mode=effective_near_catalog_mode,
                 near_search_margin=float(self._settings.near_search_margin or 1.2),
                 # Blind solver tunables from the Settings panel
                 blind_max_stars=int(self._settings.blind_max_stars or 500),
@@ -10683,6 +12197,58 @@ def launch_gui(args: argparse.Namespace) -> int:
                 dev_detect_min_area=int(self._settings.dev_detect_min_area or 5),
             )
 
+        def _fits_instrument_scale_arcsec(self, path: Path) -> float | None:
+            try:
+                header = fits.getheader(path, ext=0)
+            except Exception:
+                return None
+
+            def _header_float(key: str) -> float | None:
+                try:
+                    value = float(header.get(key))
+                except Exception:
+                    return None
+                return value if math.isfinite(value) and value > 0 else None
+
+            focal = _header_float("FOCALLEN")
+            xpix = _header_float("XPIXSZ")
+            ypix = _header_float("YPIXSZ")
+            xbin = _header_float("XBINNING") or 1.0
+            ybin = _header_float("YBINNING") or 1.0
+            if focal and xpix and ypix:
+                pixel = ((xpix * max(1.0, xbin)) + (ypix * max(1.0, ybin))) / 2.0
+                return 206.265 * (pixel / focal)
+            try:
+                from astropy.wcs import WCS
+                from astropy.wcs.utils import proj_plane_pixel_scales
+
+                wcs = WCS(header, naxis=2, relax=True)
+                if wcs.has_celestial:
+                    scales = proj_plane_pixel_scales(wcs)
+                    values = [abs(float(v)) * 3600.0 for v in scales if float(v) > 0]
+                    if values:
+                        return sum(values) / len(values)
+            except Exception:
+                return None
+            return None
+
+        def _log_instrument_consistency_warning(self, config: SolveConfig) -> None:
+            active_scale = config.hint_resolution_arcsec
+            if active_scale is None or active_scale <= 0:
+                return
+            for path in list(self._pending_files)[:5]:
+                image_scale = self._fits_instrument_scale_arcsec(path)
+                if image_scale is None or image_scale <= 0:
+                    continue
+                ratio = max(float(image_scale), float(active_scale)) / max(0.001, min(float(image_scale), float(active_scale)))
+                if ratio >= 1.6:
+                    self._log(
+                        "Avertissement instrument: le profil actif indique "
+                        f"{float(active_scale):.2f}\"/px, mais les métadonnées de l’image indiquent environ "
+                        f"{float(image_scale):.2f}\"/px. Vérifiez le profil instrument."
+                    )
+                    return
+
         def _activate_tab(self, tab_widget: QtWidgets.QWidget) -> None:
             try:
                 idx = self.tabs.indexOf(tab_widget)
@@ -10710,11 +12276,18 @@ def launch_gui(args: argparse.Namespace) -> int:
             if not db_text and hasattr(self, "db_tab_edit"):
                 db_text = self.db_tab_edit.text().strip()
             db_path = Path(db_text).expanduser() if db_text else None
+            if db_path and db_path.is_dir():
+                validation = validate_astap_root(db_path)
+                if validation.ok:
+                    self._set_astap_root(validation.path or db_path, source="wizard", validate=False)
+                    self._set_astap_status("valid", validation=validation)
+                    self._log_settings(self._text("simple_wizard_astap_ready"))
+                    return True
 
             index_text = self.settings_index_edit.text().strip() if hasattr(self, "settings_index_edit") else ""
             index_path = Path(index_text).expanduser() if index_text else None
-            if db_path and db_path.is_dir() and index_path and index_path.is_dir():
-                self._settings.db_root = str(db_path)
+            if db_path and db_path.is_dir() and index_path and index_path.is_dir() and self._current_near_catalog_mode_from_ui() == "legacy-index":
+                self._set_astap_root(db_path, source="wizard-legacy", validate=False)
                 self._settings.index_root = str(index_path)
                 self._log_settings(self._text("simple_wizard_legacy_compat"))
                 return True
@@ -10758,73 +12331,202 @@ def launch_gui(args: argparse.Namespace) -> int:
             )
             return answer == QtWidgets.QMessageBox.Yes
 
-        def _run_simple_mode_wcs_cleaning(self, files: Sequence[Path]) -> bool:
+        def _run_simple_mode_wcs_cleaning(self, files: Sequence[Path]) -> str:
             if not (hasattr(self, "simple_mode_check") and self.simple_mode_check.isChecked()):
-                return True
+                return "skip"
             if not (hasattr(self, "simple_clean_wcs_check") and self.simple_clean_wcs_check.isChecked()):
-                return True
+                return "skip"
 
             fit_ext = {".fit", ".fits", ".fts"}
             targets = [p for p in files if str(p.suffix).lower() in fit_ext]
             if not targets:
-                return True
+                return "skip"
 
             try:
-                from zewcscleaner import process_fits
+                config = WcsCleanupConfig.from_files(
+                    targets,
+                    dry_run=False,
+                    backup=False,
+                    only_if_wcs=True,
+                    all_hdus=False,
+                )
             except Exception as exc:
                 QtWidgets.QMessageBox.warning(
                     self,
                     self._text("simple_wizard_title"),
                     self._text("simple_clean_failed", error=str(exc)),
                 )
+                return "failed"
+
+            self._wcs_cleanup_run_seq += 1
+            cleanup_id = self._wcs_cleanup_run_seq
+            worker = WcsCleanupRunner(config)
+            setattr(worker, "_gui_cleanup_id", cleanup_id)
+            self._wcs_cleanup_worker = worker
+            self._wcs_cleanup_active_id = cleanup_id
+            self._wcs_cleanup_terminal = None
+            self._wcs_cleanup_terminal_payload = None
+            self._progress_total = len(config.files)
+            self._progress_completed = 0
+            self.progress_bar.setMaximum(max(1, len(config.files)))
+            self.progress_bar.setValue(0)
+            self.status_label.setText(
+                self._text("simple_clean_progress", done=0, total=len(config.files), remaining=len(config.files))
+            )
+            self._set_running(True)
+            self._log(self._text("simple_clean_started", files=len(config.files)))
+            worker.cleanup_started.connect(self._on_wcs_cleanup_started)
+            worker.file_result.connect(self._on_wcs_cleanup_file_result)
+            worker.progress.connect(self._on_wcs_cleanup_progress)
+            worker.file_error.connect(self._on_wcs_cleanup_file_error)
+            worker.fatal_error.connect(self._on_wcs_cleanup_fatal_error)
+            worker.completed.connect(self._on_wcs_cleanup_completed)
+            worker.cancelled.connect(self._on_wcs_cleanup_cancelled)
+            worker.finished.connect(self._on_wcs_cleanup_thread_finished)
+            worker.start()
+            return "started"
+
+        def _wcs_cleanup_callback_current(self) -> bool:
+            sender = self.sender()
+            cleanup_id = getattr(sender, "_gui_cleanup_id", self._wcs_cleanup_active_id)
+            if cleanup_id != self._wcs_cleanup_active_id:
+                logging.info(
+                    "WCS cleanup stale callback ignored cleanup_id=%s active_cleanup_id=%s",
+                    cleanup_id,
+                    self._wcs_cleanup_active_id,
+                )
                 return False
-
-            total_cards = 0
-            changed_files = 0
-            refreshed = 0
-            self.files_view.setUpdatesEnabled(False)
-            for path in targets:
-                try:
-                    deleted, edited_hdus = process_fits(
-                        str(path),
-                        dry_run=False,
-                        backup=False,
-                        only_if_wcs=True,
-                        all_hdus=False,
-                    )
-                    total_cards += int(deleted)
-                    if int(edited_hdus) > 0:
-                        changed_files += 1
-                        state = inspect_effective_wcs_state(path)
-                        detail = "WCS nettoyé"
-                        if state.other_hdus_have_wcs and not state.primary_has_wcs:
-                            detail = "WCS nettoyé du PRIMARY ; WCS secondaire présent"
-                        elif state.detail:
-                            detail = state.detail
-                        key = self._normalize_progress_path(path)
-                        item = self._item_by_path.get(key)
-                        if item is not None:
-                            self._apply_item_status(item, state.status, detail)
-                            refreshed += 1
-                        if refreshed and refreshed % 250 == 0:
-                            self.files_view.setUpdatesEnabled(True)
-                            QtWidgets.QApplication.processEvents(QtCore.QEventLoop.ExcludeUserInputEvents)
-                            self.files_view.setUpdatesEnabled(False)
-                except Exception as exc:
-                    self.files_view.setUpdatesEnabled(True)
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        self._text("simple_wizard_title"),
-                        self._text("simple_clean_failed", error=f"{path.name}: {exc}"),
-                    )
-                    return False
-            self.files_view.setUpdatesEnabled(True)
-
-            self._log(self._text("simple_clean_done", files=changed_files, cards=total_cards))
             return True
 
+        def _on_wcs_cleanup_started(self, progress) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            self.progress_bar.setMaximum(max(1, int(getattr(progress, "total", 0) or 0)))
+            self.progress_bar.setValue(0)
+
+        def _refresh_wcs_cleanup_status(self, path: Path) -> None:
+            state = inspect_effective_wcs_state(path)
+            detail = "WCS nettoyé"
+            if state.other_hdus_have_wcs and not state.primary_has_wcs:
+                detail = "WCS nettoyé du PRIMARY ; WCS secondaire présent"
+            elif state.detail:
+                detail = state.detail
+            key = self._normalize_progress_path(path)
+            item = self._item_by_path.get(key)
+            if item is not None:
+                self._apply_item_status(item, state.status, detail)
+
+        def _on_wcs_cleanup_file_result(self, result) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            path = Path(getattr(result, "path"))
+            self._refresh_wcs_cleanup_status(path)
+            deleted = int(getattr(result, "deleted_cards", 0) or 0)
+            edited_hdus = int(getattr(result, "edited_hdus", 0) or 0)
+            self._log(f"WCS cleanup file result: {path} cards={deleted} hdus={edited_hdus}")
+
+        def _on_wcs_cleanup_progress(self, progress) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            total = max(0, int(getattr(progress, "total", 0) or 0))
+            done = max(0, int(getattr(progress, "completed", 0) or 0))
+            remaining = max(0, int(getattr(progress, "remaining", max(0, total - done)) or 0))
+            self._progress_completed = done
+            self.progress_bar.setMaximum(max(1, total))
+            self.progress_bar.setValue(min(done, self.progress_bar.maximum()))
+            self.status_label.setText(self._text("simple_clean_progress", done=done, total=total, remaining=remaining))
+
+        def _on_wcs_cleanup_file_error(self, error) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            self._log(
+                "WCS cleanup file failed: path={path} operation={operation} error={message} status={status}".format(
+                    path=getattr(error, "path", None),
+                    operation=getattr(error, "operation", "process_fits"),
+                    message=getattr(error, "message", ""),
+                    status=getattr(error, "final_status", "failed"),
+                )
+            )
+
+        def _on_wcs_cleanup_fatal_error(self, error) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            self._wcs_cleanup_terminal = "failed"
+            self._wcs_cleanup_terminal_payload = error
+            message = "{path}: {message}".format(path=getattr(error, "path", "-"), message=getattr(error, "message", error))
+            QtWidgets.QMessageBox.warning(
+                self,
+                self._text("simple_wizard_title"),
+                self._text("simple_clean_failed", error=message),
+            )
+            self._log(self._text("simple_clean_failed", error=message))
+
+        def _on_wcs_cleanup_completed(self, summary) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            self._wcs_cleanup_terminal = "completed"
+            self._wcs_cleanup_terminal_payload = summary
+            self._log(
+                self._text(
+                    "simple_clean_summary",
+                    planned=getattr(summary, "planned", 0),
+                    processed=getattr(summary, "processed", 0),
+                    changed=getattr(summary, "changed_files", 0),
+                    cards=getattr(summary, "deleted_cards", 0),
+                    errors=getattr(summary, "errors", 0),
+                    remaining=getattr(summary, "remaining", 0),
+                    duration=f"{float(getattr(summary, 'duration_s', 0.0)):.2f}",
+                    status=getattr(summary, "terminal_status", "completed"),
+                )
+            )
+
+        def _on_wcs_cleanup_cancelled(self, summary) -> None:
+            if not self._wcs_cleanup_callback_current():
+                return
+            self._wcs_cleanup_terminal = "cancelled"
+            self._wcs_cleanup_terminal_payload = summary
+            self._log(
+                self._text(
+                    "simple_clean_cancelled",
+                    done=getattr(summary, "processed", 0),
+                    remaining=getattr(summary, "remaining", 0),
+                )
+            )
+
+        def _on_wcs_cleanup_thread_finished(self) -> None:
+            sender = self.sender()
+            worker = sender if sender is not None else self._wcs_cleanup_worker
+            cleanup_id = getattr(worker, "_gui_cleanup_id", self._wcs_cleanup_active_id)
+            if cleanup_id != self._wcs_cleanup_active_id:
+                if worker is not None:
+                    worker.deleteLater()
+                return
+            terminal = self._wcs_cleanup_terminal or ("cancelled" if self._worker_cancelled(worker) else "failed")
+            if worker is not None:
+                try:
+                    worker.finished.disconnect(self._on_wcs_cleanup_thread_finished)
+                except Exception:
+                    pass
+                worker.deleteLater()
+            if self._wcs_cleanup_worker is worker:
+                self._wcs_cleanup_worker = None
+            self._wcs_cleanup_active_id = None
+            payload = self._wcs_cleanup_terminal_payload
+            self._wcs_cleanup_terminal_payload = None
+            self._wcs_cleanup_terminal = None
+            self._set_running(False)
+            if terminal == "completed" and not self._closing:
+                self._resume_after_wcs_cleanup = True
+                QtCore.QTimer.singleShot(0, self._start_solving)
+            elif terminal == "cancelled":
+                processed = int(getattr(payload, "processed", self._progress_completed) or 0)
+                remaining = int(getattr(payload, "remaining", max(0, self._progress_total - processed)) or 0)
+                self.status_label.setText(self._text("simple_clean_cancelled", done=processed, remaining=remaining))
+            else:
+                self.status_label.setText(self._text("status_ready"))
+
         def _start_solving(self) -> None:
-            if self._worker is not None:
+            if self._worker is not None or self._wcs_cleanup_worker is not None:
                 return
             if not self._pending_files:
                 self.scan_files()
@@ -10835,95 +12537,22 @@ def launch_gui(args: argparse.Namespace) -> int:
                         self._text("dialog_no_files"),
                     )
                     return
-            if not self._run_simple_mode_assistant(len(self._pending_files)):
-                return
-            if not self._run_simple_mode_wcs_cleaning(self._pending_files):
-                return
-            preflight_started = time.perf_counter()
-            preflight_timings: dict[str, float] = {}
-            near_runtime: NearCatalogRuntime | None = None
+            if self._resume_after_wcs_cleanup:
+                self._resume_after_wcs_cleanup = False
+            else:
+                if not self._run_simple_mode_assistant(len(self._pending_files)):
+                    return
+                cleanup_state = self._run_simple_mode_wcs_cleaning(self._pending_files)
+                if cleanup_state in {"started", "failed"}:
+                    return
             try:
-                t0 = time.perf_counter()
                 config = self._build_config()
-                preflight_timings["catalog_library_open_s"] = time.perf_counter() - t0
-                t0 = time.perf_counter()
-                config, catalog_resources = apply_catalog_resources_to_config(config)
-                preflight_timings["catalog_resource_resolution_s"] = time.perf_counter() - t0
-                self._log("Catalog resources: " + json.dumps(catalog_resources.telemetry(include_paths=False), ensure_ascii=False))
-                if catalog_resources.source == "library":
-                    self._log(self._text("catalog_library_selected_log", library_id=catalog_resources.catalog_library_id or "-"))
-                    self._log(self._text("catalog_library_status_log", status=catalog_resources.library_status.value if catalog_resources.library_status else "-"))
-                t0 = time.perf_counter()
-                near_runtime = resolve_near_catalog_runtime(
-                    catalog_resources,
-                    mode=getattr(config, "near_catalog_mode", "auto"),
-                    legacy_index_root=config.blind_index_path,
-                    blind_only=bool(getattr(config, "blind_only", False)),
-                    legacy_cache_size=int(getattr(config, "near_tile_cache_size", 128) or 128),
-                )
-                preflight_timings["near_runtime_resolution_s"] = time.perf_counter() - t0
-                self._log("Near catalog preflight: " + json.dumps(near_runtime.telemetry(include_paths=False), ensure_ascii=False))
-            except (ValueError, CatalogResourceResolutionError) as exc:
+                catalog_resources = None
+            except ValueError as exc:
                 QtWidgets.QMessageBox.warning(self, self._text("dialog_config_title"), str(exc))
                 return
-            if (
-                config.blind_enabled
-                and str(getattr(config, "blind_backend_profile", HISTORICAL_PROFILE) or HISTORICAL_PROFILE).strip().lower()
-                == ZEBLIND_4D_EXPERIMENTAL_PROFILE
-            ):
-                try:
-                    t0 = time.perf_counter()
-                    requested_mode = Blind4DCatalogMode.normalize(getattr(config, "blind4d_catalog_mode", "auto"))
-                    external_manifest = config.blind_4d_manifest_path
-                    if catalog_resources.source != "library" and external_manifest is None:
-                        external_manifest = self._manifest_text_or_default()
-                    blind4d_runtime = resolve_blind4d_runtime(
-                        catalog_resources,
-                        mode=requested_mode,
-                        external_manifest_path=external_manifest,
-                    )
-                    preflight_timings["blind4d_runtime_resolution_s"] = time.perf_counter() - t0
-                    if blind4d_runtime.available and blind4d_runtime.loaded_manifest is not None:
-                        loaded_manifest = blind4d_runtime.loaded_manifest
-                        config = replace(
-                            config,
-                            blind_4d_manifest_path=loaded_manifest.manifest_path,
-                            blind_4d_loaded_manifest=loaded_manifest,
-                        )
-                        self._log(
-                            "ZeBlind 4D preflight: "
-                            + json.dumps(blind4d_runtime.telemetry(include_paths=False), ensure_ascii=False)
-                        )
-                    elif requested_mode is not Blind4DCatalogMode.AUTO:
-                        raise Blind4DRuntimeError(
-                            blind4d_runtime.error_code or "BLIND4D_RUNTIME_RESOURCE_UNAVAILABLE",
-                            blind4d_runtime.error_message or "Blind 4D runtime unavailable",
-                        )
-                    else:
-                        self._log(
-                            "ZeBlind 4D unavailable: "
-                            + json.dumps(blind4d_runtime.telemetry(include_paths=False), ensure_ascii=False)
-                        )
-                except (Blind4DRuntimeError, IndexManifestError) as exc:
-                    message = self._text("blind_4d_preflight_failed", error=str(exc))
-                    self._log(message)
-                    QtWidgets.QMessageBox.warning(
-                        self,
-                        self._text("blind_4d_enable_failed_title"),
-                        self._text(
-                            "blind_4d_enable_failed_body",
-                            manifest=(config.blind_4d_manifest_path or "CatalogLibrary"),
-                            error=str(exc),
-                        ),
-                    )
-                    return
-            preflight_timings["catalog_preflight_total_s"] = time.perf_counter() - preflight_started
-            self._log(
-                self._text(
-                    "catalog_preflight_timings",
-                    payload=json.dumps({key: round(value, 4) for key, value in preflight_timings.items()}, ensure_ascii=False),
-                )
-            )
+            self._log_instrument_consistency_warning(config)
+            self.status_label.setText("Préparation de la bibliothèque")
             self._results_seen = 0
             try:
                 self._log(
@@ -10948,6 +12577,8 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._progress_completed = 0
             self._progress_seen_paths = set()
             self._progress_run_id = None
+            if hasattr(self, "near_backend_label"):
+                self.near_backend_label.setText("ZeNear : préparation…")
             self.status_label.setText(
                 self._text(
                     "progress_status",
@@ -10961,6 +12592,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._active_run_failed = False
             self._active_run_error_message = None
             logging.info("GUI_RUN_BEGIN run_id=%s", run_id)
+            self._active_run_started_at = time.strftime("%Y-%m-%dT%H:%M:%S%z")
             self._run_started_ts = time.perf_counter()
             self._last_result_ts = self._run_started_ts
             self._progress_timer.start()
@@ -11028,6 +12660,15 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._worker.start()
 
         def _stop_solving(self) -> None:
+            if self._wcs_cleanup_worker:
+                logging.info("STOP_UI_CLICKED_WCS_CLEANUP")
+                self.status_label.setText(self._text("status_stopping"))
+                self.stop_btn.setEnabled(False)
+                self.stop_btn.setText(self._text("status_stopping"))
+                self.start_btn.setEnabled(False)
+                self._wcs_cleanup_worker.request_cancel()
+                self._log(self._text("log_stop_requested"))
+                return
             if self._worker:
                 logging.info("STOP_UI_CLICKED")
                 self.status_label.setText(self._text("status_stopping"))
@@ -11264,7 +12905,7 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
             self._run_started_ts = None
             self._last_result_ts = None
-            self._copy_runtime_log_to_output(run_id=run_id)
+            self._copy_runtime_log_to_output(run_id=run_id, worker=worker, terminal_cancelled=terminal_cancelled)
             try:
                 if worker is not None:
                     worker.finished.disconnect(self._on_worker_finished)
@@ -11310,7 +12951,7 @@ def launch_gui(args: argparse.Namespace) -> int:
             if target > int(self.progress_bar.value()):
                 self.progress_bar.setValue(target)
 
-        def _copy_runtime_log_to_output(self, *, run_id: int | None = None) -> None:
+        def _copy_runtime_log_to_output(self, *, run_id: int | None = None, worker: object | None = None, terminal_cancelled: bool = False) -> None:
             if not self._run_lifecycle.mark_log_copy_once(run_id):
                 logging.warning("Duplicate runtime log copy ignored run_id=%s", run_id)
                 return
@@ -11336,6 +12977,35 @@ def launch_gui(args: argparse.Namespace) -> int:
                 self._log(f"Log copied to output folder: {dst}")
             except Exception as exc:
                 self._log(f"Log copy skipped: {exc}")
+                return
+            try:
+                from zesolver.resource_telemetry import build_run_telemetry_payload, write_run_telemetry_sidecar
+
+                summary = getattr(worker, "_last_summary", None)
+                results = tuple(getattr(summary, "results", ()) or ())
+                solved = sum(1 for item in results if str(getattr(item, "status", "")).upper() == "SOLVED")
+                cancelled = sum(1 for item in results if str(getattr(item, "status", "")).upper() == "CANCELLED")
+                skipped = sum(1 for item in results if str(getattr(item, "status", "")).upper() == "SKIPPED")
+                failed = max(0, len(results) - solved - cancelled - skipped)
+                terminal = "cancelled" if terminal_cancelled else ("failed" if self._active_run_failed else "completed")
+                payload = build_run_telemetry_payload(
+                    run_id=run_id,
+                    started_at=getattr(self, "_active_run_started_at", None),
+                    finished_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    duration_s=(float(getattr(summary, "duration_s", 0.0)) if summary is not None else None),
+                    terminal_status=terminal,
+                    planned=int(self._progress_total or len(self._pending_files) or len(results)),
+                    solved=solved,
+                    failed=failed,
+                    cancelled=cancelled,
+                    skipped=skipped,
+                    telemetry=(getattr(summary, "telemetry", None) if summary is not None else None),
+                )
+                sidecar = write_run_telemetry_sidecar(dst, payload)
+                self._log(f"Telemetry copied to output folder: {sidecar}")
+            except Exception as exc:
+                logging.warning("Run telemetry sidecar skipped: %s", exc)
+                self._log(f"Telemetry copy skipped: {exc}")
 
         def _on_worker_stage(self, index: int, message: str) -> None:
             try:
@@ -11363,6 +13033,11 @@ def launch_gui(args: argparse.Namespace) -> int:
 
         def _log(self, message: str) -> None:
             logging.info(message)
+            if str(message).startswith("ZeNear :") and hasattr(self, "near_backend_label"):
+                try:
+                    self.near_backend_label.setText(str(message))
+                except Exception:
+                    pass
             timestamp = time.strftime("%H:%M:%S")
             self.log_view.appendPlainText(f"[{timestamp}] {message}")
             self.log_view.verticalScrollBar().setValue(self.log_view.verticalScrollBar().maximum())
@@ -11383,6 +13058,20 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
 
         def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # pragma: no cover - GUI hook
+            self._closing = True
+            cleanup_worker = self._wcs_cleanup_worker
+            self._shutdown_thread(cleanup_worker, cancel_method="request_cancel")
+            try:
+                if cleanup_worker is not None and cleanup_worker.isRunning():
+                    event.ignore()
+                    self._closing = False
+                    self.status_label.setText(self._text("status_stopping"))
+                    return
+            except Exception:
+                pass
+            if self._wcs_cleanup_worker is cleanup_worker:
+                self._wcs_cleanup_worker = None
+                self._wcs_cleanup_active_id = None
             active_worker = self._worker
             self._shutdown_thread(active_worker, cancel_method="request_cancel")
             try:
@@ -11400,8 +13089,6 @@ def launch_gui(args: argparse.Namespace) -> int:
             self._blind_worker = None
             self._shutdown_thread(self._near_worker)
             self._near_worker = None
-            self._shutdown_thread(self._benchmark_worker, cancel_method="cancel")
-            self._benchmark_worker = None
             try:
                 self._progress_timer.stop()
             except Exception:
@@ -11412,13 +13099,28 @@ def launch_gui(args: argparse.Namespace) -> int:
                 pass
             self._shutdown_thread(self._db_family_scan_thread)
             self._db_family_scan_thread = None
-            self._shutdown_thread(self._dl_worker, cancel_method="stop")
+            self._shutdown_thread(self._catalog_distribution_worker, cancel_method="request_cancel")
+            self._catalog_distribution_worker = None
+            self._shutdown_thread(getattr(self, "_catalog_discover_worker", None))
+            self._catalog_discover_worker = None
+            self._shutdown_thread(getattr(self, "_dl_worker", None), cancel_method="stop")
             self._dl_worker = None
+            try:
+                self._settings = self._apply_instrument_snapshot_to_settings(self._settings)
+                save_persistent_settings(self._settings)
+            except Exception:
+                pass
             super().closeEvent(event)
 
     QtWidgets.QApplication.setApplicationName(build_window_title("ZeSolver"))
     QtWidgets.QApplication.setApplicationVersion(APP_VERSION)
     app = QtWidgets.QApplication(sys.argv)
+    theme_controller = ThemeController(
+        app,
+        initial_mode=getattr(persistent_settings, "ui_theme", "system"),
+        save_callback=lambda mode: _save_theme_preference(persistent_settings, mode),
+    )
+    setattr(app, "zesolver_theme_controller", theme_controller)
     app_icon = None
     icon_path = resolve_app_icon_path()
     if icon_path is not None:
@@ -11439,6 +13141,7 @@ def launch_gui(args: argparse.Namespace) -> int:
         except Exception:
             pass
     window.show()
+    window.schedule_startup_wizard_if_needed()
     return app.exec()
 
 

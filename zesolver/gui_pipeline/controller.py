@@ -54,6 +54,7 @@ class GuiSolveController:
                 duration_s=summary.duration_s if summary.duration_s is not None else time.perf_counter() - started,
                 warnings=tuple(selection.warnings) + tuple(summary.warnings),
                 selection=selection,
+                telemetry=summary.telemetry,
             )
         finally:
             self._running = False

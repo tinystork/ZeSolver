@@ -29,9 +29,10 @@ from __future__ import annotations
 import functools
 import logging
 import math
+import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 import numpy as np
 
@@ -40,6 +41,7 @@ from zewcs290.catalog290 import CatalogDB, CatalogTile, SkyBox
 logger = logging.getLogger(__name__)
 
 _TileCache = {}
+_TileCacheLock = threading.Lock()
 
 @dataclass(frozen=True, slots=True)
 class TileMeta:
@@ -56,12 +58,30 @@ class TileMeta:
     tile_index: int
 
 
-def _catalog_for_root(db_root: Path | str) -> CatalogDB:
+def _normalize_families(families: tuple[str, ...] | list[str] | None) -> tuple[str, ...] | None:
+    values = tuple(dict.fromkeys(str(family).strip().lower() for family in families or () if str(family).strip()))
+    return values or None
+
+
+def _catalog_for_root(
+    db_root: Path | str,
+    families: tuple[str, ...] | list[str] | None = None,
+    *,
+    metrics_callback: Callable[[str, int], None] | None = None,
+) -> CatalogDB:
     root = Path(db_root).expanduser().resolve()
-    if root in _TileCache:
-        return _TileCache[root]
-    catalog = CatalogDB(root)
-    _TileCache[root] = catalog
+    normalized = _normalize_families(families)
+    cache_key = (root, normalized)
+    with _TileCacheLock:
+        cached = _TileCache.get(cache_key)
+        if cached is not None:
+            if metrics_callback is not None:
+                metrics_callback("near_catalog_db_reused", 1)
+            return cached
+        catalog = CatalogDB(root, families=normalized)
+        _TileCache[cache_key] = catalog
+    if metrics_callback is not None:
+        metrics_callback("near_catalog_db_created", 1)
     logger.debug("ASTAP catalog loaded: %s (%d tiles)", root, len(catalog.tiles))
     return catalog
 
@@ -90,9 +110,14 @@ def _ra_center_from_segments(bounds: SkyBox) -> float:
     return angle % 360.0
 
 
-def iter_tiles(db_root: Path | str) -> Iterator[TileMeta]:
+def iter_tiles(
+    db_root: Path | str,
+    families: tuple[str, ...] | list[str] | None = None,
+    *,
+    metrics_callback: Callable[[str, int], None] | None = None,
+) -> Iterator[TileMeta]:
     """Yield metadata for every ASTAP tile found under *db_root*."""
-    catalog = _catalog_for_root(db_root)
+    catalog = _catalog_for_root(db_root, families=families, metrics_callback=metrics_callback)
     for tile in catalog.tiles:
         center_ra = _ra_center_from_segments(tile.bounds)
         center_dec = tile.bounds.dec_center
@@ -109,14 +134,19 @@ def iter_tiles(db_root: Path | str) -> Iterator[TileMeta]:
         )
 
 
-def load_tile_stars(db_root: Path | str, tile_meta: TileMeta) -> np.ndarray:
+def load_tile_stars(
+    db_root: Path | str,
+    tile_meta: TileMeta,
+    *,
+    metrics_callback: Callable[[str, int], None] | None = None,
+) -> np.ndarray:
     """Return the field-array of (ra_deg, dec_deg, mag) stored in the ASTAP tile.
 
     The result has the dtype defined by :data:`zewcs290.catalog290.STAR_DTYPE`,
     the rows are sorted as they appear on disk, and ``mag`` is Gaia BP/Johnson-V.
 
     """
-    catalog = _catalog_for_root(db_root)
+    catalog = _catalog_for_root(db_root, families=(tile_meta.family,), metrics_callback=metrics_callback)
     target = str(tile_meta.path)
     for tile in catalog.tiles:
         if str(tile.path) == target:

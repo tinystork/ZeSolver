@@ -22,14 +22,19 @@ class ProductSettings:
     overwrite_wcs: bool = True
     workers: int | str = "auto"
     gpu_mode: str = "auto"
+    near_detect_device: int | None = None
+    near_detect_gpu_slots: int = 1
     web_fallback: bool = True
     language: str = "auto"
     log_level: str = "INFO"
     input_formats: tuple[str, ...] = ()
     blind_enabled: bool = True
     blind_only: bool = False
+    interface_mode: str = "expert"
+    move_unresolved_files: bool = False
     near_catalog_mode: str = "auto"
     blind4d_catalog_mode: str = "auto"
+    instrument_mode: str = "auto"
     downsample: int = 1
     fov_deg: float = 1.5
     hint_ra_deg: float | None = None
@@ -56,14 +61,19 @@ class ProductSettings:
                 "overwrite_wcs": self.overwrite_wcs,
                 "workers": self.workers,
                 "gpu_mode": self.gpu_mode,
+                "near_detect_device": self.near_detect_device,
+                "near_detect_gpu_slots": self.near_detect_gpu_slots,
                 "web_fallback": self.web_fallback,
                 "language": self.language,
                 "log_level": self.log_level,
                 "input_formats": list(self.input_formats),
                 "blind_enabled": self.blind_enabled,
                 "blind_only": self.blind_only,
+                "interface_mode": self.interface_mode,
+                "move_unresolved_files": self.move_unresolved_files,
                 "near_catalog_mode": self.near_catalog_mode,
                 "blind4d_catalog_mode": self.blind4d_catalog_mode,
+                "instrument_mode": self.instrument_mode,
                 "downsample": self.downsample,
                 "fov_deg": self.fov_deg,
             },

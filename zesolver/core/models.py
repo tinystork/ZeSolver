@@ -43,6 +43,7 @@ class EngineSolveResult:
     warnings: tuple[str, ...] = ()
     error: str | None = None
     raw: Mapping[str, object] = field(default_factory=dict)
+    terminal_reason_code: str | None = None
 
     @property
     def solved(self) -> bool:
@@ -68,3 +69,6 @@ class SolveResult:
     catalog_status: str | None
     warnings: tuple[str, ...]
     error: str | None
+    terminal_reason_code: str | None = None
+    moved_to: Path | None = None
+    move_error: str | None = None

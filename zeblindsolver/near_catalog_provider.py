@@ -8,15 +8,17 @@ GUI state, Blind 4D, or product settings.
 from __future__ import annotations
 
 import math
+import threading
 from collections import OrderedDict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 
 import numpy as np
 
-from .astap_db_reader import TileMeta, iter_tiles as iter_astap_tiles, load_tile_stars as load_astap_tile_stars
+from .astap_db_reader import TileMeta, _ra_center_from_segments, iter_tiles as iter_astap_tiles, load_tile_stars as load_astap_tile_stars
 from .quad_index_builder import load_manifest
+from zewcs290.catalog290 import CatalogDB, CatalogTile
 
 
 class NearCatalogProviderError(RuntimeError):
@@ -113,6 +115,9 @@ class NearCatalogProvider(Protocol):
         ...
 
 
+MetricCallback = Callable[[str, int], None]
+
+
 def _normalize_families(families: Sequence[str] | None) -> tuple[str, ...]:
     if not families:
         return ()
@@ -200,41 +205,147 @@ def _bounds_from_astap(meta: TileMeta) -> NearTileBounds:
 
 
 class _MemoryStarCache:
-    def __init__(self, max_entries: int = 128) -> None:
+    def __init__(self, max_entries: int = 128, *, metrics_callback: MetricCallback | None = None) -> None:
         self.max_entries = max(1, int(max_entries))
         self._items: OrderedDict[str, NearCatalogStars] = OrderedDict()
+        self._inflight: dict[str, _InflightLoad] = {}
+        self._lock = threading.Lock()
+        self._metrics_callback = metrics_callback
+
+    def _metric(self, key: str, amount: int = 1) -> None:
+        if self._metrics_callback is not None:
+            self._metrics_callback(key, amount)
 
     def get(self, key: str) -> NearCatalogStars | None:
-        value = self._items.get(key)
-        if value is None:
-            return None
-        self._items.pop(key)
-        self._items[key] = value
-        return NearCatalogStars(value.ra_deg.copy(), value.dec_deg.copy(), value.mag.copy())
+        with self._lock:
+            value = self._items.get(key)
+            if value is None:
+                return None
+            self._items.pop(key)
+            self._items[key] = value
+            self._metric("near_catalog_payload_cache_hits")
+            return value
 
     def put(self, key: str, value: NearCatalogStars) -> NearCatalogStars:
-        stored = NearCatalogStars(
-            np.asarray(value.ra_deg, dtype=np.float64).copy(),
-            np.asarray(value.dec_deg, dtype=np.float64).copy(),
-            np.asarray(value.mag, dtype=np.float32).copy(),
-        )
-        self._items[key] = stored
+        stored = _immutable_stars(value)
+        with self._lock:
+            self._store_locked(key, stored)
+        return stored
+
+    def get_or_load(self, key: str, loader: Callable[[], NearCatalogStars]) -> NearCatalogStars:
+        with self._lock:
+            value = self._items.get(key)
+            if value is not None:
+                self._items.pop(key)
+                self._items[key] = value
+                self._metric("near_catalog_payload_cache_hits")
+                return value
+            inflight = self._inflight.get(key)
+            if inflight is None:
+                inflight = _InflightLoad()
+                self._inflight[key] = inflight
+                owner = True
+                self._metric("near_catalog_payload_cache_misses")
+            else:
+                owner = False
+                self._metric("near_catalog_payload_duplicate_loads")
+                self._metric("near_catalog_payload_singleflight_waiters")
+
+        if owner:
+            try:
+                self._metric("near_catalog_payload_physical_loads")
+                stored = _immutable_stars(loader())
+            except BaseException as exc:  # pragma: no cover - propagated to all waiters
+                with self._lock:
+                    inflight.error = exc
+                    self._inflight.pop(key, None)
+                    inflight.event.set()
+                raise
+            with self._lock:
+                inflight.value = stored
+                self._store_locked(key, stored)
+                self._inflight.pop(key, None)
+                inflight.event.set()
+            return stored
+
+        inflight.event.wait()
+        if inflight.error is not None:
+            raise inflight.error
+        with self._lock:
+            value = self._items.get(key)
+            if value is not None:
+                self._items.pop(key)
+                self._items[key] = value
+                self._metric("near_catalog_payload_cache_hits")
+                return value
+        if inflight.value is None:  # pragma: no cover - defensive
+            raise NearCatalogProviderError(f"cache load failed without an exception for {key}")
+        return inflight.value
+
+    def _store_locked(self, key: str, value: NearCatalogStars) -> None:
+        self._items[key] = value
         while len(self._items) > self.max_entries:
             self._items.popitem(last=False)
-        return NearCatalogStars(stored.ra_deg.copy(), stored.dec_deg.copy(), stored.mag.copy())
+            self._metric("near_catalog_payload_cache_evictions")
+
+    def clear(self) -> None:
+        with self._lock:
+            self._items.clear()
+            self._inflight.clear()
+
+    def telemetry(self) -> dict[str, object]:
+        with self._lock:
+            return {
+                "near_catalog_payload_cache_id": id(self),
+                "near_catalog_payload_cache_size": len(self._items),
+                "near_catalog_payload_cache_capacity": self.max_entries,
+                "near_catalog_payload_cache_inflight": len(self._inflight),
+            }
+
+
+@dataclass(slots=True)
+class _InflightLoad:
+    event: threading.Event = field(default_factory=threading.Event)
+    value: NearCatalogStars | None = None
+    error: BaseException | None = None
+
+
+def _readonly_array(values: np.ndarray, dtype: object) -> np.ndarray:
+    array = np.asarray(values, dtype=dtype).copy()
+    array.flags.writeable = False
+    return array
+
+
+def _immutable_stars(value: NearCatalogStars) -> NearCatalogStars:
+    return NearCatalogStars(
+        _readonly_array(value.ra_deg, np.float64),
+        _readonly_array(value.dec_deg, np.float64),
+        _readonly_array(value.mag, np.float32),
+    )
 
 
 class LegacyIndexNearCatalogProvider:
     kind = "legacy_index"
 
-    def __init__(self, index_root: Path | str, *, cache_size: int = 128) -> None:
+    def __init__(
+        self,
+        index_root: Path | str,
+        *,
+        cache_size: int = 128,
+        metrics_callback: MetricCallback | None = None,
+    ) -> None:
         self.index_root = Path(index_root).expanduser().resolve()
+        self._metrics_callback = metrics_callback
+        if self._metrics_callback is not None:
+            self._metrics_callback("near_catalog_provider_created", 1)
         self.manifest = load_manifest(self.index_root)
         self.db_root = Path(str(self.manifest.get("db_root", "")).strip()).expanduser().resolve() if self.manifest.get("db_root") else None
         self._tiles = tuple(self._tile_from_entry(entry) for entry in (self.manifest.get("tiles") or ()))
         if not self._tiles:
             raise NearCatalogProviderError("legacy index manifest has no tiles")
-        self._cache = _MemoryStarCache(cache_size)
+        if self._metrics_callback is not None:
+            self._metrics_callback("near_catalog_inventory_load_count", 1)
+        self._cache = _MemoryStarCache(cache_size, metrics_callback=self._metrics_callback)
         self._fallback_used = False
         self._fallback_reason: str | None = None
 
@@ -280,9 +391,9 @@ class LegacyIndexNearCatalogProvider:
 
     def load_stars(self, tile: NearCatalogTile) -> NearCatalogStars:
         cache_key = f"legacy:{tile.tile_key}:{tile.tile_file or ''}"
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return cached
+        return self._cache.get_or_load(cache_key, lambda: self._load_stars_uncached(tile))
+
+    def _load_stars_uncached(self, tile: NearCatalogTile) -> NearCatalogStars:
         tile_path = (self.index_root / str(tile.tile_file or "").replace("\\", "/")).resolve() if tile.tile_file else None
         try:
             if tile_path is not None:
@@ -305,16 +416,16 @@ class LegacyIndexNearCatalogProvider:
                 raise NearCatalogProviderError(
                     f"failed to read legacy tile {tile.tile_key}: {exc}; ASTAP fallback failed: {fallback_exc}"
                 ) from fallback_exc
-        return self._cache.put(cache_key, stars)
+        return stars
 
     def _load_astap_fallback(self, tile: NearCatalogTile) -> NearCatalogStars:
         assert self.db_root is not None
-        for meta in iter_astap_tiles(self.db_root):
+        for meta in iter_astap_tiles(self.db_root, metrics_callback=self._metrics_callback):
             if str(meta.family).strip().lower() != tile.family:
                 continue
             if str(meta.tile_code) != str(tile.tile_code):
                 continue
-            raw = load_astap_tile_stars(self.db_root, meta)
+            raw = load_astap_tile_stars(self.db_root, meta, metrics_callback=self._metrics_callback)
             return NearCatalogStars(
                 np.asarray(raw["ra_deg"], dtype=np.float64),
                 np.asarray(raw["dec_deg"], dtype=np.float64),
@@ -323,37 +434,75 @@ class LegacyIndexNearCatalogProvider:
         raise FileNotFoundError(f"ASTAP fallback tile not found: {tile.family}_{tile.tile_code}")
 
     def telemetry(self) -> dict[str, object]:
-        return {
+        data = {
             "near_catalog_provider": self.kind,
             "near_catalog_family": list(self.families),
             "near_catalog_fallback_used": bool(self._fallback_used),
             "near_catalog_fallback_reason": self._fallback_reason,
+            "near_catalog_provider_id": id(self),
+            "near_catalog_inventory_id": id(self._tiles),
+            "near_catalog_tile_count": len(self._tiles),
         }
+        data.update(self._cache.telemetry())
+        return data
+
+    def close(self) -> None:
+        self._cache.clear()
 
 
 class AstapNearCatalogProvider:
     kind = "astap_native"
 
-    def __init__(self, db_root: Path | str, *, families: Sequence[str] | None = None, cache_size: int = 128) -> None:
+    def __init__(
+        self,
+        db_root: Path | str,
+        *,
+        families: Sequence[str] | None = None,
+        cache_size: int = 128,
+        metrics_callback: MetricCallback | None = None,
+    ) -> None:
         self.db_root = Path(db_root).expanduser().resolve()
+        self._metrics_callback = metrics_callback
+        if self._metrics_callback is not None:
+            self._metrics_callback("near_catalog_provider_created", 1)
         requested = set(_normalize_families(families))
         all_tiles: list[NearCatalogTile] = []
-        for meta in iter_astap_tiles(self.db_root):
-            family = str(meta.family).strip().lower()
-            if requested and family not in requested:
-                continue
-            all_tiles.append(
-                NearCatalogTile(
-                    family=family,
-                    tile_code=str(meta.tile_code),
-                    center_ra_deg=float(meta.center_ra_deg),
-                    center_dec_deg=float(meta.center_dec_deg),
-                    bounds=_bounds_from_astap(meta),
-                    tile_key=str(meta.key),
-                    tile_file=None,
-                    source=meta,
+        self._catalog_tiles_by_key: dict[str, CatalogTile] = {}
+        try:
+            self._catalog_db = CatalogDB(self.db_root, families=tuple(sorted(requested)) or None, cache_size=1)
+            if self._metrics_callback is not None:
+                self._metrics_callback("near_catalog_db_created", 1)
+            for catalog_tile in self._catalog_db.tiles:
+                meta = TileMeta(
+                    key=catalog_tile.key,
+                    family=catalog_tile.spec.key,
+                    tile_code=catalog_tile.tile_code,
+                    path=catalog_tile.path,
+                    center_ra_deg=_ra_center_from_segments(catalog_tile.bounds),
+                    center_dec_deg=catalog_tile.bounds.dec_center,
+                    bounds=catalog_tile.bounds,
+                    ring_index=catalog_tile.ring_index,
+                    tile_index=catalog_tile.tile_index,
                 )
-            )
+                family = str(meta.family).strip().lower()
+                if requested and family not in requested:
+                    continue
+                self._catalog_tiles_by_key[str(meta.key)] = catalog_tile
+                all_tiles.append(
+                    NearCatalogTile(
+                        family=family,
+                        tile_code=str(meta.tile_code),
+                        center_ra_deg=float(meta.center_ra_deg),
+                        center_dec_deg=float(meta.center_dec_deg),
+                        bounds=_bounds_from_astap(meta),
+                        tile_key=str(meta.key),
+                        tile_file=None,
+                        source=meta,
+                    )
+                )
+        except Exception as exc:
+            detail = ",".join(sorted(requested)) if requested else "all"
+            raise NearCatalogProviderError(f"ASTAP catalog has no usable Near tiles for families={detail}: {exc}") from exc
         if not all_tiles:
             detail = ",".join(sorted(requested)) if requested else "all"
             raise NearCatalogProviderError(f"ASTAP catalog has no usable Near tiles for families={detail}")
@@ -362,7 +511,9 @@ class AstapNearCatalogProvider:
         if missing:
             raise NearCatalogProviderError(f"ASTAP catalog missing requested family/families: {', '.join(sorted(missing))}")
         self._tiles = tuple(all_tiles)
-        self._cache = _MemoryStarCache(cache_size)
+        if self._metrics_callback is not None:
+            self._metrics_callback("near_catalog_inventory_load_count", 1)
+        self._cache = _MemoryStarCache(cache_size, metrics_callback=self._metrics_callback)
 
     @property
     def families(self) -> tuple[str, ...]:
@@ -393,23 +544,36 @@ class AstapNearCatalogProvider:
         if not isinstance(tile.source, TileMeta):
             raise NearCatalogProviderError(f"ASTAP tile has no TileMeta source: {tile.tile_key}")
         cache_key = f"astap:{tile.tile_key}"
-        cached = self._cache.get(cache_key)
-        if cached is not None:
-            return cached
+        return self._cache.get_or_load(cache_key, lambda: self._load_stars_uncached(tile))
+
+    def _load_stars_uncached(self, tile: NearCatalogTile) -> NearCatalogStars:
+        assert isinstance(tile.source, TileMeta)
         try:
-            raw = load_astap_tile_stars(self.db_root, tile.source)
+            catalog_tile = self._catalog_tiles_by_key[str(tile.tile_key)]
+            raw = self._catalog_db._load_tile(catalog_tile).stars
         except Exception as exc:
             raise NearCatalogProviderError(f"failed to read ASTAP tile {tile.tile_key}: {exc}") from exc
-        stars = NearCatalogStars(
+        return NearCatalogStars(
             np.asarray(raw["ra_deg"], dtype=np.float64),
             np.asarray(raw["dec_deg"], dtype=np.float64),
             np.asarray(raw["mag"], dtype=np.float32),
         )
-        return self._cache.put(cache_key, stars)
 
     def telemetry(self) -> dict[str, object]:
-        return {
+        data = {
             "near_catalog_provider": self.kind,
             "near_catalog_family": list(self.families),
             "near_catalog_fallback_used": False,
+            "near_catalog_provider_id": id(self),
+            "near_catalog_inventory_id": id(self._tiles),
+            "near_catalog_db_id": id(self._catalog_db),
+            "near_catalog_tile_count": len(self._tiles),
         }
+        data.update(self._cache.telemetry())
+        return data
+
+    def close(self) -> None:
+        self._cache.clear()
+        clear_cache = getattr(self._catalog_db, "clear_cache", None)
+        if callable(clear_cache):
+            clear_cache()

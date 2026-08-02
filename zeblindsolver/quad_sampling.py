@@ -32,6 +32,12 @@ from typing import Iterable, List, Sequence, Tuple
 import numpy as np
 
 
+def _distance_index_order(distances: np.ndarray) -> np.ndarray:
+    values = np.asarray(distances, dtype=np.float64)
+    indices = np.arange(values.shape[0], dtype=np.int64)
+    return np.lexsort((indices, np.where(np.isfinite(values), values, np.inf)))
+
+
 def _select_neighbors_multiscale(
     positions: np.ndarray,
     seed: int,
@@ -61,7 +67,7 @@ def _select_neighbors_multiscale(
     else:
         edges = np.geomspace(max(dmin, 1e-12), dmax, num=bin_count + 1)
     edges[-1] = max(edges[-1], dmax)
-    order = np.argsort(np.where(np.isfinite(dist2), dist2, np.inf))
+    order = _distance_index_order(dist2)
     valid_order = [idx for idx in order if finite_mask[idx] and dist2[idx] > 0.0]
     if not valid_order:
         return []
@@ -457,8 +463,7 @@ def generate_ring_coverage_quads(
         take = min(neighbor_limit, max(0, count - 1))
         if take <= 0:
             continue
-        near_idx = np.argpartition(d2, take - 1)[:take]
-        near_idx = near_idx[np.argsort(d2[near_idx], kind="stable")]
+        near_idx = _distance_index_order(d2)[:take]
         nn = [int(i) for i in near_idx if np.isfinite(float(d2[int(i)]))]
         if len(nn) < 3:
             continue

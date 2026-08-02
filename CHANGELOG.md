@@ -2,6 +2,41 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Added a reproducible public `main` projection manifest and builder so the
+  user-facing branch can be generated from `test` without merging tests,
+  internal tools, reports, or development-only documentation.
+- Promoted guided GPU provisioning for safe source-managed virtual
+  environments, while keeping system Python, frozen builds and embedded hosts
+  diagnostic-only.
+- Added visible GPU installation progress in the startup wizard, including pip
+  output, pip check, a fresh CUDA self-test subprocess, and a clear restart
+  required state instead of leaving the user with a silent install.
+- Fixed a GPU provisioning wizard crash after successful pip installation by
+  separating the custom result signal from native `QThread.finished`, delaying
+  worker cleanup until the Qt thread has really stopped, and continuously
+  draining pip output.
+- Added a guided optional GPU diagnostic/provisioning layer for ZeNear CUDA
+  acceleration and stopped repeating the missing-CuPy fallback once per image
+  in CPU-only batches.
+- Fixed macOS CI portability failures around deterministic worker caps,
+  spawn-based legacy executor shutdown, WCS-writer cancellation safety,
+  Darwin thread-sampling telemetry, and deterministic Blind 4D ring sampling.
+- Tightened macOS compatibility checks for catalog storage paths, Finder
+  opening, spawn-based cancellation, Qt offscreen startup, and CPU-only
+  operation when CuPy/CUDA is absent.
+- Fixed a false Blind 4D partial-coverage warning shown before a full
+  CatalogLibrary had been resolved.
+- Made startup wizard CatalogLibrary activation transactional: existing
+  libraries, official installs, and local packages now persist product modes
+  (`near_catalog_mode=auto`, `blind4d_catalog_mode=auto`) before any settings
+  read can validate a stale external Blind 4D manifest.
+- Prevented the startup wizard from marking itself complete after a failed
+  activation, avoiding contradictory saves from a stale wizard settings object.
+- Restored the CatalogLibrary Blind 4D manifest-view CLI used by validation
+  tests.
+
 ## [1.0.0] - 2026-04-23
 
 ### Added
@@ -55,4 +90,3 @@
 - The GUI/CLI batch runner now actually invokes the metadata-based near solver
   before falling back to the blind pipeline; the helper previously ignored the
   loaded FITS metadata, so only the manual “Near solve” tester would ever run it.
-

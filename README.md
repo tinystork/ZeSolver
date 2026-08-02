@@ -16,17 +16,25 @@ the original image pixels.
 
 ## Current status
 
-ZeSolver is under active development and is not yet considered ready for a general public
-release.
+ZeSolver is currently in public beta.
 
-The solver core, batch pipeline, catalogue library, WCS safeguards, progress reporting,
-cancellation, and the main Near/Blind solving paths are functional and covered by regression
-tests. Packaging, first-install experience, documentation, simplified GUI work, and broader
-Blind 4D catalogue coverage are still being finalized.
+The solver core, batch pipeline, catalogue library, first-run wizard, WCS safeguards,
+progress reporting, cancellation, optional GPU diagnostic/provisioning, and the main
+Near/Blind solving paths are functional. Packaging and broader community validation remain
+in progress.
 
 Blind 4D coverage may be partial depending on the installed indexes. ZeSolver reports this
 explicitly and must not be presented as all-sky unless the installed library actually provides
 all-sky coverage.
+
+## Public branch policy
+
+The `main` branch is a generated public distribution tree. It contains the runtime packages,
+public entry points, licence notices, icons, and essential user documentation only.
+
+Development happens on the `test` branch. Pull requests and technical contributions should
+target `test`, not `main`. Direct changes to `main` are not accepted; `main` is refreshed from
+`test` through a reproducible allowlist export.
 
 ## How ZeSolver works
 
@@ -181,20 +189,21 @@ attributions when redistributing any resulting assets.
 zesolver/           Product orchestration, catalogue library, settings, GUI pipeline, and core
 zeblindsolver/      Blind solver, quad generation, index builders, and validation
 zewcs290/           Native ASTAP/HNSKY catalogue readers and spatial queries
-settings/           Stable product/runtime settings models
-tools/              Benchmarks, audits, diagnostics, and maintenance utilities
-tests/              Unit, integration, regression, GUI, corpus, and safeguard tests
-docs/               Architecture, stabilization, validation, and development reports
-packaging/          PyInstaller and release helpers
-examples/           Development and example inputs where provided
+config/             Small runtime manifests
+icon/               Application icons
+legal/              Third-party catalogue and data terms
+docs/               Essential public user documentation
 pyproject.toml      Build and dependency metadata
 LICENSE             GNU GPL v3 licence text for ZeSolver source code
 NOTICE.md           Third-party credits and distribution notices
-legal/              ASTAP/HNSKY and ESA/Gaia/DPAC data terms
 ```
 
+The development branch also contains tests, internal tools, reports, CI, architecture notes, and
+stabilization documents. Those files are intentionally not part of the generated public `main`
+tree.
+
 Catalogue databases, generated indexes, large test corpora, and local runtime files are not meant
-to be committed to the repository.
+to be committed to the public repository tree.
 
 ## Requirements
 
@@ -219,14 +228,13 @@ source .venv/bin/activate
 # .venv\Scripts\Activate.ps1
 
 python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+python -m pip install -e ".[gui]"
 
 python zesolver.py
 ```
 
-The project is still being prepared for a clean public installation experience. Until packaging
-and first-run documentation are finalized, source installations should be considered development
-or beta installations.
+CPU-only installs do not need CUDA or CuPy. For optional NVIDIA acceleration, see
+`Optional GPU acceleration` below.
 
 ## Catalogue library
 
@@ -303,9 +311,9 @@ python -m zeblindsolver.db_convert \
   --quads-only
 ```
 
-Generated assets should be validated before use. ZeSolver includes index and library validation
-tools that detect missing files, incompatible formats, stale metadata, provenance mismatches, and
-partial coverage.
+Generated assets should be validated before use. ZeSolver validates installed libraries and
+reports missing files, incompatible formats, stale metadata, provenance mismatches, and partial
+coverage.
 
 ## Batch solver GUI and CLI
 
@@ -355,54 +363,51 @@ the source raster.
 
 ## Optional GPU acceleration
 
-ZeSolver works on CPU by default.
+ZeSolver works fully on CPU by default. CUDA and CuPy are optional, and they are
+only used today for ZeNear star-detection acceleration.
 
-Optional CUDA acceleration currently targets Near star detection on supported Linux/NVIDIA
-systems.
-
-Install the optional runtime where appropriate:
+Check the current runtime without installing anything:
 
 ```bash
-python -m pip install -U \
-  cupy-cuda12x \
-  nvidia-cuda-runtime-cu12 \
-  nvidia-cuda-nvrtc-cu12
+python -m zesolver.gpu_diagnostic --json --show-install-plan
+```
+
+In a safe source-managed virtual environment, the startup wizard can propose a
+guided CuPy installation after explicit confirmation. It never installs NVIDIA
+drivers, CUDA Toolkit, system packages, or multiple CuPy variants. Frozen
+executables, embedded hosts, Python system installs, and unproven interpreters
+remain diagnostic-only unless a future packaging flow provides its own GPU
+component. Set `ZESOLVER_DISABLE_GPU_PROVISIONING=1` to force diagnostic-only
+behavior; `ZESOLVER_ALLOW_GPU_PROVISIONING=1` remains an advanced override, but
+does not make a system Python mutable.
+
+Manual source install, when appropriate for your driver/Python combination:
+
+```bash
+python -m pip install "cupy-cuda12x[ctk]"
 ```
 
 In the GUI, select `Auto` or `CUDA` for the star-detection backend.
 
 When CUDA or one of its runtime libraries is unavailable, ZeSolver should fall back safely to CPU
-and record the reason in the log.
+and record the reason in the log. A permanent missing-GPU condition is selected once per batch,
+so a CPU-only run does not repeat a CuPy error for every image.
 
-## Benchmarking and diagnostics
+## WCS cleanup
 
-The repository includes utilities for controlled solver benchmarks, catalogue inspection, index
-validation, regression gates, and FITS/WCS integrity checks.
-
-Example benchmark:
+The GUI exposes WCS cleanup for solved FITS files. A small standalone helper is also available:
 
 ```bash
-python tools/benchmark_solver.py \
-  --index-root index \
-  --output-json bench.json \
-  --output-csv bench.csv \
-  examples/*.fit
+python zewcscleaner.py
 ```
 
-Benchmark inputs may include files, directories, glob patterns, or list files. By default,
-benchmarks should preserve pristine copies and avoid modifying original FITS files unless writing
-is explicitly enabled.
+Cleanup must preserve image pixels and only remove or update WCS metadata according to the
+selected action.
 
-Development and validation utilities include, depending on the current branch:
+## Development diagnostics
 
-- catalogue and binary inspection;
-- index and manifest validation;
-- source and GUI inventories;
-- WCS cleanup;
-- pixel-integrity checks;
-- core-boundary checks;
-- hermetic regression suites;
-- corpus and graphical validation instructions.
+Benchmarks, regression gates, internal reports, architecture notes, and maintenance utilities live
+on the `test` branch. They are intentionally excluded from generated `main` distributions.
 
 ## macOS readiness preflight
 
@@ -419,7 +424,10 @@ installation test.
 
 ## Packaging
 
-PyInstaller helpers are available under:
+PyInstaller packaging helpers are maintained on the `test` branch and are intentionally excluded
+from the generated public `main` tree until a public packaged release is produced.
+
+Development builds on `test` use:
 
 ```text
 packaging/pyinstaller/
@@ -444,7 +452,7 @@ that a stable public release has been completed.
 Before release, builds must be tested on clean Windows, macOS, and Linux environments, including
 CPU-only systems.
 
-## Release checklist
+## Release checklist for packaged builds
 
 Before publishing a release:
 
@@ -484,8 +492,8 @@ The project follows several non-negotiable rules:
 
 Contributions, testing, bug reports, and technical discussion are welcome.
 
-Because ZeSolver is still evolving rapidly, contributors should first read the current project
-mission and the relevant architecture or stabilization notes under `docs/`.
+Because ZeSolver is still evolving rapidly, contributors should work from the `test` branch, where
+the current tests, internal tools, architecture notes, and stabilization reports live.
 
 Changes to solver thresholds, catalogue formats, WCS acceptance rules, FITS-writing behavior, or
 routing logic should be isolated, tested, and justified by reproducible evidence.

@@ -88,6 +88,7 @@ def result_from_engine(
         catalog_status=catalog_status,
         warnings=tuple(dict.fromkeys((*warnings, *engine.warnings))),
         error=engine.error,
+        terminal_reason_code=engine.terminal_reason_code,
     )
 
 
@@ -99,6 +100,7 @@ def failure_result(
     catalog_status: str | None = None,
     warnings: tuple[str, ...] = (),
     error: str | None = None,
+    terminal_reason_code: str | None = None,
 ) -> SolveResult:
     return SolveResult(
         request_id=request.request_id,
@@ -118,4 +120,5 @@ def failure_result(
         catalog_status=catalog_status,
         warnings=warnings,
         error=error,
+        terminal_reason_code=terminal_reason_code,
     )

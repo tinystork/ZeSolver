@@ -26,6 +26,8 @@
 
 from __future__ import annotations
 
+import logging
+import math
 import json
 import sys
 from dataclasses import asdict, dataclass
@@ -45,16 +47,30 @@ DEFAULT_SEARCH_RADIUS_ATTEMPTS = 3
 
 SETTINGS_PATH = Path.home() / ".zesolver_settings.json"
 # Increment when the on-disk settings layout or recommended defaults change
-SETTINGS_SCHEMA_VERSION = 11
+SETTINGS_SCHEMA_VERSION = 16
 
 QUAD_STORAGE_CHOICES = ("npz", "npz_uncompressed", "npy")
 TILE_COMPRESSION_CHOICES = ("compressed", "uncompressed")
+UI_THEME_CHOICES = ("system", "light", "dark")
+
+
+def normalize_ui_theme(value: object) -> str:
+    if isinstance(value, str):
+        candidate = value.strip().lower().replace("_", "-")
+        if candidate in UI_THEME_CHOICES:
+            return candidate
+    if value not in (None, ""):
+        logging.warning("UI_THEME_SETTING_INVALID value=%r fallback=system", value)
+    return "system"
 
 
 @dataclass
 class PersistentSettings:
     schema_version: int = SETTINGS_SCHEMA_VERSION
     catalog_library_path: Optional[str] = None
+    catalog_library_install_parent: Optional[str] = None
+    startup_wizard_version: int = 0
+    startup_wizard_completed: bool = False
     db_root: Optional[str] = None
     index_root: Optional[str] = None
     mag_cap: float = DEFAULT_MAG_CAP
@@ -65,6 +81,7 @@ class PersistentSettings:
     log_level: str = "INFO"
     sample_fits: Optional[str] = None
     # Preset/FOV persistence
+    instrument_mode: str = "auto"  # auto|preset|custom
     last_preset_id: Optional[str] = None
     last_fov_focal_mm: float = 0.0
     last_fov_pixel_um: float = 0.0
@@ -136,7 +153,15 @@ class PersistentSettings:
     solver_family: Optional[str] = None  # lower-case key, None = Auto
     solver_blind_enabled: bool = True
     solver_overwrite: bool = True
+    move_unresolved_files: bool = False
     interface_mode: str = "easy"
+    ui_theme: str = "system"
+    gpu_diagnostic_schema_version: int = 1
+    gpu_diagnostic_completed: bool = False
+    gpu_available: bool = False
+    gpu_user_cpu_selected: bool = False
+    gpu_restart_required: bool = False
+    gpu_last_reason_code: Optional[str] = None
     blind_backend_profile: str = "zeblind_4d_experimental"
     blind_4d_manifest_path: Optional[str] = None
     solver_hint_ra_deg: Optional[float] = None
@@ -169,6 +194,7 @@ class PersistentSettings:
     benchmark_sip_order: int = 2
     benchmark_full_mode: bool = False
     benchmark_try_parity: bool = True
+    catalog_library_verification: Optional[dict[str, object]] = None
 
 
 def _resolve_settings_path() -> Path:
@@ -199,9 +225,51 @@ def load_persistent_settings() -> PersistentSettings:
         if value in (None, "", False):
             return None
         try:
-            return float(value)
+            result = float(value)
+            return result if math.isfinite(result) else None
         except (TypeError, ValueError):
             return None
+
+    def _float_value(value: object, default: float, *, minimum: float | None = None, maximum: float | None = None, field: str = "") -> float:
+        try:
+            result = float(value)
+        except (TypeError, ValueError):
+            if field:
+                logging.warning("settings_field_invalid: %s", field)
+            return default
+        if not math.isfinite(result):
+            if field:
+                logging.warning("settings_field_invalid: %s", field)
+            return default
+        if minimum is not None and result < minimum:
+            if field:
+                logging.warning("settings_field_out_of_range: %s", field)
+            return default
+        if maximum is not None and result > maximum:
+            if field:
+                logging.warning("settings_field_out_of_range: %s", field)
+            return default
+        return result
+
+    def _int_value(value: object, default: int, *, minimum: int | None = None, maximum: int | None = None, field: str = "") -> int:
+        try:
+            result = int(value)
+        except (TypeError, ValueError):
+            if field:
+                logging.warning("settings_field_invalid: %s", field)
+            return default
+        if minimum is not None and result < minimum:
+            if field:
+                logging.warning("settings_field_out_of_range: %s", field)
+            return default
+        if maximum is not None and result > maximum:
+            if field:
+                logging.warning("settings_field_out_of_range: %s", field)
+            return default
+        return result
+
+    def _dict_or_none(value: object) -> Optional[dict[str, object]]:
+        return dict(value) if isinstance(value, dict) else None
 
     def _list_or_none(value: object) -> Optional[list[str]]:
         if isinstance(value, list):
@@ -228,9 +296,23 @@ def load_persistent_settings() -> PersistentSettings:
         bench_sip = 2
     bench_limit = int(payload.get("benchmark_limit", 0) or 0)
     bench_tile_cache = int(payload.get("benchmark_tile_cache_size", 128) or 128)
+    if "instrument_mode" in payload:
+        instrument_mode = str(payload.get("instrument_mode", "auto") or "auto").strip().lower()
+        if instrument_mode not in {"auto", "preset", "custom"}:
+            instrument_mode = "auto"
+    elif payload.get("last_preset_id"):
+        instrument_mode = "preset"
+    elif payload.get("last_fov_focal_mm") or payload.get("last_fov_pixel_um"):
+        instrument_mode = "custom"
+    else:
+        instrument_mode = "auto"
+
     settings = PersistentSettings(
-        schema_version=int(payload.get("schema_version", 1)),
+        schema_version=_int_value(payload.get("schema_version", 1), 1, minimum=1, field="schema_version"),
         catalog_library_path=(payload.get("catalog_library_path") or None),
+        catalog_library_install_parent=(payload.get("catalog_library_install_parent") or None),
+        startup_wizard_version=_int_value(payload.get("startup_wizard_version", 0), 0, minimum=0, field="startup_wizard_version"),
+        startup_wizard_completed=bool(payload.get("startup_wizard_completed", False)),
         db_root=payload.get("db_root"),
         index_root=payload.get("index_root"),
         mag_cap=float(payload.get("mag_cap", DEFAULT_MAG_CAP)),
@@ -240,13 +322,14 @@ def load_persistent_settings() -> PersistentSettings:
         tile_compression=_normalize_choice(payload.get("tile_compression"), TILE_COMPRESSION_CHOICES, TILE_COMPRESSION_CHOICES[0]),
         log_level=str(payload.get("log_level", "INFO") or "INFO").upper(),
         sample_fits=payload.get("sample_fits"),
+        instrument_mode=instrument_mode,
         last_preset_id=(payload.get("last_preset_id") or None),
-        last_fov_focal_mm=float(payload.get("last_fov_focal_mm", 0.0)),
-        last_fov_pixel_um=float(payload.get("last_fov_pixel_um", 0.0)),
-        last_fov_res_w=int(payload.get("last_fov_res_w", 0)),
-        last_fov_res_h=int(payload.get("last_fov_res_h", 0)),
-        last_fov_reducer=float(payload.get("last_fov_reducer", 1.0)),
-        last_fov_binning=int(payload.get("last_fov_binning", 1)),
+        last_fov_focal_mm=_float_value(payload.get("last_fov_focal_mm", 0.0), 0.0, minimum=0.0, maximum=10000.0, field="last_fov_focal_mm"),
+        last_fov_pixel_um=_float_value(payload.get("last_fov_pixel_um", 0.0), 0.0, minimum=0.0, maximum=100.0, field="last_fov_pixel_um"),
+        last_fov_res_w=_int_value(payload.get("last_fov_res_w", 0), 0, minimum=0, maximum=100000, field="last_fov_res_w"),
+        last_fov_res_h=_int_value(payload.get("last_fov_res_h", 0), 0, minimum=0, maximum=100000, field="last_fov_res_h"),
+        last_fov_reducer=_float_value(payload.get("last_fov_reducer", 1.0), 1.0, minimum=0.01, maximum=10.0, field="last_fov_reducer"),
+        last_fov_binning=_int_value(payload.get("last_fov_binning", 1), 1, minimum=1, maximum=16, field="last_fov_binning"),
         blind_max_stars=int(payload.get("blind_max_stars", 500)),
         blind_max_quads=int(payload.get("blind_max_quads", 8000)),
         blind_max_candidates=int(payload.get("blind_max_candidates", 10)),
@@ -307,7 +390,15 @@ def load_persistent_settings() -> PersistentSettings:
         solver_family=(payload.get("solver_family") or None),
         solver_blind_enabled=bool(payload.get("solver_blind_enabled", True)),
         solver_overwrite=bool(payload.get("solver_overwrite", True)),
+        move_unresolved_files=bool(payload.get("move_unresolved_files", False)),
         interface_mode=str(payload.get("interface_mode", "easy") or "easy"),
+        ui_theme=normalize_ui_theme(payload.get("ui_theme", "system")),
+        gpu_diagnostic_schema_version=_int_value(payload.get("gpu_diagnostic_schema_version", 1), 1, minimum=1, field="gpu_diagnostic_schema_version"),
+        gpu_diagnostic_completed=bool(payload.get("gpu_diagnostic_completed", False)),
+        gpu_available=bool(payload.get("gpu_available", False)),
+        gpu_user_cpu_selected=bool(payload.get("gpu_user_cpu_selected", False)),
+        gpu_restart_required=bool(payload.get("gpu_restart_required", False)),
+        gpu_last_reason_code=(payload.get("gpu_last_reason_code") or None),
         blind_backend_profile=str(payload.get("blind_backend_profile", "zeblind_4d_experimental") or "zeblind_4d_experimental"),
         blind_4d_manifest_path=(payload.get("blind_4d_manifest_path") or None),
         solver_hint_ra_deg=_float_or_none(payload.get("solver_hint_ra_deg")),
@@ -339,6 +430,7 @@ def load_persistent_settings() -> PersistentSettings:
         benchmark_sip_order=bench_sip,
         benchmark_full_mode=bool(payload.get("benchmark_full_mode", False)),
         benchmark_try_parity=bool(payload.get("benchmark_try_parity", True)),
+        catalog_library_verification=_dict_or_none(payload.get("catalog_library_verification")),
     )
     migrated, updated = _migrate_settings_if_needed(settings)
     if updated:
@@ -354,6 +446,7 @@ def save_persistent_settings(settings: PersistentSettings) -> None:
     path = _resolve_settings_path()
     # Legacy non-strict mode is retired.
     settings.near_astap_iso_strict = True
+    settings.ui_theme = normalize_ui_theme(getattr(settings, "ui_theme", "system"))
     data = asdict(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
@@ -399,6 +492,14 @@ def _migrate_settings_if_needed(settings: PersistentSettings) -> tuple[Persisten
         changed = True
     if getattr(settings, "near_catalog_mode", "auto") != near_catalog_mode:
         settings.near_catalog_mode = near_catalog_mode
+        changed = True
+
+    instrument_mode = str(getattr(settings, "instrument_mode", "auto") or "auto").strip().lower()
+    if instrument_mode not in {"auto", "preset", "custom"}:
+        instrument_mode = "auto"
+        changed = True
+    if getattr(settings, "instrument_mode", "auto") != instrument_mode:
+        settings.instrument_mode = instrument_mode
         changed = True
 
     blind4d_catalog_mode = str(getattr(settings, "blind4d_catalog_mode", "auto") or "auto").strip().lower().replace("_", "-")
@@ -471,9 +572,11 @@ __all__ = [
     "DEFAULT_SEARCH_RADIUS_SCALE",
     "QUAD_STORAGE_CHOICES",
     "TILE_COMPRESSION_CHOICES",
+    "UI_THEME_CHOICES",
     "PersistentSettings",
     "SETTINGS_PATH",
     "SETTINGS_SCHEMA_VERSION",
     "load_persistent_settings",
+    "normalize_ui_theme",
     "save_persistent_settings",
 ]
