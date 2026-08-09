@@ -42,6 +42,9 @@ zeblindsolver = "zesolver.zeblindsolver:main"
 zeblindsolve = "zeblindsolver.zeblindsolver:main"
 zebuildindex = "zeblindsolver.db_convert:main"
 
+[project.gui-scripts]
+zesolver = "zesolver._app:main"
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 addopts = "-ra"
@@ -81,10 +84,13 @@ exclude = [
   "docs*",
   "reports*",
   "packaging*",
-  "config*",
-  "icon*",
   "legal*",
 ]
 
 [tool.setuptools.package-data]
+"zesolver.icon" = ["*"]
+"zesolver.config" = ["*.json"]
 zewcs290 = ["data/*.json"]
+
+[tool.setuptools.exclude-package-data]
+"zesolver.icon" = ["__pycache__/*", "*.pyc"]

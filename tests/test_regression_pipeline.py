@@ -10,7 +10,7 @@ from corpus_loader import CorpusDataMissing, iter_cases
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("zesolver_app_regression", ROOT / "zesolver.py")
+SPEC = importlib.util.spec_from_file_location("zesolver_app_regression", ROOT / "zesolver/_app.py")
 assert SPEC is not None and SPEC.loader is not None
 zesolver = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = zesolver

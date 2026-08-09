@@ -3,7 +3,7 @@ from pathlib import Path
 import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("zesolver_app", REPO_ROOT / "zesolver.py")
+SPEC = importlib.util.spec_from_file_location("zesolver_app", REPO_ROOT / "zesolver/_app.py")
 assert SPEC is not None and SPEC.loader is not None
 zesolver = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = zesolver

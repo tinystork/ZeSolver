@@ -19,7 +19,7 @@ def test_startup_wizard_gpu_page_uses_non_gui_service_contract() -> None:
 
 
 def test_settings_performance_tab_exposes_gpu_diagnostic_button() -> None:
-    source = (Path(__file__).resolve().parents[1] / "zesolver.py").read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[1] / "zesolver/_app.py").read_text(encoding="utf-8")
 
     assert "settings_perf_gpu_diag_btn" in source
     assert "def _run_gpu_diagnostic_from_settings" in source

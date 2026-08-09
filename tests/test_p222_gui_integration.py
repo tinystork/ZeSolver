@@ -86,7 +86,7 @@ def test_p222_manifest_resolver_explicit_env_and_default(tmp_path: Path, monkeyp
 
 
 def test_p222_gui_source_contains_required_controls_and_translations() -> None:
-    source = (Path(__file__).resolve().parents[1] / "zesolver.py").read_text(encoding="utf-8")
+    source = (Path(__file__).resolve().parents[1] / "zesolver/_app.py").read_text(encoding="utf-8")
     required = [
         "blind_4d_easy_check",
         "blind_4d_profile_combo",

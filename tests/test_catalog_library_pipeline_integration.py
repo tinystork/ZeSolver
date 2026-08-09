@@ -16,7 +16,7 @@ from catalog_resource_helpers import (
 
 
 def _load_entrypoint():
-    path = Path(__file__).resolve().parents[1] / "zesolver.py"
+    path = Path(__file__).resolve().parents[1] / "zesolver/_app.py"
     spec = importlib.util.spec_from_file_location("zesolver_entrypoint_p1c_pipeline", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

@@ -67,7 +67,7 @@ def _check_process_pool() -> tuple[bool, str]:
 
 
 def _check_zesolver_help(python_exe: str, repo_root: Path) -> tuple[bool, str]:
-    zesolver_py = repo_root / "zesolver.py"
+    zesolver_py = repo_root / "zesolver/_app.py"
     if not zesolver_py.exists():
         return False, f"missing {zesolver_py}"
     try:
@@ -189,7 +189,7 @@ def main() -> int:
     checks.append(("Qt offscreen widget", ok_qt, detail_qt, not args.strict_gui))
 
     ok_help, detail_help = _check_zesolver_help(sys.executable, repo_root)
-    checks.append(("zesolver.py --help", ok_help, detail_help, False))
+    checks.append(("zesolver/_app.py --help", ok_help, detail_help, False))
 
     ok_cupy, detail_cupy = _check_cupy_optional()
     checks.append(("CuPy optional", ok_cupy, detail_cupy, True))

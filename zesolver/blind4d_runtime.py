@@ -5,9 +5,17 @@ import sys
 from pathlib import Path
 
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
 DEFAULT_4D_MANIFEST_RELATIVE = Path("config") / "zeblind_4d_experimental_manifest.json"
 ENV_4D_MANIFEST_PATH = "ZEBLIND_4D_MANIFEST"
+
+
+def _package_config_root() -> Path | None:
+    """Return the package resource root for config access (importlib.resources)."""
+    try:
+        from importlib.resources import files as _resource_files
+        return Path(str(_resource_files("zesolver")))
+    except Exception:
+        return None
 
 
 def runtime_resource_dirs() -> list[Path]:
@@ -18,7 +26,12 @@ def runtime_resource_dirs() -> list[Path]:
             roots.append(Path(meipass))
         except Exception:
             pass
-    roots.append(ROOT_DIR)
+    pkg = _package_config_root()
+    if pkg is not None:
+        roots.append(pkg)
+    # Also include parent dir for source-tree fallback
+    source_root = Path(__file__).resolve().parents[1]
+    roots.append(source_root)
     seen: set[str] = set()
     ordered: list[Path] = []
     for root in roots:
@@ -41,7 +54,9 @@ def resolve_default_4d_manifest_path(explicit: Path | str | None = None) -> Path
         candidate = base / DEFAULT_4D_MANIFEST_RELATIVE
         if candidate.is_file():
             return candidate.resolve()
-    return (ROOT_DIR / DEFAULT_4D_MANIFEST_RELATIVE).resolve()
+    # Final fallback: source-tree location
+    source_root = Path(__file__).resolve().parents[1]
+    return (source_root / DEFAULT_4D_MANIFEST_RELATIVE).resolve()
 
 
 __all__ = [

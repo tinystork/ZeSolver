@@ -18,6 +18,7 @@ def test_core_imports_from_package_without_root_entrypoint(tmp_path: Path) -> No
             package_root / name,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.zip"),
         )
+    # Root-level launcher (zesolver.py) should NOT be copied by copytree of the package directory
     assert not (package_root / "zesolver.py").exists()
 
     script = r"""

@@ -25,7 +25,7 @@ from zeblindsolver.zeblindsolver import SolveConfig, _astrometry_4d_runtime_requ
 def _load_zesolver_entrypoint():
     import importlib.util
 
-    path = Path(__file__).resolve().parents[1] / "zesolver.py"
+    path = Path(__file__).resolve().parents[1] / "zesolver/_app.py"
     spec = importlib.util.spec_from_file_location("zesolver_entrypoint_for_tests", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

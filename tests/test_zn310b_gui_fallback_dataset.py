@@ -137,7 +137,7 @@ def test_zn310b_oracle_sidecars_exist_for_every_gui_case() -> None:
 
 
 def test_zn310b_gate_diagnostic_and_4d_defaults() -> None:
-    source = (ROOT / "zesolver.py").read_text(encoding="utf-8")
+    source = (ROOT / "zesolver/_app.py").read_text(encoding="utf-8")
 
     assert NearSolveConfig().strict_acceptance_mode == "diagnostic"
     assert "blind_backend_profile: str = ZEBLIND_4D_EXPERIMENTAL_PROFILE" in source
@@ -160,7 +160,7 @@ def test_zn310b_seed_scale_not_written_to_fits_headers() -> None:
 
 
 def test_zn310b_gui_text_no_longer_claims_historical_default() -> None:
-    text = (ROOT / "zesolver.py").read_text(encoding="utf-8")
+    text = (ROOT / "zesolver/_app.py").read_text(encoding="utf-8")
     docs = (ROOT / "docs" / "zeblind_astrometry_4d_experimental.md").read_text(encoding="utf-8")
 
     assert "remains the default" not in text

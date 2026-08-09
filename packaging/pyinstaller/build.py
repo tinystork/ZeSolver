@@ -63,7 +63,7 @@ def main() -> int:
     args = parser.parse_args()
 
     repo_root = Path(args.repo_root).expanduser().resolve()
-    entry = repo_root / "zesolver.py"
+    entry = repo_root / "zesolver/_app.py"
     icon_dir = repo_root / "icon"
 
     if not entry.is_file():

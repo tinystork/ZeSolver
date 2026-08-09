@@ -23,7 +23,7 @@ from zesolver.gui_startup_wizard import (
 from zesolver.settings_store import PersistentSettings, load_persistent_settings, save_persistent_settings
 
 
-SOURCE = (Path(__file__).resolve().parents[1] / "zesolver.py").read_text(encoding="utf-8")
+SOURCE = (Path(__file__).resolve().parents[1] / "zesolver/_app.py").read_text(encoding="utf-8")
 _QT_APP = None
 
 

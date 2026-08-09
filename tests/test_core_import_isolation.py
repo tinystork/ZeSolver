@@ -17,7 +17,7 @@ import json
 import sys
 from pathlib import Path
 
-root = Path.cwd() / "zesolver.py"
+root = Path.cwd() / "zesolver/_app.py"
 real_import = builtins.__import__
 
 def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):

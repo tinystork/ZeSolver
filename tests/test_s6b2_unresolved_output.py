@@ -13,7 +13,7 @@ from zesolver.unresolved_output import move_unresolved_results
 
 def _load_app_module():
     root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("zesolver_app_s6b2_scan", root / "zesolver.py")
+    spec = importlib.util.spec_from_file_location("zesolver_app_s6b2_scan", root / "zesolver/_app.py")
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     sys.modules[spec.name] = module

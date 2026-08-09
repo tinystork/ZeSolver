@@ -13,7 +13,7 @@ from solver_pipeline_fixtures import near_resources
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("zesolver_entrypoint_blind_config_parity", ROOT / "zesolver.py")
+SPEC = importlib.util.spec_from_file_location("zesolver_entrypoint_blind_config_parity", ROOT / "zesolver/_app.py")
 assert SPEC is not None and SPEC.loader is not None
 zesolver_app = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = zesolver_app

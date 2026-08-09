@@ -16,7 +16,7 @@ from test_p221_app_integration import _entry, _manifest, _write_fake_index
 
 
 def _load_zesolver_entrypoint():
-    path = Path(__file__).resolve().parents[1] / "zesolver.py"
+    path = Path(__file__).resolve().parents[1] / "zesolver/_app.py"
     spec = importlib.util.spec_from_file_location("zesolver_entrypoint_for_p224_tests", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

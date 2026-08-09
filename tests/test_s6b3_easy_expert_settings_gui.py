@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 
-SOURCE = (Path(__file__).resolve().parents[1] / "zesolver.py").read_text(encoding="utf-8")
+SOURCE = (Path(__file__).resolve().parents[1] / "zesolver/_app.py").read_text(encoding="utf-8")
 PROFILE_SOURCE = (Path(__file__).resolve().parents[1] / "zesolver" / "gui_profiles.py").read_text(encoding="utf-8")
 
 

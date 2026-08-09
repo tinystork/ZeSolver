@@ -25,7 +25,7 @@ def test_main_gui_builds_without_benchmark_surface_or_engine_import() -> None:
         from PySide6 import QtWidgets
         from zesolver.settings_store import PersistentSettings
 
-        spec = importlib.util.spec_from_file_location("zesolver_app", Path("zesolver.py"))
+        spec = importlib.util.spec_from_file_location("zesolver_app", Path("zesolver/_app.py"))
         assert spec is not None and spec.loader is not None
         zesolver_app = importlib.util.module_from_spec(spec)
         sys.modules["zesolver_app"] = zesolver_app

@@ -73,7 +73,7 @@ def main(argv: list[str] | None = None) -> int:
             "zesolver",
             "tools",
             "tests",
-            "zesolver.py",
+            "zesolver/_app.py",
             "zewcscleaner.py",
             "zedatabase..py",
             "zeindexcheck.py",

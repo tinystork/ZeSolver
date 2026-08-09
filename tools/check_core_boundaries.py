@@ -68,7 +68,7 @@ def check_file(path: Path) -> list[Violation]:
             if node.id in FORBIDDEN_EXACT_NAMES:
                 violations.append(Violation(path, node.lineno, f"forbidden application/gui symbol: {node.id}"))
         elif isinstance(node, ast.Constant) and isinstance(node.value, str):
-            if "zesolver.py" in node.value:
+            if "zesolver/_app.py" in node.value:
                 violations.append(Violation(path, getattr(node, "lineno", 0), "forbidden root entrypoint path reference"))
     return violations
 
@@ -77,7 +77,7 @@ def _check_import(path: Path, line: int, module: str) -> list[Violation]:
     violations: list[Violation] = []
     if any(module == prefix or module.startswith(prefix + ".") for prefix in FORBIDDEN_IMPORT_PREFIXES):
         violations.append(Violation(path, line, f"forbidden GUI import: {module}"))
-    if module == "zesolver.py":
+    if module == "zesolver/_app.py":
         violations.append(Violation(path, line, "forbidden root entrypoint import"))
     return violations
 

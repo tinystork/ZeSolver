@@ -31,7 +31,7 @@ def test_startup_wizard_existing_library_activation_ignores_stale_external_manif
         from zesolver.gui_startup_wizard import StartupAstapProbe, StartupCatalogProbe, StartupWizardDecision
         from zesolver.settings_store import PersistentSettings
 
-        spec = importlib.util.spec_from_file_location("zesolver_app_p3b1f_activation", Path("zesolver.py"))
+        spec = importlib.util.spec_from_file_location("zesolver_app_p3b1f_activation", Path("zesolver/_app.py"))
         appmod = importlib.util.module_from_spec(spec)
         sys.modules["zesolver_app_p3b1f_activation"] = appmod
         spec.loader.exec_module(appmod)

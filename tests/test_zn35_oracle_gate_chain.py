@@ -19,7 +19,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def _load_zesolver_entrypoint():
-    path = REPO_ROOT / "zesolver.py"
+    path = REPO_ROOT / "zesolver/_app.py"
     spec = importlib.util.spec_from_file_location("zesolver_entrypoint_zn35_tests", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -145,7 +145,7 @@ def test_zn35_near_wrapper_never_falls_back_to_historical(monkeypatch, tmp_path:
 
 
 def test_zn35_app_blind_runner_blocks_historical_profile_in_source() -> None:
-    source = (REPO_ROOT / "zesolver.py").read_text(encoding="utf-8")
+    source = (REPO_ROOT / "zesolver/_app.py").read_text(encoding="utf-8")
     start = source.index("    def _run_blind_solver(")
     end = source.index("    def _run_blind_on_raster", start)
     block = source[start:end]

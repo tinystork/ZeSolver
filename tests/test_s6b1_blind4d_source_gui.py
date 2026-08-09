@@ -25,7 +25,7 @@ def test_blind4d_external_manifest_controls_live_only_in_advanced_source_selecto
         from PySide6 import QtWidgets
         from zesolver.settings_store import PersistentSettings
 
-        spec = importlib.util.spec_from_file_location("zesolver_app_s6b1", Path("zesolver.py"))
+        spec = importlib.util.spec_from_file_location("zesolver_app_s6b1", Path("zesolver/_app.py"))
         assert spec is not None and spec.loader is not None
         zesolver_app = importlib.util.module_from_spec(spec)
         sys.modules["zesolver_app_s6b1"] = zesolver_app

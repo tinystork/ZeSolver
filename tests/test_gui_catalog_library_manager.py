@@ -29,7 +29,7 @@ def test_catalog_library_manager_gui_entrypoints_and_selection() -> None:
         from zesolver.catalog_library.models import CatalogCoverage, CoverageStatus, NearCatalogDescriptor
         from zesolver.settings_store import PersistentSettings
 
-        spec = importlib.util.spec_from_file_location("zesolver_app_p3b1d", Path("zesolver.py"))
+        spec = importlib.util.spec_from_file_location("zesolver_app_p3b1d", Path("zesolver/_app.py"))
         assert spec is not None and spec.loader is not None
         appmod = importlib.util.module_from_spec(spec)
         sys.modules["zesolver_app_p3b1d"] = appmod

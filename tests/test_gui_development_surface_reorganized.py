@@ -25,7 +25,7 @@ def test_development_surface_reorganized_and_persisted() -> None:
         from PySide6 import QtWidgets
         from zesolver.settings_store import PersistentSettings
 
-        spec = importlib.util.spec_from_file_location("zesolver_app_p3b1c", Path("zesolver.py"))
+        spec = importlib.util.spec_from_file_location("zesolver_app_p3b1c", Path("zesolver/_app.py"))
         assert spec is not None and spec.loader is not None
         zesolver_app = importlib.util.module_from_spec(spec)
         sys.modules["zesolver_app_p3b1c"] = zesolver_app

@@ -76,7 +76,7 @@ def test_legacy_image_solver_blind_path_still_available() -> None:
     import sys
 
     root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("zesolver_entrypoint_legacy_blind_available", root / "zesolver.py")
+    spec = importlib.util.spec_from_file_location("zesolver_entrypoint_legacy_blind_available", root / "zesolver/_app.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

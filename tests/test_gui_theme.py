@@ -168,7 +168,7 @@ def test_theme_menu_is_available_in_easy_and_expert_and_persists_without_save_bu
         from PySide6 import QtGui, QtWidgets
         from zesolver.settings_store import PersistentSettings
 
-        spec = importlib.util.spec_from_file_location("zesolver_app_p3b1h", Path("zesolver.py"))
+        spec = importlib.util.spec_from_file_location("zesolver_app_p3b1h", Path("zesolver/_app.py"))
         appmod = importlib.util.module_from_spec(spec)
         sys.modules["zesolver_app_p3b1h"] = appmod
         spec.loader.exec_module(appmod)

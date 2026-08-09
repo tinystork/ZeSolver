@@ -8,7 +8,7 @@ from astropy.io import fits
 
 
 def load_zesolver_app():
-    path = Path(__file__).resolve().parents[1] / "zesolver.py"
+    path = Path(__file__).resolve().parents[1] / "zesolver/_app.py"
     spec = importlib.util.spec_from_file_location("zesolver_app_for_tests", path)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

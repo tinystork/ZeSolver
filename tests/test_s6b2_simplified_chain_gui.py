@@ -10,7 +10,7 @@ from zesolver.gui_pipeline.settings_adapter import build_gui_solve_request, buil
 
 def _load_app_module():
     root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("zesolver_app_s6b2_gui", root / "zesolver.py")
+    spec = importlib.util.spec_from_file_location("zesolver_app_s6b2_gui", root / "zesolver/_app.py")
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     sys.modules[spec.name] = module

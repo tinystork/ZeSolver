@@ -53,11 +53,19 @@ def _make_public_publication_fixture(tmp_path: Path) -> tuple[Path, Path]:
     _write(source / "README.md", "fixture\n")
     _write(source / "ZeSolver_Ballad.md", "English ballad\n")
     _write(source / "la_ballade_de_ZeSolver.md", "Ballade francaise\n")
+    # Root compatibility shim
     _write(
         source / "zesolver.py",
-        "import argparse\n"
-        "parser = argparse.ArgumentParser()\n"
-        "parser.parse_args()\n",
+        "from zesolver._app import main\n"
+        "if __name__ == '__main__':\n"
+        "    import sys\n"
+        "    main(sys.argv[1:])\n",
+    )
+    # Package launcher (gui_scripts entry point)
+    _write(
+        source / "zesolver" / "_app.py",
+        "def main(argv=None):\n"
+        "    pass\n",
     )
     _write(source / "zesolver" / "__init__.py", "VALUE = 'zesolver'\n")
     _write(
@@ -74,6 +82,7 @@ def _make_public_publication_fixture(tmp_path: Path) -> tuple[Path, Path]:
                 "README.md",
                 "ZeSolver_Ballad.md",
                 "la_ballade_de_ZeSolver.md",
+                "zesolver/_app.py",
                 "zesolver.py",
                 "zesolver/**",
                 "zeblindsolver/**",

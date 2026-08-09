@@ -16,7 +16,7 @@ from solver_pipeline_fixtures import near_resources
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SPEC = importlib.util.spec_from_file_location("zesolver_entrypoint_gui_development_audit", ROOT / "zesolver.py")
+SPEC = importlib.util.spec_from_file_location("zesolver_entrypoint_gui_development_audit", ROOT / "zesolver/_app.py")
 assert SPEC is not None and SPEC.loader is not None
 zesolver_app = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = zesolver_app
@@ -99,7 +99,7 @@ def test_legacy_blind_builder_consumes_development_bucket_vote_cap_and_detection
 
 
 def test_worker_control_has_single_performance_widget_source() -> None:
-    source = (ROOT / "zesolver.py").read_text(encoding="utf-8")
+    source = (ROOT / "zesolver/_app.py").read_text(encoding="utf-8")
     start = source.index("def _build_performance_tab")
     end = source.index("def _build_fast_solver_tab", start)
     block = source[start:end]
@@ -112,7 +112,7 @@ def test_worker_control_has_single_performance_widget_source() -> None:
 
 
 def test_hash_rebuild_controls_start_quads_only_indexbuilder_not_a_solve_run() -> None:
-    source = (ROOT / "zesolver.py").read_text(encoding="utf-8")
+    source = (ROOT / "zesolver/_app.py").read_text(encoding="utf-8")
     start = source.index("def _rebuild_hash_level")
     end = source.index("def _populate_settings_ui", start)
     block = source[start:end]
@@ -126,7 +126,7 @@ def test_hash_rebuild_controls_start_quads_only_indexbuilder_not_a_solve_run() -
 
 
 def test_development_tab_builder_removed_and_hash_widgets_are_dialog_scoped() -> None:
-    source = (ROOT / "zesolver.py").read_text(encoding="utf-8")
+    source = (ROOT / "zesolver/_app.py").read_text(encoding="utf-8")
     build_ui = source[source.index("def _build_ui") : source.index("def _wrap_scroll_area")]
 
     assert "_build_dev_tab" not in source

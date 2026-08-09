@@ -16,7 +16,7 @@ def load_zesolver_app():
     existing = sys.modules.get(name)
     if existing is not None:
         return existing
-    spec = importlib.util.spec_from_file_location(name, root / "zesolver.py")
+    spec = importlib.util.spec_from_file_location(name, root / "zesolver/_app.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[name] = module

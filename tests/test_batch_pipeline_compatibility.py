@@ -9,7 +9,7 @@ from zesolver.core.batch import BatchSolverPipeline
 
 def test_legacy_batch_solver_still_available() -> None:
     root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("zesolver_entrypoint_batch_compat", root / "zesolver.py")
+    spec = importlib.util.spec_from_file_location("zesolver_entrypoint_batch_compat", root / "zesolver/_app.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module

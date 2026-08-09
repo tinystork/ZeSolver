@@ -14,6 +14,7 @@ ZeSolver_Ballad.md
 la_ballade_de_ZeSolver.md
 
 zesolver.py
+zesolver/_app.py
 zewcscleaner.py
 zeindexcheck.py
 
