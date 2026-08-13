@@ -26,6 +26,49 @@
 
 """ZeSolver helper package."""
 
+from pathlib import Path
+
+
+def _load_package_version(default: str = "0.0.dev") -> str:
+    """Return the project version without adding a second source of truth."""
+    pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+    try:
+        import tomllib
+
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+        version = str((data.get("project") or {}).get("version") or "").strip()
+        if version:
+            return version
+    except Exception:
+        pass
+    try:
+        in_project = False
+        for raw_line in pyproject.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if line == "[project]":
+                in_project = True
+                continue
+            if in_project and line.startswith("["):
+                break
+            if in_project and line.startswith("version") and "=" in line:
+                value = line.split("=", 1)[1].strip().strip('"\'')
+                if value:
+                    return value
+    except Exception:
+        pass
+    try:
+        from importlib.metadata import PackageNotFoundError, version as pkg_version
+
+        try:
+            return pkg_version("ZeSolver")
+        except PackageNotFoundError:
+            return default
+    except Exception:
+        return default
+
+
+__version__ = _load_package_version()
+
 from .blindindex import BlindIndex, BlindIndexCandidate, ObservedQuad
 from .settings_store import (
     DEFAULT_FOV_DEG,
@@ -70,4 +113,5 @@ __all__ = [
     "DEFAULT_FOV_DEG",
     "DEFAULT_SEARCH_RADIUS_SCALE",
     "DEFAULT_SEARCH_RADIUS_ATTEMPTS",
+    "__version__",
 ]

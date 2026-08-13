@@ -94,3 +94,62 @@ def test_engine_selection_request_marks_blind_disabled() -> None:
     selection_request = build_engine_selection_request(request)
 
     assert selection_request.blind4d_enabled is False
+
+
+def test_auto_batch_mixed_fit_fits_uses_pipeline() -> None:
+    request = build_gui_solve_request(
+        [Path("frame001.fit"), Path("frame002.fits")],
+        GuiSettingsState(engine_mode=EngineMode.AUTO, backend="local", workers=2),
+    )
+    selection = select_engine(build_engine_selection_request(request))
+    assert selection.selected_mode is EngineMode.PIPELINE
+    assert selection.supported is True
+    assert "mixed_file_types" not in selection.reason
+
+
+def test_auto_batch_mixed_fit_fits_fts_uses_pipeline() -> None:
+    request = build_gui_solve_request(
+        [Path("frame001.fit"), Path("frame002.fits"), Path("frame003.fts")],
+        GuiSettingsState(engine_mode=EngineMode.AUTO, backend="local", workers=2),
+    )
+    selection = select_engine(build_engine_selection_request(request))
+    assert selection.selected_mode is EngineMode.PIPELINE
+    assert selection.supported is True
+    assert "mixed_file_types" not in selection.reason
+
+
+def test_auto_batch_fit_plus_png_not_assimilated_as_fits() -> None:
+    request = build_gui_solve_request(
+        [Path("frame001.fit"), Path("frame002.png")],
+        GuiSettingsState(engine_mode=EngineMode.AUTO, backend="local"),
+    )
+    selection = select_engine(build_engine_selection_request(request))
+    assert selection.selected_mode is EngineMode.LEGACY
+    assert "raster_not_supported_by_pipeline" in selection.reason
+
+
+def test_auto_batch_fit_plus_unknown_not_assimilated_as_fits() -> None:
+    request = build_gui_solve_request(
+        [Path("frame001.fit"), Path("frame002.xyz")],
+        GuiSettingsState(engine_mode=EngineMode.AUTO, backend="local"),
+    )
+    selection = select_engine(build_engine_selection_request(request))
+    assert selection.selected_mode is EngineMode.LEGACY
+    assert "mixed_file_types" in selection.reason
+
+
+def test_gui_path_mixed_fits_batch_routes_to_pipeline() -> None:
+    paths = [Path("frame001.fit"), Path("frame002.fits"), Path("frame003.fts")]
+    request = build_gui_solve_request(
+        paths,
+        GuiSettingsState(engine_mode=EngineMode.AUTO, backend="local", workers=2),
+    )
+    selection_request = build_engine_selection_request(request)
+    selection = select_engine(selection_request)
+
+    assert selection.requested_mode is EngineMode.AUTO
+    assert selection.selected_mode is EngineMode.PIPELINE
+    assert selection.supported is True
+    assert selection.reason
+    assert "mixed_file_types" not in selection.reason
+    assert selection_request.unknown_capabilities == ()

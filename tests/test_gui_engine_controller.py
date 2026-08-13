@@ -59,3 +59,36 @@ def test_controller_rejects_pipeline_raster_without_fallback() -> None:
     with pytest.raises(GuiEngineSelectionError):
         controller.run(request)
     assert calls == []
+
+
+def test_controller_routes_mixed_fits_batch_to_pipeline() -> None:
+    calls: list[str] = []
+    controller = GuiSolveController(
+        pipeline_runner_factory=lambda: _Runner(EngineMode.PIPELINE, calls),
+        legacy_runner_factory=lambda: _Runner(EngineMode.LEGACY, calls),
+    )
+    request = build_gui_solve_request(
+        [Path("a.fit"), Path("b.fits"), Path("c.fts")],
+        GuiSettingsState(engine_mode=EngineMode.AUTO),
+    )
+    summary = controller.run(request)
+    assert summary.selected_engine is EngineMode.PIPELINE
+    assert calls == ["pipeline"]
+
+
+def test_controller_mixed_fits_batch_never_invokes_legacy_runner() -> None:
+    def _legacy_runner_factory() -> None:
+        raise AssertionError("LegacyGuiRunner must not be invoked for a homogeneous FITS batch")
+
+    calls: list[str] = []
+    controller = GuiSolveController(
+        pipeline_runner_factory=lambda: _Runner(EngineMode.PIPELINE, calls),
+        legacy_runner_factory=_legacy_runner_factory,
+    )
+    request = build_gui_solve_request(
+        [Path("a.fit"), Path("b.fits"), Path("c.fts")],
+        GuiSettingsState(engine_mode=EngineMode.AUTO),
+    )
+    summary = controller.run(request)
+    assert summary.selected_engine is EngineMode.PIPELINE
+    assert calls == ["pipeline"]
