@@ -101,3 +101,6 @@ ASTAP-main.zip
 
 # Python build metadata
 *.egg-info/
+
+# Python build artifacts
+/build/
