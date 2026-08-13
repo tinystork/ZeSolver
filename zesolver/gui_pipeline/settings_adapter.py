@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
-from zesolver.engine_selection import EngineMode, EngineSelectionRequest, RASTER_EXTENSIONS
+from zesolver.engine_selection import EngineMode, EngineSelectionRequest, FITS_EXTENSIONS, RASTER_EXTENSIONS
 from zesolver.settings import ProductSettings, RuntimeOptions
 
 from .requests import GuiSettingsState, GuiSolveRequest
@@ -157,7 +157,7 @@ def build_gui_solve_request_from_legacy_config(
 def build_engine_selection_request(request: GuiSolveRequest) -> EngineSelectionRequest:
     representative = _representative_path(request.input_paths)
     unknown: list[str] = []
-    suffixes = {Path(path).suffix.lower() for path in request.input_paths}
+    suffixes = {_format_suffix(path) for path in request.input_paths}
     if len(suffixes) > 1 and not any(suffix in RASTER_EXTENSIONS for suffix in suffixes):
         unknown.append("mixed_file_types")
     return EngineSelectionRequest(
@@ -183,6 +183,20 @@ def _representative_path(paths: tuple[Path, ...]) -> Path | None:
         if Path(path).suffix.lower() in RASTER_EXTENSIONS:
             return Path(path)
     return Path(paths[0])
+
+
+def _format_suffix(path: Path) -> str:
+    """Normalize FITS variants into a single format family for mixed detection.
+
+    ``.fit``, ``.fits`` and ``.fts`` all denote the FITS format and must not be
+    treated as distinct file types when deciding whether a batch is homogeneous.
+    Raster and unknown extensions keep their own suffix so genuine mixed batches
+    (for example ``.fit`` + ``.png`` or ``.fit`` + ``.xyz``) remain detectable.
+    """
+    suffix = Path(path).suffix.lower()
+    if suffix in FITS_EXTENSIONS:
+        return ".fits"
+    return suffix
 
 
 def _has_raster(paths: Sequence[Path]) -> bool:

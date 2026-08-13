@@ -4,6 +4,8 @@
 
 ### Fixed
 
+- Canonicalized `.fit`, `.fits`, and `.fts` GUI batch engine selection as one
+  FITS family so mixed FITS extensions stay on the modern Pipeline in AUTO.
 - Added a reproducible public `main` projection manifest and builder so the
   user-facing branch can be generated from `test` without merging tests,
   internal tools, reports, or development-only documentation.
