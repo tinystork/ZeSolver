@@ -1,3 +1,6 @@
+# Local workspace for development agents.
+/AGENT/
+
 __pycache__/
 .pytest_cache/
 database/
