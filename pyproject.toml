@@ -88,6 +88,7 @@ exclude = [
 ]
 
 [tool.setuptools.package-data]
+"zesolver" = ["zesoftware_interop.json"]
 "zesolver.icon" = ["*"]
 "zesolver.config" = ["*.json"]
 zewcs290 = ["data/*.json"]
