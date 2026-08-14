@@ -57,6 +57,28 @@ The exact public symbols are enumerated in `zesolver.api.v1.__all__`:
 
 Everything else is private and must not be relied upon.
 
+## Enum value form (stable wire values)
+
+All public `str` enums expose **lowercase `snake_case` string values** as their
+stable wire form for public interop (serialization, logging, comparison by
+consumers).  Enum **member names** remain uppercase (for example
+`CapabilityAvailability.AVAILABLE`, `GpuPolicy.AUTO`), but the `.value` of each
+member is the lowercase contract form:
+
+- `CapabilityAvailability`: `"available"` / `"unavailable"` / `"not_checked"`.
+- `CapabilityUnavailableReason`: `"missing_resource"`, `"backend_unavailable"`,
+  `"policy_disabled"`, `"gpu_unavailable"`, `"network_unavailable"`,
+  `"license_or_auth_required"`, `"unsupported_platform"`, `"unknown"`.
+- `GpuPolicy`: `"auto"` / `"disabled"` / `"required"`.
+- `NetworkPolicy`: `"disabled"` / `"allowed"`.
+- `BackendPolicy`: `"auto"` / `"near_only"` / `"blind_only"`.
+- `WritePolicy`: `"overwrite_input"` / `"write_copy"`.
+- `SolveStatus`: `"solved"` / `"skipped_existing_wcs"` / `"failed"` /
+  `"cancelled"`.
+- `FailureCode`: lowercase `snake_case` values (for example
+  `"invalid_input"`, `"no_solution"`, `"backend_unavailable"`).
+- `ProgressPhase`: `"preparing"` / `"solving"` / `"writing"` / `"finalizing"`.
+
 ## Metadata and probing
 
 - `get_api_info()` returns **static** metadata only (`api_version`,

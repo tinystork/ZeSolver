@@ -58,20 +58,20 @@ class ApiInfo:
 
 
 class CapabilityAvailability(str, Enum):
-    AVAILABLE = "AVAILABLE"
-    UNAVAILABLE = "UNAVAILABLE"
-    NOT_CHECKED = "NOT_CHECKED"
+    AVAILABLE = "available"
+    UNAVAILABLE = "unavailable"
+    NOT_CHECKED = "not_checked"
 
 
 class CapabilityUnavailableReason(str, Enum):
-    MISSING_RESOURCE = "MISSING_RESOURCE"
-    BACKEND_UNAVAILABLE = "BACKEND_UNAVAILABLE"
-    POLICY_DISABLED = "POLICY_DISABLED"
-    GPU_UNAVAILABLE = "GPU_UNAVAILABLE"
-    NETWORK_UNAVAILABLE = "NETWORK_UNAVAILABLE"
-    LICENSE_OR_AUTH_REQUIRED = "LICENSE_OR_AUTH_REQUIRED"
-    UNSUPPORTED_PLATFORM = "UNSUPPORTED_PLATFORM"
-    UNKNOWN = "UNKNOWN"
+    MISSING_RESOURCE = "missing_resource"
+    BACKEND_UNAVAILABLE = "backend_unavailable"
+    POLICY_DISABLED = "policy_disabled"
+    GPU_UNAVAILABLE = "gpu_unavailable"
+    NETWORK_UNAVAILABLE = "network_unavailable"
+    LICENSE_OR_AUTH_REQUIRED = "license_or_auth_required"
+    UNSUPPORTED_PLATFORM = "unsupported_platform"
+    UNKNOWN = "unknown"
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,24 +103,24 @@ class RuntimeProbe:
 class GpuPolicy(str, Enum):
     """GPU usage policy, owned by the *runtime* (never per-solve options)."""
 
-    AUTO = "AUTO"
-    DISABLED = "DISABLED"
-    REQUIRED = "REQUIRED"
+    AUTO = "auto"
+    DISABLED = "disabled"
+    REQUIRED = "required"
 
 
 class NetworkPolicy(str, Enum):
     """Network policy.  ``DISABLED`` is the default everywhere in v1."""
 
-    DISABLED = "DISABLED"
-    ALLOWED = "ALLOWED"
+    DISABLED = "disabled"
+    ALLOWED = "allowed"
 
 
 class BackendPolicy(str, Enum):
     """Which solver backends may be used for a request."""
 
-    AUTO = "AUTO"
-    NEAR_ONLY = "NEAR_ONLY"
-    BLIND_ONLY = "BLIND_ONLY"
+    AUTO = "auto"
+    NEAR_ONLY = "near_only"
+    BLIND_ONLY = "blind_only"
 
 
 class WritePolicy(str, Enum):
@@ -130,8 +130,8 @@ class WritePolicy(str, Enum):
     temp-copy simulation of one.
     """
 
-    OVERWRITE_INPUT = "OVERWRITE_INPUT"
-    WRITE_COPY = "WRITE_COPY"
+    OVERWRITE_INPUT = "overwrite_input"
+    WRITE_COPY = "write_copy"
 
 
 # ---------------------------------------------------------------------------
@@ -283,10 +283,10 @@ class CanonicalWcsHeader:
 
 
 class SolveStatus(str, Enum):
-    SOLVED = "SOLVED"
-    SKIPPED_EXISTING_WCS = "SKIPPED_EXISTING_WCS"
-    FAILED = "FAILED"
-    CANCELLED = "CANCELLED"
+    SOLVED = "solved"
+    SKIPPED_EXISTING_WCS = "skipped_existing_wcs"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class FailureCode(str, Enum):
@@ -296,16 +296,16 @@ class FailureCode(str, Enum):
     :class:`SolveStatus`, not a failure code).
     """
 
-    INVALID_INPUT = "INVALID_INPUT"
-    UNSUPPORTED_INPUT = "UNSUPPORTED_INPUT"
-    EXISTING_WCS_INVALID = "EXISTING_WCS_INVALID"
-    NO_SOLUTION = "NO_SOLUTION"
-    MISSING_RESOURCE = "MISSING_RESOURCE"
-    BACKEND_UNAVAILABLE = "BACKEND_UNAVAILABLE"
-    POLICY_DISABLED = "POLICY_DISABLED"
-    TIMEOUT = "TIMEOUT"
-    WCS_INVALID = "WCS_INVALID"
-    WRITE_FAILED = "WRITE_FAILED"
+    INVALID_INPUT = "invalid_input"
+    UNSUPPORTED_INPUT = "unsupported_input"
+    EXISTING_WCS_INVALID = "existing_wcs_invalid"
+    NO_SOLUTION = "no_solution"
+    MISSING_RESOURCE = "missing_resource"
+    BACKEND_UNAVAILABLE = "backend_unavailable"
+    POLICY_DISABLED = "policy_disabled"
+    TIMEOUT = "timeout"
+    WCS_INVALID = "wcs_invalid"
+    WRITE_FAILED = "write_failed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -334,10 +334,10 @@ class SolveResult:
 
 
 class ProgressPhase(str, Enum):
-    PREPARING = "PREPARING"
-    SOLVING = "SOLVING"
-    WRITING = "WRITING"
-    FINALIZING = "FINALIZING"
+    PREPARING = "preparing"
+    SOLVING = "solving"
+    WRITING = "writing"
+    FINALIZING = "finalizing"
 
 
 @dataclass(frozen=True, slots=True)

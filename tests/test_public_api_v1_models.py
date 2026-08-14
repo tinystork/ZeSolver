@@ -16,10 +16,13 @@ from zesolver.api.v1 import (
     API_VERSION,
     BackendPolicy,
     CanonicalWcsHeader,
+    CapabilityAvailability,
+    CapabilityUnavailableReason,
     FailureCode,
     GpuPolicy,
     InvalidRequestError,
     NetworkPolicy,
+    ProgressPhase,
     SolveHints,
     SolveOptions,
     SolveRequest,
@@ -46,16 +49,16 @@ def test_api_version_is_single_source_of_truth() -> None:
 
 
 def test_write_policy_has_only_two_members_and_no_no_write() -> None:
-    assert {m.value for m in WritePolicy} == {"OVERWRITE_INPUT", "WRITE_COPY"}
+    assert {m.value for m in WritePolicy} == {"overwrite_input", "write_copy"}
     assert not hasattr(WritePolicy, "NO_WRITE")
 
 
 def test_backend_policy_is_non_ambiguous() -> None:
-    assert {m.value for m in BackendPolicy} == {"AUTO", "NEAR_ONLY", "BLIND_ONLY"}
+    assert {m.value for m in BackendPolicy} == {"auto", "near_only", "blind_only"}
 
 
 def test_network_policy_default_disabled() -> None:
-    assert {m.value for m in NetworkPolicy} == {"DISABLED", "ALLOWED"}
+    assert {m.value for m in NetworkPolicy} == {"disabled", "allowed"}
     assert SolveOptions().network_policy is NetworkPolicy.DISABLED
 
 
@@ -63,11 +66,68 @@ def test_gpu_policy_is_runtime_scoped_not_per_solve() -> None:
     # GPU policy must NOT live on the per-request SolveOptions.
     option_fields = {f.name for f in fields(SolveOptions)}
     assert "gpu_policy" not in option_fields
-    assert {m.value for m in GpuPolicy} == {"AUTO", "DISABLED", "REQUIRED"}
+    assert {m.value for m in GpuPolicy} == {"auto", "disabled", "required"}
 
 
 def test_solve_options_default_write_policy_is_overwrite_input() -> None:
     assert SolveOptions().write_policy is WritePolicy.OVERWRITE_INPUT
+
+
+# ---------------------------------------------------------------------------
+# Wire value contract (lowercase snake_case, stable for public interop)
+# ---------------------------------------------------------------------------
+
+
+def test_enum_values_are_lowercase_snake_case() -> None:
+    # Member *names* stay uppercase; the str *values* are the stable wire form.
+    assert {m.value for m in CapabilityAvailability} == {
+        "available",
+        "unavailable",
+        "not_checked",
+    }
+    assert {m.value for m in CapabilityUnavailableReason} == {
+        "missing_resource",
+        "backend_unavailable",
+        "policy_disabled",
+        "gpu_unavailable",
+        "network_unavailable",
+        "license_or_auth_required",
+        "unsupported_platform",
+        "unknown",
+    }
+    assert {m.value for m in FailureCode} == {
+        "invalid_input",
+        "unsupported_input",
+        "existing_wcs_invalid",
+        "no_solution",
+        "missing_resource",
+        "backend_unavailable",
+        "policy_disabled",
+        "timeout",
+        "wcs_invalid",
+        "write_failed",
+    }
+    assert {m.value for m in ProgressPhase} == {
+        "preparing",
+        "solving",
+        "writing",
+        "finalizing",
+    }
+
+
+def test_enum_member_names_preserved_uppercase() -> None:
+    assert {m.name for m in CapabilityAvailability} == {
+        "AVAILABLE",
+        "UNAVAILABLE",
+        "NOT_CHECKED",
+    }
+    assert {m.name for m in GpuPolicy} == {"AUTO", "DISABLED", "REQUIRED"}
+    assert {m.name for m in SolveStatus} == {
+        "SOLVED",
+        "SKIPPED_EXISTING_WCS",
+        "FAILED",
+        "CANCELLED",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -228,12 +288,12 @@ def test_canonical_wcs_header_accepts_passthrough_wcs(tmp_path: Path) -> None:
 
 def test_solve_status_members() -> None:
     assert {m.value for m in SolveStatus} == {
-        "SOLVED",
-        "SKIPPED_EXISTING_WCS",
-        "FAILED",
-        "CANCELLED",
+        "solved",
+        "skipped_existing_wcs",
+        "failed",
+        "cancelled",
     }
 
 
 def test_failure_code_does_not_duplicate_cancelled() -> None:
-    assert "CANCELLED" not in {m.value for m in FailureCode}
+    assert "cancelled" not in {m.value for m in FailureCode}
