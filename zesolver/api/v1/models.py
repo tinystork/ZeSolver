@@ -109,10 +109,16 @@ class GpuPolicy(str, Enum):
 
 
 class NetworkPolicy(str, Enum):
-    """Network policy.  ``DISABLED`` is the default everywhere in v1."""
+    """Network policy for the public API.
+
+    API 1.0 is strictly local-only: the only valid member is ``DISABLED``.
+    There is no ``ALLOWED`` member in 1.0 and no code path in the public API
+    performs network access.  A future 1.1+ release may introduce an explicit
+    network policy, but that is a deliberate, versioned contract change — never
+    an implicit inheritance of a persisted GUI web-fallback preference.
+    """
 
     DISABLED = "disabled"
-    ALLOWED = "allowed"
 
 
 class BackendPolicy(str, Enum):
@@ -187,6 +193,11 @@ class SolveOptions:
     timeout_s: float | None = None
 
     def __post_init__(self) -> None:
+        if self.network_policy is not NetworkPolicy.DISABLED:
+            raise InvalidRequestError(
+                "network_policy must be NetworkPolicy.DISABLED: "
+                "API 1.0 is local-only and exposes no network policy"
+            )
         if self.timeout_s is not None and float(self.timeout_s) <= 0.0:
             raise InvalidRequestError("timeout_s must be > 0")
         if self.output_path is not None and not isinstance(self.output_path, Path):

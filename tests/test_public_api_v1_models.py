@@ -57,8 +57,10 @@ def test_backend_policy_is_non_ambiguous() -> None:
     assert {m.value for m in BackendPolicy} == {"auto", "near_only", "blind_only"}
 
 
-def test_network_policy_default_disabled() -> None:
-    assert {m.value for m in NetworkPolicy} == {"disabled", "allowed"}
+def test_network_policy_is_local_only() -> None:
+    # API 1.0 is local-only: ``ALLOWED`` must not exist as a public member.
+    assert {m.value for m in NetworkPolicy} == {"disabled"}
+    assert not hasattr(NetworkPolicy, "ALLOWED")
     assert SolveOptions().network_policy is NetworkPolicy.DISABLED
 
 

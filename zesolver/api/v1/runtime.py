@@ -216,8 +216,8 @@ def create_solver_runtime(
     gpu_policy:
         Runtime-wide GPU usage policy (``AUTO``/``DISABLED``/``REQUIRED``).
     network_policy:
-        Runtime-wide network policy.  ``DISABLED`` is the default and the v1
-        API performs no network access.
+        Runtime-wide network policy.  Only ``NetworkPolicy.DISABLED`` is valid
+        in API 1.0 (local-only): the public API performs no network access.
     """
     return SolverRuntime(
         resources_path=resources_path,

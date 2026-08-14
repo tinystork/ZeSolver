@@ -728,6 +728,11 @@ def _build_configuration(
     from zesolver.settings import ProductSettings, RuntimeOptions, build_solver_configuration
 
     hints: SolveHints = request.hints
+    # Source of truth for network behavior in API v1: the public API is
+    # local-only.  ``web_fallback`` is forced off here and MUST NOT be read
+    # from any persisted GUI preference (``use_web_fallback`` /
+    # ``astrometry_fallback_after_blind``).  ``network_policy`` can only ever
+    # be ``NetworkPolicy.DISABLED`` in API 1.0 (see models.NetworkPolicy).
     product_settings = ProductSettings(
         catalog_library_path=resources_path,
         gpu_mode=_gpu_mode_text(gpu_policy),

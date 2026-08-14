@@ -36,6 +36,15 @@ def build_solver_configuration(
     overrides = developer_overrides or DeveloperOverrides()
     values: dict[str, object] = {}
     values.update(near.values)
+    for key, value in blind.values.items():
+        if key.startswith("blind_") or key in {"quad_hash_schema", "quad_sources", "max_quads", "max_hypotheses", "max_accepts", "max_wall_s", "match_radius_px", "code_tol", "max_hits", "max_hits_per_image_quad"}:
+            values[key] = value
+    values.update(pipeline.values)
+    # Explicit product settings override profile defaults.  This ordering is
+    # what makes ``product_settings.web_fallback`` actually win over the
+    # pipeline profile's ``astrometry_fallback_after_blind=True`` default, so a
+    # local-only caller (for example the public v1 API) cannot silently inherit
+    # a persisted web-fallback preference.
     values.update(
         {
             "catalog_library_path": product_settings.catalog_library_path,
@@ -71,10 +80,6 @@ def build_solver_configuration(
             "hint_resolution_max_arcsec": product_settings.hint_resolution_max_arcsec,
         }
     )
-    for key, value in blind.values.items():
-        if key.startswith("blind_") or key in {"quad_hash_schema", "quad_sources", "max_quads", "max_hypotheses", "max_accepts", "max_wall_s", "match_radius_px", "code_tol", "max_hits", "max_hits_per_image_quad"}:
-            values[key] = value
-    values.update(pipeline.values)
     if overrides.active:
         values.update(overrides.values)
     return ResolvedSolverConfiguration(

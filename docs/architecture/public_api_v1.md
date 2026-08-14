@@ -70,7 +70,7 @@ member is the lowercase contract form:
   `"policy_disabled"`, `"gpu_unavailable"`, `"network_unavailable"`,
   `"license_or_auth_required"`, `"unsupported_platform"`, `"unknown"`.
 - `GpuPolicy`: `"auto"` / `"disabled"` / `"required"`.
-- `NetworkPolicy`: `"disabled"` / `"allowed"`.
+- `NetworkPolicy`: `"disabled"` only (API 1.0 is local-only; `"allowed"` is deferred to a future 1.1+).
 - `BackendPolicy`: `"auto"` / `"near_only"` / `"blind_only"`.
 - `WritePolicy`: `"overwrite_input"` / `"write_copy"`.
 - `SolveStatus`: `"solved"` / `"skipped_existing_wcs"` / `"failed"` /
