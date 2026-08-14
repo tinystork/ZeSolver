@@ -144,16 +144,16 @@ def test_create_solver_runtime_defaults() -> None:
 
 
 def test_create_solver_runtime_rejects_bad_policy_types() -> None:
-    with pytest.raises(TypeError):
+    with pytest.raises(InvalidRequestError):
         SolverRuntime(gpu_policy="AUTO")  # type: ignore[arg-type]
-    with pytest.raises(TypeError):
+    with pytest.raises(InvalidRequestError):
         SolverRuntime(network_policy="DISABLED")  # type: ignore[arg-type]
 
 
 def test_session_solve_rejects_non_solve_request(monkeypatch, tmp_path: Path) -> None:
     rt = _runtime_with_context(monkeypatch, _fake_resources())
     session = rt.create_session()
-    with pytest.raises(TypeError):
+    with pytest.raises(InvalidRequestError):
         session.solve("not a request")  # type: ignore[arg-type]
 
 
@@ -385,7 +385,7 @@ def test_session_rejects_concurrent_solve(monkeypatch, tmp_path: Path) -> None:
     t.start()
     assert entered.wait(timeout=15), "near solver never entered"
     try:
-        with pytest.raises(RuntimeError):
+        with pytest.raises(InvalidRequestError):
             session.solve(req)
     finally:
         release.set()
@@ -397,5 +397,5 @@ def test_session_rejects_concurrent_solve(monkeypatch, tmp_path: Path) -> None:
 def test_solve_requires_solve_request_type(monkeypatch, tmp_path: Path) -> None:
     rt = _runtime_with_context(monkeypatch, _fake_resources())
     session = rt.create_session()
-    with pytest.raises(TypeError):
+    with pytest.raises(InvalidRequestError):
         session.solve(None)  # type: ignore[arg-type]

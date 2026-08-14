@@ -26,7 +26,7 @@ from ._adapters import (
     near_solve_engine,
     run_solve,
 )
-from .errors import SolverClosedError
+from .errors import InvalidRequestError, SolverClosedError
 from .models import (
     GpuPolicy,
     NetworkPolicy,
@@ -51,9 +51,9 @@ class SolverRuntime:
         _blind_solver: Callable | None = None,
     ) -> None:
         if not isinstance(gpu_policy, GpuPolicy):
-            raise TypeError("gpu_policy must be a GpuPolicy")
+            raise InvalidRequestError("gpu_policy must be a GpuPolicy")
         if not isinstance(network_policy, NetworkPolicy):
-            raise TypeError("network_policy must be a NetworkPolicy")
+            raise InvalidRequestError("network_policy must be a NetworkPolicy")
         if resources_path is not None and not isinstance(resources_path, Path):
             resources_path = Path(resources_path)
         self._resources_path = resources_path
@@ -156,11 +156,11 @@ class SolverSession:
         :mod:`zesolver.api.v1.errors`).
         """
         if not isinstance(request, SolveRequest):
-            raise TypeError("request must be a SolveRequest")
+            raise InvalidRequestError("request must be a SolveRequest")
         self._ensure_open()
         with self._solve_lock:
             if self._solving:
-                raise RuntimeError("SolverSession does not support concurrent solve() calls")
+                raise InvalidRequestError("SolverSession does not support concurrent solve() calls")
             self._solving = True
         try:
             ctx = self._runtime._context()
