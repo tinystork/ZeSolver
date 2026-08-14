@@ -169,6 +169,7 @@ class SolverSession:
                 resources=ctx.resources,
                 near_shared=ctx.near_shared,
                 blind_selection=ctx.blind_selection,
+                resources_error=getattr(ctx, "resources_error", None),
                 gpu_policy=self._runtime._gpu_policy,
                 network_policy=request.options.network_policy,
                 resources_path=self._runtime._resources_path,

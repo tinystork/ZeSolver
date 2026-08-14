@@ -59,6 +59,7 @@ class _RuntimeContext:
     near_shared: object | None
     blind_selection: object | None
     blind_selection_error: object | None
+    resources_error: str | None = None
 
 
 def build_runtime_context(
@@ -72,18 +73,45 @@ def build_runtime_context(
     """
     from zesolver.catalog_resources import (
         Blind4DRuntimeError,
+        CatalogResourceResolutionError,
         NearBatchRuntime,
         NearCatalogMode,
+        SolverCatalogResources,
         resolve_blind4d_runtime,
         resolve_catalog_resources,
     )
 
     resources = injected_resources
+    resources_error: str | None = None
     if resources is None:
-        resources = resolve_catalog_resources(
-            catalog_library=resources_path,
-            enable_environment_discovery=(resources_path is None),
-        )
+        try:
+            resources = resolve_catalog_resources(
+                catalog_library=resources_path,
+                enable_environment_discovery=(resources_path is None),
+            )
+        except CatalogResourceResolutionError as exc:
+            # Expected operational failure: an explicitly requested catalog
+            # library could not be resolved.  Degrade to "no resources" instead
+            # of letting an internal catalog exception escape the public v1
+            # boundary.  The diagnostic detail is preserved (non-stable, for
+            # logs/debug only) and surfaced on the SolveResult.
+            resources_error = str(exc)
+            resources = SolverCatalogResources(
+                library_path=resources_path,
+                library_status=None,
+                near=None,
+                blind4d_indexes=(),
+                blind4d_runtime_paths=(),
+                blind4d_manifest_path=None,
+                legacy_index_root=None,
+                source="none",
+                warnings=("catalog_resource_resolution_failed",),
+                catalog_library_id=None,
+                catalog_manifest_fingerprint=None,
+                coverage=None,
+                all_sky_blind4d=False,
+                catalog_library=None,
+            )
 
     near_shared = None
     if resources.near_available:
@@ -107,6 +135,7 @@ def build_runtime_context(
         near_shared=near_shared,
         blind_selection=blind_selection,
         blind_selection_error=blind_selection_error,
+        resources_error=resources_error,
     )
 
 
@@ -344,6 +373,7 @@ def run_solve(
     resources,
     near_shared,
     blind_selection,
+    resources_error: str | None = None,
     gpu_policy: GpuPolicy,
     network_policy: NetworkPolicy,
     resources_path: Path | None,
@@ -453,6 +483,13 @@ def run_solve(
         if blind_available:
             attempts.append(("BLIND4D", blind_solver))
         if not attempts:
+            if resources_error is not None:
+                return _result(
+                    request, SolveStatus.FAILED, FailureCode.MISSING_RESOURCE,
+                    f"catalog_resources_invalid: {resources_error}",
+                    f"no solver catalog resources are available: {resources_error}",
+                    elapsed_s=elapsed(),
+                )
             return _result(
                 request, SolveStatus.FAILED, FailureCode.MISSING_RESOURCE,
                 diagnostic_code="catalog_resources_absent",
