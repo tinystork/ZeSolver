@@ -1,0 +1,13 @@
+{
+  "schema": "zesoftware.interop.v1",
+  "product_id": "zesolver",
+  "distribution_name": "ZeSolver",
+  "provides": [
+    {
+      "api_module": "zesolver.api.v1",
+      "api_version": "1.0",
+      "capabilities": ["near_solve", "blind_solve", "wcs_write", "gpu", "cancel"]
+    }
+  ],
+  "consumes": []
+}

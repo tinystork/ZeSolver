@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Provider interop metadata (`zesolver/zesoftware_interop.json`, schema
+  `zesoftware.interop.v1`) so the installed ZeSolver distribution is
+  verifiable by the ZeAlfie compatibility gate when a consumer such as
+  ZeMosaic declares `zesolver.api.v1` (API 1.0; capabilities:
+  `near_solve`, `blind_solve`, `wcs_write`, `cancel`, `gpu`).
+- Wheel-install witness test: the built wheel installs standalone and the
+  public API still imports (ZS-INTEROP-PROVIDER-CLOSURE).
+
 ### Fixed
 
 - Canonicalized `.fit`, `.fits`, and `.fts` GUI batch engine selection as one
