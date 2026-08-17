@@ -11,6 +11,7 @@ These tests never import ZeAlfie and never inspect any sibling repository.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import zipfile
@@ -161,3 +162,57 @@ def test_wheel_interop_json_parseable_without_importing_product_code(
     assert data["provides"][0]["api_version"] == API_VERSION
     assert set(data["provides"][0]["capabilities"]) == set(_SUPPORTED_CAPABILITIES)
     assert data["consumes"] == []
+
+
+def test_wheel_install_then_api_import_passes(
+    tmp_path: Path, wheel_path: Path
+) -> None:
+    """Install the built wheel standalone and import the public API.
+
+    The wheel is installed with ``--no-deps --target`` into an isolated
+    directory (dependencies come from the test environment) and the import
+    runs from a foreign CWD with ``PYTHONPATH`` pinned to that target, so the
+    imported ``zesolver`` provably comes from the wheel, not from the source
+    checkout.
+    """
+    target = tmp_path / "site"
+    install = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "install",
+            str(wheel_path),
+            "--no-deps",
+            "--target",
+            str(target),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert install.returncode == 0, f"wheel install failed:\n{install.stderr}"
+
+    script = (
+        "import sys\n"
+        "import zesolver\n"
+        "assert zesolver.__file__.startswith(sys.argv[1]), zesolver.__file__\n"
+        "from zesolver.api import v1\n"
+        "assert v1.API_VERSION == '1.0'\n"
+        "from zesolver.api.v1.probe import get_api_info\n"
+        "info = get_api_info()\n"
+        "assert info.api_version == '1.0'\n"
+        "assert set(info.supported_capabilities) == "
+        "{'near_solve', 'blind_solve', 'wcs_write', 'cancel', 'gpu'}\n"
+        "print('wheel API import OK:', zesolver.__file__)\n"
+    )
+    env = dict(os.environ)
+    env["PYTHONPATH"] = str(target)
+    probe = subprocess.run(
+        [sys.executable, "-c", script, str(target)],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=env,
+    )
+    assert probe.returncode == 0, f"wheel API import failed:\n{probe.stderr}"
+    assert "wheel API import OK" in probe.stdout
