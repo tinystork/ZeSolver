@@ -19,7 +19,7 @@ from .errors import InvalidRequestError
 # API version
 # ---------------------------------------------------------------------------
 
-API_VERSION = "1.1"
+API_VERSION = "1.2"
 """Single source of truth for the public API version."""
 
 

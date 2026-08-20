@@ -29,6 +29,7 @@ from .models import (
     ReadinessReport,
 )
 from .probe import _product_version
+from .session import ConfigurationSession
 
 # Stable, consumer-facing readiness messages.  Deliberately free of internal
 # exception text, catalog paths, and catalog details so consumers can rely on
@@ -109,7 +110,7 @@ def readiness(
     return _report_from_resources(resources, product_version=product_version)
 
 
-def open_configuration() -> None:
+def open_configuration() -> ConfigurationSession:
     """Launch the public ZeSolver configuration GUI, non-blocking.
 
     Prefers the installed ``zesolver`` ``gui_scripts`` entry point (resolved
@@ -117,12 +118,15 @@ def open_configuration() -> None:
     ``[sys.executable, "-c", "from zesolver._app import main; main()"]``.
 
     The subprocess is detached (new session), with stdout/stderr/stdin bound to
-    ``DEVNULL``, and this function returns immediately without waiting.  A
-    failed launch raises :class:`ZeSolverApiError` with a stable message.
+    ``DEVNULL``, and this function returns immediately without waiting.  It
+    returns an opaque :class:`ConfigurationSession` handle so the consumer can
+    observe the end of the configuration lifecycle via ``is_running()`` /
+    ``wait()``.  A failed launch raises :class:`ZeSolverApiError` with a stable
+    message.
     """
     cmd = _configuration_launcher_cmd()
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
@@ -132,6 +136,7 @@ def open_configuration() -> None:
         )
     except Exception as exc:
         raise ZeSolverApiError("unable to launch ZeSolver configuration") from exc
+    return ConfigurationSession(proc)
 
 
 # ---------------------------------------------------------------------------

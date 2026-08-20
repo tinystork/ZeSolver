@@ -37,9 +37,9 @@ from zesolver.api.v1 import (
 
 
 def test_api_version_is_single_source_of_truth() -> None:
-    assert API_VERSION == "1.1"
+    assert API_VERSION == "1.2"
     assert API_MAJOR == 1
-    assert API_MINOR == 1
+    assert API_MINOR == 2
     assert f"{API_MAJOR}.{API_MINOR}" == API_VERSION
 
 

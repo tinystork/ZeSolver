@@ -21,6 +21,7 @@ import pytest
 from zesolver.api.v1 import (
     API_VERSION,
     CapabilityAvailability,
+    ConfigurationSession,
     CapabilityUnavailableReason,
     InvalidRequestError,
     ReadinessReport,
@@ -241,7 +242,7 @@ def test_open_configuration_fallback_launcher(monkeypatch) -> None:
 
     result = readiness_module.open_configuration()
 
-    assert result is None
+    assert isinstance(result, ConfigurationSession)
     assert calls["args"] == [sys.executable, "-c", "from zesolver._app import main; main()"]
     kw = calls["kwargs"]
     assert kw["stdin"] is subprocess.DEVNULL
@@ -304,7 +305,7 @@ print(json.dumps(payload, sort_keys=True))
     )
     assert result.returncode == 0, f"stdout={result.stdout}\nstderr={result.stderr}"
     payload = json.loads(result.stdout)
-    assert payload["api_version"] == "1.1"
+    assert payload["api_version"] == "1.2"
     assert payload["catalog_loaded"] is False
     assert payload["settings_loaded"] is False
     assert payload["engine_loaded"] is False
