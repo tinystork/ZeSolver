@@ -25,7 +25,11 @@ _EXPECTED_PUBLIC = {
     "ApiInfo",
     "get_api_info",
     "RuntimeProbe",
+    "ReadinessReport",
     "probe",
+    # readiness / configuration access
+    "readiness",
+    "open_configuration",
     # capabilities
     "CapabilityAvailability",
     "CapabilityUnavailableReason",
@@ -122,7 +126,7 @@ payload = {
 print(json.dumps(payload, sort_keys=True))
 """
     payload = _run_script(script)
-    assert payload["api_version"] == "1.0"
+    assert payload["api_version"] == "1.1"
     assert payload["cupy_loaded"] is False
     assert payload["qt_loaded"] is False
     assert payload["gui_pipeline_loaded"] is False
@@ -202,6 +206,7 @@ print(json.dumps({"callable": callable(fn)}))
         "zesolver.api.v1.models",
         "zesolver.api.v1.cancellation",
         "zesolver.api.v1.probe",
+        "zesolver.api.v1.readiness",
     ],
 )
 def test_individual_public_modules_are_lightweight(module: str) -> None:

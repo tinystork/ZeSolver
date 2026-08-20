@@ -32,6 +32,7 @@ from .models import (
     ProgressEvent,
     ProgressPhase,
     RuntimeProbe,
+    ReadinessReport,
     SolveHints,
     SolveOptions,
     SolveRequest,
@@ -40,6 +41,7 @@ from .models import (
     WritePolicy,
 )
 from .probe import get_api_info, probe
+from .readiness import open_configuration, readiness
 from .runtime import SolverRuntime, SolverSession, create_solver_runtime
 
 __all__ = [
@@ -51,7 +53,11 @@ __all__ = [
     "ApiInfo",
     "get_api_info",
     "RuntimeProbe",
+    "ReadinessReport",
     "probe",
+    # readiness / configuration access
+    "readiness",
+    "open_configuration",
     # capabilities
     "CapabilityAvailability",
     "CapabilityUnavailableReason",
