@@ -198,6 +198,19 @@ import zeblindsolver
 import zesolver
 import zewcs290
 
+from zesolver.api import v1
+
+assert v1.API_VERSION == "1.2", f"API_VERSION={v1.API_VERSION!r}"
+assert v1.API_MAJOR == 1, f"API_MAJOR={v1.API_MAJOR!r}"
+info = v1.get_api_info()
+assert info.api_version == "1.2", f"api_version={info.api_version!r}"
+assert set(info.supported_capabilities) == {
+    "near_solve", "blind_solve", "wcs_write", "gpu", "cancel",
+}
+report = v1.readiness()
+assert report.api_version == "1.2", f"readiness.api_version={report.api_version!r}"
+assert isinstance(report.operational, bool), f"operational={report.operational!r}"
+
 print("PUBLIC_IMPORT_SMOKE_OK")
 PY
 

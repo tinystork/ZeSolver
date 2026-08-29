@@ -2,12 +2,20 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-08-29
+
 ### Added
 
+- Public API v1 `readiness()` and `open_configuration()` (readiness /
+  configuration surface) exposing operational status and catalog-configuration
+  launch through the stable `zesolver.api.v1` contract.
+- Public API v1.1 -> v1.2: `open_configuration()` returns an opaque
+  `ConfigurationSession` handle (observable lifecycle via `is_running()` /
+  `wait()`).
 - Provider interop metadata (`zesolver/zesoftware_interop.json`, schema
   `zesoftware.interop.v1`) so the installed ZeSolver distribution is
   verifiable by the ZeAlfie compatibility gate when a consumer such as
-  ZeMosaic declares `zesolver.api.v1` (API 1.0; capabilities:
+  ZeMosaic declares `zesolver.api.v1` (API 1.2; capabilities:
   `near_solve`, `blind_solve`, `wcs_write`, `cancel`, `gpu`).
 - Wheel-install witness test: the built wheel installs standalone and the
   public API still imports (ZS-INTEROP-PROVIDER-CLOSURE).

@@ -73,6 +73,27 @@ def _make_public_publication_fixture(tmp_path: Path) -> tuple[Path, Path]:
         "import json\n"
         "print(json.dumps({'ok': True}))\n",
     )
+    _write(source / "zesolver" / "api" / "__init__.py", "")
+    _write(
+        source / "zesolver" / "api" / "v1" / "__init__.py",
+        'API_VERSION = "1.2"\n'
+        'API_MAJOR = 1\n'
+        '\n'
+        'class _Info:\n'
+        '    api_version = "1.2"\n'
+        '    supported_capabilities = ("near_solve", "blind_solve", "wcs_write", "gpu", "cancel")\n'
+        '\n'
+        'class _Report:\n'
+        '    api_version = "1.2"\n'
+        '    operational = False\n'
+        '\n'
+        'def get_api_info():\n'
+        '    return _Info()\n'
+        '\n'
+        'def readiness():\n'
+        '    return _Report()\n'
+    )
+
     _write(source / "zeblindsolver" / "__init__.py", "VALUE = 'zeblindsolver'\n")
     _write(source / "zewcs290" / "__init__.py", "VALUE = 'zewcs290'\n")
     _write(

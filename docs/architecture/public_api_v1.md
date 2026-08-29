@@ -36,7 +36,7 @@ first resolved or a solve is actually run.
 
 ## Versioning
 
-- `API_VERSION = "1.0"` is the single source of truth.
+- `API_VERSION = "1.2"` is the single source of truth.
 - `API_MAJOR` / `API_MINOR` are derived from `API_VERSION` (never independent
   constants).
 
