@@ -10,6 +10,7 @@ Import the whole surface with::
         SolveStatus, FailureCode, CanonicalWcsHeader,
         CancellationToken, ProgressPhase, ProgressEvent,
         CapabilityState, CapabilityAvailability, CapabilityUnavailableReason,
+        ReadinessReport, ConfigurationSession,
         ZeSolverApiError, SolverClosedError, InvalidRequestError,
     )
 """
@@ -32,6 +33,7 @@ from .models import (
     ProgressEvent,
     ProgressPhase,
     RuntimeProbe,
+    ReadinessReport,
     SolveHints,
     SolveOptions,
     SolveRequest,
@@ -40,6 +42,8 @@ from .models import (
     WritePolicy,
 )
 from .probe import get_api_info, probe
+from .readiness import open_configuration, readiness
+from .session import ConfigurationSession
 from .runtime import SolverRuntime, SolverSession, create_solver_runtime
 
 __all__ = [
@@ -51,7 +55,12 @@ __all__ = [
     "ApiInfo",
     "get_api_info",
     "RuntimeProbe",
+    "ReadinessReport",
     "probe",
+    # readiness / configuration access
+    "readiness",
+    "open_configuration",
+    "ConfigurationSession",
     # capabilities
     "CapabilityAvailability",
     "CapabilityUnavailableReason",

@@ -19,7 +19,7 @@ from .errors import InvalidRequestError
 # API version
 # ---------------------------------------------------------------------------
 
-API_VERSION = "1.0"
+API_VERSION = "1.2"
 """Single source of truth for the public API version."""
 
 
@@ -93,6 +93,31 @@ class RuntimeProbe:
     product_version: str | None
     capabilities: tuple[CapabilityState, ...]
     warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class ReadinessReport:
+    """The result of :func:`zesolver.api.v1.readiness`.
+
+    A frozen, pickle/process-friendly summary of whether ZeSolver is actually
+    *operational* (at least one usable solve backend plus the intrinsic WCS
+    write capability), produced using the same resource-discovery rules as the
+    real runtime.  Carries no handles, locks, callbacks, or live resources.
+
+    ``configuration_needed`` is ``True`` only when ZeSolver is non-operational
+    *because* of a missing/unusable catalog configuration (no source, an
+    inexistent configured path, an absent/invalid manifest, ...).  It is
+    ``False`` when non-operationality stems from something else (for example an
+    unexpected internal failure).
+    """
+
+    api_version: str
+    product_version: str | None
+    operational: bool
+    configuration_needed: bool
+    capabilities: tuple[CapabilityState, ...]
+    catalog_source: str | None
+    message: str | None
 
 
 # ---------------------------------------------------------------------------
