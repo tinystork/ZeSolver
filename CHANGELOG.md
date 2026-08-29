@@ -1,6 +1,14 @@
 # Changelog
 
-## [Unreleased]
+## [1.2.1] - 2026-08-30
+
+### Fixed
+
+- Made the default public API runtime use the same persisted catalogue
+  discovery as `readiness()`, so embedded consumers can solve with a configured
+  ZeSolver without importing private settings or supplying catalogue paths.
+- Isolated settings-persistence and public resource-boundary tests from the
+  real user settings file so test runs cannot overwrite catalogue configuration.
 
 ## [1.2.0] - 2026-08-29
 

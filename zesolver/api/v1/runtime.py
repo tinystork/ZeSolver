@@ -212,8 +212,11 @@ def create_solver_runtime(
     Parameters
     ----------
     resources_path:
-        Optional catalog library root / discovery hint.  It is a resource
-        discovery hint only; it is never used to inject internal engine objects.
+        Optional catalog library root / discovery hint.  When omitted, the
+        runtime uses the same persisted-settings and environment discovery
+        order as :func:`readiness`.  An explicit path is authoritative.  It is
+        a resource discovery hint only; it is never used to inject internal
+        engine objects.
     gpu_policy:
         Runtime-wide GPU usage policy (``AUTO``/``DISABLED``/``REQUIRED``).
     network_policy:
