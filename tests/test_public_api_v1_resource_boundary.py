@@ -53,10 +53,17 @@ def _write_clean_fits(path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def _clear_env_catalog_hints(monkeypatch) -> None:
-    """Keep auto-discovery deterministic regardless of the host environment."""
+def _isolate_default_resource_discovery(tmp_path: Path, monkeypatch) -> None:
+    """Keep default discovery deterministic and away from real user settings."""
+    import zesolver
+    import zesolver.settings_store as store
+
     for key in _ENV_CATALOG_HINTS:
         monkeypatch.delenv(key, raising=False)
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(zesolver, "SETTINGS_PATH", settings_file)
+    monkeypatch.setattr(store, "SETTINGS_PATH", settings_file)
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +175,68 @@ def test_unexpected_bug_is_not_masked_as_missing_resource(
 # ---------------------------------------------------------------------------
 # (d) Default healthy path vs explicit invalid path: both respect the boundary
 # ---------------------------------------------------------------------------
+
+
+def test_default_runtime_matches_persisted_readiness(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Operational readiness and the default runtime resolve one resource set."""
+    import zesolver
+    import zesolver.settings_store as store
+    from zesolver.api.v1 import readiness
+
+    near_root = tmp_path / "near"
+    near_root.mkdir()
+    settings_file = tmp_path / "configured-settings.json"
+    settings_file.write_text(
+        json.dumps({"db_root": str(near_root)}), encoding="utf-8"
+    )
+    monkeypatch.setattr(zesolver, "SETTINGS_PATH", settings_file)
+    monkeypatch.setattr(store, "SETTINGS_PATH", settings_file)
+
+    report = readiness()
+    assert report.operational is True
+    assert report.catalog_source == "legacy"
+
+    rt = create_solver_runtime()
+    try:
+        context = rt._context()
+    finally:
+        rt.close()
+
+    assert context.resources.source == report.catalog_source
+    assert context.resources.near_available is True
+    assert context.resources.blind4d_available is False
+
+
+def test_explicit_resources_path_does_not_fallback_to_persisted_settings(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An explicit invalid path stays invalid even when settings are usable."""
+    import zesolver
+    import zesolver.settings_store as store
+
+    near_root = tmp_path / "configured-near"
+    near_root.mkdir()
+    settings_file = tmp_path / "configured-settings.json"
+    settings_file.write_text(
+        json.dumps({"db_root": str(near_root)}), encoding="utf-8"
+    )
+    monkeypatch.setattr(zesolver, "SETTINGS_PATH", settings_file)
+    monkeypatch.setattr(store, "SETTINGS_PATH", settings_file)
+
+    input_path = _write_clean_fits(tmp_path / "explicit-invalid.fits")
+    rt = create_solver_runtime(resources_path=tmp_path / "missing-library")
+    session = rt.create_session()
+    try:
+        result = session.solve(SolveRequest(input_path))
+    finally:
+        session.close()
+        rt.close()
+
+    assert result.status is SolveStatus.FAILED
+    assert result.failure_code is FailureCode.MISSING_RESOURCE
+    assert result.diagnostic_code.startswith("catalog_resources_invalid")
 
 
 def test_default_and_invalid_resources_both_respect_boundary(tmp_path: Path) -> None:

@@ -85,10 +85,22 @@ def build_runtime_context(
     resources_error: str | None = None
     if resources is None:
         try:
-            resources = resolve_catalog_resources(
-                catalog_library=resources_path,
-                enable_environment_discovery=(resources_path is None),
-            )
+            if resources_path is None:
+                # Keep the default runtime on the exact same persisted-settings
+                # discovery path as readiness().  Consumers such as ZSSS must
+                # not know or import ZeSolver's private settings/catalog paths.
+                # The import stays lazy so the public API import boundary
+                # remains lightweight.
+                from .readiness import _load_settings, _resolve_resources
+
+                resources = _resolve_resources(_load_settings(None), env=None)
+            else:
+                # An explicit public resources_path remains authoritative and
+                # must never silently fall back to persisted configuration.
+                resources = resolve_catalog_resources(
+                    catalog_library=resources_path,
+                    enable_environment_discovery=False,
+                )
         except CatalogResourceResolutionError as exc:
             # Expected operational failure: an explicitly requested catalog
             # library could not be resolved.  Degrade to "no resources" instead

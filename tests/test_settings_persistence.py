@@ -70,9 +70,11 @@ def test_settings_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_settings_roundtrip_preserves_gpu_diagnostic_preferences(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    import zesolver
     import zesolver.settings_store as store
 
     settings_file = tmp_path / ".zesolver_settings.json"
+    monkeypatch.setattr(zesolver, "SETTINGS_PATH", settings_file, raising=True)
     monkeypatch.setattr(store, "SETTINGS_PATH", settings_file, raising=True)
     original = store.PersistentSettings(
         gpu_diagnostic_schema_version=1,

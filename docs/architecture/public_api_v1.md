@@ -113,6 +113,9 @@ object.
   resources (resolved catalog resources, the shared Near catalog provider, the
   resolved Blind-4D manifest selection).  These are resolved once and never
   rebuilt per image.
+- `create_solver_runtime()` without `resources_path` uses the same persisted
+  settings and environment fallback order as `readiness()`.  An explicit
+  `resources_path` remains authoritative.
 - **One `SolverSession` per concurrent worker/thread** owns the mutable,
   non-thread-safe solve context (a per-session Blind prep cache).  A session is
   not safe for concurrent `solve()` calls and detects that misuse.
