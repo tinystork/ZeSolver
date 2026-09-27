@@ -34,12 +34,14 @@ fixture), and non-regression when the FITS carries RA/DEC and no hint is supplie
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 import numpy as np
 import pytest
 from astropy.io import fits
 
+import zeblindsolver.metadata_solver as metadata_solver
 from zesolver.core.near_hints import (
     NearHintResolution,
     instrument_hint_applied,
@@ -228,3 +230,49 @@ def test_fits_center_without_hint_unchanged(tmp_path):
     res = solve_near(fits_path, index_root, config=NearSolveConfig())
     assert not res.success
     assert "metadata RA/DEC missing" not in res.message  # RA/DEC present -> past metadata
+
+
+# ---------------------------------------------------------------------------
+# 5. R4c: hint telemetry must be local to the solve run (no shared module state).
+# ---------------------------------------------------------------------------
+
+def test_hint_telemetry_is_not_module_level():
+    # The Phase E bug was a module-level mutable dict; it must not exist.
+    assert not hasattr(metadata_solver, "_NEAR_HINT_TELEMETRY")
+
+
+def test_concurrent_solves_no_telemetry_contamination(tmp_path):
+    # Two solves in parallel, with DIFFERENT preset hints, must each report their
+    # own telemetry (never the other's).  Deterministic with local telemetry.
+    cases = []
+    for i, (ra, dec) in enumerate([(33.0, 12.0), (55.0, 20.0)]):
+        image = (np.random.default_rng(i).normal(100.0, 5.0, size=(120, 120))).astype(np.float32)
+        fits_path = tmp_path / f"nometa_{i}.fits"
+        fits.PrimaryHDU(data=image, header=fits.Header()).writeto(fits_path)
+        index_root = tmp_path / f"index_{i}"
+        _build_index(index_root, ra, dec)
+        cfg = NearSolveConfig(
+            hint_ra_deg=ra, hint_dec_deg=dec, hint_scale_arcsec=5.0,
+            hint_source={"center": "preset", "scale": "preset"},
+        )
+        cases.append((fits_path, index_root, cfg, ra, dec))
+
+    results: list = [None, None]
+    barrier = threading.Barrier(2)
+
+    def worker(idx):
+        fits_path, index_root, cfg, ra, dec = cases[idx]
+        barrier.wait()  # maximise interleaving
+        results[idx] = solve_near(fits_path, index_root, config=cfg)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    for idx, (_f, _i, _cfg, ra, dec) in enumerate(cases):
+        r = results[idx]
+        assert r.stats.get("near_hint_center_source") == "preset"
+        assert r.stats.get("near_hint_center_ra_deg") == ra
+        assert r.stats.get("near_hint_center_dec_deg") == dec

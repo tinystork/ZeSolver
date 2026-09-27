@@ -193,14 +193,7 @@ class NearSolveConfig:
 
 
 def _failure(message: str) -> WcsSolution:
-    stats = dict(_NEAR_HINT_TELEMETRY) if _NEAR_HINT_TELEMETRY else {}
-    return WcsSolution(False, message, None, stats, None, {})
-
-
-# Per-solve observability for the resolved Near hints (Phase E).  Populated early
-# in solve_near and merged into both success and failure stats so the hint source
-# is traceable even when the solve stops at detection/matching.
-_NEAR_HINT_TELEMETRY: dict = {}
+    return WcsSolution(False, message, None, {}, None, {})
 
 
 def _near_catalog_star_quota(
@@ -3946,52 +3939,56 @@ def solve_near(
     cfg = config or NearSolveConfig()
     logger.setLevel(cfg.log_level.upper())
     start = time.perf_counter()
-    _NEAR_HINT_TELEMETRY.clear()
+    near_hint_telemetry: dict = {}
+
+    def _fail(message: str) -> WcsSolution:
+        return WcsSolution(False, message, None, dict(near_hint_telemetry), None, {})
+
     fits_path = Path(input_fits).expanduser().resolve()
     index_path = Path(index_root).expanduser().resolve() if index_root is not None else None
     ransac_seed = int(cfg.ransac_seed) if cfg.ransac_seed is not None else _stable_seed_for_path(fits_path)
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     provider: NearCatalogProvider | None = catalog_provider
     manifest: dict | None = None
     if provider is None:
         if index_path is None:
-            return _failure("near catalog provider absent and index_root not supplied")
+            return _fail("near catalog provider absent and index_root not supplied")
         try:
             manifest = load_manifest(index_path)
         except FileNotFoundError as exc:
-            return _failure(f"index manifest missing: {exc}")
+            return _fail(f"index manifest missing: {exc}")
         tiles = manifest.get("tiles") or []
         # Optional: restrict to a specific catalog family to speed up candidate selection
         if cfg.family:
             fam = str(cfg.family).strip().lower()
             tiles = [entry for entry in tiles if str(entry.get("family", "")).strip().lower() == fam]
         if not tiles:
-            return _failure("index manifest has no tiles")
+            return _fail("index manifest has no tiles")
     else:
         try:
             families = tuple(str(fam).strip().lower() for fam in provider.families if str(fam).strip())
         except Exception as exc:
-            return _failure(f"near catalog provider invalid: {exc}")
+            return _fail(f"near catalog provider invalid: {exc}")
         if cfg.family and str(cfg.family).strip().lower() not in set(families):
-            return _failure(f"near catalog provider missing requested family: {cfg.family}")
+            return _fail(f"near catalog provider missing requested family: {cfg.family}")
         if not families:
-            return _failure("near catalog provider has no families")
+            return _fail("near catalog provider has no families")
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     strict_astap_iso = bool(getattr(cfg, "astap_iso_strict", True))
     try:
         with fits.open(fits_path, mode="readonly", memmap=False) as hdul:
             primary = hdul[0]
             if primary.data is None:
-                return _failure("FITS HDU has no image data")
+                return _fail("FITS HDU has no image data")
             header = primary.header
             if strict_astap_iso:
                 image = astap_iso_image_for_solve(primary)
             else:
                 image = to_luminance_for_solve(primary)
     except Exception as exc:
-        return _failure(f"failed to read FITS data: {exc}")
+        return _fail(f"failed to read FITS data: {exc}")
     height, width = image.shape
     ra_keys = ("RA", "OBJCTRA", "OBJRA", "OBJ_RA", "CRVAL1")
     dec_keys = ("DEC", "OBJCTDEC", "OBJDEC", "OBJ_DEC", "CRVAL2")
@@ -4019,7 +4016,7 @@ def solve_near(
         )
     else:
         near_hint_center_source = "none"
-        return _failure("metadata RA/DEC missing for near solve")
+        return _fail("metadata RA/DEC missing for near solve")
     scale_arcsec, (fov_x, fov_y) = estimate_scale_and_fov(header, width, height)
     if scale_arcsec is not None:
         near_hint_scale_source = "fits"
@@ -4087,7 +4084,7 @@ def solve_near(
     if hint_fastpath and hint_radius_deg > 0:
         # Throughput-first hinted solve (ASTAP-like -r behavior).
         radius = max(_MIN_SEARCH_RADIUS, min(radius, float(hint_radius_deg)))
-    _NEAR_HINT_TELEMETRY.update({
+    near_hint_telemetry.update({
         "near_hint_center_source": near_hint_center_source,
         "near_hint_scale_source": near_hint_scale_source,
         "near_hint_radius_source": near_hint_radius_source,
@@ -4106,7 +4103,7 @@ def solve_near(
         str(strict_astap_iso).lower(),
     )
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     provider_tiles_by_key: dict[str, NearCatalogTile] = {}
     if provider is None:
         candidates = _select_tiles(manifest or {}, ra0, dec0, radius, cfg.max_tile_candidates)
@@ -4120,9 +4117,9 @@ def solve_near(
                 families=(str(cfg.family).strip().lower(),) if cfg.family else None,
             )
         except NearCatalogProviderError as exc:
-            return _failure(f"near catalog provider selection failed: {exc}")
+            return _fail(f"near catalog provider selection failed: {exc}")
         except Exception as exc:
-            return _failure(f"near catalog provider selection failed: {exc}")
+            return _fail(f"near catalog provider selection failed: {exc}")
         provider_tiles_by_key = {tile.tile_key: tile for tile in selected_tiles}
         candidates = [tile.to_manifest_entry() for tile in selected_tiles]
     logger.info("near candidates selected: %d", len(candidates))
@@ -4183,7 +4180,7 @@ def solve_near(
             logger.info("near strict candidates selected from provider: %d", len(candidates))
             provider_telemetry["near_catalog_candidate_tiles"] = int(len(candidates))
         except Exception as exc:
-            return _failure(f"near catalog provider strict selection failed: {exc}")
+            return _fail(f"near catalog provider strict selection failed: {exc}")
     elif strict_astap_iso and raw_tile_lookup:
         try:
             search_deg = max(float(radius), float(approx_fov or 1.0)) * 1.6
@@ -4250,12 +4247,12 @@ def solve_near(
 
     if not candidates:
         if provider is not None:
-            return _failure("near catalog provider returned no tile intersecting the metadata cone")
-        return _failure("manifest present but no tile intersects the metadata cone")
+            return _fail("near catalog provider returned no tile intersecting the metadata cone")
+        return _fail("manifest present but no tile intersects the metadata cone")
 
     for entry in candidates:
         if cancel_check and cancel_check():
-            return _failure("cancelled")
+            return _fail("cancelled")
 
         if provider is not None:
             try:
@@ -4278,7 +4275,7 @@ def solve_near(
                         catalog_mags.append(mags)
                         continue
             except Exception as exc:
-                return _failure(f"near catalog provider load failed: {exc}")
+                return _fail(f"near catalog provider load failed: {exc}")
 
         if strict_astap_iso and db_root_path is not None and raw_tile_lookup is not None:
             try:
@@ -4325,8 +4322,8 @@ def solve_near(
         catalog_mags.append(mags)
     if not catalog_positions:
         if missing_tiles:
-            return _failure(f"tile files missing: {missing_tiles[0]}")
-        return _failure("candidate tiles found but none yielded catalog stars")
+            return _fail(f"tile files missing: {missing_tiles[0]}")
+        return _fail("candidate tiles found but none yielded catalog stars")
     cat_positions = np.vstack(catalog_positions)
     provider_telemetry["near_catalog_loaded_tiles"] = int(len(catalog_positions))
     provider_telemetry["near_catalog_loaded_stars"] = int(sum(arr.shape[0] for arr in catalog_positions))
@@ -4379,7 +4376,7 @@ def solve_near(
         cat_world = cat_world[keep]
         cat_mags = cat_mags[keep]
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     strict_db_target_stars: int | None = None
     near_catalog_telemetry: dict = {}
     logger.debug("near detect start")
@@ -4473,7 +4470,7 @@ def solve_near(
                         _telemetry.mark_near_detect_finished()
                     except Exception:
                         pass
-                return _failure("cancelled")
+                return _fail("cancelled")
             raise
         detect_trace["requested"] = str(astap_detect_diag.get("backend_requested", detect_backend))
         detect_trace["selected"] = str(astap_detect_diag.get("backend_selected", "unknown"))
@@ -4594,7 +4591,7 @@ def solve_near(
         except Exception:
             pass
     if stars.size == 0:
-        return _failure("no stars detected in the frame")
+        return _fail("no stars detected in the frame")
     logger.info("near detected stars: %d", int(stars.size))
     # Mirror ASTAP behavior more closely by working on brightest image stars.
     # Strict ASTAP-ISO already receives stars in ASTAP scan/selection order.
@@ -5989,7 +5986,7 @@ def solve_near(
             "iso_refs": int(iso_refs),
             "astap_iso_diag": astap_iso_diag,
         })
-        return _failure("near solver could not estimate a similarity transform")
+        return _fail("near solver could not estimate a similarity transform")
     center_xy = (width / 2.0, height / 2.0)
     logger.info("near pair-build start")
     t_pair0 = time.perf_counter()
@@ -6061,9 +6058,9 @@ def solve_near(
         ransac_min_scale = None
         ransac_max_scale = None
     if img_pairs.size == 0 and iso_transform is None:
-        return _failure("unable to build candidate matches from metadata")
+        return _fail("unable to build candidate matches from metadata")
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     # Try ASTAP ISO transform first if available.
     t_ransac0 = time.perf_counter()
     used_transform: SimilarityTransform | None = None
@@ -6194,7 +6191,7 @@ def solve_near(
             "iso_refs": int(iso_refs),
             "astap_iso_diag": astap_iso_diag,
         })
-        return _failure("near solver could not estimate a similarity transform")
+        return _fail("near solver could not estimate a similarity transform")
     t_ransac_s = time.perf_counter() - t_ransac0
 
     if strict_astap_iso:
@@ -6273,7 +6270,7 @@ def solve_near(
                 "scale_max_deg": float(scale_max_deg),
                 "astap_iso_diag": astap_iso_diag,
             })
-            return _failure("no geometric consensus found for metadata solve")
+            return _fail("no geometric consensus found for metadata solve")
     t_fit0 = time.perf_counter()
     tile_center_hint = (float(ra0), float(dec0))
     tile_center_iso = (float(iso_center_ra), float(iso_center_dec))
@@ -6351,7 +6348,7 @@ def solve_near(
         final_wcs = wcs
         final_stats = stats
         if cancel_check and cancel_check():
-            return _failure("cancelled")
+            return _fail("cancelled")
         try:
             ls_wcs, _ = fit_wcs_tan(matches)
         except Exception:
@@ -6369,7 +6366,7 @@ def solve_near(
         if final_stats.get("quality") == "GOOD" and needs_sip(final_wcs, final_stats, fov_est):
             for order in range(2, cfg.sip_order + 1):
                 if cancel_check and cancel_check():
-                    return _failure("cancelled")
+                    return _fail("cancelled")
                 candidate_wcs, _ = fit_wcs_sip(matches, order=order)
                 candidate_stats = validate_solution(
                     candidate_wcs,
@@ -6410,7 +6407,7 @@ def solve_near(
             "iso_refs": int(iso_refs),
             "astap_iso_diag": astap_iso_diag,
         })
-        return _failure(f"near solution failed validation ({final_stats})")
+        return _fail(f"near solution failed validation ({final_stats})")
 
     if strict_astap_iso:
         pix_scale_arcsec = _pix_scale_arcsec(final_wcs)
@@ -6470,7 +6467,7 @@ def solve_near(
                 "cd_det": cd_det,
                 "tile_id": candidates[0].get("tile_key") if candidates else None,
             })
-            return _failure(f"near solution rejected for zemosaic ({zemo_reason})")
+            return _fail(f"near solution rejected for zemosaic ({zemo_reason})")
 
         near_ok, near_reason, near_diag = _near_conformance_check(
             final_wcs,
@@ -6525,7 +6522,7 @@ def solve_near(
     _emit_near_debug_record(debug_record)
 
     if not near_ok:
-        return _failure(f"near solution rejected by conformance gate ({near_reason})")
+        return _fail(f"near solution rejected by conformance gate ({near_reason})")
 
     header_updates = {
         "SOLVED": 1,
@@ -6555,7 +6552,7 @@ def solve_near(
         except Exception:
             pass
     final_stats.update(provider_telemetry)
-    final_stats.update(_NEAR_HINT_TELEMETRY)
+    final_stats.update(near_hint_telemetry)
     if pix_scale_arcsec is None:
         pix_scale_arcsec = _pix_scale_arcsec(final_wcs)
     if pix_scale_arcsec is not None:
@@ -6564,7 +6561,7 @@ def solve_near(
     elapsed = time.perf_counter() - start
     header_updates["NEARTIME"] = f"{elapsed:.2f}s"
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     t_write0 = time.perf_counter()
     try:
         with fits.open(fits_path, mode="update", memmap=False) as hdul:
@@ -6577,7 +6574,7 @@ def solve_near(
             )
             hdul.flush()
     except Exception as exc:
-        return _failure(f"unable to write WCS to FITS: {exc}")
+        return _fail(f"unable to write WCS to FITS: {exc}")
     t_write_s = time.perf_counter() - t_write0
     final_stats.update(
         {
