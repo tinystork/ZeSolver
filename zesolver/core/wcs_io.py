@@ -11,6 +11,8 @@ from astropy.wcs import WCS
 
 from zeblindsolver.wcs_header import apply_wcs_solution_to_header
 
+from .fits_hdu import any_hdu_has_celestial_wcs
+
 
 @dataclass(frozen=True, slots=True)
 class WcsWriteResult:
@@ -50,7 +52,7 @@ def write_wcs_safely(
             shutil.copyfile(input_path, target)
         before = pixel_fingerprint(target) if verify_pixels else ""
         with fits.open(target, mode="update", memmap=False) as hdul:
-            if not overwrite_wcs and any(bool(WCS(hdu.header, naxis=2, relax=True).has_celestial) for hdu in hdul):
+            if not overwrite_wcs and any_hdu_has_celestial_wcs(hdul):
                 return WcsWriteResult(False, target, False, True, "existing_wcs_overwrite_forbidden")
             apply_wcs_solution_to_header(hdul[0].header, wcs, header_updates=header_updates or {"SOLVED": 1, "SOLVER": "ZeSolver"})
             hdul.flush(output_verify="exception")

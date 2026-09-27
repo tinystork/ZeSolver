@@ -97,6 +97,18 @@ class NearSolveConfig:
     # - fov_override_deg: override approximate FOV when estimating search radius; 0/None → auto
     family: str | None = None
     fov_override_deg: float | None = None
+    # Optional acquisition/pointing hints (deterministic priority, see
+    # zesolver.core.near_hints.resolve_near_hints).  Default None => behaviour
+    # strictly unchanged when not supplied.
+    # - hint_ra_deg/hint_dec_deg: centre fallback when the FITS header has no RA/DEC.
+    # - hint_scale_arcsec: plate-scale fallback when estimate_scale_and_fov is None.
+    # - hint_radius_deg: explicit search-radius bound (overrides the default radius).
+    # - hint_source: observability dict (per-field source: override|fits|preset|none).
+    hint_ra_deg: float | None = None
+    hint_dec_deg: float | None = None
+    hint_scale_arcsec: float | None = None
+    hint_radius_deg: float | None = None
+    hint_source: dict | None = None
     # Performance tuning
     # - max_tile_candidates: cap how many intersecting tiles to consider per image
     # - tile_cache_size: LRU size for cached tile blobs (RA/DEC/MAG arrays)
@@ -182,6 +194,118 @@ class NearSolveConfig:
 
 def _failure(message: str) -> WcsSolution:
     return WcsSolution(False, message, None, {}, None, {})
+
+
+def _near_catalog_star_quota(
+    *,
+    nstars_image: int,
+    window_w_deg: float,
+    window_h_deg: float,
+    footprint_w_deg: float,
+    footprint_h_deg: float,
+) -> int:
+    """Return the strict ASTAP-ISO catalogue star quota (surface law).
+
+    The expected number of catalogue stars inside the local search window is the
+    image star count scaled by the area ratio of the window to the physical image
+    footprint (both expressed on the sky, in degrees)::
+
+        N_expected = Nimg * (window_w_deg * window_h_deg)
+                          / (footprint_w_deg * footprint_h_deg)
+
+    The result is floored at 32 (the ASTAP minimum database-star request used by
+    the historical formula).  This replaces the historical pixel-ratio formula
+    ``Nimg * height/width``, which is only correct for portrait frames: it ignores
+    the fact that the strict window is a square of side ``max(fov_x, fov_y)``.
+
+    Non-regression (portrait): when called with the **non-oversized** reference
+    window (``window_w_deg == window_h_deg == max(fov_x, fov_y)``) and
+    ``footprint_w_deg/h == scale_deg * width/height``, the area ratio equals
+    ``max(fov)/min(fov) == max(width,height)/min(width,height)``, which for portrait
+    frames is exactly ``height/width``.  Because ``oversize`` is applied only once,
+    squared, by the caller (and never folded into this window), the whole pipeline
+    reproduces the historical formula -- including its rounding order -- for every
+    portrait frame and every oversize regime.
+
+    Robustness: any non-finite, zero or negative input (denominator <= 0, NaN, inf)
+    returns the documented floor ``32`` deterministically.  The function never
+    raises and never returns NaN.
+    """
+    try:
+        nstars = int(nstars_image)
+        ww = float(window_w_deg)
+        wh = float(window_h_deg)
+        fw = float(footprint_w_deg)
+        fh = float(footprint_h_deg)
+    except (TypeError, ValueError):
+        return 32
+    if nstars < 0:
+        return 32
+    if not (math.isfinite(ww) and math.isfinite(wh) and math.isfinite(fw) and math.isfinite(fh)):
+        return 32
+    if ww <= 0.0 or wh <= 0.0 or fw <= 0.0 or fh <= 0.0:
+        return 32
+    window_area = ww * wh
+    footprint_area = fw * fh
+    if not math.isfinite(window_area) or window_area <= 0.0:
+        return 32
+    if not math.isfinite(footprint_area) or footprint_area <= 0.0:
+        return 32
+    return max(32, int(round(float(nstars) * window_area / footprint_area)))
+
+
+def _near_catalog_oversize(nstars_image: int) -> float:
+    """ASTAP database-star oversize factor (unchanged production logic).
+
+    ``< 35`` -> 2.0 ; ``> 140`` -> 1.0 ; otherwise ``2 * sqrt(35 / Nimg)``.
+    Extracted verbatim from the strict ASTAP-ISO quota path so the invariant can be
+    unit-tested; the formula is byte-for-byte identical to the historical inline code.
+    """
+    n = int(nstars_image)
+    if n < 35:
+        return 2.0
+    if n > 140:
+        return 1.0
+    return 2.0 * math.sqrt(35.0 / max(float(n), 1.0))
+
+
+def _near_catalog_quota_effective(
+    *,
+    nstars_image: int,
+    scale_deg: float,
+    width: int,
+    height: int,
+) -> tuple[int, int]:
+    """Compose the full strict ASTAP-ISO quota pipeline into one pure callable.
+
+    Returns ``(quota_requested, quota_effective)`` where:
+
+    * the reference window is the **non-oversized** max-FOV square
+      ``fov2 = max(scale_deg*width, scale_deg*height)``;
+    * ``quota_requested`` is the surface-law base quota on that window
+      (``Nimg * fov2**2 / footprint``, floored at 32);
+    * ``oversize`` is applied **exactly once**, squared, to obtain
+      ``quota_effective = max(64, round(quota_requested * oversize**2))``.
+
+    ``oversize`` must NOT be folded into the window: ``search_window_deg`` already
+    multiplies the window by ``oversize`` for the catalogue mask, and reusing that
+    value here would apply ``oversize`` a second time (oversize**4).
+
+    In portrait frames ``fov2**2 / footprint == max(width,height)/min(width,height)
+    == height/width``, so this reproduces the historical formula (including its
+    rounding order) for **every** portrait frame and **every** oversize regime.
+    """
+    fov2 = max(float(scale_deg) * float(width), float(scale_deg) * float(height))
+    requested = _near_catalog_star_quota(
+        nstars_image=nstars_image,
+        window_w_deg=fov2,
+        window_h_deg=fov2,
+        footprint_w_deg=float(scale_deg) * float(width),
+        footprint_h_deg=float(scale_deg) * float(height),
+    )
+    oversize = _near_catalog_oversize(nstars_image)
+    effective = max(64, int(round(float(requested) * oversize * oversize)))
+    return int(requested), int(effective)
 
 
 def _near_reports_dir() -> Path:
@@ -3815,59 +3939,100 @@ def solve_near(
     cfg = config or NearSolveConfig()
     logger.setLevel(cfg.log_level.upper())
     start = time.perf_counter()
+    near_hint_telemetry: dict = {}
+
+    def _fail(message: str) -> WcsSolution:
+        return WcsSolution(False, message, None, dict(near_hint_telemetry), None, {})
+
     fits_path = Path(input_fits).expanduser().resolve()
     index_path = Path(index_root).expanduser().resolve() if index_root is not None else None
     ransac_seed = int(cfg.ransac_seed) if cfg.ransac_seed is not None else _stable_seed_for_path(fits_path)
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     provider: NearCatalogProvider | None = catalog_provider
     manifest: dict | None = None
     if provider is None:
         if index_path is None:
-            return _failure("near catalog provider absent and index_root not supplied")
+            return _fail("near catalog provider absent and index_root not supplied")
         try:
             manifest = load_manifest(index_path)
         except FileNotFoundError as exc:
-            return _failure(f"index manifest missing: {exc}")
+            return _fail(f"index manifest missing: {exc}")
         tiles = manifest.get("tiles") or []
         # Optional: restrict to a specific catalog family to speed up candidate selection
         if cfg.family:
             fam = str(cfg.family).strip().lower()
             tiles = [entry for entry in tiles if str(entry.get("family", "")).strip().lower() == fam]
         if not tiles:
-            return _failure("index manifest has no tiles")
+            return _fail("index manifest has no tiles")
     else:
         try:
             families = tuple(str(fam).strip().lower() for fam in provider.families if str(fam).strip())
         except Exception as exc:
-            return _failure(f"near catalog provider invalid: {exc}")
+            return _fail(f"near catalog provider invalid: {exc}")
         if cfg.family and str(cfg.family).strip().lower() not in set(families):
-            return _failure(f"near catalog provider missing requested family: {cfg.family}")
+            return _fail(f"near catalog provider missing requested family: {cfg.family}")
         if not families:
-            return _failure("near catalog provider has no families")
+            return _fail("near catalog provider has no families")
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     strict_astap_iso = bool(getattr(cfg, "astap_iso_strict", True))
     try:
         with fits.open(fits_path, mode="readonly", memmap=False) as hdul:
             primary = hdul[0]
             if primary.data is None:
-                return _failure("FITS HDU has no image data")
+                return _fail("FITS HDU has no image data")
             header = primary.header
             if strict_astap_iso:
                 image = astap_iso_image_for_solve(primary)
             else:
                 image = to_luminance_for_solve(primary)
     except Exception as exc:
-        return _failure(f"failed to read FITS data: {exc}")
+        return _fail(f"failed to read FITS data: {exc}")
     height, width = image.shape
     ra_keys = ("RA", "OBJCTRA", "OBJRA", "OBJ_RA", "CRVAL1")
     dec_keys = ("DEC", "OBJCTDEC", "OBJDEC", "OBJ_DEC", "CRVAL2")
     ra0 = _extract_near_center_angle(header, ra_keys, is_ra=True, strict_astap_iso=strict_astap_iso)
     dec0 = _extract_near_center_angle(header, dec_keys, is_ra=False, strict_astap_iso=strict_astap_iso)
-    if ra0 is None or dec0 is None:
-        return _failure("metadata RA/DEC missing for near solve")
+    _hint_source = dict(getattr(cfg, "hint_source", None) or {})
+    _hint_center_src = str(_hint_source.get("center", "none") or "none")
+    _hint_ra = getattr(cfg, "hint_ra_deg", None)
+    _hint_dec = getattr(cfg, "hint_dec_deg", None)
+    if _hint_center_src == "override" and _hint_ra is not None and _hint_dec is not None:
+        # Explicit user override beats the acquisition FITS cards.
+        ra0 = float(_hint_ra)
+        dec0 = float(_hint_dec)
+        near_hint_center_source = "override"
+        logger.info("near centre overridden by explicit hint: ra=%.6f dec=%.6f", ra0, dec0)
+    elif ra0 is not None and dec0 is not None:
+        near_hint_center_source = "fits"
+    elif _hint_ra is not None and _hint_dec is not None:
+        ra0 = float(_hint_ra)
+        dec0 = float(_hint_dec)
+        near_hint_center_source = _hint_center_src if _hint_center_src in ("preset", "override") else "preset"
+        logger.info(
+            "near centre from hint (source=%s): ra=%.6f dec=%.6f",
+            near_hint_center_source, ra0, dec0,
+        )
+    else:
+        near_hint_center_source = "none"
+        return _fail("metadata RA/DEC missing for near solve")
     scale_arcsec, (fov_x, fov_y) = estimate_scale_and_fov(header, width, height)
+    if scale_arcsec is not None:
+        near_hint_scale_source = "fits"
+    else:
+        _hint_scale = getattr(cfg, "hint_scale_arcsec", None)
+        if _hint_scale is not None and float(_hint_scale) > 0:
+            scale_arcsec = float(_hint_scale)
+            fov_x = scale_arcsec * float(width) / 3600.0
+            fov_y = scale_arcsec * float(height) / 3600.0
+            near_hint_scale_source = str(_hint_source.get("scale", "preset") or "preset")
+            logger.info(
+                "near scale from hint (source=%s): %.4f arcsec/px",
+                near_hint_scale_source, scale_arcsec,
+            )
+        else:
+            near_hint_scale_source = "none"
     fov_candidates = [value for value in (fov_x, fov_y) if value is not None]
     approx_fov = max(fov_candidates) if fov_candidates else None
     fov_hint_source = "scale"
@@ -3893,6 +4058,8 @@ def solve_near(
         approx_fov = float(cfg.fov_override_deg)
         fov_hint_source = "override"
 
+    near_hint_fov_source = {"scale": "none", "header": "fits", "override": "override"}.get(fov_hint_source, "none")
+
     approx_scale_deg = scale_arcsec / 3600.0 if scale_arcsec else None
     if approx_scale_deg is None:
         approx_fov = approx_fov or 1.5
@@ -3903,11 +4070,31 @@ def solve_near(
     fov_for_radius = approx_fov or (approx_scale_deg * max(width, height))
     radius = max(_MIN_SEARCH_RADIUS, 1.0 * fov_for_radius * max(cfg.search_margin, 1.0))
     radius = min(radius, _MAX_SEARCH_RADIUS)
+    near_hint_radius_source = "none"
+    _hint_radius = getattr(cfg, "hint_radius_deg", None)
+    if _hint_radius is not None and float(_hint_radius) > 0:
+        radius = max(_MIN_SEARCH_RADIUS, min(radius, float(_hint_radius)))
+        near_hint_radius_source = str(_hint_source.get("radius", "override") or "override")
+        logger.info(
+            "near radius bound from hint (source=%s): %.4f deg",
+            near_hint_radius_source, radius,
+        )
     hint_fastpath = bool(getattr(cfg, "astap_hint_fastpath", True))
     hint_radius_deg = float(getattr(cfg, "astap_hint_radius_deg", 3.0) or 0.0)
     if hint_fastpath and hint_radius_deg > 0:
         # Throughput-first hinted solve (ASTAP-like -r behavior).
         radius = max(_MIN_SEARCH_RADIUS, min(radius, float(hint_radius_deg)))
+    near_hint_telemetry.update({
+        "near_hint_center_source": near_hint_center_source,
+        "near_hint_scale_source": near_hint_scale_source,
+        "near_hint_radius_source": near_hint_radius_source,
+        "near_hint_fov_source": near_hint_fov_source,
+        "near_hint_center_ra_deg": float(ra0) if ra0 is not None else None,
+        "near_hint_center_dec_deg": float(dec0) if dec0 is not None else None,
+        "near_hint_scale_arcsec": float(scale_arcsec) if scale_arcsec is not None else None,
+        "near_hint_radius_deg": float(radius),
+        "near_hint_fov_deg": float(approx_fov) if approx_fov is not None else None,
+    })
     logger.info(
         "near solve start for %s (radius=%.2f°, approx_scale=%.3g°/px, astap_iso_strict=%s)",
         fits_path.name,
@@ -3916,7 +4103,7 @@ def solve_near(
         str(strict_astap_iso).lower(),
     )
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     provider_tiles_by_key: dict[str, NearCatalogTile] = {}
     if provider is None:
         candidates = _select_tiles(manifest or {}, ra0, dec0, radius, cfg.max_tile_candidates)
@@ -3930,9 +4117,9 @@ def solve_near(
                 families=(str(cfg.family).strip().lower(),) if cfg.family else None,
             )
         except NearCatalogProviderError as exc:
-            return _failure(f"near catalog provider selection failed: {exc}")
+            return _fail(f"near catalog provider selection failed: {exc}")
         except Exception as exc:
-            return _failure(f"near catalog provider selection failed: {exc}")
+            return _fail(f"near catalog provider selection failed: {exc}")
         provider_tiles_by_key = {tile.tile_key: tile for tile in selected_tiles}
         candidates = [tile.to_manifest_entry() for tile in selected_tiles]
     logger.info("near candidates selected: %d", len(candidates))
@@ -3993,7 +4180,7 @@ def solve_near(
             logger.info("near strict candidates selected from provider: %d", len(candidates))
             provider_telemetry["near_catalog_candidate_tiles"] = int(len(candidates))
         except Exception as exc:
-            return _failure(f"near catalog provider strict selection failed: {exc}")
+            return _fail(f"near catalog provider strict selection failed: {exc}")
     elif strict_astap_iso and raw_tile_lookup:
         try:
             search_deg = max(float(radius), float(approx_fov or 1.0)) * 1.6
@@ -4060,12 +4247,12 @@ def solve_near(
 
     if not candidates:
         if provider is not None:
-            return _failure("near catalog provider returned no tile intersecting the metadata cone")
-        return _failure("manifest present but no tile intersects the metadata cone")
+            return _fail("near catalog provider returned no tile intersecting the metadata cone")
+        return _fail("manifest present but no tile intersects the metadata cone")
 
     for entry in candidates:
         if cancel_check and cancel_check():
-            return _failure("cancelled")
+            return _fail("cancelled")
 
         if provider is not None:
             try:
@@ -4088,7 +4275,7 @@ def solve_near(
                         catalog_mags.append(mags)
                         continue
             except Exception as exc:
-                return _failure(f"near catalog provider load failed: {exc}")
+                return _fail(f"near catalog provider load failed: {exc}")
 
         if strict_astap_iso and db_root_path is not None and raw_tile_lookup is not None:
             try:
@@ -4135,8 +4322,8 @@ def solve_near(
         catalog_mags.append(mags)
     if not catalog_positions:
         if missing_tiles:
-            return _failure(f"tile files missing: {missing_tiles[0]}")
-        return _failure("candidate tiles found but none yielded catalog stars")
+            return _fail(f"tile files missing: {missing_tiles[0]}")
+        return _fail("candidate tiles found but none yielded catalog stars")
     cat_positions = np.vstack(catalog_positions)
     provider_telemetry["near_catalog_loaded_tiles"] = int(len(catalog_positions))
     provider_telemetry["near_catalog_loaded_stars"] = int(sum(arr.shape[0] for arr in catalog_positions))
@@ -4189,8 +4376,9 @@ def solve_near(
         cat_world = cat_world[keep]
         cat_mags = cat_mags[keep]
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     strict_db_target_stars: int | None = None
+    near_catalog_telemetry: dict = {}
     logger.debug("near detect start")
     t_detect0 = time.perf_counter()
     _telemetry = None
@@ -4282,7 +4470,7 @@ def solve_near(
                         _telemetry.mark_near_detect_finished()
                     except Exception:
                         pass
-                return _failure("cancelled")
+                return _fail("cancelled")
             raise
         detect_trace["requested"] = str(astap_detect_diag.get("backend_requested", detect_backend))
         detect_trace["selected"] = str(astap_detect_diag.get("backend_selected", "unknown"))
@@ -4403,7 +4591,7 @@ def solve_near(
         except Exception:
             pass
     if stars.size == 0:
-        return _failure("no stars detected in the frame")
+        return _fail("no stars detected in the frame")
     logger.info("near detected stars: %d", int(stars.size))
     # Mirror ASTAP behavior more closely by working on brightest image stars.
     # Strict ASTAP-ISO already receives stars in ASTAP scan/selection order.
@@ -4433,15 +4621,7 @@ def solve_near(
     if strict_astap_iso and cat_positions.shape[0] > 0 and injected_catalog is None:
         # Mirror ASTAP database star request count (nrstars_required2).
         nrstars_image = int(stars.size)
-        nrstars_required = max(32, int(round(float(nrstars_image) * (float(height) / max(1.0, float(width))))))
-        if nrstars_image < 35:
-            oversize = 2.0
-        elif nrstars_image > 140:
-            oversize = 1.0
-        else:
-            oversize = 2.0 * math.sqrt(35.0 / max(float(nrstars_image), 1.0))
-        nrstars_required2 = max(64, int(round(float(nrstars_required) * oversize * oversize)))
-        strict_db_target_stars = int(nrstars_required2)
+        oversize = _near_catalog_oversize(nrstars_image)
 
         # Mirror ASTAP square-search window: window = oversize * fov2, capped by
         # the catalog tile size (5.142857° for .1476, 9.53° for .290).
@@ -4480,6 +4660,17 @@ def solve_near(
             )
         except Exception:
             pass
+
+        # Catalogue star quota (surface law, orientation-generic).  Based on the
+        # NON-oversized reference window (max fov); oversize is applied exactly once
+        # via nrstars_required2 (unchanged historical logic).
+        nrstars_required, nrstars_required2 = _near_catalog_quota_effective(
+            nstars_image=nrstars_image,
+            scale_deg=float(approx_scale_deg),
+            width=int(width),
+            height=int(height),
+        )
+        strict_db_target_stars = int(nrstars_required2)
 
         # ASTAP-like read_stars emulation: read stars from up to four corner areas
         # with cumulative quotas, preserving on-disk order inside each tile.
@@ -4655,10 +4846,23 @@ def solve_near(
             cat_world = cat_world[keep]
             cat_mags = cat_mags[keep]
 
+        near_catalog_window_deg = max(float(approx_scale_deg) * float(width), float(approx_scale_deg) * float(height))
+        near_catalog_telemetry.update({
+            "near_catalog_window_deg": near_catalog_window_deg,
+            "near_catalog_window_area_deg2": near_catalog_window_deg * near_catalog_window_deg,
+            "near_catalog_footprint_deg2": (float(approx_scale_deg) * float(width)) * (float(approx_scale_deg) * float(height)),
+            "near_catalog_quota_requested": int(nrstars_required),
+            "near_catalog_quota_effective": int(nrstars_required2),
+            "near_catalog_stars_selected": int(cat_positions.shape[0]),
+            "near_catalog_quota_law": "surface",
+        })
         logger.info(
-            "near strict astap-iso db stars target: requested=%d selected=%d",
+            "near strict astap-iso db stars target: requested=%d selected=%d quota_law=surface window=%.2fdeg window_area=%.4fdeg2 footprint=%.4fdeg2",
             int(nrstars_required2),
             int(cat_positions.shape[0]),
+            near_catalog_window_deg,
+            near_catalog_window_deg * near_catalog_window_deg,
+            (float(approx_scale_deg) * float(width)) * (float(approx_scale_deg) * float(height)),
         )
 
     image_positions = np.column_stack((stars["x"], stars["y"])).astype(np.float32, copy=False)
@@ -5782,7 +5986,7 @@ def solve_near(
             "iso_refs": int(iso_refs),
             "astap_iso_diag": astap_iso_diag,
         })
-        return _failure("near solver could not estimate a similarity transform")
+        return _fail("near solver could not estimate a similarity transform")
     center_xy = (width / 2.0, height / 2.0)
     logger.info("near pair-build start")
     t_pair0 = time.perf_counter()
@@ -5854,9 +6058,9 @@ def solve_near(
         ransac_min_scale = None
         ransac_max_scale = None
     if img_pairs.size == 0 and iso_transform is None:
-        return _failure("unable to build candidate matches from metadata")
+        return _fail("unable to build candidate matches from metadata")
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     # Try ASTAP ISO transform first if available.
     t_ransac0 = time.perf_counter()
     used_transform: SimilarityTransform | None = None
@@ -5987,7 +6191,7 @@ def solve_near(
             "iso_refs": int(iso_refs),
             "astap_iso_diag": astap_iso_diag,
         })
-        return _failure("near solver could not estimate a similarity transform")
+        return _fail("near solver could not estimate a similarity transform")
     t_ransac_s = time.perf_counter() - t_ransac0
 
     if strict_astap_iso:
@@ -6066,7 +6270,7 @@ def solve_near(
                 "scale_max_deg": float(scale_max_deg),
                 "astap_iso_diag": astap_iso_diag,
             })
-            return _failure("no geometric consensus found for metadata solve")
+            return _fail("no geometric consensus found for metadata solve")
     t_fit0 = time.perf_counter()
     tile_center_hint = (float(ra0), float(dec0))
     tile_center_iso = (float(iso_center_ra), float(iso_center_dec))
@@ -6131,6 +6335,7 @@ def solve_near(
             "pix_scale_arcsec": float(pix_scale_arcsec_guess) if pix_scale_arcsec_guess is not None else None,
             "reason": "strict_astap_iso_mirror",
         }
+        final_stats.update(near_catalog_telemetry)
     else:
         rms_gate = float(cfg.quality_rms)
         inlier_gate = adaptive_inliers
@@ -6143,7 +6348,7 @@ def solve_near(
         final_wcs = wcs
         final_stats = stats
         if cancel_check and cancel_check():
-            return _failure("cancelled")
+            return _fail("cancelled")
         try:
             ls_wcs, _ = fit_wcs_tan(matches)
         except Exception:
@@ -6161,7 +6366,7 @@ def solve_near(
         if final_stats.get("quality") == "GOOD" and needs_sip(final_wcs, final_stats, fov_est):
             for order in range(2, cfg.sip_order + 1):
                 if cancel_check and cancel_check():
-                    return _failure("cancelled")
+                    return _fail("cancelled")
                 candidate_wcs, _ = fit_wcs_sip(matches, order=order)
                 candidate_stats = validate_solution(
                     candidate_wcs,
@@ -6202,7 +6407,7 @@ def solve_near(
             "iso_refs": int(iso_refs),
             "astap_iso_diag": astap_iso_diag,
         })
-        return _failure(f"near solution failed validation ({final_stats})")
+        return _fail(f"near solution failed validation ({final_stats})")
 
     if strict_astap_iso:
         pix_scale_arcsec = _pix_scale_arcsec(final_wcs)
@@ -6262,7 +6467,7 @@ def solve_near(
                 "cd_det": cd_det,
                 "tile_id": candidates[0].get("tile_key") if candidates else None,
             })
-            return _failure(f"near solution rejected for zemosaic ({zemo_reason})")
+            return _fail(f"near solution rejected for zemosaic ({zemo_reason})")
 
         near_ok, near_reason, near_diag = _near_conformance_check(
             final_wcs,
@@ -6317,7 +6522,7 @@ def solve_near(
     _emit_near_debug_record(debug_record)
 
     if not near_ok:
-        return _failure(f"near solution rejected by conformance gate ({near_reason})")
+        return _fail(f"near solution rejected by conformance gate ({near_reason})")
 
     header_updates = {
         "SOLVED": 1,
@@ -6347,6 +6552,7 @@ def solve_near(
         except Exception:
             pass
     final_stats.update(provider_telemetry)
+    final_stats.update(near_hint_telemetry)
     if pix_scale_arcsec is None:
         pix_scale_arcsec = _pix_scale_arcsec(final_wcs)
     if pix_scale_arcsec is not None:
@@ -6355,7 +6561,7 @@ def solve_near(
     elapsed = time.perf_counter() - start
     header_updates["NEARTIME"] = f"{elapsed:.2f}s"
     if cancel_check and cancel_check():
-        return _failure("cancelled")
+        return _fail("cancelled")
     t_write0 = time.perf_counter()
     try:
         with fits.open(fits_path, mode="update", memmap=False) as hdul:
@@ -6368,7 +6574,7 @@ def solve_near(
             )
             hdul.flush()
     except Exception as exc:
-        return _failure(f"unable to write WCS to FITS: {exc}")
+        return _fail(f"unable to write WCS to FITS: {exc}")
     t_write_s = time.perf_counter() - t_write0
     final_stats.update(
         {

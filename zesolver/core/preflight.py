@@ -3,9 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from astropy.io import fits
-from astropy.wcs import WCS
 
 from zesolver.catalog_resources import SolverCatalogResources
+
+from .fits_hdu import any_hdu_has_celestial_wcs
 
 from .models import SolveRequest, SolveStatus
 
@@ -42,7 +43,7 @@ def run_preflight(
             shape = tuple(int(v) for v in data.shape)
             if len(shape) < 2 or shape[-1] <= 0 or shape[-2] <= 0:
                 return PreflightResult(ok=False, status=SolveStatus.INVALID_INPUT, error=f"fits_invalid_dimensions: {shape}")
-            has_wcs = any(bool(WCS(hdu.header, naxis=2, relax=True).has_celestial) for hdu in hdul)
+            has_wcs = any_hdu_has_celestial_wcs(hdul)
     except Exception as exc:
         return PreflightResult(ok=False, status=SolveStatus.INVALID_INPUT, error=f"fits_unreadable: {exc}")
 

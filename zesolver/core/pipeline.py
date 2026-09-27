@@ -8,6 +8,9 @@ from astropy.io import fits
 from astropy.wcs import WCS
 
 from zeblindsolver.metadata_solver import NearSolveConfig
+from zeblindsolver.fits_utils import estimate_scale_and_fov
+
+from zesolver.core.near_hints import resolve_near_hints
 
 from zesolver.catalog_resources import (
     BLIND4D_LIBRARY_NO_INDEXES,
@@ -35,6 +38,25 @@ from .result_adapter import failure_result, result_from_engine
 from .telemetry import PipelineTelemetry
 from .terminal_reasons import TerminalReasonCode
 from .wcs_io import write_wcs_safely
+
+
+def _float_or_none(value: object) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _header_float(header, keys) -> float | None:
+    for key in keys:
+        try:
+            if key in header:
+                return float(header[key])
+        except (TypeError, ValueError):
+            continue
+    return None
 
 
 class NearSolverPort(Protocol):
@@ -78,6 +100,35 @@ class ExistingNearSolverPort:
         if target != request.input_path:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(request.input_path, target)
+        # Resolve effective Near hints (override > FITS metadata > preset).  The
+        # single source of truth for both GUI and API paths; always produces the
+        # same result for identical inputs.
+        fits_ra_deg = fits_dec_deg = fits_scale_arcsec = None
+        try:
+            with fits.open(target, memmap=False) as hdul:
+                _h = hdul[0].header
+                _w = int(_h["NAXIS1"])
+                _ht = int(_h["NAXIS2"])
+                fits_ra_deg = _header_float(_h, ("RA", "OBJCTRA", "OBJRA", "OBJ_RA", "CRVAL1"))
+                fits_dec_deg = _header_float(_h, ("DEC", "OBJCTDEC", "OBJDEC", "OBJ_DEC", "CRVAL2"))
+                _s, _ = estimate_scale_and_fov(_h, _w, _ht)
+                fits_scale_arcsec = _s
+        except Exception:
+            fits_ra_deg = fits_dec_deg = fits_scale_arcsec = None
+        hint_resolution = resolve_near_hints(
+            override_radius_deg=_float_or_none(values.get("hint_radius_deg")),
+            override_scale_arcsec=_float_or_none(values.get("hint_resolution_arcsec")),
+            # fov_deg is a product default (1.5), NOT an explicit per-solve override:
+            # never map it to fov_override_deg silently.
+            override_fov_deg=None,
+            fits_ra_deg=fits_ra_deg,
+            fits_dec_deg=fits_dec_deg,
+            fits_scale_arcsec=fits_scale_arcsec,
+            preset_ra_deg=_float_or_none(values.get("hint_ra_deg")),
+            preset_dec_deg=_float_or_none(values.get("hint_dec_deg")),
+            preset_focal_mm=_float_or_none(values.get("hint_focal_mm")),
+            preset_pixel_um=_float_or_none(values.get("hint_pixel_um")),
+        )
         near_cfg = NearSolveConfig(
             family=(resources.near.families[0] if resources.near and resources.near.families else "d50"),
             max_tile_candidates=int(values.get("near_max_tile_candidates", 48) or 48),
@@ -101,6 +152,17 @@ class ExistingNearSolverPort:
             max_cat_stars=int(values.get("near_max_cat_stars", 2000) or 2000),
             try_parity_flip=bool(values.get("near_try_parity_flip", True)),
             astap_iso_strict=bool(values.get("near_astap_iso_strict", True)),
+            hint_ra_deg=hint_resolution.center_ra_deg,
+            hint_dec_deg=hint_resolution.center_dec_deg,
+            hint_scale_arcsec=hint_resolution.scale_arcsec,
+            hint_radius_deg=hint_resolution.radius_deg,
+            hint_source={
+                "center": hint_resolution.center_source,
+                "scale": hint_resolution.scale_source,
+                "radius": hint_resolution.radius_source,
+                "fov": hint_resolution.fov_source,
+            },
+            fov_override_deg=(hint_resolution.fov_deg if hint_resolution.fov_source == "override" else None),
         )
         try:
             result = near_solve(
