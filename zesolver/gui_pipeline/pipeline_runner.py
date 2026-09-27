@@ -11,6 +11,7 @@ from zesolver.core import ProductionBlindSolverPort, SolverPipeline
 from zesolver.core.batch import BatchSolverPipeline, BatchSolveRequest
 from zesolver.core.models import SolveRequest, SolveResult
 from zesolver.core.pipeline import ExistingNearSolverPort
+from zesolver.core.near_hints import instrument_hint_applied, resolve_near_hints
 from zesolver.resource_telemetry import BatchResourceTelemetry, reset_active_batch_telemetry, set_active_batch_telemetry
 from zesolver.settings import build_solver_configuration
 from zesolver.simplified_capability import (
@@ -143,11 +144,27 @@ class PipelineGuiRunner:
                         product_settings=product_settings_for_simplified_run(request.product_settings, decision),
                     )
                 instrument_mode = str(getattr(request.product_settings, "instrument_mode", "auto") or "auto").strip().lower()
+                _ps = request.product_settings
+                _hint_resolution = resolve_near_hints(
+                    override_radius_deg=getattr(_ps, "hint_radius_deg", None),
+                    override_scale_arcsec=getattr(_ps, "hint_resolution_arcsec", None),
+                    override_fov_deg=None,
+                    preset_ra_deg=getattr(_ps, "hint_ra_deg", None),
+                    preset_dec_deg=getattr(_ps, "hint_dec_deg", None),
+                    preset_focal_mm=getattr(_ps, "hint_focal_mm", None),
+                    preset_pixel_um=getattr(_ps, "hint_pixel_um", None),
+                )
+                _hint_applied = instrument_hint_applied(
+                    center_source=_hint_resolution.center_source,
+                    scale_source=_hint_resolution.scale_source,
+                    radius_source=_hint_resolution.radius_source,
+                    fov_source=_hint_resolution.fov_source,
+                )
                 logging.info(
                     "Instrument hints: instrument_mode_requested=%s instrument_hint_source=%s global_instrument_hint_applied=%s",
                     instrument_mode,
                     "per-file-fits-metadata" if instrument_mode == "auto" else instrument_mode,
-                    "false" if instrument_mode == "auto" else "true",
+                    str(_hint_applied).lower(),
                 )
                 near_request = request.for_phase("near")
                 near_configuration = build_solver_configuration(

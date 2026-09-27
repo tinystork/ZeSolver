@@ -97,6 +97,18 @@ class NearSolveConfig:
     # - fov_override_deg: override approximate FOV when estimating search radius; 0/None → auto
     family: str | None = None
     fov_override_deg: float | None = None
+    # Optional acquisition/pointing hints (deterministic priority, see
+    # zesolver.core.near_hints.resolve_near_hints).  Default None => behaviour
+    # strictly unchanged when not supplied.
+    # - hint_ra_deg/hint_dec_deg: centre fallback when the FITS header has no RA/DEC.
+    # - hint_scale_arcsec: plate-scale fallback when estimate_scale_and_fov is None.
+    # - hint_radius_deg: explicit search-radius bound (overrides the default radius).
+    # - hint_source: observability dict (per-field source: override|fits|preset|none).
+    hint_ra_deg: float | None = None
+    hint_dec_deg: float | None = None
+    hint_scale_arcsec: float | None = None
+    hint_radius_deg: float | None = None
+    hint_source: dict | None = None
     # Performance tuning
     # - max_tile_candidates: cap how many intersecting tiles to consider per image
     # - tile_cache_size: LRU size for cached tile blobs (RA/DEC/MAG arrays)
@@ -181,7 +193,14 @@ class NearSolveConfig:
 
 
 def _failure(message: str) -> WcsSolution:
-    return WcsSolution(False, message, None, {}, None, {})
+    stats = dict(_NEAR_HINT_TELEMETRY) if _NEAR_HINT_TELEMETRY else {}
+    return WcsSolution(False, message, None, stats, None, {})
+
+
+# Per-solve observability for the resolved Near hints (Phase E).  Populated early
+# in solve_near and merged into both success and failure stats so the hint source
+# is traceable even when the solve stops at detection/matching.
+_NEAR_HINT_TELEMETRY: dict = {}
 
 
 def _near_catalog_star_quota(
@@ -3927,6 +3946,7 @@ def solve_near(
     cfg = config or NearSolveConfig()
     logger.setLevel(cfg.log_level.upper())
     start = time.perf_counter()
+    _NEAR_HINT_TELEMETRY.clear()
     fits_path = Path(input_fits).expanduser().resolve()
     index_path = Path(index_root).expanduser().resolve() if index_root is not None else None
     ransac_seed = int(cfg.ransac_seed) if cfg.ransac_seed is not None else _stable_seed_for_path(fits_path)
@@ -3977,9 +3997,45 @@ def solve_near(
     dec_keys = ("DEC", "OBJCTDEC", "OBJDEC", "OBJ_DEC", "CRVAL2")
     ra0 = _extract_near_center_angle(header, ra_keys, is_ra=True, strict_astap_iso=strict_astap_iso)
     dec0 = _extract_near_center_angle(header, dec_keys, is_ra=False, strict_astap_iso=strict_astap_iso)
-    if ra0 is None or dec0 is None:
+    _hint_source = dict(getattr(cfg, "hint_source", None) or {})
+    _hint_center_src = str(_hint_source.get("center", "none") or "none")
+    _hint_ra = getattr(cfg, "hint_ra_deg", None)
+    _hint_dec = getattr(cfg, "hint_dec_deg", None)
+    if _hint_center_src == "override" and _hint_ra is not None and _hint_dec is not None:
+        # Explicit user override beats the acquisition FITS cards.
+        ra0 = float(_hint_ra)
+        dec0 = float(_hint_dec)
+        near_hint_center_source = "override"
+        logger.info("near centre overridden by explicit hint: ra=%.6f dec=%.6f", ra0, dec0)
+    elif ra0 is not None and dec0 is not None:
+        near_hint_center_source = "fits"
+    elif _hint_ra is not None and _hint_dec is not None:
+        ra0 = float(_hint_ra)
+        dec0 = float(_hint_dec)
+        near_hint_center_source = _hint_center_src if _hint_center_src in ("preset", "override") else "preset"
+        logger.info(
+            "near centre from hint (source=%s): ra=%.6f dec=%.6f",
+            near_hint_center_source, ra0, dec0,
+        )
+    else:
+        near_hint_center_source = "none"
         return _failure("metadata RA/DEC missing for near solve")
     scale_arcsec, (fov_x, fov_y) = estimate_scale_and_fov(header, width, height)
+    if scale_arcsec is not None:
+        near_hint_scale_source = "fits"
+    else:
+        _hint_scale = getattr(cfg, "hint_scale_arcsec", None)
+        if _hint_scale is not None and float(_hint_scale) > 0:
+            scale_arcsec = float(_hint_scale)
+            fov_x = scale_arcsec * float(width) / 3600.0
+            fov_y = scale_arcsec * float(height) / 3600.0
+            near_hint_scale_source = str(_hint_source.get("scale", "preset") or "preset")
+            logger.info(
+                "near scale from hint (source=%s): %.4f arcsec/px",
+                near_hint_scale_source, scale_arcsec,
+            )
+        else:
+            near_hint_scale_source = "none"
     fov_candidates = [value for value in (fov_x, fov_y) if value is not None]
     approx_fov = max(fov_candidates) if fov_candidates else None
     fov_hint_source = "scale"
@@ -4005,6 +4061,8 @@ def solve_near(
         approx_fov = float(cfg.fov_override_deg)
         fov_hint_source = "override"
 
+    near_hint_fov_source = {"scale": "none", "header": "fits", "override": "override"}.get(fov_hint_source, "none")
+
     approx_scale_deg = scale_arcsec / 3600.0 if scale_arcsec else None
     if approx_scale_deg is None:
         approx_fov = approx_fov or 1.5
@@ -4015,11 +4073,31 @@ def solve_near(
     fov_for_radius = approx_fov or (approx_scale_deg * max(width, height))
     radius = max(_MIN_SEARCH_RADIUS, 1.0 * fov_for_radius * max(cfg.search_margin, 1.0))
     radius = min(radius, _MAX_SEARCH_RADIUS)
+    near_hint_radius_source = "none"
+    _hint_radius = getattr(cfg, "hint_radius_deg", None)
+    if _hint_radius is not None and float(_hint_radius) > 0:
+        radius = max(_MIN_SEARCH_RADIUS, min(radius, float(_hint_radius)))
+        near_hint_radius_source = str(_hint_source.get("radius", "override") or "override")
+        logger.info(
+            "near radius bound from hint (source=%s): %.4f deg",
+            near_hint_radius_source, radius,
+        )
     hint_fastpath = bool(getattr(cfg, "astap_hint_fastpath", True))
     hint_radius_deg = float(getattr(cfg, "astap_hint_radius_deg", 3.0) or 0.0)
     if hint_fastpath and hint_radius_deg > 0:
         # Throughput-first hinted solve (ASTAP-like -r behavior).
         radius = max(_MIN_SEARCH_RADIUS, min(radius, float(hint_radius_deg)))
+    _NEAR_HINT_TELEMETRY.update({
+        "near_hint_center_source": near_hint_center_source,
+        "near_hint_scale_source": near_hint_scale_source,
+        "near_hint_radius_source": near_hint_radius_source,
+        "near_hint_fov_source": near_hint_fov_source,
+        "near_hint_center_ra_deg": float(ra0) if ra0 is not None else None,
+        "near_hint_center_dec_deg": float(dec0) if dec0 is not None else None,
+        "near_hint_scale_arcsec": float(scale_arcsec) if scale_arcsec is not None else None,
+        "near_hint_radius_deg": float(radius),
+        "near_hint_fov_deg": float(approx_fov) if approx_fov is not None else None,
+    })
     logger.info(
         "near solve start for %s (radius=%.2f°, approx_scale=%.3g°/px, astap_iso_strict=%s)",
         fits_path.name,
@@ -6477,6 +6555,7 @@ def solve_near(
         except Exception:
             pass
     final_stats.update(provider_telemetry)
+    final_stats.update(_NEAR_HINT_TELEMETRY)
     if pix_scale_arcsec is None:
         pix_scale_arcsec = _pix_scale_arcsec(final_wcs)
     if pix_scale_arcsec is not None:
