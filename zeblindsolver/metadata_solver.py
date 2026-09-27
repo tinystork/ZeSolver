@@ -184,6 +184,77 @@ def _failure(message: str) -> WcsSolution:
     return WcsSolution(False, message, None, {}, None, {})
 
 
+def _near_catalog_star_quota(
+    *,
+    nstars_image: int,
+    window_w_deg: float,
+    window_h_deg: float,
+    footprint_w_deg: float,
+    footprint_h_deg: float,
+) -> int:
+    """Return the strict ASTAP-ISO catalogue star quota (surface law).
+
+    The expected number of catalogue stars inside the local search window is the
+    image star count scaled by the area ratio of the window to the physical image
+    footprint (both expressed on the sky, in degrees)::
+
+        N_expected = Nimg * (window_w_deg * window_h_deg)
+                          / (footprint_w_deg * footprint_h_deg)
+
+    The result is floored at 32 (the ASTAP minimum database-star request used by
+    the historical formula).  This replaces the historical pixel-ratio formula
+    ``Nimg * height/width``, which is only correct for portrait frames: it ignores
+    the fact that the strict window is a square of side ``max(fov_x, fov_y)``.
+
+    Non-regression (portrait): with the production square window,
+    ``window_w_deg == window_h_deg == max(fov_x, fov_y)`` and
+    ``footprint_w_deg/h == scale_deg * width/height``, so the area ratio equals
+    ``max(fov)/min(fov) == max(width,height)/min(width,height)``, which for portrait
+    frames is exactly ``height/width`` -- the new law therefore reduces to the old
+    formula for every portrait frame.
+
+    Robustness: any non-finite, zero or negative input (denominator <= 0, NaN, inf)
+    returns the documented floor ``32`` deterministically.  The function never
+    raises and never returns NaN.
+    """
+    try:
+        nstars = int(nstars_image)
+        ww = float(window_w_deg)
+        wh = float(window_h_deg)
+        fw = float(footprint_w_deg)
+        fh = float(footprint_h_deg)
+    except (TypeError, ValueError):
+        return 32
+    if nstars < 0:
+        return 32
+    if not (math.isfinite(ww) and math.isfinite(wh) and math.isfinite(fw) and math.isfinite(fh)):
+        return 32
+    if ww <= 0.0 or wh <= 0.0 or fw <= 0.0 or fh <= 0.0:
+        return 32
+    window_area = ww * wh
+    footprint_area = fw * fh
+    if not math.isfinite(window_area) or window_area <= 0.0:
+        return 32
+    if not math.isfinite(footprint_area) or footprint_area <= 0.0:
+        return 32
+    return max(32, int(round(float(nstars) * window_area / footprint_area)))
+
+
+def _near_catalog_oversize(nstars_image: int) -> float:
+    """ASTAP database-star oversize factor (unchanged production logic).
+
+    ``< 35`` -> 2.0 ; ``> 140`` -> 1.0 ; otherwise ``2 * sqrt(35 / Nimg)``.
+    Extracted verbatim from the strict ASTAP-ISO quota path so the invariant can be
+    unit-tested; the formula is byte-for-byte identical to the historical inline code.
+    """
+    n = int(nstars_image)
+    if n < 35:
+        return 2.0
+    if n > 140:
+        return 1.0
+    return 2.0 * math.sqrt(35.0 / max(float(n), 1.0))
+
+
 def _near_reports_dir() -> Path:
     # ZeSolver/zeblindsolver/metadata_solver.py -> ZeSolver/reports
     return Path(__file__).resolve().parents[1] / "reports"
@@ -4191,6 +4262,7 @@ def solve_near(
     if cancel_check and cancel_check():
         return _failure("cancelled")
     strict_db_target_stars: int | None = None
+    near_catalog_telemetry: dict = {}
     logger.debug("near detect start")
     t_detect0 = time.perf_counter()
     _telemetry = None
@@ -4433,15 +4505,7 @@ def solve_near(
     if strict_astap_iso and cat_positions.shape[0] > 0 and injected_catalog is None:
         # Mirror ASTAP database star request count (nrstars_required2).
         nrstars_image = int(stars.size)
-        nrstars_required = max(32, int(round(float(nrstars_image) * (float(height) / max(1.0, float(width))))))
-        if nrstars_image < 35:
-            oversize = 2.0
-        elif nrstars_image > 140:
-            oversize = 1.0
-        else:
-            oversize = 2.0 * math.sqrt(35.0 / max(float(nrstars_image), 1.0))
-        nrstars_required2 = max(64, int(round(float(nrstars_required) * oversize * oversize)))
-        strict_db_target_stars = int(nrstars_required2)
+        oversize = _near_catalog_oversize(nrstars_image)
 
         # Mirror ASTAP square-search window: window = oversize * fov2, capped by
         # the catalog tile size (5.142857° for .1476, 9.53° for .290).
@@ -4480,6 +4544,18 @@ def solve_near(
             )
         except Exception:
             pass
+
+        # Catalogue star quota (surface law, orientation-generic).  Uses the strict
+        # square window (window_w == window_h == search_window_deg) computed above.
+        nrstars_required = _near_catalog_star_quota(
+            nstars_image=nrstars_image,
+            window_w_deg=float(search_window_deg),
+            window_h_deg=float(search_window_deg),
+            footprint_w_deg=float(approx_scale_deg) * float(width),
+            footprint_h_deg=float(approx_scale_deg) * float(height),
+        )
+        nrstars_required2 = max(64, int(round(float(nrstars_required) * oversize * oversize)))
+        strict_db_target_stars = int(nrstars_required2)
 
         # ASTAP-like read_stars emulation: read stars from up to four corner areas
         # with cumulative quotas, preserving on-disk order inside each tile.
@@ -4655,10 +4731,22 @@ def solve_near(
             cat_world = cat_world[keep]
             cat_mags = cat_mags[keep]
 
+        near_catalog_telemetry.update({
+            "near_catalog_window_deg": float(search_window_deg),
+            "near_catalog_window_area_deg2": float(search_window_deg) * float(search_window_deg),
+            "near_catalog_footprint_deg2": (float(approx_scale_deg) * float(width)) * (float(approx_scale_deg) * float(height)),
+            "near_catalog_quota_requested": int(nrstars_required),
+            "near_catalog_quota_effective": int(nrstars_required2),
+            "near_catalog_stars_selected": int(cat_positions.shape[0]),
+            "near_catalog_quota_law": "surface",
+        })
         logger.info(
-            "near strict astap-iso db stars target: requested=%d selected=%d",
+            "near strict astap-iso db stars target: requested=%d selected=%d quota_law=surface window=%.2fdeg window_area=%.4fdeg2 footprint=%.4fdeg2",
             int(nrstars_required2),
             int(cat_positions.shape[0]),
+            float(search_window_deg),
+            float(search_window_deg) * float(search_window_deg),
+            (float(approx_scale_deg) * float(width)) * (float(approx_scale_deg) * float(height)),
         )
 
     image_positions = np.column_stack((stars["x"], stars["y"])).astype(np.float32, copy=False)
@@ -6131,6 +6219,7 @@ def solve_near(
             "pix_scale_arcsec": float(pix_scale_arcsec_guess) if pix_scale_arcsec_guess is not None else None,
             "reason": "strict_astap_iso_mirror",
         }
+        final_stats.update(near_catalog_telemetry)
     else:
         rms_gate = float(cfg.quality_rms)
         inlier_gate = adaptive_inliers
