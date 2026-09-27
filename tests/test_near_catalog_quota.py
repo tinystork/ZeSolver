@@ -37,7 +37,11 @@ import math
 
 import pytest
 
-from zeblindsolver.metadata_solver import _near_catalog_oversize, _near_catalog_star_quota
+from zeblindsolver.metadata_solver import (
+    _near_catalog_oversize,
+    _near_catalog_quota_effective,
+    _near_catalog_star_quota,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -194,3 +198,73 @@ def test_oversize_boundaries():
     # Nimg=35 -> 2.0 (formula: 2*sqrt(1) = 2.0) ; Nimg=140 -> 1.0 (formula: 2*sqrt(0.25)=1.0)
     assert _near_catalog_oversize(35) == pytest.approx(2.0, rel=1e-12)
     assert _near_catalog_oversize(140) == pytest.approx(1.0, rel=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# 5. Pipeline composition (window + oversize + quota) — the R4 regression hole:
+#    portrait + Nimg <= 140 must reproduce the OLD formula EXACTLY (oversize is
+#    applied once, squared, not folded into the window).
+# ---------------------------------------------------------------------------
+
+def _old_quota_pipeline(nstars, width, height):
+    """Historical inline pipeline: base = round(Nimg*h/w), then oversize^2 once."""
+    base = max(32, int(round(float(nstars) * (float(height) / max(1.0, float(width))))))
+    oversize = _near_catalog_oversize(nstars)
+    effective = max(64, int(round(float(base) * oversize * oversize)))
+    return base, effective
+
+
+@pytest.mark.parametrize("nstars", [1, 10, 30, 34, 35, 50, 100, 139, 140, 141, 200, 254])
+def test_portrait_pipeline_composition_matches_old_formula(nstars):
+    # Seestar portrait geometry (1080 x 1920 @ 2.392675"/px).
+    scale_deg = 2.392675 / 3600.0
+    width, height = 1080, 1920
+    requested, effective = _near_catalog_quota_effective(
+        nstars_image=nstars, scale_deg=scale_deg, width=width, height=height)
+    old_base, old_effective = _old_quota_pipeline(nstars, width, height)
+    assert requested == old_base
+    assert effective == old_effective
+
+
+def test_portrait_pipeline_composition_non_square_portrait():
+    # A different portrait geometry must also reproduce the old formula exactly.
+    scale_deg = 1.5 / 3600.0
+    width, height = 900, 1600
+    for nstars in (30, 50, 100, 254):
+        requested, effective = _near_catalog_quota_effective(
+            nstars_image=nstars, scale_deg=scale_deg, width=width, height=height)
+        old_base, old_effective = _old_quota_pipeline(nstars, width, height)
+        assert requested == old_base
+        assert effective == old_effective
+
+
+def test_asi_pipeline_composition_landscape_correction_preserved():
+    # ASI294 landscape (4144 x 2822 @ 0.522147"/px), Nimg=164 -> 241 (oversize=1).
+    scale_deg = 0.522147 / 3600.0
+    requested, effective = _near_catalog_quota_effective(
+        nstars_image=164, scale_deg=scale_deg, width=4144, height=2822)
+    assert requested == 241
+    assert effective == 241
+
+
+def test_pipeline_composition_transposition_invariance():
+    # Same physical sensor rotated 90 degrees: the composed quota is invariant.
+    scale_deg = 1.0 / 3600.0
+    nstars = 100
+    p_req, p_eff = _near_catalog_quota_effective(
+        nstars_image=nstars, scale_deg=scale_deg, width=1080, height=1920)
+    l_req, l_eff = _near_catalog_quota_effective(
+        nstars_image=nstars, scale_deg=scale_deg, width=1920, height=1080)
+    assert p_req == l_req
+    assert p_eff == l_eff
+
+
+def test_pipeline_composition_no_oversize4():
+    # R4 regression guard: for Nimg < 35 (oversize=2.0), the effective quota must
+    # carry oversize^2 (x4), NOT oversize^4 (x16).  Portrait 1080x1920, Nimg=30:
+    # old base = round(30*1920/1080)=53 -> effective = max(64, round(53*4)) = 212.
+    scale_deg = 2.392675 / 3600.0
+    requested, effective = _near_catalog_quota_effective(
+        nstars_image=30, scale_deg=scale_deg, width=1080, height=1920)
+    assert requested == 53
+    assert effective == 212

@@ -206,12 +206,14 @@ def _near_catalog_star_quota(
     ``Nimg * height/width``, which is only correct for portrait frames: it ignores
     the fact that the strict window is a square of side ``max(fov_x, fov_y)``.
 
-    Non-regression (portrait): with the production square window,
-    ``window_w_deg == window_h_deg == max(fov_x, fov_y)`` and
-    ``footprint_w_deg/h == scale_deg * width/height``, so the area ratio equals
+    Non-regression (portrait): when called with the **non-oversized** reference
+    window (``window_w_deg == window_h_deg == max(fov_x, fov_y)``) and
+    ``footprint_w_deg/h == scale_deg * width/height``, the area ratio equals
     ``max(fov)/min(fov) == max(width,height)/min(width,height)``, which for portrait
-    frames is exactly ``height/width`` -- the new law therefore reduces to the old
-    formula for every portrait frame.
+    frames is exactly ``height/width``.  Because ``oversize`` is applied only once,
+    squared, by the caller (and never folded into this window), the whole pipeline
+    reproduces the historical formula -- including its rounding order -- for every
+    portrait frame and every oversize regime.
 
     Robustness: any non-finite, zero or negative input (denominator <= 0, NaN, inf)
     returns the documented floor ``32`` deterministically.  The function never
@@ -253,6 +255,45 @@ def _near_catalog_oversize(nstars_image: int) -> float:
     if n > 140:
         return 1.0
     return 2.0 * math.sqrt(35.0 / max(float(n), 1.0))
+
+
+def _near_catalog_quota_effective(
+    *,
+    nstars_image: int,
+    scale_deg: float,
+    width: int,
+    height: int,
+) -> tuple[int, int]:
+    """Compose the full strict ASTAP-ISO quota pipeline into one pure callable.
+
+    Returns ``(quota_requested, quota_effective)`` where:
+
+    * the reference window is the **non-oversized** max-FOV square
+      ``fov2 = max(scale_deg*width, scale_deg*height)``;
+    * ``quota_requested`` is the surface-law base quota on that window
+      (``Nimg * fov2**2 / footprint``, floored at 32);
+    * ``oversize`` is applied **exactly once**, squared, to obtain
+      ``quota_effective = max(64, round(quota_requested * oversize**2))``.
+
+    ``oversize`` must NOT be folded into the window: ``search_window_deg`` already
+    multiplies the window by ``oversize`` for the catalogue mask, and reusing that
+    value here would apply ``oversize`` a second time (oversize**4).
+
+    In portrait frames ``fov2**2 / footprint == max(width,height)/min(width,height)
+    == height/width``, so this reproduces the historical formula (including its
+    rounding order) for **every** portrait frame and **every** oversize regime.
+    """
+    fov2 = max(float(scale_deg) * float(width), float(scale_deg) * float(height))
+    requested = _near_catalog_star_quota(
+        nstars_image=nstars_image,
+        window_w_deg=fov2,
+        window_h_deg=fov2,
+        footprint_w_deg=float(scale_deg) * float(width),
+        footprint_h_deg=float(scale_deg) * float(height),
+    )
+    oversize = _near_catalog_oversize(nstars_image)
+    effective = max(64, int(round(float(requested) * oversize * oversize)))
+    return int(requested), int(effective)
 
 
 def _near_reports_dir() -> Path:
@@ -4545,16 +4586,15 @@ def solve_near(
         except Exception:
             pass
 
-        # Catalogue star quota (surface law, orientation-generic).  Uses the strict
-        # square window (window_w == window_h == search_window_deg) computed above.
-        nrstars_required = _near_catalog_star_quota(
+        # Catalogue star quota (surface law, orientation-generic).  Based on the
+        # NON-oversized reference window (max fov); oversize is applied exactly once
+        # via nrstars_required2 (unchanged historical logic).
+        nrstars_required, nrstars_required2 = _near_catalog_quota_effective(
             nstars_image=nrstars_image,
-            window_w_deg=float(search_window_deg),
-            window_h_deg=float(search_window_deg),
-            footprint_w_deg=float(approx_scale_deg) * float(width),
-            footprint_h_deg=float(approx_scale_deg) * float(height),
+            scale_deg=float(approx_scale_deg),
+            width=int(width),
+            height=int(height),
         )
-        nrstars_required2 = max(64, int(round(float(nrstars_required) * oversize * oversize)))
         strict_db_target_stars = int(nrstars_required2)
 
         # ASTAP-like read_stars emulation: read stars from up to four corner areas
@@ -4731,9 +4771,10 @@ def solve_near(
             cat_world = cat_world[keep]
             cat_mags = cat_mags[keep]
 
+        near_catalog_window_deg = max(float(approx_scale_deg) * float(width), float(approx_scale_deg) * float(height))
         near_catalog_telemetry.update({
-            "near_catalog_window_deg": float(search_window_deg),
-            "near_catalog_window_area_deg2": float(search_window_deg) * float(search_window_deg),
+            "near_catalog_window_deg": near_catalog_window_deg,
+            "near_catalog_window_area_deg2": near_catalog_window_deg * near_catalog_window_deg,
             "near_catalog_footprint_deg2": (float(approx_scale_deg) * float(width)) * (float(approx_scale_deg) * float(height)),
             "near_catalog_quota_requested": int(nrstars_required),
             "near_catalog_quota_effective": int(nrstars_required2),
@@ -4744,8 +4785,8 @@ def solve_near(
             "near strict astap-iso db stars target: requested=%d selected=%d quota_law=surface window=%.2fdeg window_area=%.4fdeg2 footprint=%.4fdeg2",
             int(nrstars_required2),
             int(cat_positions.shape[0]),
-            float(search_window_deg),
-            float(search_window_deg) * float(search_window_deg),
+            near_catalog_window_deg,
+            near_catalog_window_deg * near_catalog_window_deg,
             (float(approx_scale_deg) * float(width)) * (float(approx_scale_deg) * float(height)),
         )
 
