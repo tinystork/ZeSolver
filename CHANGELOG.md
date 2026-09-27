@@ -1,5 +1,52 @@
 # Changelog
 
+## [1.2.2] - 2026-09-27
+
+### Fixed
+
+- **Catalogue star quota is now orientation-generic.** The strict ASTAP-ISO
+  path sized its local catalogue window as a square of side
+  `max(fov_x, fov_y)` (degrees) but derived the number of catalogue stars to
+  request from `Nimg * height/width` (pixels). That is only correct for
+  portrait frames: for landscape fields it under-provisioned the matcher by
+  ≈2.15x, so the magnitude truncation removed the stars that actually fall
+  inside the frame and no similarity transform could be estimated. The quota
+  now follows the surface law `Nimg * window_area / footprint_area`, which is
+  algebraically identical to the historical formula for every portrait frame
+  (Seestar S50 results are bit-identical) and restores landscape solving
+  (e.g. ASI294MC 4144x2822 @ ~1800 mm, FOV < 1°). No acceptance gate, quad
+  tolerance or magnitude threshold was changed.
+- The catalogue `oversize` factor is applied exactly once. The first
+  implementation of the surface law folded `oversize` into the window and then
+  applied it a second time, inflating the quota by up to 4x on star-poor
+  portrait frames.
+- Handled non-2D auxiliary HDUs during WCS probing (previously validated on
+  the beta branch, included in this release).
+
+### Added
+
+- **Deterministic pointing/scale hint resolution** with an explicit, tested
+  precedence: explicit user override > valid FITS acquisition metadata >
+  instrument preset > generic fallback. Presets configured in the settings are
+  now actually propagated to the near solver (previously they were dropped
+  before `NearSolveConfig`), and a FITS without `RA`/`DEC` can now be solved
+  from a preset hint. Per-field sources are reported in solve statistics and
+  the GUI indicator reflects real consumption instead of configuration intent.
+
+### Changed
+
+- Near hint telemetry is stored per solve run instead of module state, so
+  concurrent solves in the same process (parallel batch workers) can no longer
+  cross-contaminate each other's reported hint sources.
+
+### Notes
+
+- Public API version is unchanged (`zesolver.api.v1` == 1.2).
+- Qualified hint-offset domain for near solving is >= 1.00x FOV (8/8 directions)
+  on both a portrait wide-field (Seestar S50) and a landscape narrow-field
+  (ASI294MC) geometry, up from ~0.10x FOV on the landscape geometry before this
+  release.
+
 ## [1.2.1] - 2026-08-30
 
 ### Fixed
