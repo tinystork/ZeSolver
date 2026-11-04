@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.2.3] - 2026-11-04
+
+### Fixed
+
+- Included the top-level `zewcscleaner` runtime module in the installed wheel.
+  The WCS-cleanup option already called this module, but source-checkout tests
+  masked its absence from managed wheel installations such as ZeAlfie; those
+  installations failed before processing with `No module named
+  'zewcscleaner'`.
+- Added a wheel-content and isolated wheel-install witness so the cleanup
+  module cannot silently disappear from future distributions.
+
+### Notes
+
+- Solver algorithms and the public API version are unchanged
+  (`zesolver.api.v1` == 1.2).
+
 ## [1.2.2] - 2026-09-27
 
 ### Fixed

@@ -146,6 +146,12 @@ def test_wheel_contains_exactly_one_interop_json(wheel_path: Path) -> None:
     assert matches == [INTEROP_WHEEL_PATH]
 
 
+def test_wheel_contains_wcs_cleaner_runtime_module(wheel_path: Path) -> None:
+    with zipfile.ZipFile(wheel_path) as zf:
+        matches = [name for name in zf.namelist() if name == "zewcscleaner.py"]
+    assert matches == ["zewcscleaner.py"]
+
+
 def test_wheel_interop_json_parseable_without_importing_product_code(
     wheel_path: Path,
 ) -> None:
@@ -198,6 +204,8 @@ def test_wheel_install_then_api_import_passes(
         "assert zesolver.__file__.startswith(sys.argv[1]), zesolver.__file__\n"
         "from zesolver.api import v1\n"
         f"assert v1.API_VERSION == {API_VERSION!r}\n"
+        "from zewcscleaner import process_fits\n"
+        "assert callable(process_fits)\n"
         "from zesolver.api.v1.probe import get_api_info\n"
         "info = get_api_info()\n"
         f"assert info.api_version == {API_VERSION!r}\n"
